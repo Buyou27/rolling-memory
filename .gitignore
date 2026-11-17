@@ -17,6 +17,12 @@ autoresearch-dashboard.html
 /dev/release/receipts/
 .env
 .env.*
+# Console web build configs carry only public values (ports, brand layer,
+# loopback API URL) and are load-bearing: git-archive mirrors and source builds
+# without them lose the frontend API base and send every request to the static
+# server. Keep them tracked.
+!admin/web/.env
+!admin/web/.env.development
 /AGENTS.md
 /AGENT.md
 /CLAUDE.md

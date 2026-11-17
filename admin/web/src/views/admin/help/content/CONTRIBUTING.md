@@ -4,6 +4,12 @@
 
 Thanks for considering a contribution.
 
+## Project status and development model
+
+Rolling Memory is under **active, high-velocity development** and is still pre-1.0. This repository is the **public release face** of the project: it receives curated source snapshots and tagged releases derived from the internal development tree, and every snapshot is scanned for private material before it is published. The commit history here therefore shows release/snapshot commits rather than the full per-feature development history; every user-facing change is documented in [CHANGELOG.md](https://github.com/rocareer/rolling-memory/blob/main/CHANGELOG.md) and on the [releases page](https://github.com/rocareer/rolling-memory/releases).
+
+Because the engine evolves quickly, APIs, file formats and behaviors may change between releases — each change is recorded in the changelog, and we do our best to keep every release reproducible and benchmarkable. We are grateful for your understanding and support, and we warmly welcome participation: bug reports, benchmark reproductions, documentation fixes and pull requests are all appreciated (see below). Thank you for helping the project grow.
+
 ## Ground rules
 
 - Keep the runtime dependency-free: the shipped binary is self-contained, and its module set is the fixed
