@@ -1,11 +1,19 @@
 {
   "name": "@rocareer/dsh-rolling-memory",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.0.2",
   "type": "module",
-  "description": "DeepSeek Harness (dsh) Cordis plugin bundle for Rolling Memory (mounts dsh-mcp-client + bundled skill).",
+  "description": "Rolling Memory recall and skill for DeepSeek Harness (dsh).",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "engines": {
+    "dsh": "0.2.2-rc.3"
+  },
+  "scripts": {
+    "prepack": "bash check-pack.sh"
+  },
   "files": [
-    "cordis.patch.yml"
+    "check-pack.sh",
+    "cordis.patch.yml",
+    "skills"
   ],
   "dsh": {
     "bundle": {

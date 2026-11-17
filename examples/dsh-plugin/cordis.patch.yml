@@ -1,0 +1,17 @@
+- insert:
+    - id: rolling-memory-bundle-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: rolling-memory
+        transport: stdio
+        command: rolling-memory
+        args: ['mcp', '--mode', 'local']
+        env:
+          ROLLING_MEMORY_DAEMON: '0'
+        failOnStartupError: false
+    - id: rolling-memory-bundle-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: rolling-memory-bundle
+        includeDefaultRoots: false
+        bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@rocareer/dsh-rolling-memory/package.json')), 'skills')
