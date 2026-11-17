@@ -2,20 +2,44 @@
 
 All notable user-facing changes to **Rolling Memory** are documented in this file.
 
----
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.0.2 — 2026-11-18
+## [Unreleased]
+
+### Fixed
+
+- Recall delivery budget is now enforced end to end: the legacy 200-character per-item truncation floor was removed and truncation markers count against the budget, so `caps.chars = 300` never over-delivers.
+- Installer integrity checks are fail-closed: a SHA-256 mismatch for a downloaded release asset is a fatal error instead of a silent fallback to a source build; when no checksum tool or entry is available the installer reports `unverified` with an explicit reason.
+- Bare installs and one-command installs now honor the persisted language preference (`--lang` is no longer reset to English).
+- Harness conversation capture keeps envelope-only turns out of the user-speech stream.
+
+### Changed
+
+- Panel lifecycle management is unified: the `rolling-memory-panel` wrapper and the `panel` command share the same pid/log locations.
+
+## [0.0.2] - 2026-11-18
+
+### Changed
 
 - Consolidated cloud credential handling onto the single canonical pulse path: `mem2` credentials carrying a `bpep` blinded pepper use it verbatim, static secrets and legacy `mem2` tokens keep the documented derivation, and the speculative V2/legacy dual-read query arm, pepper policies, and the `RekeyUnits` migration layer were removed from the SDK and thin client (local plaintext mode was always single-arm).
-- Eliminated duplicate inline-snapshot documents during concurrent insert/scan windows and deduplicated repeated cloud candidates, preserving stable product/direct recall ordering; added deterministic regressions and passed the LoCoMo product-parity probe 24/24 runs.
 - Simplified the local product assembly onto the engine-native canonical companion path: structured-date ISO beacons and the merged closed-set companion tables (SI/IEC units, ISO 4217 currencies, ISO 3166 geography, statistical notation) now load directly from the SDK, replacing the redundant standalone language-pack layer with the same default max-capability indexing behavior.
-- Preserved high-resolution email sub-unit line spans by keeping subject metadata out of the document body while retaining the subject-plus-summary header block.
-- Added repository community-health files — a Contributor Covenant 2.1 Code of Conduct (English and Simplified Chinese), an accessibility statement, and a pull-request template — so the public repository covers the full GitHub community-standards checklist.
 - Aligned the client SDK with the project license: the SDK under `sdk/` now carries the same **PolyForm Noncommercial 1.0.0** terms as the rest of the repository (superseding the earlier Apache-2.0 SDK terms); commercial use still requires a separate written commercial license.
 
-## v0.0.1 — 2026-11-16
+### Fixed
+
+- Eliminated duplicate inline-snapshot documents during concurrent insert/scan windows and deduplicated repeated cloud candidates, preserving stable product/direct recall ordering; deterministic regressions were added and the LoCoMo product-parity probe passes 24/24 runs.
+- Preserved high-resolution email sub-unit line spans by keeping subject metadata out of the document body while retaining the subject-plus-summary header block.
+
+### Added
+
+- Added repository community-health files — a Contributor Covenant 2.1 Code of Conduct (English and Simplified Chinese), an accessibility statement, and a pull-request template — so the public repository covers the full GitHub community-standards checklist.
+
+## [0.0.1] - 2026-11-16
 
 Initial public release.
+
+### Added
 
 - **Local-first persistent memory (`local_plain`)**: on-device long-term memory over a single-file SQLite plaintext vault (FTS5 + BM25 retrieval with dimensionless Shannon self-information gain and event-chain coherence). Zero network egress, zero vector database, zero model calls required for daily memory storage and retrieval.
 - **Three-layer memory architecture**: structured separation across L1 Background (mounted local workspace folders), L2 Episodic (streaming Harness conversation capture with zero-copy verified pointer indexing — the multi-generation union read keeps the entire history recallable across encoder upgrades; on a live 4,773-document vault, cited-evidence recall went 26.3% → **90.9%**), and L3 Noetic (consolidated evidence-backed insights, automatically crystallized from recalled evidence).
@@ -23,5 +47,9 @@ Initial public release.
 - **Source-available web administration console** (`rolling-memory panel`): Go + SQLite backend (`:9006`) and Vue 3 + TypeScript + Vite frontend (`:8008`) providing a read-only Recall Debugger, three-layer memory browser, Harness sync diagnostics, ROI & adoption telemetry, an interactive memory graph, and an evaluation workbench over an event-driven WebSocket bus.
 - **Reproducible evaluation runner (`rmem eval`) & benchmark readings**: corpus-pinned evaluation over ACL 2024 LoCoMo and the University of Cambridge ATM-Bench with isolated evaluation scopes and per-question provenance. On the full official LoCoMo Cat 1–4 set (1,540 questions), the local plaintext arm reaches **85.26%** end-to-end judge accuracy (1313/1540; single-hop 90.96 / temporal 87.23 / multi-hop 70.57 / open-domain 71.88; retrieval 100% offline). ATM-Bench readings: Main-1013 R@10 **82.56%**, Hard-31 R@10 **50.35%** (official gold-set-mean, pinned corpus and protocol). One-command corpus fetch (`rmem eval --fetch atm|locomo`) downloads the pinned upstream data, rebuilds the corpus and question sets locally, and verifies the digests. The benchmark corpora are never bundled with the product or its release assets (upstream CC BY-NC 4.0 terms).
 - **Cross-platform packaging & self-update**: six-platform CLI binaries, macOS `.dmg` and Windows desktop packages (`.zip`), Windows drive-letter/UNC path hardening, and a built-in `rolling-memory update` path with SHA-256-verified release assets and dual GitHub/Gitee sources.
-- **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`, Apache-2.0) for local memory encoding and integration, with complete third-party license notices.
-- **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license (the SDK additionally carries Apache-2.0 terms for integration).
+- **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
+- **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
+
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/rocareer/rolling-memory/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/rocareer/rolling-memory/releases/tag/v0.0.1
