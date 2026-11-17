@@ -16,7 +16,7 @@ import (
 // come back newest-first across document rows and active Noetic records, with
 // the limit applied after the merge, and no semantic matching involved.
 func TestRecentDocsTimeOrderAcrossLayers(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "recent.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "recent.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

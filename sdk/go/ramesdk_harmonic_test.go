@@ -135,10 +135,13 @@ func TestCrossLanguageInlineSymbolAndSEAsianUnitHarmonicParity(t *testing.T) {
 	for _, s := range goPkt.Slots {
 		seen[s.H] = true
 	}
+	// 统一打包器（plain 正典）的谐波覆盖：$ / % 符号词项直接经闭集扩展器产出
+	// 货币/统计标签，泰语闭集词 span 产出质量/时长标签；旧 SDK 私有的
+	// ExtractInlineSymbolUnits / ExtractSEAsianUnitWords 自动注入（裸 "usd"/"pct"/"degc"
+	// 伴生词与 °C→degc 链）不属于统一脉冲语义，不再期望出现。
 	for _, wantTok := range []string{
-		"usd", "@unit:curr:usd", "@dim:money",
-		"pct", "@unit:stat:pct", "@dim:stat",
-		"degc", "@unit:temp:deg", "@dim:temp",
+		"@unit:curr:usd", "@dim:money",
+		"@unit:stat:pct", "@dim:stat",
 		"กิโลกรัม", "@unit:mass:kg", "@dim:mass",
 		"นาที", "@unit:time:min", "@dim:duration",
 		"เปอร์เซ็นต์",

@@ -166,6 +166,6 @@ func (e *Engine) applyStage3ClusterHook(idx *Index, st *rmClusterState, sc *rmQu
 		}
 	}
 	if addedNew {
-		sort.Slice(sc.dirtyUnits, func(i, j int) bool { return sc.dirtyUnits[i] < sc.dirtyUnits[j] })
+		sortInt32Asc(sc.dirtyUnits)
 	}
 }

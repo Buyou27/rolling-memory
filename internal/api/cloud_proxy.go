@@ -17,15 +17,14 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/clock"
-	"github.com/rocareer/rolling-memory/internal/cloudcred"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/evalns"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/langpack"
 	"github.com/rocareer/rolling-memory/internal/recall"
 	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
+	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
 
 // IsThinBrainProxy reports whether this Memory instance operates via the
@@ -43,11 +42,10 @@ func (m *Memory) IsThinBrainProxy() bool {
 }
 
 // brainEndpointAndKey resolves the memory-plane endpoint and credential, in order of explicitness:
-// environment (injected by the dashboard plugin) → explicit configuration → the machine account state.
-// An explicitly pinned endpoint is never rewritten: the account state only supplies the missing
-// credential for it. The only legal client-side credential is a data-plane signed key (`mem2.*`:
-// issued by the control plane, verified offline by the data plane, renewed locally before expiry);
-// the retired control-plane proxied path (`mem_*` user keys) is gone and no key material is compiled in.
+// environment (injected by the dashboard plugin) → explicit configuration. The only legal
+// client-side credential is a data-plane signed key (`mem2.*`: issued by the control plane,
+// verified offline by the data plane); the retired control-plane proxied path (`mem_*` user keys)
+// is gone, the client keeps no machine account state, and no key material is compiled in.
 func (m *Memory) brainEndpointAndKey() (baseURL, apiKey string) {
 	baseURL = strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_URL"))
 	apiKey = strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
@@ -60,17 +58,7 @@ func (m *Memory) brainEndpointAndKey() (baseURL, apiKey string) {
 			apiKey, _ = m.Config.SyncKey()
 		}
 	}
-	if baseURL != "" && apiKey != "" {
-		return baseURL, apiKey
-	}
-	accountURL, accountKey, err := cloudcred.Ensure(context.Background())
-	if err != nil || accountURL == "" || accountKey == "" {
-		return baseURL, apiKey
-	}
-	if baseURL != "" {
-		return baseURL, accountKey
-	}
-	return accountURL, accountKey
+	return baseURL, apiKey
 }
 
 // ThinClient returns an initialized Rolling Autonoetic Memory Engine Ultra-Thin Client
@@ -237,14 +225,12 @@ func (m *Memory) ThinClient() (*thinclient.Client, error) {
 			thinclient.PurgeLegacyTables(m.Store.DB())
 		}
 		m.thinVault, m.thinVaultErr = thinclient.NewVault(m.Store.DB(), nil)
-		if m.thinVaultErr == nil {
-			// 唯一 Vault 装配点（ingest 与 query 共用）：默认即最强装配
-			// （max-capability packer：128k BPE 先验自信息 + 词干/词根泛音 + 结构化日期信标 +
-			// 内联符号单位），与评测产品面（internal/eval 的 LocalIndexSurfaceProduct）同源同配。
-			// `ROLLING_MEMORY_LANGPACK=off` 显式退回纯平脉冲；显式指定语言包仅作诊断覆盖。
-			if err := langpack.ConfigureDefault(m.thinVault, os.Getenv("ROLLING_MEMORY_LANGPACK")); err != nil {
-				m.thinVaultErr = fmt.Errorf("langpack default assembly: %w", err)
-			}
+		if m.thinVaultErr == nil && !strings.EqualFold(strings.TrimSpace(os.Getenv("ROLLING_MEMORY_HARMONICS")), "off") {
+			m.thinVault.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
+				EnableStructuredDates: true,
+				Expander:              plain.CanonicalCompanionTags,
+			})
+			m.thinVault.SetSegmenterOptions(thinclient.SegmenterPackOptions{HarmonicOverlay: true})
 		}
 	})
 	if m.thinVaultErr != nil {

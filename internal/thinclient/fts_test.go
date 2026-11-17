@@ -19,7 +19,7 @@ import (
 // replace/delete keep the map and the postings consistent.
 func TestFTSContentlessMigrationAndRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.db")
-	db, err := sql.Open("sqlite", "file:"+path)
+	db, err := sql.Open("sqlite", vaultTestDSN("file:"+path))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

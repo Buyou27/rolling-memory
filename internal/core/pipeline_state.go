@@ -61,7 +61,7 @@ func (c *rmCandidate) hasGroup(g uint64) bool {
 	return false
 }
 
-func (c *rmCandidate) upsertMatch(group uint64, mass float64, entry int32, newBits uint16, unitEntries []rmDocEntry, tieBreakBits bool) {
+func (c *rmCandidate) upsertMatch(sc *rmQueryScratch, group uint64, mass float64, entry int32, newBits uint16, unitEntries []rmDocEntry, tieBreakBits bool) {
 	isExactGroup := tieBreakBits && unitEntries[entry].id == group
 	for i := range c.matches {
 		if c.matches[i].group == group {
@@ -77,10 +77,19 @@ func (c *rmCandidate) upsertMatch(group uint64, mass float64, entry int32, newBi
 			}
 			oldBits := unitEntries[c.matches[i].entry].bits
 			if len(c.matches[i].positions) == 0 {
-				pos := make([]int32, 2, 4)
-				pos[0] = c.matches[i].entry
-				pos[1] = entry
-				c.matches[i].positions = pos
+				if sc != nil {
+					// Reserve a 4-slot segment so follow-up repeats can append in
+					// place, matching the make([]int32, 2, 4) profile without a
+					// per-match allocation.
+					base := len(sc.matchPosPool)
+					sc.matchPosPool = append(sc.matchPosPool, c.matches[i].entry, entry, 0, 0)
+					c.matches[i].positions = sc.matchPosPool[base : base+2 : base+4]
+				} else {
+					pos := make([]int32, 2, 4)
+					pos[0] = c.matches[i].entry
+					pos[1] = entry
+					c.matches[i].positions = pos
+				}
 			} else {
 				c.matches[i].positions = append(c.matches[i].positions, entry)
 			}
@@ -207,7 +216,7 @@ func sortSentGroupW(s []rmStructSentGroupW) {
 		}
 		return
 	}
-	sort.Slice(s, func(i, j int) bool { return lessSentGroupW(s[i], s[j]) })
+	sort.Sort(sentGroupWSort(s))
 }
 
 func sortInt64Asc(s []int64) {
@@ -223,7 +232,7 @@ func sortInt64Asc(s []int64) {
 		}
 		return
 	}
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	sort.Sort(int64AscSort(s))
 }
 
 func sortStructGroupW(s []rmStructGroupW) {
@@ -239,12 +248,142 @@ func sortStructGroupW(s []rmStructGroupW) {
 		}
 		return
 	}
-	sort.Slice(s, func(i, j int) bool {
-		if s[i].group != s[j].group {
-			return s[i].group < s[j].group
+	sort.Sort(structGroupWSort(s))
+}
+
+// Concrete sort.Interface adapters for the typed helpers above and for large
+// build-slice call sites: sort.Sort runs the same pdqsort with direct
+// Swap/Less dispatch instead of the reflection-based sort.Slice path.
+type sentGroupWSort []rmStructSentGroupW
+
+func (s sentGroupWSort) Len() int           { return len(s) }
+func (s sentGroupWSort) Less(i, j int) bool { return lessSentGroupW(s[i], s[j]) }
+func (s sentGroupWSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type int64AscSort []int64
+
+func (s int64AscSort) Len() int           { return len(s) }
+func (s int64AscSort) Less(i, j int) bool { return s[i] < s[j] }
+func (s int64AscSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type structGroupWSort []rmStructGroupW
+
+func (s structGroupWSort) Len() int { return len(s) }
+func (s structGroupWSort) Less(i, j int) bool {
+	if s[i].group != s[j].group {
+		return s[i].group < s[j].group
+	}
+	return s[i].weight > s[j].weight
+}
+func (s structGroupWSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+type rmOccurrenceSort []rmOccurrence
+
+func (s rmOccurrenceSort) Len() int           { return len(s) }
+func (s rmOccurrenceSort) Less(i, j int) bool { return lessRmOccurrence(s[i], s[j]) }
+func (s rmOccurrenceSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type rmDyadSort []rmDyad
+
+func (s rmDyadSort) Len() int           { return len(s) }
+func (s rmDyadSort) Less(i, j int) bool { return lessRmDyad(s[i], s[j]) }
+func (s rmDyadSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type termPositionSort []TermPosition
+
+func (s termPositionSort) Len() int { return len(s) }
+func (s termPositionSort) Less(i, j int) bool {
+	if s[i].Sentence != s[j].Sentence {
+		return s[i].Sentence < s[j].Sentence
+	}
+	return s[i].Slot < s[j].Slot
+}
+func (s termPositionSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+type focalTermWeightSort []rmFocalTermWeight
+
+func (s focalTermWeightSort) Len() int           { return len(s) }
+func (s focalTermWeightSort) Less(i, j int) bool { return s[i].group < s[j].group }
+func (s focalTermWeightSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+// rmUnitStrength pairs a unit with its precomputed event strength for the
+// per-episode strength ordering.
+type rmUnitStrength struct {
+	unit     int32
+	strength float64
+}
+
+type rmUnitStrengthSort []rmUnitStrength
+
+func (s rmUnitStrengthSort) Len() int { return len(s) }
+func (s rmUnitStrengthSort) Less(i, j int) bool {
+	if s[i].strength != s[j].strength {
+		return s[i].strength > s[j].strength
+	}
+	return s[i].unit < s[j].unit
+}
+func (s rmUnitStrengthSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+// dyadPosting is one (phrase dyad, unit) posting in the cluster build.
+type dyadPosting struct {
+	pair rmDyad
+	unit int32
+}
+
+type dyadPostingSort []dyadPosting
+
+func (s dyadPostingSort) Len() int { return len(s) }
+func (s dyadPostingSort) Less(i, j int) bool {
+	x, y := s[i], s[j]
+	if x.pair.a != y.pair.a {
+		return x.pair.a < y.pair.a
+	}
+	if x.pair.b != y.pair.b {
+		return x.pair.b < y.pair.b
+	}
+	return x.unit < y.unit
+}
+func (s dyadPostingSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+// radixSortDyadPostings partitions postings in place into 1024 MSB buckets on
+// pair.a >> 54 (American flag sort; no second posting array) and then fully
+// sorts each L1-sized bucket with dyadPostingSort. Because dyadPostingSort is a
+// total order, the result matches an out-of-place stable partition followed by
+// the same per-bucket sorts; only the transient second array is avoided.
+func radixSortDyadPostings(postings []dyadPosting) {
+	const radixBits = 10
+	const numBuckets = 1 << radixBits
+	const shift = 64 - radixBits
+	var bucketCounts [numBuckets]uint32
+	for _, dp := range postings {
+		bucketCounts[dp.pair.a>>shift]++
+	}
+	var bucketOffsets [numBuckets + 1]uint32
+	for b := 0; b < numBuckets; b++ {
+		bucketOffsets[b+1] = bucketOffsets[b] + bucketCounts[b]
+	}
+	var next [numBuckets]uint32
+	copy(next[:], bucketOffsets[:numBuckets])
+	for b := 0; b < numBuckets; b++ {
+		end := bucketOffsets[b+1]
+		for next[b] < end {
+			d := postings[next[b]].pair.a >> shift
+			if int(d) == b {
+				next[b]++
+			} else {
+				postings[next[b]], postings[next[d]] = postings[next[d]], postings[next[b]]
+				next[d]++
+			}
 		}
-		return s[i].weight > s[j].weight
-	})
+	}
+	for b := 0; b < numBuckets; b++ {
+		s, e := bucketOffsets[b], bucketOffsets[b+1]
+		if e-s <= 1 {
+			continue
+		}
+		sub := postings[s:e]
+		sort.Sort(dyadPostingSort(sub))
+	}
 }
 
 func rmPopCount64(x uint64) int {
@@ -310,6 +449,51 @@ type rmQueryScratch struct {
 	// Per-engine memoization for warm-domain cosine misses. ResetScratch gives
 	// concurrent shallow engines independent maps, so shared CSR stays read-only.
 	dayCos map[uint64]float64
+	// Per-query arena for query terms and TermPositions to avoid map/slice allocations.
+	qTerms            map[uint64]Term
+	posMap            map[uint64][]TermPosition
+	posPool           []TermPosition
+	queryHashes       []uint64
+	hashGroup         map[uint64]uint64
+	detachedFrag      map[uint64]bool
+	detachedSlot2     map[uint64]bool
+	famMinDF          map[uint64]int
+	properSlots       map[TermPosition]int
+	primaryAtPos      map[TermPosition]uint64
+	groupRigid        map[uint64]bool
+	groupProper       map[uint64]bool
+	hasBroadComp      map[uint64]bool
+	kappaOcc          map[uint64]float64
+	anchorKappa       map[uint64]float64
+	isAnchorGroup     map[uint64]bool
+	anchorTimes       []int64
+	anchorUnitList    []int32
+	shellScale        map[uint64]float64
+	groups            map[uint64]float64
+	slotPrim          map[TermPosition]uint64
+	slotPure          map[TermPosition]bool
+	groupKeys         []uint64
+	activeEpisodes    []int32
+	latticeGKeys      []uint64
+	latticeDeltaCache map[uint64]float64
+	latticeGroupDF    map[uint64]int
+	latticeGroupW     map[uint64]float64
+	latticeHashes     []uint64
+	latticeQGroupMid  map[uint64]uint64
+	latticeGroupDFMid map[uint64]int
+	latticeGroupWMid  map[uint64]float64
+	latticeMidHashes  []uint64
+	selectCoverage    map[uint64]int
+	selectCompCov     map[uint64]float64
+	selectProfCache   map[int32]unitGroupProfile
+	endorseActiveSet  map[int32]bool
+	endorseQSet       map[uint64]struct{}
+	endorseEventUnits []scoredEventUnit
+	queryOccs         []rmOccurrence
+	queryDyads        []rmDyad
+	matchPosPool      []int32
+	explainAnchorPool []uint32
+	unitStrengthPool  []rmUnitStrength
 	// Memory pool for buildUnitGroupProfileWithPos (per-query arena).
 	profileItemPool []unitGroupItem
 	profilePosPool  []uint32
@@ -374,6 +558,7 @@ func (sc *rmQueryScratch) nextAnchorGen() uint32 {
 func (sc *rmQueryScratch) resetDirtyUnits(n int) uint32 {
 	sc.profileItemPool = sc.profileItemPool[:0]
 	sc.profilePosPool = sc.profilePosPool[:0]
+	sc.matchPosPool = sc.matchPosPool[:0]
 	if len(sc.dirtyUnits) > 0 {
 		for _, u := range sc.dirtyUnits {
 			prevMatches := sc.candidates[u].matches[:0]
@@ -961,7 +1146,7 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	for h := range idx.DF {
 		st.termKeys = append(st.termKeys, h)
 	}
-	sort.Slice(st.termKeys, func(i, j int) bool { return st.termKeys[i] < st.termKeys[j] })
+	sortUint64Asc(st.termKeys)
 	{
 		tKeys := st.termKeys
 		tn := uint32(len(tKeys))
@@ -1016,13 +1201,9 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	}
 	st.termRowPtr[len(st.termKeys)] = postAcc
 
-	type dyadPosting struct {
-		pair rmDyad
-		unit int32
-	}
 	docDyadRowPtr := make([]uint32, idx.N+1)
 	docDyadsFlat := make([]rmDyad, 0, totalDocEntries*2)
-	allDyadPostings := make([]dyadPosting, 0, totalDocEntries*2)
+	var allDyadPostings []dyadPosting
 	var occScratch []rmPackedOccurrence
 	var dyadScratch []rmDyad
 	var posScratch []uint32
@@ -1148,52 +1329,24 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 			dyadScratch, occScratch = st.extractDocDyadsInto(entries, occScratch, dyadScratch[:0])
 		}
 		docDyadsFlat = append(docDyadsFlat, dyadScratch...)
-		for _, pair := range dyadScratch {
-			allDyadPostings = append(allDyadPostings, dyadPosting{pair: pair, unit: int32(u)})
-		}
 	}
 	docDyadRowPtr[idx.N] = uint32(len(docDyadsFlat))
 
-	// Build flat CSR for intra-sentence PhraseDyad postings using 1024-bucket
-	// MSB radix partitioning on pair.a >> 54 so each L1-sized bucket sorts in-cache.
+	// Postings are one per doc dyad in the same order: size the posting slice
+	// exactly from the finished docDyadsFlat pass instead of growing both
+	// arrays in lockstep (the exponential growth re-copied gigabytes).
+	allDyadPostings = make([]dyadPosting, 0, len(docDyadsFlat))
+	for u := 0; u < idx.N; u++ {
+		for _, pair := range docDyadsFlat[docDyadRowPtr[u]:docDyadRowPtr[u+1]] {
+			allDyadPostings = append(allDyadPostings, dyadPosting{pair: pair, unit: int32(u)})
+		}
+	}
+
+	// Build flat CSR for intra-sentence PhraseDyad postings: in-place 1024-bucket
+	// MSB radix partition on pair.a >> 54 followed by a per-bucket sort (see
+	// radixSortDyadPostings).
 	if len(allDyadPostings) > 0 {
-		const radixBits = 10
-		const numBuckets = 1 << radixBits
-		const shift = 64 - radixBits
-		var bucketCounts [numBuckets]uint32
-		for _, dp := range allDyadPostings {
-			bucketCounts[dp.pair.a>>shift]++
-		}
-		var bucketOffsets [numBuckets + 1]uint32
-		for b := 0; b < numBuckets; b++ {
-			bucketOffsets[b+1] = bucketOffsets[b] + bucketCounts[b]
-		}
-		var writeCur [numBuckets]uint32
-		copy(writeCur[:], bucketOffsets[:numBuckets])
-		partitioned := make([]dyadPosting, len(allDyadPostings))
-		for _, dp := range allDyadPostings {
-			b := dp.pair.a >> shift
-			partitioned[writeCur[b]] = dp
-			writeCur[b]++
-		}
-		allDyadPostings = partitioned
-		for b := 0; b < numBuckets; b++ {
-			s, e := bucketOffsets[b], bucketOffsets[b+1]
-			if e-s <= 1 {
-				continue
-			}
-			sub := allDyadPostings[s:e]
-			sort.Slice(sub, func(i, j int) bool {
-				x, y := sub[i], sub[j]
-				if x.pair.a != y.pair.a {
-					return x.pair.a < y.pair.a
-				}
-				if x.pair.b != y.pair.b {
-					return x.pair.b < y.pair.b
-				}
-				return x.unit < y.unit
-			})
-		}
+		radixSortDyadPostings(allDyadPostings)
 		uniqueKeys := 1
 		for i := 1; i < len(allDyadPostings); i++ {
 			if allDyadPostings[i].pair != allDyadPostings[i-1].pair {
@@ -1951,8 +2104,75 @@ func (st *rmClusterState) extractDocDyadsExactInto(entries []rmDocEntry, out []r
 	return out[:w]
 }
 
+func lessRmOccurrence(a, b rmOccurrence) bool {
+	if a.pos.Sentence != b.pos.Sentence {
+		return a.pos.Sentence < b.pos.Sentence
+	}
+	if a.pos.Slot != b.pos.Slot {
+		return a.pos.Slot < b.pos.Slot
+	}
+	return a.id < b.id
+}
+
+func sortRmOccurrences(s []rmOccurrence) {
+	if len(s) <= 32 {
+		for i := 1; i < len(s); i++ {
+			v := s[i]
+			j := i - 1
+			for j >= 0 && lessRmOccurrence(v, s[j]) {
+				s[j+1] = s[j]
+				j--
+			}
+			s[j+1] = v
+		}
+		return
+	}
+	sort.Sort(rmOccurrenceSort(s))
+}
+
+func lessRmDyad(x, y rmDyad) bool {
+	if x.a != y.a {
+		return x.a < y.a
+	}
+	return x.b < y.b
+}
+
+func sortAndDedupRmDyads(pairs []rmDyad) []rmDyad {
+	if len(pairs) <= 1 {
+		return pairs
+	}
+	if len(pairs) <= 64 {
+		for i := 1; i < len(pairs); i++ {
+			v := pairs[i]
+			j := i - 1
+			for j >= 0 && lessRmDyad(v, pairs[j]) {
+				pairs[j+1] = pairs[j]
+				j--
+			}
+			pairs[j+1] = v
+		}
+	} else {
+		sort.Sort(rmDyadSort(pairs))
+	}
+	w := 1
+	for i := 1; i < len(pairs); i++ {
+		if pairs[i] != pairs[w-1] {
+			pairs[w] = pairs[i]
+			w++
+		}
+	}
+	return pairs[:w]
+}
+
 func rmQueryDyadsWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) []rmDyad {
+	return rmQueryDyadsWithPositionsInto(nil, qTerms, qPositions)
+}
+
+func rmQueryDyadsWithPositionsInto(sc *rmQueryScratch, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) []rmDyad {
 	var occs []rmOccurrence
+	if sc != nil {
+		occs = sc.queryOccs[:0]
+	}
 	for h, atom := range qTerms {
 		if len(qPositions) > 0 {
 			if posList := qPositions[h]; len(posList) > 0 {
@@ -1970,20 +2190,17 @@ func rmQueryDyadsWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]T
 			pos: TermPosition{Sentence: int(atom.Sent - 1), Slot: int(atom.Slot)},
 		})
 	}
+	if sc != nil {
+		sc.queryOccs = occs
+	}
 	if len(occs) < 2 {
 		return nil
 	}
-	sort.Slice(occs, func(i, j int) bool {
-		a, b := occs[i], occs[j]
-		if a.pos.Sentence != b.pos.Sentence {
-			return a.pos.Sentence < b.pos.Sentence
-		}
-		if a.pos.Slot != b.pos.Slot {
-			return a.pos.Slot < b.pos.Slot
-		}
-		return a.id < b.id
-	})
-	seen := make(map[rmDyad]struct{})
+	sortRmOccurrences(occs)
+	var pairs []rmDyad
+	if sc != nil {
+		pairs = sc.queryDyads[:0]
+	}
 	const maxSpan = maxPhraseSlotSpan
 	for i, a := range occs {
 		for _, b := range occs[i+1:] {
@@ -1997,19 +2214,13 @@ func rmQueryDyadsWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]T
 			if left > right {
 				left, right = right, left
 			}
-			seen[rmDyad{a: left, b: right}] = struct{}{}
+			pairs = append(pairs, rmDyad{a: left, b: right})
 		}
 	}
-	pairs := make([]rmDyad, 0, len(seen))
-	for pair := range seen {
-		pairs = append(pairs, pair)
+	pairs = sortAndDedupRmDyads(pairs)
+	if sc != nil {
+		sc.queryDyads = pairs
 	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].a != pairs[j].a {
-			return pairs[i].a < pairs[j].a
-		}
-		return pairs[i].b < pairs[j].b
-	})
 	return pairs
 }
 
@@ -2079,12 +2290,7 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 			rootPairs = append(rootPairs, rmDyad{a: a, b: b})
 		}
 		if len(rootPairs) > 1 {
-			sort.Slice(rootPairs, func(i, j int) bool {
-				if rootPairs[i].a != rootPairs[j].a {
-					return rootPairs[i].a < rootPairs[j].a
-				}
-				return rootPairs[i].b < rootPairs[j].b
-			})
+			sort.Sort(rmDyadSort(rootPairs))
 		}
 		for i, pair := range rootPairs {
 			if i > 0 && pair == rootPairs[i-1] {
@@ -2103,7 +2309,7 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 			total += c
 		}
 		if len(keys) > 1 {
-			sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+			sortUint64Asc(keys)
 		}
 		var entropy float64
 		if total > 0 {

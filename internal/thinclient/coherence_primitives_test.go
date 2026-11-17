@@ -88,7 +88,7 @@ func TestComputeDimensionlessCoherence_ScaleAndLengthInvariance(t *testing.T) {
 
 func TestVaultSearchClientSDKDefault_CloneInflationImmunity(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "clone_immunity.sqlite")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatal(err)
 	}

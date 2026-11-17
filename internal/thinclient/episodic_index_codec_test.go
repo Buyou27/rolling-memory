@@ -28,12 +28,12 @@ func TestEpisodicIndexCodecIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db1, err := sql.Open("sqlite", path)
+	db1, err := sql.Open("sqlite", vaultTestDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db1.Close()
-	db2, err := sql.Open("sqlite", path)
+	db2, err := sql.Open("sqlite", vaultTestDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestEpisodicIndexCodecIsolation(t *testing.T) {
 }
 
 func TestEpisodicIndexLegacySchemaMigratedWithoutLoss(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}

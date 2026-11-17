@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
@@ -55,10 +56,7 @@ func (v *Vault) episodicCodecKey() ([]byte, error) {
 		name := f.Name()
 		plainSub := "github.com/rocareer/rolling-memory/sdk/go/pulse/plain/"
 		plainPkg := "github.com/rocareer/rolling-memory/sdk/go/pulse/plain."
-		langpackSub := "github.com/rocareer/rolling-memory/internal/langpack/"
-		langpackPkg := "github.com/rocareer/rolling-memory/internal/langpack."
-		supported := strings.HasPrefix(name, plainSub) || strings.HasPrefix(name, plainPkg) ||
-			strings.HasPrefix(name, langpackSub) || strings.HasPrefix(name, langpackPkg)
+		supported := strings.HasPrefix(name, plainSub) || strings.HasPrefix(name, plainPkg)
 		if !supported || strings.Contains(name, ".func") || strings.HasSuffix(name, "-fm") {
 			return "", errors.New("thinclient: unsupported episodic encoder function")
 		}
@@ -1031,11 +1029,35 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 			locus:         strings.TrimSpace(r.locus),
 			refPointer:    r.refPointer,
 			contentDigest: r.digest,
+			termMeta:      make(map[uint64]core.Term, len(pkt.Slots)/2+4),
 			termCounts:    make(map[uint64]int, len(pkt.Slots)/2+4),
 		}
 		for _, atom := range pkt.Slots {
 			doc.termCounts[atom.H]++
 			doc.docLen++
+			if atom.H == 0 {
+				continue
+			}
+			bits := atom.RawBitsX10
+			if bits == 0 {
+				bits = 32
+			}
+			role := core.RolePrimary
+			ext := core.ExtFlagSeenPrimary
+			if (atom.RawBitsX10&1) == 1 && (atom.ClassFlags&FlagHasConn) != 0 {
+				role = core.RoleMorphStem
+				ext = core.ExtFlagSeenMorphOrClos
+			}
+			if cur, ok := doc.termMeta[atom.H]; !ok || bits > cur.Bits {
+				doc.termMeta[atom.H] = core.Term{
+					Hash:     atom.H,
+					Bits:     bits,
+					Flags:    atom.ClassFlags,
+					Role:     role,
+					ExtFlags: ext,
+					Group:    atom.H,
+				}
+			}
 		}
 		if len(pkt.SentenceFrames) > 0 {
 			doc.sentHashes = make([][]uint64, 0, len(pkt.SentenceFrames))

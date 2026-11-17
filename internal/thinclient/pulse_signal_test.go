@@ -16,7 +16,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/cloudcred"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 	_ "modernc.org/sqlite"
 )
@@ -24,7 +23,7 @@ import (
 func openTestVault(t *testing.T) *thinclient.Vault {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "vault_signal.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -325,14 +324,7 @@ func TestLiveUpstreamPulseSignalScoreAndWarnings_UserID10(t *testing.T) {
 	}
 	apiKey := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
 	if apiKey == "" {
-		accountURL, accountKey, accountErr := cloudcred.Ensure(context.Background())
-		if accountErr != nil {
-			t.Skipf("live data-plane credentials not configured (%v); skipping live pulse-signal test", accountErr)
-		}
-		if baseURL == "" {
-			baseURL = accountURL
-		}
-		apiKey = accountKey
+		t.Skip("ROLLING_MEMORY_BRAIN_KEY not set; skipping live pulse-signal test")
 	}
 	healthURL := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(healthURL, "/open/memory/v1") {

@@ -190,7 +190,7 @@ func TestCrossEncoderRerankScorePropagatesToItemDelivery(t *testing.T) {
 // the leading segment of their source text (`srcHead`), allowing callers to resolve
 // delivered entries back to their source items.
 func TestFlatItemDeliveryCarriesSourceHead(t *testing.T) {
-	const head = "ID: 20250221_133131"
+	const head = "ID: 20220703_210745"
 	src := head + "\nWe had lunch at Fancett together with Grace."
 
 	usable := []store.Candidate{{

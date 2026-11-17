@@ -51,9 +51,10 @@ func TestPunctuationFallbackUnicodeSpaceAndFlags(t *testing.T) {
 		{
 			name:  "non BMP code points",
 			input: "💡✨",
+			// 统一分词器（plain 正典）：So ≥ U+1F000 的符号（💡）作为符号词项入脉冲；
+			// 低于该平面的 So 符号（✨ U+2728）不产词项，也不再走逐码点符号回退。
 			want: []ramesdk.BlindTokenAtom{
 				{H: enc.KeyedHash64("💡"), RawBitsX10: 10},
-				{H: enc.KeyedHash64("✨"), RawBitsX10: 10},
 			},
 		},
 		{

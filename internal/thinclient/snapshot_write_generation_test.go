@@ -13,20 +13,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// incrTestDSN mirrors the storage profile the production vault opens with
-// (internal/db.Connect): immediate write transactions, a busy timeout, and WAL.
-// A bare file DSN runs on the rollback journal with a zero busy timeout, so
-// lock contention between the foreground writer and the debounced snapshot
-// refresh turns into an instant SQLITE_BUSY on a loaded machine - a failure
-// mode the product's own connection settings rule out.
-func incrTestDSN(dbPath string) string {
-	return dbPath + "?_txlock=immediate&_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)"
-}
-
 func openIncrTestVault(t *testing.T, name string) (*Vault, *sql.DB, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), name)
-	db, err := sql.Open("sqlite", incrTestDSN(dbPath))
+	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -44,7 +34,7 @@ func openIncrTestVault(t *testing.T, name string) (*Vault, *sql.DB, string) {
 // a from-scratch rebuild, never an approximation.
 func snapshotEquivalence(t *testing.T, v *Vault, dbPath string, queries []string) {
 	t.Helper()
-	coldDB, err := sql.Open("sqlite", incrTestDSN(dbPath))
+	coldDB, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open cold db: %v", err)
 	}
@@ -155,6 +145,86 @@ func TestSnapshotWriteGenerationManyWrites(t *testing.T) {
 		}
 	}
 	snapshotEquivalence(t, v, dbPath, queries)
+}
+
+func TestSnapshotInlineAppendExcludesAlreadyScannedDocs(t *testing.T) {
+	v, db, dbPath := openIncrTestVault(t, "inline_stale_fingerprint.db")
+	v.slotCacheMu.Lock()
+	v.snapRef.refreshing = true
+	v.slotCacheMu.Unlock()
+	defer func() {
+		v.slotCacheMu.Lock()
+		v.snapRef.refreshing = false
+		v.slotCacheMu.Unlock()
+	}()
+
+	docs := []struct {
+		id, text string
+		occ      int64
+	}{
+		{"d1", "Albert visited the Porto lighthouse and photographed the Douro river sunset.", 1700000100},
+		{"d2", "The Dongguan train arrived at noon; dinner was braised goose with friends.", 1700000200},
+	}
+	for _, d := range docs {
+		if err := v.SaveLocalPlaintext(d.id, d.occ, d.text, SplitSentences(d.text), CloudIngestResponse{AddressURI: "mem://" + d.id}); err != nil {
+			t.Fatalf("save %s: %v", d.id, err)
+		}
+	}
+	snap, err := v.buildCorpusSnapshot(context.Background())
+	if err != nil || snap == nil || len(snap.docs) != len(docs) {
+		t.Fatalf("initial snapshot: snap=%v docs=%d err=%v", snap != nil, len(snap.docs), err)
+	}
+
+	var docsRev, firstRowID, secondRowID int64
+	if err := db.QueryRow(`SELECT docs_rev FROM thin_vault_corpus_revision WHERE id = 1`).Scan(&docsRev); err != nil {
+		t.Fatalf("docs revision: %v", err)
+	}
+	if err := db.QueryRow(`SELECT rowid FROM thin_vault_docs WHERE doc_id = 'd1'`).Scan(&firstRowID); err != nil {
+		t.Fatalf("first rowid: %v", err)
+	}
+	if err := db.QueryRow(`SELECT rowid FROM thin_vault_docs WHERE doc_id = 'd2'`).Scan(&secondRowID); err != nil {
+		t.Fatalf("second rowid: %v", err)
+	}
+	if secondRowID-firstRowID != 1 {
+		t.Fatalf("unexpected fixture rowids: first=%d second=%d", firstRowID, secondRowID)
+	}
+
+	// Reproduce the state left when an INSERT lands between the aggregate read and
+	// the row scan: baseInline already contains d2, while its fingerprint does not.
+	v.slotCacheMu.Lock()
+	v.snapRef.lastDocsRev = docsRev - 1
+	v.snapRef.inlineDocsRev = docsRev - 1
+	v.snapRef.inlineDocCnt = 1
+	v.snapRef.inlineDocRowSum = firstRowID
+	v.snapRef.inlineMaxRowID = firstRowID
+	v.snapRef.inlineDocTextLen = int64(len(docs[0].text))
+	v.slotCacheMu.Unlock()
+
+	got, err := v.buildCorpusSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("incremental snapshot: %v", err)
+	}
+	seen := make(map[string]int, len(got.docs))
+	for _, doc := range got.docs {
+		seen[doc.docID]++
+	}
+	if len(got.docs) != len(docs) || seen["d1"] != 1 || seen["d2"] != 1 {
+		t.Fatalf("duplicate inline snapshot docs: %+v", seen)
+	}
+	v.slotCacheMu.RLock()
+	inlineCnt := v.snapRef.inlineDocCnt
+	inlineMaxRowID := v.snapRef.inlineMaxRowID
+	inlineDocsRev := v.snapRef.inlineDocsRev
+	inlineDocsLen := len(v.snapRef.inlineDocs)
+	inlineTotalLen := v.snapRef.inlineTotalLen
+	v.slotCacheMu.RUnlock()
+	if inlineCnt != int64(len(docs)) || inlineMaxRowID != secondRowID || inlineDocsRev != docsRev || inlineDocsLen != len(docs) {
+		t.Fatalf("inline metadata did not converge: cnt=%d max=%d rev=%d/%d docs=%d", inlineCnt, inlineMaxRowID, inlineDocsRev, docsRev, inlineDocsLen)
+	}
+	if inlineTotalLen != got.totalDocLen {
+		t.Fatalf("inline length diverged: inline=%d snapshot=%d", inlineTotalLen, got.totalDocLen)
+	}
+	snapshotEquivalence(t, v, dbPath, []string{"Porto lighthouse", "Dongguan braised goose"})
 }
 
 // TestFullPostingsEquivalentToLazyScan pins the complete inverted index built
@@ -272,7 +342,7 @@ func TestSnapshotRevisionGateCrossConnectionWrite(t *testing.T) {
 	}
 
 	// Foreign writer: a separate connection the Vault knows nothing about.
-	ext, err := sql.Open("sqlite", dbPath)
+	ext, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open ext: %v", err)
 	}

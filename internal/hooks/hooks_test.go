@@ -35,10 +35,11 @@ import (
 const testNow = int64(1793102400)
 
 func TestMain(m *testing.M) {
-	previous := time.Local
+	// UTC stays for the whole process: restoring time.Local after m.Run would
+	// write a global while goroutines outliving their test (vault snapshot
+	// refreshes) may still read it, and the process exits immediately after.
 	time.Local = time.UTC
 	code := m.Run()
-	time.Local = previous
 	os.Exit(code)
 }
 

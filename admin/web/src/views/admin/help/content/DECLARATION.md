@@ -6,7 +6,7 @@
 
 ## 1. Release Boundary: what ships here, and what does not
 
-**Rolling Memory** is a local-first memory tool for AI coding agents, built on the **Rolling Autonoetic Memory Engine**. This repository ships **pure local mode (`local_plain`)** and contains the complete, auditable client side of the system: the CLI and multi-harness plugin, the local SQLite plaintext vault, the cross-language SDKs, the transport-layer egress gate, and the `rmem eval` evaluation runner.
+**Rolling Memory** is a local-first memory tool for AI coding agents, built on the **Rolling Autonoetic Memory Engine**. This repository ships **pure local mode (`local_plain`)** and contains the complete, auditable client side of the system: the CLI and multi-harness plugin, the local SQLite plaintext vault, the client SDK, the transport-layer egress gate, and the `rmem eval` evaluation runner.
 
 The high-order **cloud memory services** and **proprietary enterprise extensions** are closed-source and are **not** open or included in this repository. Nothing shipped here requires them: this release runs 100% in local plaintext mode (`local_plain`) fully offline with zero external network requests.
 
@@ -31,7 +31,7 @@ As cryptography and trustworthy-AI researchers, we reject disingenuous excuses �
 3. **Limitations**: We are **not necessarily right, and not necessarily smart**. Both human engineering and AI involvement can introduce defects, edge-case omissions, and inconsistencies.
 4. **No Warranty ("AS IS")**: **We make no commitment or guarantee regarding the quality of this software** — no guarantee of correctness, security, completeness, fitness for a particular purpose, or long-term maintainability.
 5. **Assumption of Risk**: Users must **judge for themselves and bear all consequences**. Review, test, and assess risks independently before running this software. In no event shall the authors or licensor be liable for any direct, indirect, incidental, or consequential damages.
-6. **License Boundary (Noncommercial Use Only · Commercial Use Licensed Separately)**: Released under the [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX: `PolyForm-Noncommercial-1.0.0`). The full source code is free to use, modify, and share **for any noncommercial purpose**. **Commercial use, enterprise production deployment, managed SaaS hosting, and commercial distribution are prohibited** without a separate written commercial license from the authors. The client SDKs under `sdk/` are separately licensed under Apache-2.0 (`sdk/LICENSE`). Third-party components retain their respective upstream licenses as detailed in [NOTICE](NOTICE).
+6. **License Boundary (Noncommercial Use Only · Commercial Use Licensed Separately)**: Released under the [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX: `PolyForm-Noncommercial-1.0.0`). The full source code is free to use, modify, and share **for any noncommercial purpose**. **Commercial use, enterprise production deployment, managed SaaS hosting, and commercial distribution are prohibited** without a separate written commercial license from the authors. The client SDK under `sdk/` is separately licensed under Apache-2.0 (`sdk/LICENSE`). Third-party components retain their respective upstream licenses as detailed in [NOTICE](NOTICE).
 
 ## 3. Contributing
 

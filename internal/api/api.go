@@ -421,9 +421,11 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 		// Graph supplementary traces can bypass the requested filters.
 		return nil, fmt.Errorf("graph recall cannot enforce session, asof or window filters across all sources")
 	}
-	// A RAME database keeps only the `thin_vault_*` schema (PurgeLegacyTables retired the
-	// assertion graph), so the legacy recall body below has no tables to read: serve the
-	// recall from the local plaintext vault (FTS5 + slot matching) instead.
+	// Databases without the legacy assertion table serve recall from the local
+	// plaintext vault only (FTS5 + slot matching). Fresh databases still carry the
+	// legacy schema with an empty graph (store.TestLegacyGraphLivenessOnFreshDatabase),
+	// so for them the legacy body below runs first and the local-mode fallback
+	// further down is the load-bearing path.
 	if m.Store != nil && !m.Store.HasLegacyGraph() {
 		return m.thinClientRecall(req)
 	}
@@ -519,8 +521,10 @@ func (m *Memory) Recent(scope, reader *string, limit int) ([]map[string]any, err
 	if err := m.checkLocalVaultScope(effectiveScope); err != nil {
 		return nil, err
 	}
-	// A RAME database has no `assertion` table at all (PurgeLegacyTables retired it),
-	// so the newest-entries view must be served from the local plaintext vault.
+	// Serve the newest-entries view from the local plaintext vault when the legacy
+	// assertion table is absent. Fresh databases still carry the legacy schema
+	// (store.TestLegacyGraphLivenessOnFreshDatabase), so this fast path does not
+	// trigger for them.
 	if m.Store != nil && !m.Store.HasLegacyGraph() {
 		return m.recentVaultItems(limit)
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 // sortUint64Asc sorts ascending with a typed insertion sort on short slices to
-// avoid sort.Slice reflection; larger inputs fall back to sort.Slice.
+// avoid reflection; larger inputs use the concrete sort.Interface adapter.
 func sortUint64Asc(s []uint64) {
 	if len(s) < 2 {
 		return
@@ -26,11 +26,11 @@ func sortUint64Asc(s []uint64) {
 		}
 		return
 	}
-	sort.Slice(s, func(a, b int) bool { return s[a] < s[b] })
+	sort.Sort(uint64AscSort(s))
 }
 
 // sortUint32Asc sorts ascending with a typed insertion sort on short slices to
-// avoid sort.Slice reflection; larger inputs fall back to sort.Slice.
+// avoid reflection; larger inputs use the concrete sort.Interface adapter.
 func sortUint32Asc(s []uint32) {
 	if len(s) < 2 {
 		return
@@ -47,7 +47,7 @@ func sortUint32Asc(s []uint32) {
 		}
 		return
 	}
-	sort.Slice(s, func(a, b int) bool { return s[a] < s[b] })
+	sort.Sort(uint32AscSort(s))
 }
 
 // sortInt32Asc is the []int32 twin of sortUint32Asc.
@@ -67,7 +67,7 @@ func sortInt32Asc(s []int32) {
 		}
 		return
 	}
-	sort.Slice(s, func(a, b int) bool { return s[a] < s[b] })
+	sort.Sort(int32AscSort(s))
 }
 
 // sortUnitGroupItemByGroup orders items by ascending group id, matching the
@@ -88,8 +88,41 @@ func sortUnitGroupItemByGroup(items []unitGroupItem) {
 		}
 		return
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].group < items[j].group })
+	sort.Sort(unitGroupItemSort(items))
 }
+
+// Concrete sort.Interface adapters for the typed helpers above and the
+// remaining large-slice call sites: sort.Sort runs the same pdqsort with
+// direct Swap/Less dispatch instead of the reflection-based sort.Slice path.
+type uint64AscSort []uint64
+
+func (s uint64AscSort) Len() int           { return len(s) }
+func (s uint64AscSort) Less(i, j int) bool { return s[i] < s[j] }
+func (s uint64AscSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type uint32AscSort []uint32
+
+func (s uint32AscSort) Len() int           { return len(s) }
+func (s uint32AscSort) Less(i, j int) bool { return s[i] < s[j] }
+func (s uint32AscSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type int32AscSort []int32
+
+func (s int32AscSort) Len() int           { return len(s) }
+func (s int32AscSort) Less(i, j int) bool { return s[i] < s[j] }
+func (s int32AscSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type unitGroupItemSort []unitGroupItem
+
+func (s unitGroupItemSort) Len() int           { return len(s) }
+func (s unitGroupItemSort) Less(i, j int) bool { return s[i].group < s[j].group }
+func (s unitGroupItemSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type scoredEventUnitSort []scoredEventUnit
+
+func (s scoredEventUnitSort) Len() int           { return len(s) }
+func (s scoredEventUnitSort) Less(i, j int) bool { return lessScoredEventUnit(s[i], s[j]) }
+func (s scoredEventUnitSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 // localSlotZ is the closed-form single-sided geometric series sum of the
 // intra-sentence slot kernel exp(-(d-1)/e) over d >= 1:
@@ -433,11 +466,14 @@ func evalUnrelatedBystanderBorrowFromProfiles(profS, profNb unitGroupProfile, af
 // anchors `sharedMask` with `explainee`, bounded by the Anchor-Quota
 // Hyperbolic Capacity Envelope min(1, Z_local * A_raw / M_comp,0) and gated by
 // the explainee's uncompensated salient missing mass exp(-I_{>μ}(explainee \ explainer) / μ).
-func computeDirectedLocalExplainWork(explainer unitGroupProfile, sharedMask []bool, anchorRawNats, explaineeSalientMissing, explaineeMu float64, qTerms map[uint64]struct{}) float64 {
+func computeDirectedLocalExplainWork(sc *rmQueryScratch, explainer unitGroupProfile, sharedMask []bool, anchorRawNats, explaineeSalientMissing, explaineeMu float64, qTerms map[uint64]struct{}) float64 {
 	if anchorRawNats <= 0 || len(explainer.items) == 0 {
 		return 0
 	}
 	var anchorPacked []uint32
+	if sc != nil {
+		anchorPacked = sc.explainAnchorPool[:0]
+	}
 	var coreAnchorNats float64
 	hasAnyPos := false
 	for i, isShared := range sharedMask {
@@ -450,6 +486,9 @@ func computeDirectedLocalExplainWork(explainer unitGroupProfile, sharedMask []bo
 				anchorPacked = append(anchorPacked, explainer.items[i].pos...)
 			}
 		}
+	}
+	if sc != nil {
+		sc.explainAnchorPool = anchorPacked
 	}
 	if coreAnchorNats <= 0 {
 		return 0
@@ -555,8 +594,8 @@ func (e *Engine) evalPairFromProfilesQ(st *rmClusterState, u int32, profU unitGr
 		}
 	}
 
-	selfExplain := computeDirectedLocalExplainWork(profU, ix.sharedMaskU, ix.sharedMin, ix.peerSalientEx, profV.muMass, qSet)
-	peerExplain := computeDirectedLocalExplainWork(profV, ix.sharedMaskV, ix.sharedMin, ix.selfSalientEx, profU.muMass, qSet)
+	selfExplain := computeDirectedLocalExplainWork(e.queryScratch, profU, ix.sharedMaskU, ix.sharedMin, ix.peerSalientEx, profV.muMass, qSet)
+	peerExplain := computeDirectedLocalExplainWork(e.queryScratch, profV, ix.sharedMaskV, ix.sharedMin, ix.selfSalientEx, profU.muMass, qSet)
 
 	return UnitRelationPeer{
 		UnitID:              idx.UnitIDs[v],
@@ -848,7 +887,7 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 		for v := range candSet {
 			cands = append(cands, v)
 		}
-		sort.Slice(cands, func(i, j int) bool { return cands[i] < cands[j] })
+		sortInt32Asc(cands)
 
 		dpiFloor := math.Exp(-float64(hop))
 		var bestStep ExplanationChainStep
@@ -985,6 +1024,36 @@ func intraEventEndorseGain(rel UnitRelationPeer, aff, harmCov, eventRatio, satDe
 	return gain
 }
 
+type scoredEventUnit struct {
+	unit     int32
+	energy   float64
+	microOcc float64
+	prof     unitGroupProfile
+}
+
+func lessScoredEventUnit(a, b scoredEventUnit) bool {
+	if a.energy != b.energy {
+		return a.energy > b.energy
+	}
+	return a.unit < b.unit
+}
+
+func sortScoredEventUnits(s []scoredEventUnit) {
+	if len(s) <= 32 {
+		for i := 1; i < len(s); i++ {
+			v := s[i]
+			j := i - 1
+			for j >= 0 && lessScoredEventUnit(v, s[j]) {
+				s[j+1] = s[j]
+				j--
+			}
+			s[j+1] = v
+		}
+		return
+	}
+	sort.Sort(scoredEventUnitSort(s))
+}
+
 // applyIntraEventExplanatoryEndorsement executes the two-pass event-cluster
 // endorsement before Phase-4 unfolding:
 //   - Pass 1 (Primary Event Cluster Identification): identifies the peak
@@ -1031,19 +1100,19 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 		return
 	}
 
-	type scoredEventUnit struct {
-		unit     int32
-		energy   float64
-		microOcc float64
-		prof     unitGroupProfile
-	}
 	seedFloor := subFloor * maxE
 	// A non-trivial multi-record event cluster requires the seed plus at least 2 peers (>= 3 units total).
 	const (
 		minClusterPeers = 2
 		burstFreeQuota  = 3.0
 	)
-	activeSet := make(map[int32]bool, 32)
+	activeSet := sc.endorseActiveSet
+	if activeSet == nil {
+		activeSet = make(map[int32]bool, 32)
+		sc.endorseActiveSet = activeSet
+	} else {
+		clear(activeSet)
+	}
 	// Primary event cluster: the continuous affinity gate aff >= 1/e is the
 	// real selector (gap <= meanGap up to the ordinal penalty). The former
 	// peakDay±1 calendar pre-filter was a dead guard whenever meanGap < 1d
@@ -1092,24 +1161,20 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 			}
 		}
 	}
-	var eventUnits []scoredEventUnit
+	eventUnits := sc.endorseEventUnits[:0]
 	for u := range activeSet {
 		if eu := evalStage2E(u); eu > 0 {
 			eventUnits = append(eventUnits, scoredEventUnit{unit: u, energy: eu})
 		}
 	}
+	sc.endorseEventUnits = eventUnits
 	if len(eventUnits) < 2 {
 		return
 	}
-	sort.Slice(eventUnits, func(i, j int) bool {
-		if eventUnits[i].energy != eventUnits[j].energy {
-			return eventUnits[i].energy > eventUnits[j].energy
-		}
-		return eventUnits[i].unit < eventUnits[j].unit
-	})
+	sortScoredEventUnits(eventUnits)
 	for i := range eventUnits {
 		u := eventUnits[i].unit
-		eventUnits[i].prof = e.buildUnitGroupProfile(st, u, highDFThresh)
+		eventUnits[i].prof = st.buildUnitGroupProfileWithPos(idx, sc, u, highDFThresh, true)
 		for k := 0; k < i; k++ {
 			if eventUnits[k].energy > eventUnits[i].energy {
 				if aff := st.temporalAffinity(idx, eventUnits[k].unit, u); aff >= identityFloor {
@@ -1122,7 +1187,7 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 	// Build the query ground-set once: directed explanatory work inside the
 	// endorsement pass is query-conditioned (3-body), counting only unknown
 	// payload terms u \ Q as explanation.
-	qSet := buildQueryGroundSet(qTerms)
+	qSet := buildQueryGroundSetInto(sc, qTerms)
 	for i := 1; i < len(eventUnits); i++ {
 		u := eventUnits[i].unit
 		profU := eventUnits[i].prof
@@ -1169,10 +1234,25 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 // ground set used by query-conditioned explanation: both the raw term hash and
 // its family group are considered already known to the asker.
 func buildQueryGroundSet(qTerms map[uint64]Term) map[uint64]struct{} {
+	return buildQueryGroundSetInto(nil, qTerms)
+}
+
+func buildQueryGroundSetInto(sc *rmQueryScratch, qTerms map[uint64]Term) map[uint64]struct{} {
 	if len(qTerms) == 0 {
 		return nil
 	}
-	qSet := make(map[uint64]struct{}, len(qTerms)*2)
+	var qSet map[uint64]struct{}
+	if sc != nil {
+		qSet = sc.endorseQSet
+		if qSet == nil {
+			qSet = make(map[uint64]struct{}, len(qTerms)*2)
+			sc.endorseQSet = qSet
+		} else {
+			clear(qSet)
+		}
+	} else {
+		qSet = make(map[uint64]struct{}, len(qTerms)*2)
+	}
 	for h, qa := range qTerms {
 		qSet[h] = struct{}{}
 		if qa.Group != 0 {

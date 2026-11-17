@@ -19,7 +19,7 @@ const legacyEpisodicIndexDDL = `CREATE TABLE thin_vault_episodic_index (doc_id T
 
 func migrationTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestEpisodicMigrationRollback(t *testing.T) {
 
 func TestEpisodicMigrationConcurrentConnections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.sqlite")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
+	db, err := sql.Open("sqlite", vaultTestDSN("file:"+path))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -163,11 +163,17 @@ func TestWidgetAndGraphHandlersMakeZeroCloudCallsInLocalMode(t *testing.T) {
 
 	InvalidateLocomoPublicCorpusCache()
 	graphRaw := callPluginHandler(t, graphHandler, "/graph", `{"scope":"default","limit":50}`)
-	if !strings.Contains(graphRaw, `"suite":"locomo"`) {
-		t.Fatalf("local graph must return preset LoCoMo preview graph: %s", clipTest(graphRaw, 400))
-	}
-	if strings.Contains(graphRaw, "local_graph_1") {
-		t.Fatalf("local mode preview graph must not expose raw local vault docs: %s", clipTest(graphRaw, 400))
+	// 源码树不随包分发 LoCoMo 演示快照（CC BY-NC 语料）：缺夹具时 /graph 合法走本地预览
+	// 回退，预设图谱契约仅在快照可用时钉住（与 locomo_public_graph_shape_test.go 同口径）。
+	if _, err := loadLocomoDemoCorpus(); err != nil {
+		t.Logf("LoCoMo 演示快照不可用（%v）：跳过预设图谱断言，仅校验零外呼契约", err)
+	} else {
+		if !strings.Contains(graphRaw, `"suite":"locomo"`) {
+			t.Fatalf("local graph must return preset LoCoMo preview graph: %s", clipTest(graphRaw, 400))
+		}
+		if strings.Contains(graphRaw, "local_graph_1") {
+			t.Fatalf("local mode preview graph must not expose raw local vault docs: %s", clipTest(graphRaw, 400))
+		}
 	}
 
 	if got := atomic.LoadInt32(&hits); got != 0 {

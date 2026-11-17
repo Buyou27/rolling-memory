@@ -2,7 +2,7 @@
 
 **[简体中文](README.zh-CN.md) · [English](README.md)**
 
-本目录提供 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）**（`RAME` · `/open/memory/v1/*`）的官方**零依赖 Go 客户端 SDK**（`sdk/go`），以及黄金测试向量集（`go/spec/golden_vectors.json`）、公共分词/字符整形/闭集底座（`go/public`）与脉冲编解码（`go/pulse/{plain,cipher}`）。
+本目录提供 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）**（`RAME` · `/open/memory/v1/*`）的官方**零依赖 Go 客户端 SDK**（`sdk/go`），以及黄金测试向量集（`go/spec/golden_vectors.json`）、公共分词/字符整形/闭集底座（`go/public`）与明文脉冲编解码（`go/pulse/plain`）。
 
 **SDK 版本：`1.11.3`**（语义化版本 · 与线格式规范 `RAME-BlindPulse-v1` 独立版本化）。SDK 以命名常量暴露该版本（`ramesdk.SDKVersion`）。**任何 SDK 变更都必须提升该版本号**；SDK 必须与线格式规范保持逐字节一致，任何外部服务或宿主都不得通过导入引擎内部检索包来使用编码器。
 
@@ -12,14 +12,18 @@
 
 | 语言 | 路径 | 运行时与依赖 | 验证命令 |
 |---|---|---|---|
-| **Go** | [`sdk/go/ramesdk.go`](go/ramesdk.go) · `sdk/go/public/` · `sdk/go/pulse/` · `sdk/go/api/` | 仅 Go 1.26+ 标准库（`crypto/hmac`、`crypto/sha256`、`unicode`） | `go test -v ./sdk/go/...` |
+| **Go** | [`sdk/go/ramesdk.go`](go/ramesdk.go) · `sdk/go/public/` · `sdk/go/pulse/plain/` | 仅 Go 1.26+ 标准库（`crypto/hmac`、`crypto/sha256`、`unicode`） | `go test -v ./sdk/go/...` |
 | **规范与黄金向量** | [`sdk/go/spec/golden_vectors.json`](go/spec/golden_vectors.json) | 标准测试向量（英文 / 驼峰、中日韩滑动二元组、日韩阿拉伯多语种、代码、标点） | 由 `TestCrossLanguageSDKGoldenParity` 自动校验 |
+
+### 1.1 无 core 依赖的编码布局
+
+- `ramesdk.go` 保留云端 Client、Store、HTTP 契约和公开 DTO；`encoder_facade.go` 是客户端唯一编码入口，统一委托 `pulse/plain`；`public/termdoc` 保存 stdlib-only 的 `Term`/`Doc` 叶类型与 `QueryIndexView`。SDK 镜像不需要引擎检索 `core`。
 
 ---
 
 ## 2. `RAME-BlindPulse-v1` 确定性客户端算法规范
 
-为保证 RAME 服务、随包客户端与多语言 SDK 之间**零漂移**，同时严格遵循 **100% 语种无关、零词表、零字符截断** 的规范，每个 SDK 都实现完全相同的四阶段编码流水线：
+为保证 RAME 服务与各随包客户端 SDK 之间**零漂移**，同时严格遵循 **100% 语种无关、零词表、零字符截断** 的规范，每个 SDK 都实现完全相同的四阶段编码流水线：
 
 ### 阶段 1：256-bit 本地密钥派生与 `KeyedHash64`
 - 给定用户密钥字节串 $S$：$K_{\text{user}} = \text{SHA-256}(S) \in \{0,1\}^{256}$。
@@ -74,14 +78,11 @@
 当客户端直接用 `HMAC-SHA256(K_user, lower(w))` 对表面词元做哈希时，跨语言、符号或日期格式的两种等价表达——例如 `"50 kg"` 与 `"50 千克"`、`"$100"` 与 `"100 USD"`、`"Tokyo"` 与 `"東京"`、`"2026/11/8"` 与 `"2026年11月8日"`——会生成完全无关的 64 位哈希 `h`。
 
 **标准谐波表**是**可选的客户端增益附加项**（`SetCanonicalHarmonics` / `set_canonical_harmonics` / `setCanonicalHarmonics`），在数据包离开客户端之前，为原始表面词元脉冲附加一个**归一化的密文伴随标签**：
-1. **四语言 SDK 内置能力**：
+1. **内置标准伴随表**：
    - **结构化日期 ISO 信标（`EnableStructuredDates`）**：零词表状态机识别 `YYYY/M/D`、`YYYY.MM.DD` 与 `YYYY年M月D日`，并为标准 `YYYY-MM-DD` 字符串发射伴随密文脉冲（`b = 284`，`f = FlagHasDigit | FlagHasConn`）。自 SDK `1.11.0` 起，同一状态机还会在 ISO 脉冲之前紧邻发射专用日历信标伴随脉冲 `H(K_user, "cal:YYYY-MM-DD")`（`b = 588`，`f` 相同）——一个供云端引擎做日历轴共振的不透明日历锚点。该能力纯属附加：上述 ISO 脉冲不变，且伴随脉冲仅在 `EnableStructuredDates` 开启时出现。
    - **ISO 3166 L0–L3 地理层级表（`LookupISO3166GeoHarmonics` / `lookup_iso3166_geo_harmonics` / `lookupISO3166GeoHarmonics`）**：将多语种国家、地区 / 省州与主要城市名映射为标准一阶（`@geo:cc:<iso2>`）与二阶（`@geo:cont:<cont>` / `@dim:geo`）标签。
-   - **合并闭集谐波表（`LookupClosedSetHarmonics` / `lookup_closed_set_harmonics` / `lookupClosedSetHarmonics`）**：对合并后的闭集轴——地理、亲属、角色、日历、生物、物体、场所，以及带统计维度标签（`@unit:*` / `@dim:*`）的 SI/IEC/ISO 4217 单位——提供一次内置查表；可通过 `CombineHarmonicExpanders` / `combine_harmonic_expanders` / `combineHarmonicExpanders` 与自定义展开器组合，并经 `SetCanonicalHarmonics` 启用。
+   - **合并闭集谐波表（`LookupClosedSetHarmonics` / `lookup_closed_set_harmonics` / `lookupClosedSetHarmonics`）**：对合并后的闭集轴——地理、亲属、角色、日历、生物、物体、场所，以及带统计维度标签（`@unit:*` / `@dim:*`）的 SI/IEC/ISO 4217 单位——提供一次内置查表：覆盖多语种单位词与符号（`kilograms` / `千克` / `キログラム` $\to$ `@unit:mass:kg`、`@dim:mass`）、国际货币符号 / 代码（`$`、`€`、`¥`、`usd`、`cny` $\to$ `@unit:curr:*`、`@dim:money`）与统计记号（`%`、`p99`、`avg` $\to$ `@unit:stat:*`、`@dim:stat`）；可通过 `CombineHarmonicExpanders` / `combine_harmonic_expanders` / `combineHarmonicExpanders` 与自定义展开器组合，并经 `SetCanonicalHarmonics` 启用。
    - **自定义 `HarmonicExpander` 回调**：任何应用都可以把领域符号或本体术语映射为每个词元最多 2 个标准标签。
-2. **Go 客户端伴随套件（`internal/langpack`）**：
-   - **通用 SI / ISO 4217 / 统计核心（`langpack/common`）**：映射国际货币符号 / 代码（`$`、`€`、`£`、`¥`、`₩`、`₹`、`usd`、`eur`、`cny` $\to$ `@unit:curr:*`、`@dim:money`）、物理计量符号（`kg`、`km`、`kwh`、`psi`、`gb` $\to$ `@unit:*`、`@dim:*`）与统计记号（`%`、`p99`、`avg`、`max` $\to$ `@unit:stat:*`、`@dim:stat`）。
-   - **多语种计量与形态包（`langpack/multi` 及各语言包）**：把多语种单位词（`kilograms` / `千克` / `公斤` / `キログラム` / `킬로그램` / `กิโลกรัม` $\to$ `@unit:mass:kg`、`@dim:mass`）与形态变体对齐到同一批标准标签。
 
 ### 4.2 客户端机制：附加密文归一化标签
 谐波表**100% 在客户端**以纯密文标签叠加的方式工作：
@@ -92,7 +93,7 @@
 3. **100% 密文脉冲一致（服务端不可逆、零明文）**：由于 `H(t_1)` 与 `H(t_2)` 在本地经 `HMAC-SHA256(K_user, tag)` 计算为 64 位整数脉冲（`{h, b, f}`），**谐波值本身就是密文脉冲，绝不是明文**。由于服务端不持有 $K_{\text{user}}$，它永远无法反推谐波哈希 `h`，也无法知道谐波内容代表什么（无法分辨伴随脉冲来自重量单位、货币、日期还是城市）。无论用户写 `"50 kg"` 还是 `"50 千克"`，两个数据包都保留各自不同的主哈希（`H("kg")` 与 `H("千克")`），同时共享完全相同的伴随哈希 `H("@unit:mass:kg")`——本质上**在不向服务端暴露词元或标签的前提下，为两个密文词元贴上了同一张共享的归一化标签**。
 
 ### 4.3 为什么它是纯增益附加项（不是作弊，且默认可选）
-- **不开也能工作（零硬依赖）**：记忆引擎与四个 SDK 在 `SetCanonicalHarmonics` 关闭时（`EnableStructuredDates = false`、`Expander = nil`）开箱即用。没有谐波表，精确词元与子词召回照常工作；启用谐波表只是额外获得跨写法与跨语种的召回增益。
+- **不开也能工作（零硬依赖）**：记忆引擎与 SDK 在 `SetCanonicalHarmonics` 关闭时（`EnableStructuredDates = false`、`Expander = nil`）开箱即用。没有谐波表，精确词元与子词召回照常工作；启用谐波表只是额外获得跨写法与跨语种的召回增益。
 - **密文标签归一化，而非语料定制或作弊**：
   - **谐波值就是密文脉冲（服务端无法反推或检视）**：`"@unit:mass:kg"` 或 `"@geo:cc:jp"` 这类标准字符串只在编码期间的客户端内存中存在，**绝不出现在线路上**。在线路上与服务端，谐波值只是用用户密钥 $K_{\text{user}}$ 派生的一个不透明 64 位整数 `h`——服务端对谐波的含义或类别零知识。
   - **语料零改动**：用户本地存储中的原始文本与主词元脉冲永远不会被改写、伪造或过滤。

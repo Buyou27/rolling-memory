@@ -61,11 +61,41 @@ func (a *TermExtractor) atomizeSentences(canonical string, collectFrames bool) (
 	return a.atomizeSentenceList(splitSentences(canonical), collectFrames)
 }
 
+func appendPosToArena(positions map[uint64][]TermPosition, posBacking []TermPosition, h uint64, pos TermPosition) ([]TermPosition, bool) {
+	prev := positions[h]
+	if len(prev) == 0 {
+		idx := len(posBacking)
+		posBacking = append(posBacking, pos)
+		positions[h] = posBacking[idx : idx+1 : idx+1]
+		return posBacking, true
+	}
+	if prev[len(prev)-1] == pos {
+		return posBacking, false
+	}
+	// Repeats grow their own slice with amortized doubling. Copying the whole
+	// prefix back into the shared backing per occurrence would cost O(k^2) for
+	// a term occurring k times.
+	positions[h] = append(prev, pos)
+	return posBacking, true
+}
+
 func (a *TermExtractor) atomizeSentenceList(sents []string, collectFrames bool) (map[uint64]Term, map[uint64]int, map[uint64][]TermPosition, [][]TermSample) {
 	atoms := make(map[uint64]Term, 64)
 	counts := make(map[uint64]int, 64)
 	positions := make(map[uint64][]TermPosition, 64)
 	posBacking := make([]TermPosition, 0, len(sents)*24+16)
+	_, primaryFrames := a.atomizeSentenceListInto(sents, collectFrames, atoms, counts, positions, posBacking)
+	return atoms, counts, positions, primaryFrames
+}
+
+func (a *TermExtractor) atomizeSentenceListInto(
+	sents []string,
+	collectFrames bool,
+	atoms map[uint64]Term,
+	counts map[uint64]int,
+	positions map[uint64][]TermPosition,
+	posBacking []TermPosition,
+) ([]TermPosition, [][]TermSample) {
 	var primaryFrames [][]TermSample
 	if collectFrames {
 		primaryFrames = make([][]TermSample, 0, len(sents))
@@ -154,21 +184,17 @@ func (a *TermExtractor) atomizeSentenceList(sents []string, collectFrames bool) 
 			}
 			atom.Flags |= raw.ClassFlags
 			atoms[raw.H] = atom
-			if prev := positions[raw.H]; len(prev) == 0 {
-				counts[raw.H] = 1
-				idx := len(posBacking)
-				posBacking = append(posBacking, pos)
-				positions[raw.H] = posBacking[idx : idx+1 : idx+1]
-			} else if prev[len(prev)-1] != pos {
+			var added bool
+			posBacking, added = appendPosToArena(positions, posBacking, raw.H, pos)
+			if added && counts != nil {
 				counts[raw.H]++
-				positions[raw.H] = append(prev, pos)
 			}
 		}
 		if collectFrames && len(framePrimaries) >= 2 {
 			primaryFrames = append(primaryFrames, framePrimaries)
 		}
 	}
-	return atoms, counts, positions, primaryFrames
+	return posBacking, primaryFrames
 }
 
 // ExtractDoc 将明文切分为携带词项（Terms）、频次与句槽位置表的完整待入库 Doc。
@@ -191,7 +217,7 @@ func (a *TermExtractor) ExtractTermsDoc(unitID string, occurredAt int64, text st
 }
 
 // ExtractQueryWithPositions 提取查询词项表、出现次数与句槽位置，并并入空格容错双轨粘合候选与句尾自然语言日期信标。
-func (a *TermExtractor) ExtractQueryWithPositions(idx *Index, text string) (map[uint64]Term, map[uint64]int, map[uint64][]TermPosition) {
+func (a *TermExtractor) ExtractQueryWithPositions(idx QueryIndexView, text string) (map[uint64]Term, map[uint64]int, map[uint64][]TermPosition) {
 	canonical := CanonicalizeApostrophe(text)
 	sents := splitSentences(canonical)
 	qTerms, counts, qPositions, _ := a.atomizeSentenceList(sents, false)
@@ -199,6 +225,24 @@ func (a *TermExtractor) ExtractQueryWithPositions(idx *Index, text string) (map[
 	a.mergeQueryNaturalDateBeaconsSents(canonical, sents, qTerms, qPositions)
 	a.mergeQueryOrdinalSpanBeacons(idx, sents, qTerms, qPositions)
 	return qTerms, counts, qPositions
+}
+
+// ExtractQueryInto 是 ExtractQueryWithPositions 的零分配复用快速路径：
+// 直接将词项与句槽位置写入调用方传入的 qTerms、qPositions 与 posPool Arena 中。
+func (a *TermExtractor) ExtractQueryInto(
+	idx QueryIndexView,
+	text string,
+	qTerms map[uint64]Term,
+	qPositions map[uint64][]TermPosition,
+	posPool []TermPosition,
+) []TermPosition {
+	canonical := CanonicalizeApostrophe(text)
+	sents := splitSentences(canonical)
+	posPool, _ = a.atomizeSentenceListInto(sents, false, qTerms, nil, qPositions, posPool)
+	a.mergeQuerySpaceFaultFusionSents(idx, canonical, sents, qTerms)
+	posPool = a.mergeQueryNaturalDateBeaconsSentsInto(canonical, sents, qTerms, qPositions, posPool)
+	posPool = a.mergeQueryOrdinalSpanBeaconsInto(idx, sents, qTerms, qPositions, posPool)
+	return posPool
 }
 
 // 查询侧在主体词项之外并入空格容错双轨外挂的去空格粘合候选
@@ -336,6 +380,10 @@ func scanSentenceNaturalDates(ws []string, startWi, sentNum int, isQuery, leadWo
 }
 
 func (a *TermExtractor) upsertNaturalDateBeaconTerms(iso string, sentIdx, slotIdx int, isQuery bool, terms map[uint64]Term, counts map[uint64]int, positions map[uint64][]TermPosition) {
+	_ = a.upsertNaturalDateBeaconTermsInto(iso, sentIdx, slotIdx, isQuery, terms, counts, positions, nil)
+}
+
+func (a *TermExtractor) upsertNaturalDateBeaconTermsInto(iso string, sentIdx, slotIdx int, isQuery bool, terms map[uint64]Term, counts map[uint64]int, positions map[uint64][]TermPosition, posPool []TermPosition) []TermPosition {
 	sentU16 := clampPosU16(sentIdx)
 	slotU16 := clampPosU16(slotIdx)
 	pos := TermPosition{Sentence: sentIdx - 1, Slot: slotIdx}
@@ -370,18 +418,17 @@ func (a *TermExtractor) upsertNaturalDateBeaconTerms(iso string, sentIdx, slotId
 				counts[h] = 1
 			}
 			if positions != nil {
-				positions[h] = []TermPosition{pos}
+				posPool, _ = appendPosToArena(positions, posPool, h, pos)
 			}
 		} else if positions != nil {
-			prev := positions[h]
-			if len(prev) == 0 || prev[len(prev)-1] != pos {
-				positions[h] = append(prev, pos)
-				if counts != nil {
-					counts[h]++
-				}
+			var added bool
+			posPool, added = appendPosToArena(positions, posPool, h, pos)
+			if added && counts != nil {
+				counts[h]++
 			}
 		}
 	}
+	return posPool
 }
 
 func (a *TermExtractor) resolveNaturalDateMonthSlot(monthWord string, sentIdx, fallbackSlot int, positions map[uint64][]TermPosition) int {
@@ -400,8 +447,12 @@ func (a *TermExtractor) resolveNaturalDateMonthSlot(monthWord string, sentIdx, f
 }
 
 func (a *TermExtractor) mergeQueryNaturalDateBeaconsSents(canonical string, sents []string, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) {
+	_ = a.mergeQueryNaturalDateBeaconsSentsInto(canonical, sents, qTerms, qPositions, nil)
+}
+
+func (a *TermExtractor) mergeQueryNaturalDateBeaconsSentsInto(canonical string, sents []string, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, posPool []TermPosition) []TermPosition {
 	if a == nil || a.enc == nil || !a.enc.harmOpts.EnableStructuredDates || len(qTerms) == 0 || len(sents) == 0 {
-		return
+		return posPool
 	}
 	var allQueryWords []string
 	for _, s := range sents {
@@ -447,10 +498,11 @@ func (a *TermExtractor) mergeQueryNaturalDateBeaconsSents(canonical string, sent
 				w0 := strings.TrimSuffix(stripDatePunct(ws[slotIdx-1]), ".")
 				resolvedSlot = a.resolveNaturalDateMonthSlot(w0, sentIdx, slotIdx, qPositions)
 			}
-			a.upsertNaturalDateBeaconTerms(iso, sentIdx, resolvedSlot, true, qTerms, nil, qPositions)
+			posPool = a.upsertNaturalDateBeaconTermsInto(iso, sentIdx, resolvedSlot, true, qTerms, nil, qPositions, posPool)
 		}
 		scanSentenceNaturalDates(ws, startWi, sIdx+1, true, leadWordRepeated, "", emitISO)
 	}
+	return posPool
 }
 
 func (a *TermExtractor) mergeDocNaturalDateBeaconsSents(occurredAt int64, sents []string, atoms map[uint64]Term, counts map[uint64]int, positions map[uint64][]TermPosition) {
@@ -546,13 +598,17 @@ func ClampPosU16(v int) uint16 { return clampPosU16(v) }
 //     into runs tolerating a single-day gap; only an unambiguous single-run
 //     histogram may emit (multi-trip anchors abstain);
 //  4. begin polarity emits the run's first day, end polarity its last day.
-func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) {
-	if a == nil || a.enc == nil || !a.enc.harmOpts.EnableStructuredDates || idx == nil || idx.N == 0 || len(qTerms) == 0 {
-		return
+func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx QueryIndexView, sents []string, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) {
+	_ = a.mergeQueryOrdinalSpanBeaconsInto(idx, sents, qTerms, qPositions, nil)
+}
+
+func (a *TermExtractor) mergeQueryOrdinalSpanBeaconsInto(idx QueryIndexView, sents []string, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, posPool []TermPosition) []TermPosition {
+	if a == nil || a.enc == nil || !a.enc.harmOpts.EnableStructuredDates || queryIndexAbsent(idx) || idx.CorpusSize() == 0 || len(qTerms) == 0 {
+		return posPool
 	}
 	for _, tm := range qTerms {
 		if tm.Role == RoleClosedBeacon && tm.Bits == calBeaconCarrierBitsX10 {
-			return
+			return posPool
 		}
 	}
 	polarity := int8(0)
@@ -578,11 +634,11 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string,
 				// day" names the quantum itself and therefore selects a boundary
 				// element of the anchor run.
 				if (strings.HasPrefix(nextTag, "@cal:") || strings.HasPrefix(nextTag, "@unit:time")) && nextTag != "@unit:time:day" {
-					return
+					return posPool
 				}
 			}
 			if polarity != 0 && pol != polarity {
-				return
+				return posPool
 			}
 			if polarity == 0 {
 				polSent, polSlot = sIdx+1, wi
@@ -591,13 +647,13 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string,
 		}
 	}
 	if polarity == 0 {
-		return
+		return posPool
 	}
 	var anchorH uint64
 	var anchorMass float64
 	// Anchor rarity tier: proper-name primary terms with document frequency
 	// within [2, N/e] of the corpus (at most ≈36.8% of documents).
-	dfCeil := float64(idx.N) / math.E
+	dfCeil := float64(idx.CorpusSize()) / math.E
 	for h, tm := range qTerms {
 		if tm.Role != RolePrimary || tm.Flags&FlagHasUpper == 0 {
 			continue
@@ -618,15 +674,16 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string,
 		anchorH = h
 	}
 	if anchorH == 0 {
-		return
+		return posPool
 	}
 	dayOf := func(u int32) int64 {
-		if int(u) >= len(idx.UnitMeta) {
+		occurredAt, narratedAt, _, ok := idx.UnitTime(u)
+		if !ok {
 			return -1 << 62
 		}
-		ts := idx.UnitMeta[u].OccurredAt
+		ts := occurredAt
 		if ts == 0 {
-			ts = idx.UnitMeta[u].NarratedAt
+			ts = narratedAt
 		}
 		if ts == 0 {
 			return -1 << 62
@@ -640,7 +697,7 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string,
 		}
 	})
 	if len(dayUnits) == 0 {
-		return
+		return posPool
 	}
 	maxUnits := 0
 	for _, c := range dayUnits {
@@ -650,7 +707,7 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string,
 	}
 	_, _, dStar, ok := resolveOrdinalSpanBoundary(dayUnits, maxUnits, polarity > 0)
 	if !ok {
-		return
+		return posPool
 	}
 	iso := time.Unix(dStar*86400, 0).UTC().Format("2006-01-02")
 	// Continuous-energy dose only: emit the bare ISO day term (284-bit carrier,
@@ -677,7 +734,8 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeacons(idx *Index, sents []string,
 			Slot:     slotU16,
 		}
 		if qPositions != nil && idx.TermDFOf(h) > 0 {
-			qPositions[h] = []TermPosition{{Sentence: polSent - 1, Slot: polSlot}}
+			posPool, _ = appendPosToArena(qPositions, posPool, h, TermPosition{Sentence: polSent - 1, Slot: polSlot})
 		}
 	}
+	return posPool
 }

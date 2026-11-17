@@ -76,7 +76,9 @@ func TestInstallDefaultExtendedHarnesses(t *testing.T) {
 // The build lands in a temporary directory that is removed
 // again when the suite ends.
 func TestMain(m *testing.M) {
-	previous := time.Local
+	// UTC stays for the whole process: restoring time.Local after m.Run would
+	// write a global while goroutines outliving their test (vault snapshot
+	// refreshes) may still read it, and the process exits immediately after.
 	time.Local = time.UTC
 
 	root, err := repoRootDir()
@@ -96,7 +98,6 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
-	time.Local = previous
 	os.RemoveAll(tempDir)
 	os.Exit(code)
 }

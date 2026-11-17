@@ -25,7 +25,7 @@ func TestEpisodicPointerIndexJSONL(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,12 +98,12 @@ func TestEpisodicPointerIndexJSONL(t *testing.T) {
 func TestEpisodicIndexEnsureAndCrossInstance(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault.sqlite")
-	db1, err := sql.Open("sqlite", path)
+	db1, err := sql.Open("sqlite", vaultTestDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db1.Close()
-	db2, err := sql.Open("sqlite", path)
+	db2, err := sql.Open("sqlite", vaultTestDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestEpisodicIndexContentIdentity(t *testing.T) {
 	}
 	writeSource("quartz")
 	ref := "@ref:jsonl:" + path + ":0#0"
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestEpisodicEnsureAndRecentIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestEpisodicEnsureAndRecentIdentity(t *testing.T) {
 }
 
 func TestEpisodicIndexAtomicMismatch(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestEpisodicPointerRepointSameContent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +471,7 @@ func TestEpisodicPointerRelocatesByContentDigest(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}

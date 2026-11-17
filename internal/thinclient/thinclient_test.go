@@ -17,10 +17,19 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/cloudcred"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 	_ "modernc.org/sqlite"
 )
+
+// vaultTestDSN mirrors the storage profile the production runtime opens vault
+// files with (internal/db.Connect): immediate write transactions, a 15s busy
+// timeout, and WAL. Harness connections carry the same lock patience and
+// journal semantics, so ordinary contention with the vault's own background
+// activity never surfaces as an instant SQLITE_BUSY. Twin of the
+// internal-package helper in storage_profile_test.go.
+func vaultTestDSN(dbPath string) string {
+	return dbPath + "?_txlock=immediate&_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)"
+}
 
 // TestHTTPBrainTransportDefaultsToSingleIncarnation pins the ordinary Harness
 // query boundary: sibling fan-out is an explicit opt-in, never an engine default
@@ -56,7 +65,7 @@ func TestHTTPBrainTransportDefaultsToSingleIncarnation(t *testing.T) {
 // TestRecallNoeticMatchesOriginalCueNotEvidence proves that a long answer or
 // cited evidence cannot smuggle an unrelated Noetic record into a later query.
 func TestRecallNoeticMatchesOriginalCueNotEvidence(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "noetic-cue.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "noetic-cue.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -92,7 +101,7 @@ func TestRememberPreservesVaultWhenCloudIngestFails(t *testing.T) {
 		http.Error(w, "engine unavailable", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "local-first.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "local-first.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -130,7 +139,7 @@ func TestRememberPreservesVaultWhenCloudIngestFails(t *testing.T) {
 
 func TestRememberEpisodicByRefInvalidSourcePreservesPlaintext(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +203,7 @@ func TestRememberEpisodicByRefInvalidSourcePreservesPlaintext(t *testing.T) {
 
 func TestRememberEpisodicByRefPreservesIdenticalInline(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +268,7 @@ func TestRememberEpisodicByRefPreservesIdenticalInline(t *testing.T) {
 
 func TestLoadLocalDocumentRefPrefixIdentity(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +499,7 @@ func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "thin_vault.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -626,11 +635,7 @@ func TestLiveUpstreamV1Integration_UserID10(t *testing.T) {
 	}
 	apiKey := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
 	if apiKey == "" {
-		_, accountKey, accountErr := cloudcred.Ensure(context.Background())
-		if accountErr != nil {
-			t.Skipf("live data-plane credentials not configured (%v); skipping live integration check", accountErr)
-		}
-		apiKey = accountKey
+		t.Skip("ROLLING_MEMORY_BRAIN_KEY not set; skipping live integration check")
 	}
 	healthURL := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(healthURL, "/open/memory/v1") {
@@ -646,7 +651,7 @@ func TestLiveUpstreamV1Integration_UserID10(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "live_u10_vault.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -725,7 +730,7 @@ func TestLiveUpstreamV1Integration_UserID10(t *testing.T) {
 // TestClientSDKDefaultRecallCacheInvalidatesChangedDocument prevents the
 // shared blind-slot cache from serving stale atoms after a docID is rewritten.
 func TestClientSDKDefaultRecallCacheInvalidatesChangedDocument(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "cache-invalidation.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "cache-invalidation.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -758,7 +763,7 @@ func TestClientSDKDefaultRecallCacheInvalidatesChangedDocument(t *testing.T) {
 
 func TestClientSDKDefaultRecall_StandaloneAndOfflineFallback(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "sdk_default.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -937,130 +942,12 @@ func normalizePulseForTest(pkt *thinclient.BlindPulsePacket) error {
 	return nil
 }
 
-// TestVaultSecretSurvivesMem2KeyRotation verifies that when NewVault is initialized with a
-// short-lived `mem2.<payload>.<sig>` signed key, renewing/rotating the signed key (`iat`/`exp`/`sig`
-// change for the same tenant) keeps the blind token hashes `{h, b, f}` 100% invariant so previously
-// ingested memories remain recallable with 0 re-ingestion (no `rigid_vacuum` false empty).
-func TestVaultSecretSurvivesMem2KeyRotation(t *testing.T) {
-	keyA := "mem2.eyJ0aWQiOiJ1c2VyIiwidWlkIjoiMTAiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDA4NjQwMH0.sig_rotation_alpha_1111"
-	keyB := "mem2.eyJ0aWQiOiJ1c2VyIiwidWlkIjoiMTAiLCJpYXQiOjE3MDAwODAwMDAsImV4cCI6MTcwMDE2NjQwMH0.sig_rotation_beta_2222"
-	keyOther := "mem2.eyJ0aWQiOiJvdGhlciIsInVpZCI6Ijk5IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwODY0MDB9.sig_other_3333"
-
-	ingestedByUnit := map[string]map[uint64]bool{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/open/memory/v1/ingest":
-			var pkt thinclient.BlindPulsePacket
-			if err := json.NewDecoder(r.Body).Decode(&pkt); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := normalizePulseForTest(&pkt); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			set := map[uint64]bool{}
-			for _, s := range pkt.Slots {
-				set[s.H] = true
-			}
-			ingestedByUnit[pkt.UnitID] = set
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(thinclient.CloudIngestResponse{
-				UnitID: pkt.UnitID,
-				Layer:  pkt.Layer,
-			})
-		case "/open/memory/v1/query":
-			var req struct {
-				Query thinclient.BlindPulsePacket `json:"query"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := normalizePulseForTest(&req.Query); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			var out []thinclient.CloudQueryHit
-			for unitID, set := range ingestedByUnit {
-				matched := 0
-				for _, s := range req.Query.Slots {
-					if set[s.H] {
-						matched++
-					}
-				}
-				if matched > 0 {
-					out = append(out, thinclient.CloudQueryHit{
-						UnitID:      unitID,
-						Layer:       thinclient.LayerEpisodic,
-						AddressURI:  "C6:L3:B001/C6:L2:B001/C6:L1:B001#00",
-						WaveScore:   float64(matched),
-						FinalWeight: float64(matched),
-					})
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(out)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	dbPath := filepath.Join(t.TempDir(), "mem2_rotation.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	defer db.Close()
-
-	// Phase 1: Ingest under keyA (initial 24h signed key)
-	vaultA, err := thinclient.NewVault(db, []byte(keyA))
-	if err != nil {
-		t.Fatalf("NewVault(keyA): %v", err)
-	}
-	clientA := thinclient.NewClient(vaultA, thinclient.NewHTTPBrainTransport(srv.URL, keyA))
-	ctx := context.Background()
-	if _, err := clientA.Remember(ctx, "ROT-DOC-1", "The Edinburgh robotics workshop registration code is RAME-9042.", 1732500000); err != nil {
-		t.Fatalf("clientA.Remember: %v", err)
-	}
-
-	// Phase 2: Renew/rotate to keyB (new iat/exp/sig, same tenant user:10) — 0 re-ingestion!
-	vaultB, err := thinclient.NewVault(db, []byte(keyB))
-	if err != nil {
-		t.Fatalf("NewVault(keyB): %v", err)
-	}
-	clientB := thinclient.NewClient(vaultB, thinclient.NewHTTPBrainTransport(srv.URL, keyB))
-	hits, err := clientB.Recall(ctx, "Edinburgh robotics workshop RAME-9042", 3)
-	if err != nil {
-		t.Fatalf("clientB.Recall after key rotation: %v", err)
-	}
-	if len(hits) == 0 || hits[0].UnitID != "ROT-DOC-1" || hits[0].AddressURI != "C6:L3:B001/C6:L2:B001/C6:L1:B001#00" || !strings.Contains(hits[0].RawPlaintext, "RAME-9042") {
-		t.Fatalf("expected 100%% cloud manifold recall hit for ROT-DOC-1 after mem2 key rotation with 0 re-ingest, got %+v", hits)
-	}
-
-	// Phase 3: Rotated vaultB must match vaultA bit-for-bit, while different tenant keyOther must NOT collide
-	vaultOther, err := thinclient.NewVault(db, []byte(keyOther))
-	if err != nil {
-		t.Fatalf("NewVault(keyOther): %v", err)
-	}
-	pktA, _ := vaultA.PackBlindPacket("probe", "Edinburgh", 1732500000)
-	pktB, _ := vaultB.PackBlindPacket("probe", "Edinburgh", 1732500000)
-	pktOther, _ := vaultOther.PackBlindPacket("probe", "Edinburgh", 1732500000)
-	if len(pktA.Slots) == 0 || pktA.Slots[0] != pktB.Slots[0] {
-		t.Fatalf("mem2 key rotation broke NewVault blind token atom: A=%+v B=%+v", pktA.Slots, pktB.Slots)
-	}
-	if len(pktB.Slots) == 0 || pktB.Slots[0].H == pktOther.Slots[0].H {
-		t.Fatalf("different tenant must not share blind hash: B=%+v Other=%+v", pktB.Slots, pktOther.Slots)
-	}
-}
-
 // TestQueryFTS5BM25RankedOrdersByBM25 pins the contract that the auxiliary FTS5 ranker used by
 // reciprocal rank fusion returns a deterministic, relevance-ordered doc list (not the clamped
 // score map), and that the fused recall puts a doc corroborated by both rankers ahead of a doc
 // only one ranker can see.
 func TestQueryFTS5BM25RankedOrdersByBM25(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "fts5-ranked.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "fts5-ranked.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

@@ -356,8 +356,20 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 	if topK > 0 && topK < limit {
 		limit = topK
 	}
-	coverage := make(map[uint64]int, len(groups))
-	compCov := make(map[uint64]float64, 128)
+	coverage := sc.selectCoverage
+	if coverage == nil {
+		coverage = make(map[uint64]int, len(groups))
+		sc.selectCoverage = coverage
+	} else {
+		clear(coverage)
+	}
+	compCov := sc.selectCompCov
+	if compCov == nil {
+		compCov = make(map[uint64]float64, 128)
+		sc.selectCompCov = compCov
+	} else {
+		clear(compCov)
+	}
 	focalComps := sc.focalComps[:idx.N]
 	focalRawSum := sc.focalRawSum[:idx.N]
 	focalBuilt := sc.focalBuilt[:idx.N]
@@ -403,19 +415,14 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 			return nil, 0
 		}
 		if len(anchorPacked) > 1 {
-			sort.Slice(anchorPacked, func(i, j int) bool { return anchorPacked[i] < anchorPacked[j] })
+			sortUint32Asc(anchorPacked)
 		}
 		if len(anchorExact) > 1 {
-			sort.Slice(anchorExact, func(i, j int) bool {
-				if anchorExact[i].Sentence != anchorExact[j].Sentence {
-					return anchorExact[i].Sentence < anchorExact[j].Sentence
-				}
-				return anchorExact[i].Slot < anchorExact[j].Slot
-			})
+			sort.Sort(termPositionSort(anchorExact))
 		}
 		focalCands := sc.focalCands[:0]
 		for _, entry := range entries {
-			if role, _ := unpackTermRoleExt(entry.roleExt); role == RoleClosedBeacon && entry.flags&rmFlagCompanion == 0 {
+			if role, _ := UnpackTermRoleExt(entry.roleExt); role == RoleClosedBeacon && entry.flags&rmFlagCompanion == 0 {
 				continue
 			}
 			if _, inQ := qTerms[entry.id]; inQ {
@@ -511,7 +518,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 			rawSum += tw
 		}
 		fcs := sc.focalPool[fStart:len(sc.focalPool):len(sc.focalPool)]
-		sort.Slice(fcs, func(i, j int) bool { return fcs[i].group < fcs[j].group })
+		sort.Sort(focalTermWeightSort(fcs))
 		focalComps[u] = fcs
 		focalRawSum[u] = rawSum
 		return fcs, rawSum
@@ -558,10 +565,14 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		})
 	}
 	subFloor := 1.0 - invE
-	var profCache map[int32]unitGroupProfile
+	profCache := sc.selectProfCache
+	if profCache != nil {
+		clear(profCache)
+	}
 	getLightProf := func(u int32) unitGroupProfile {
 		if profCache == nil {
 			profCache = make(map[int32]unitGroupProfile, 16)
+			sc.selectProfCache = profCache
 		}
 		if p, ok := profCache[u]; ok {
 			return p

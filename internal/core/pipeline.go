@@ -152,7 +152,7 @@ func (e *Engine) ForEachDocEntry(u int, fn func(DocEntryView)) {
 		return
 	}
 	for _, entry := range st.docEntriesOf(int32(u)) {
-		role, extFlags := unpackTermRoleExt(entry.roleExt)
+		role, extFlags := UnpackTermRoleExt(entry.roleExt)
 		fn(DocEntryView{
 			ID:       entry.id,
 			Group:    entry.group,
@@ -224,7 +224,7 @@ func (e *Engine) ExportDocs() []Doc {
 				}
 				positions[entry.id] = pl
 			}
-			role, extFlags := unpackTermRoleExt(entry.roleExt)
+			role, extFlags := UnpackTermRoleExt(entry.roleExt)
 			if u < len(idx.UnitExtFlags) && idx.UnitExtFlags[u] != nil {
 				extFlags |= idx.UnitExtFlags[u][entry.id]
 			}
@@ -404,7 +404,7 @@ func (e *Engine) SearchWithPositions(qTerms map[uint64]Term, qPositions map[uint
 	for hash := range qTerms {
 		queryHashes = append(queryHashes, hash)
 	}
-	sort.Slice(queryHashes, func(i, j int) bool { return queryHashes[i] < queryHashes[j] })
+	sortUint64Asc(queryHashes)
 	masses := e.queryWeights(queryHashes, qTerms)
 	for _, hash := range queryHashes {
 		mass, ok := masses[hash]
@@ -1118,13 +1118,41 @@ func closestPackedSlot(left, right []uint32) int {
 	return closest
 }
 
-// QueryExtractor abstracts query-side term and position extraction for Engine.Query.
-type QueryExtractor interface {
-	ExtractQueryWithPositions(idx *Index, text string) (map[uint64]Term, map[uint64]int, map[uint64][]TermPosition)
+// reusableQueryExtractor is an optional zero-allocation fast path implemented
+// by TermExtractor to reuse the Engine's per-query map and position slice arena.
+type reusableQueryExtractor interface {
+	ExtractQueryInto(idx QueryIndexView, text string, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, posPool []TermPosition) []TermPosition
 }
 
 // Query extracts query terms with positions and executes the 4-step cluster pipeline.
 func (e *Engine) Query(az QueryExtractor, text string, topK int) []Hit {
+	if e != nil && e.Index != nil {
+		if rq, ok := az.(reusableQueryExtractor); ok {
+			st := e.ensureClusterState()
+			clusterN := 0
+			if st != nil {
+				clusterN = st.clusterN
+			}
+			sc := e.ensureQueryScratch(e.Index.N, clusterN)
+			if sc.qTerms == nil {
+				sc.qTerms = make(map[uint64]Term, 64)
+			} else {
+				clear(sc.qTerms)
+			}
+			if sc.posMap == nil {
+				sc.posMap = make(map[uint64][]TermPosition, 64)
+			} else {
+				clear(sc.posMap)
+			}
+			if cap(sc.posPool) < 128 {
+				sc.posPool = make([]TermPosition, 0, 128)
+			} else {
+				sc.posPool = sc.posPool[:0]
+			}
+			sc.posPool = rq.ExtractQueryInto(e.Index, text, sc.qTerms, sc.posMap, sc.posPool)
+			return e.SearchWithPositions(sc.qTerms, sc.posMap, topK)
+		}
+	}
 	qTerms, _, qPositions := az.ExtractQueryWithPositions(e.Index, text)
 	return e.SearchWithPositions(qTerms, qPositions, topK)
 }

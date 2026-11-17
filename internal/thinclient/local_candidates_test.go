@@ -78,3 +78,45 @@ func TestLocalTransportCanceledContext(t *testing.T) {
 		t.Fatalf("recall canceled: %v", err)
 	}
 }
+
+func TestRecallWithOptionsSkipsDuplicateLocalCloudHits(t *testing.T) {
+	db := migrationTestDB(t)
+	vault, err := NewVault(db, []byte("candidate-duplicate-cloud"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault.slotCacheMu.Lock()
+	vault.snapRef.refreshing = true
+	vault.slotCacheMu.Unlock()
+	defer func() {
+		vault.slotCacheMu.Lock()
+		vault.snapRef.refreshing = false
+		vault.slotCacheMu.Unlock()
+	}()
+	if err := vault.SaveLocalPlaintext("doc", 1, "quartz nebula", nil, CloudIngestResponse{Layer: LayerEpisodic}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := vault.buildCorpusSnapshot(context.Background())
+	if err != nil || snap == nil || len(snap.docs) != 1 {
+		t.Fatalf("snapshot: docs=%d err=%v", len(snap.docs), err)
+	}
+	vault.slotCacheMu.Lock()
+	snap.docs = append(snap.docs, snap.docs[0])
+	snap.inlineCount = len(snap.docs)
+	vault.slotCacheMu.Unlock()
+
+	transport := NewLocalVaultTransport(vault)
+	qPkt, _ := vault.PackBlindPacket("QUERY", "quartz nebula", 0)
+	cloudHits, err := transport.QueryBlindManifold(context.Background(), qPkt, 0)
+	if err != nil || len(cloudHits) != 2 || cloudHits[0].UnitID != cloudHits[1].UnitID {
+		t.Fatalf("duplicate transport fixture: hits=%+v err=%v", cloudHits, err)
+	}
+	client := NewClient(vault, transport)
+	hits, err := client.RecallWithOptions(context.Background(), "quartz nebula", BlindQueryOptions{TopK: 10})
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if len(hits) != 1 || hits[0].UnitID != "doc" {
+		t.Fatalf("duplicate cloud UnitID was not suppressed: %+v", hits)
+	}
+}

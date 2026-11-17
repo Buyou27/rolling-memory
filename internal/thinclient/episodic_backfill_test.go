@@ -20,7 +20,7 @@ import (
 
 func TestEpisodicBackfillPagesAndRetries(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestEpisodicBackfillPagesAndRetries(t *testing.T) {
 
 func TestEpisodicBackfillEncodingFailureDoesNotAdvancePage(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestEpisodicBackfillEncodingFailureDoesNotAdvancePage(t *testing.T) {
 
 func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 }
 
 func TestEpisodicBackfillResumeAfterError(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}

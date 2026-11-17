@@ -219,7 +219,7 @@ func TestBackgroundMultiDirs_NestedSubdirsAndSevenDocumentFormats(t *testing.T) 
 	_ = os.WriteFile(ignoredNoise, []byte("should_never_be_indexed_node_modules"), 0o600)
 
 	// Open SQLite Vault & Client
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "bg_multi.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "bg_multi.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -373,7 +373,7 @@ func newBackgroundTestDir(t *testing.T) string {
 
 func newBackgroundTestClient(t *testing.T, transport thinclient.BrainTransport) (*thinclient.Client, *sql.DB) {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "background_test.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "background_test.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -636,7 +636,7 @@ func openCountingVaultDB(t *testing.T, path string) *sql.DB {
 	countingDriverOnce.Do(func() {
 		sql.Register("sqlite_bg_remove_counting", countingBeginDriver{inner: &sqlite.Driver{}, begins: &countingDriverBegins})
 	})
-	db, err := sql.Open("sqlite_bg_remove_counting", path)
+	db, err := sql.Open("sqlite_bg_remove_counting", vaultTestDSN(path))
 	if err != nil {
 		t.Fatalf("open counting sqlite: %v", err)
 	}
@@ -1075,7 +1075,7 @@ func TestBackgroundSyncChunkLevelDelta(t *testing.T) {
 		t.Fatalf("write original: %v", err)
 	}
 
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "chunk_delta.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "chunk_delta.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -1931,7 +1931,7 @@ func TestBackgroundAddIsIdempotentAndReportsCoverage(t *testing.T) {
 
 func TestSyncBackgroundDirsHonorsRollingMemoryIgnoreAndLockfiles(t *testing.T) {
 	root := newBackgroundTestDir(t)
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "bg_ignore.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "bg_ignore.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

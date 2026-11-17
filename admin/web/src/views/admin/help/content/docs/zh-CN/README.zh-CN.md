@@ -239,7 +239,7 @@ rmem eval --tier 1540 --answerer none --judge off --top-k 20
 ## 11. 源码许可、贡献入口与致谢
 
 - **贡献入口**：非常欢迎大家提 Issue、分享想法或提交 PR 一起完善——见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [SUPPORT.md](SUPPORT.md)。本项目采用**「人类定义架构、形式化不变量与验收标准 + AI 辅助代码实现」**的协作模式；完整免责说明见 [DECLARATION.md](DECLARATION.md)。
-- **源码许可**：采用 **[PolyForm Noncommercial License 1.0.0](../../LICENSE)**（SPDX：`PolyForm-Noncommercial-1.0.0`）公开全部源码，**任何非商业用途均可自由使用、修改与分享**；**商业使用与商业分发（含 SaaS 托管与商业产品内嵌）须另行签署书面商业许可**。`sdk/` 下四语言客户端 SDK 单独采用 **Apache-2.0**（`sdk/LICENSE`）。第三方组件署名见 [NOTICE](../../NOTICE)。
+- **源码许可**：采用 **[PolyForm Noncommercial License 1.0.0](../../LICENSE)**（SPDX：`PolyForm-Noncommercial-1.0.0`）公开全部源码，**任何非商业用途均可自由使用、修改与分享**；**商业使用与商业分发（含 SaaS 托管与商业产品内嵌）须另行签署书面商业许可**。`sdk/` 下客户端 SDK 单独采用 **Apache-2.0**（`sdk/LICENSE`）。第三方组件署名见 [NOTICE](../../NOTICE)。
 - **致谢**：本项目的 Web 管理控制台以 **[AI GO ADMIN](https://github.com/ai-go-hub/ai-go-admin)**（Apache-2.0，Go + Gin + Vue 3 后台框架；镜像：[Gitee](https://gitee.com/ai-go-hub/ai-go-admin) · [AtomGit](https://atomgit.com/ai-go-hub/ai-go-admin)）为基座衍生开发；其 UI 血统承自 **[BuildAdmin](https://gitee.com/wonderful-code/buildadmin)**（Apache-2.0，© 妙码生花），插件清单页按 BuildAdmin `v2.3.9` 移植改写。逐文件归属与修改说明见 [NOTICE](../../NOTICE) §2。感谢两个开源项目的作者与社区。
 
 Copyright © 2026 Rocareer & Rolling-Memory Organization (Albert `<albert@rocareer.com>`). All rights reserved.

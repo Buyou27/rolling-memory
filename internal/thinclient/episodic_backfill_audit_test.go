@@ -21,7 +21,7 @@ func TestEpisodicBackfillLiveAudit(t *testing.T) {
 	if path == "" {
 		t.Skip("live audit not requested")
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(15000)")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -103,36 +103,49 @@ func applyCoreEnergyFusion(snap *vaultCorpusSnapshot, qPkt BlindPulsePacket, top
 			continue
 		}
 		d := &docs[di]
-		atoms := make(map[uint64]core.Term, len(qAtoms)*2)
-		counts := make(map[uint64]int, len(qAtoms)*2)
-		positions := make(map[uint64][]core.TermPosition, len(qAtoms)*2)
+		atoms := make(map[uint64]core.Term, len(d.termCounts))
+		counts := make(map[uint64]int, len(d.termCounts))
+		positions := make(map[uint64][]core.TermPosition, len(d.termCounts))
 		for sIdx, sh := range d.sentHashes {
 			for slotIdx, h := range sh {
 				if h == 0 {
-					continue
-				}
-				if _, inQ := qAtoms[h]; !inQ && len(atoms) >= 24 {
 					continue
 				}
 				pos := core.TermPosition{Sentence: sIdx, Slot: slotIdx + 1}
 				positions[h] = append(positions[h], pos)
 				counts[h]++
 				if _, exists := atoms[h]; !exists {
-					atoms[h] = core.Term{
-						Hash:     h,
-						Bits:     32,
-						Role:     core.RolePrimary,
-						ExtFlags: core.ExtFlagSeenPrimary,
-						Group:    h,
-						Sent:     uint16(sIdx + 1),
-						Slot:     uint16(slotIdx + 1),
+					if meta, ok := d.termMeta[h]; ok {
+						meta.Sent = uint16(sIdx + 1)
+						meta.Slot = uint16(slotIdx + 1)
+						atoms[h] = meta
+					} else {
+						atoms[h] = core.Term{
+							Hash:     h,
+							Bits:     32,
+							Role:     core.RolePrimary,
+							ExtFlags: core.ExtFlagSeenPrimary,
+							Group:    h,
+							Sent:     uint16(sIdx + 1),
+							Slot:     uint16(slotIdx + 1),
+						}
 					}
 				}
 			}
 		}
-		for h := range qAtoms {
-			if c := d.termCounts[h]; c > 0 {
-				if _, exists := atoms[h]; !exists {
+		for h, c := range d.termCounts {
+			if c <= 0 {
+				continue
+			}
+			if c > counts[h] {
+				counts[h] = c
+			}
+			if _, exists := atoms[h]; !exists {
+				if meta, ok := d.termMeta[h]; ok {
+					meta.Sent = 1
+					meta.Slot = 1
+					atoms[h] = meta
+				} else {
 					atoms[h] = core.Term{
 						Hash:     h,
 						Bits:     32,
@@ -142,9 +155,8 @@ func applyCoreEnergyFusion(snap *vaultCorpusSnapshot, qPkt BlindPulsePacket, top
 						Sent:     1,
 						Slot:     1,
 					}
-					counts[h] = c
-					positions[h] = []core.TermPosition{{Sentence: 0, Slot: 1}}
 				}
+				positions[h] = []core.TermPosition{{Sentence: 0, Slot: 1}}
 			}
 		}
 		rmDocs = append(rmDocs, core.Doc{

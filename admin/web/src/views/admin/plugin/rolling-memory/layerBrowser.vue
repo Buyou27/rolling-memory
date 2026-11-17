@@ -503,10 +503,12 @@ const optButtons: OptButton[] = [
 
 const tableManager = useTableManager({
     auth: (action: string) => {
+        // layers/read 与 layers/delete 权限节点挂在 index 菜单下（authNode 的 key 是该菜单路径），
+        // 不存在 /admin/plugin/rolling-memory/layers 这个菜单节点，误用会让行内操作按钮恒不渲染。
         if (action === 'delete') {
-            return auth({ name: '/admin/plugin/rolling-memory/layers', subNodeName: '/admin/plugin/rolling-memory/layers/delete' })
+            return auth({ name: '/admin/plugin/rolling-memory/index', subNodeName: '/admin/plugin/rolling-memory/layers/delete' })
         }
-        return auth({ name: '/admin/plugin/rolling-memory/layers', subNodeName: '/admin/plugin/rolling-memory/layers/read' })
+        return auth({ name: '/admin/plugin/rolling-memory/index', subNodeName: '/admin/plugin/rolling-memory/layers/read' })
     },
     api: new TableManagerAPI('/admin/plugin/rolling-memory/layers/'),
     table: {

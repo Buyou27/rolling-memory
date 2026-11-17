@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/cloudcred"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 )
 
@@ -23,18 +22,13 @@ import (
 // 同一大载荷分别以「强制 gzip」与「关闭压缩」经本地计数代理上行到 /open/memory/v1/ingest，
 // 对比客户端→服务端方向的实际字节数（含 HTTP 头，即真实传输成本）。
 func TestLiveUpstreamWireGzipByteSavings_UserID10(t *testing.T) {
-	// 端侧唯一凭据 = 数据面签名钥（`mem2.*`）：仅在显式提供 ROLLING_MEMORY_BRAIN_URL 时才执行远端集成测试。
 	baseURL := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_URL"))
 	if baseURL == "" {
 		t.Skip("ROLLING_MEMORY_BRAIN_URL not set; skipping live upstream wire-gzip test in local mode")
 	}
 	apiKey := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
 	if apiKey == "" {
-		_, accountKey, credErr := cloudcred.Ensure(context.Background())
-		if credErr != nil {
-			t.Skipf("live data-plane credentials not configured (%v); skipping", credErr)
-		}
-		apiKey = accountKey
+		t.Skip("ROLLING_MEMORY_BRAIN_KEY not set; skipping")
 	}
 	health := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(health, "/open/memory/v1") {

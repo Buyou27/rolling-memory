@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
-	"github.com/rocareer/rolling-memory/internal/langpack"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
@@ -32,7 +31,7 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "")
-	t.Setenv("ROLLING_MEMORY_LANGPACK", "multi")
+	t.Setenv("ROLLING_MEMORY_HARMONICS", "max")
 	keyPath := filepath.Join(env.base, "cloud.key")
 	if err := os.WriteFile(keyPath, []byte("test-local-only-key"), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
@@ -85,12 +84,11 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open thinclient vault: %v", err)
 	}
-	// A raw Vault uses different encoding options from api.Memory.ThinClient.
-	// Keep the same multi language pack and date harmonics on both sides.
-	if err := langpack.ConfigureVault(vault, "multi"); err != nil {
-		t.Fatalf("configure vault language pack: %v", err)
-	}
-	vault.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{EnableStructuredDates: true})
+	vault.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
+		EnableStructuredDates: true,
+		Expander:              plain.CanonicalCompanionTags,
+	})
+	vault.SetSegmenterOptions(thinclient.SegmenterPackOptions{HarmonicOverlay: true})
 	assertSearch := func(query string) string {
 		t.Helper()
 		hits, err := vault.SearchClientSDKDefault(query, 10)

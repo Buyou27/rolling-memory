@@ -6,7 +6,7 @@
 
 ## 1. 发布边界：本仓库发布什么、不发布什么
 
-**Rolling Memory** 是面向 AI 编程助手的本地优先记忆工具，由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。本仓库发布**纯本地模式（`local_plain`）**，并包含整套可独立审计的客户端面：CLI 与多宿主插件、本地 SQLite 明文金库、四语言 SDK、传输层出口闸门，以及 `rmem eval` 评测运行器。
+**Rolling Memory** 是面向 AI 编程助手的本地优先记忆工具，由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。本仓库发布**纯本地模式（`local_plain`）**，并包含整套可独立审计的客户端面：CLI 与多宿主插件、本地 SQLite 明文金库、客户端 SDK、传输层出口闸门，以及 `rmem eval` 评测运行器。
 
 **云端记忆服务**与**专有企业级扩展组件**属于闭源专有技术，**不对外开放、不在本仓库中**，且本仓库发布的任何功能都不依赖它们——本发布版 100% 以纯本地明文模式（`local_plain`）完全离线运行，零外部网络请求。
 

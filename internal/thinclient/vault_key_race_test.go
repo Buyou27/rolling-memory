@@ -23,7 +23,7 @@ func TestVaultKeyConcurrentInitialization(t *testing.T) {
 	dir := t.TempDir()
 	for round := 0; round < rounds; round++ {
 		path := filepath.Join(dir, fmt.Sprintf("vault-%d.sqlite", round))
-		dsn := "file:" + path + "?_pragma=busy_timeout(10000)"
+		dsn := vaultTestDSN("file:" + path)
 		dbs := make([]*sql.DB, workers)
 		for i := range dbs {
 			var err error
@@ -81,7 +81,7 @@ func TestVaultKeyInvalidExistingValue(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "vault.sqlite")
-			db, err := sql.Open("sqlite", path)
+			db, err := sql.Open("sqlite", vaultTestDSN(path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -121,7 +121,7 @@ func TestVaultKeyInvalidExistingValue(t *testing.T) {
 
 func TestCorpusSnapshotIncrementalAppendConcurrentRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.sqlite")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
+	db, err := sql.Open("sqlite", vaultTestDSN("file:"+path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestCorpusSnapshotIncrementalAppendConcurrentRead(t *testing.T) {
 
 func TestDirIDCollisionResolution(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.sqlite")
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", vaultTestDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}

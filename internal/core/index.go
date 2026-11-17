@@ -8,155 +8,6 @@ import (
 	"sort"
 )
 
-// TermRole 表示词项（Term）在所属物理词槽偏序格 L(s) 中的代数角色（8-bit 扩展域：低位 0..4 为现役闭集，高 5 bits 预留未来扩展）。
-type TermRole uint8
-
-// AtomRole 是 TermRole 的向后兼容类型别名（标准术语统一为 TermRole）。
-type AtomRole = TermRole
-
-const (
-	RolePrimary         TermRole = 0 // 原词表面核（精确词面，独占 1 个物理词槽）
-	RoleMorphStem       TermRole = 1 // 一阶同根词干（屈折/派生词干、撇号剥离、变音折叠、游程坍缩）
-	RoleSubwordPiece    TermRole = 2 // 二阶复合子词（次级切分块、剥离数字的前导字母块等）
-	RoleClosedBeacon    TermRole = 3 // 闭集世界知识装饰（@*）与日历信标（cal:*）
-	RoleBiwordHomomorph TermRole = 4 // 相邻双词合成闭集同态修饰（如 "New Zealand" -> @geo:cc:nz）
-)
-
-// Term.ExtFlags（16-bit 扩展声明标志位域）低 6 位记录词项在单元内跨词槽出现的角色分布掩码，
-// 高 10 位预留未来扩展（零结构体内存膨胀）：
-const (
-	ExtFlagSeenPrimary     uint16 = 1 << 0 // 在单元内曾作为原词表面核 (RolePrimary) 出现
-	ExtFlagSeenMorphOrClos uint16 = 1 << 1 // 在单元内曾作为一阶词干 (RoleMorphStem) 或闭集信标 (RoleClosedBeacon) 出现
-	ExtFlagSeenSubword     uint16 = 1 << 2 // 在单元内曾作为二阶子词 (RoleSubwordPiece / RoleBiwordHomomorph) 出现
-)
-
-// Term 表示键控词项（特征项）：身份哈希 + 声明式载体元数据 {b, f}（Bits 为载体最大
-// 宽度、Flags 为 8 位 ClassFlags 并集、Role 为词槽偏序格角色、ExtFlags 为 16 位预留扩展标志位域）
-// 以及所属主词族 Group 与首现句槽坐标 (Sent, Slot)。全部为平波声明字段，零先验能量，
-// 不参与词项身份计算（身份唯一由 Hash 决定；利用原结构体对齐空洞内嵌 Role 与 ExtFlags，总宽恒定 32B）。
-type Term struct {
-	Hash     uint64
-	Bits     uint16
-	Flags    uint8
-	Role     TermRole
-	ExtFlags uint16
-	Group    uint64
-	Sent     uint16
-	Slot     uint16
-}
-
-// Atom 是 Term 的向后兼容类型别名（去伪物理化标准术语统一为 Term）。
-type Atom = Term
-
-func packTermRoleExt(role TermRole, ext uint16) uint8 {
-	return (uint8(role) & 0x1F) | uint8((ext&0x07)<<5)
-}
-
-func unpackTermRoleExt(re uint8) (TermRole, uint16) {
-	return TermRole(re & 0x1F), uint16((re >> 5) & 0x07)
-}
-
-// InferSlotRole 推导词项相对于宿主主词 host 的槽内偏序格角色：
-//  1. 双词闭集同态修饰（RoleBiwordHomomorph）与单/双词闭集信标（RoleClosedBeacon）具有代数封闭性，恒保持各自闭集角色；
-//  2. 剥离尾部数字的前导字母块伴随（ExtFlagSeenSubword != 0 且 host 含数字而自身不含数字）恒为 RoleSubwordPiece（免疫跨槽 max(Bits) 冲刷）；
-//  3. 其余跨槽或合成夹具情况按声明位与宿主宽度差（host.Bits >= a.Bits+3）无损推导。
-func (a Term) InferSlotRole(host Term) TermRole {
-	const (
-		flagDigit     uint8 = 1 << 2
-		flagCompanion uint8 = 1 << 4
-	)
-	if a.Role == RoleBiwordHomomorph && (host.Hash == 0 || host.Hash == a.Group) {
-		return RoleBiwordHomomorph
-	}
-	if a.Role == RoleClosedBeacon {
-		return RoleClosedBeacon
-	}
-	if a.ExtFlags&ExtFlagSeenSubword != 0 && (a.ExtFlags&(ExtFlagSeenPrimary|ExtFlagSeenMorphOrClos) == 0 || (host.Hash != 0 && host.Hash != a.Hash && host.Flags&flagDigit != 0 && a.Flags&flagDigit == 0)) {
-		return RoleSubwordPiece
-	}
-	if host.Hash != 0 && host.Hash != a.Hash && int(host.Bits) >= int(a.Bits)+3 {
-		return RoleSubwordPiece
-	}
-	if a.Flags&flagCompanion == 0 || ((host.Hash == 0 || host.Hash == a.Hash) && a.Role == RolePrimary && a.ExtFlags&ExtFlagSeenPrimary != 0) {
-		return RolePrimary
-	}
-	return RoleMorphStem
-}
-
-// IsSlot2Companion 报告伴随词项相对于宿主主词 host 是否处于二阶复合子词角色（RoleSubwordPiece）。
-func (a Term) IsSlot2Companion(host Term) bool {
-	return a.InferSlotRole(host) == RoleSubwordPiece
-}
-
-// TermPosition locates one carrier occurrence in the caller's sentence stream.
-type TermPosition struct {
-	Sentence int
-	Slot     int
-}
-
-// DocMeta carries the optional unit metadata mirrored from the cloud wire.
-type DocMeta struct {
-	OccurredAt int64
-	NarratedAt int64
-	IngestedAt int64
-	AuthorHash uint64
-	DocHash    uint64
-	BlockHash  uint64
-	LineStart  int
-	LineEnd    int
-	Layer      string
-	CitedIDs   []string
-}
-
-func (m DocMeta) RefTime() int64 {
-	for _, at := range [3]int64{m.OccurredAt, m.NarratedAt, m.IngestedAt} {
-		if at > 0 {
-			return at
-		}
-	}
-	return 0
-}
-
-// Doc 是一条待入库记忆单元（去重词项表 + 逐词项出现次数 + 可选元信息）。
-type Doc struct {
-	UnitID     string
-	OccurredAt int64
-	NarratedAt int64
-	IngestedAt int64
-	AuthorHash uint64
-	DocHash    uint64
-	BlockHash  uint64
-	LineStart  int
-	LineEnd    int
-	Layer      string
-	CitedIDs   []string
-	RawText    string
-	Terms      map[uint64]Term
-	Counts     map[uint64]int
-	Positions  map[uint64][]TermPosition
-}
-
-func (d Doc) Meta() DocMeta { return d.meta() }
-
-func (d Doc) meta() DocMeta {
-	var cited []string
-	if len(d.CitedIDs) > 0 {
-		cited = append([]string(nil), d.CitedIDs...)
-	}
-	return DocMeta{
-		OccurredAt: d.OccurredAt,
-		NarratedAt: d.NarratedAt,
-		IngestedAt: d.IngestedAt,
-		AuthorHash: d.AuthorHash,
-		DocHash:    d.DocHash,
-		BlockHash:  d.BlockHash,
-		LineStart:  d.LineStart,
-		LineEnd:    d.LineEnd,
-		Layer:      d.Layer,
-		CitedIDs:   cited,
-	}
-}
-
 func (idx *Index) meanUnitGap() float64 {
 	times := make([]int64, 0, len(idx.UnitMeta))
 	for _, meta := range idx.UnitMeta {
@@ -167,7 +18,7 @@ func (idx *Index) meanUnitGap() float64 {
 	if len(times) < 2 {
 		return 0
 	}
-	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+	sortInt64Asc(times)
 	total, count := 0.0, 0
 	for at := 1; at < len(times); at++ {
 		if gap := times[at] - times[at-1]; gap > 0 {
@@ -300,11 +151,20 @@ func HighDFThresholdForN(n int) int {
 	return int(math.Max(minHighDFFloor, float64(n)*highDFFraction))
 }
 
+// highDFThresholdGuarded 保证被判词项的高 DF 阈值至少为 1：n·fraction 在小 n 上经
+// int() 截断可下溢到 0，而 df>=1 恒大于 0，会把微簿记的全部词项错置为非背景。
+func highDFThresholdGuarded(n int) int {
+	if t := HighDFThresholdForN(n); t >= 1 {
+		return t
+	}
+	return 1
+}
+
 func (idx *Index) HighDFThreshold() int {
 	if idx == nil {
-		return HighDFThresholdForN(0)
+		return highDFThresholdGuarded(0)
 	}
-	return HighDFThresholdForN(idx.N)
+	return highDFThresholdGuarded(idx.N)
 }
 
 func (idx *Index) TermMassOf(hash uint64) (float64, bool) {
@@ -429,7 +289,7 @@ func BuildIndex(docs []Doc) *Index {
 	for unit, id := range ids {
 		idx.UnitOf[id] = int32(unit)
 		doc := latest[id]
-		idx.UnitMeta[unit] = doc.meta()
+		idx.UnitMeta[unit] = doc.Meta()
 		hasExplicitPos := len(doc.Positions) > 0
 		if hasExplicitPos {
 			posMap := make(map[uint64][]TermPosition, len(doc.Positions))
@@ -485,7 +345,7 @@ func BuildIndex(docs []Doc) *Index {
 				}
 				idx.UnitGroups[unit][hash] = atom.Group
 			}
-			if re := packTermRoleExt(atom.Role, atom.ExtFlags); re != 0 {
+			if re := PackTermRoleExt(atom.Role, atom.ExtFlags); re != 0 {
 				if idx.UnitRoleExt[unit] == nil {
 					idx.UnitRoleExt[unit] = make(map[uint64]uint8, len(doc.Terms))
 				}
@@ -616,7 +476,7 @@ func (idx *Index) finalizeMasses() {
 			keys = append(keys, h)
 		}
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	sortUint64Asc(keys)
 	var bitSum float64
 	for _, h := range keys {
 		bitSum += float64(idx.TermBits[h])
@@ -638,7 +498,7 @@ func (idx *Index) computePostingDigestFromMap() uint64 {
 	for k := range idx.Postings {
 		tKeys = append(tKeys, k)
 	}
-	sort.Slice(tKeys, func(i, j int) bool { return tKeys[i] < tKeys[j] })
+	sortUint64Asc(tKeys)
 	const (
 		offset64 = 14695981039346656037
 		prime64  = 1099511628211
@@ -695,10 +555,10 @@ func (idx *Index) computePostingDigestFromMap() uint64 {
 					}
 				}
 				if len(posScratch) > 1 {
-					sort.Slice(posScratch, func(a, b int) bool { return posScratch[a] < posScratch[b] })
+					sortUint32Asc(posScratch)
 				}
 				if len(overflowPos) > 1 {
-					sort.Slice(overflowPos, func(a, b int) bool { return overflowPos[a] < overflowPos[b] })
+					sortUint64Asc(overflowPos)
 				}
 			}
 			h = mix(h, uint64(len(posScratch)))
@@ -786,7 +646,7 @@ func (idx *Index) ExportDocs() []Doc {
 			var role TermRole
 			var extFlags uint16
 			if u < len(idx.UnitRoleExt) && idx.UnitRoleExt[u] != nil {
-				role, extFlags = unpackTermRoleExt(idx.UnitRoleExt[u][h])
+				role, extFlags = UnpackTermRoleExt(idx.UnitRoleExt[u][h])
 			}
 			if u < len(idx.UnitExtFlags) && idx.UnitExtFlags[u] != nil {
 				extFlags |= idx.UnitExtFlags[u][h]
@@ -861,14 +721,21 @@ func (idx *Index) DeleteDocs(unitIDs ...string) int {
 	return removed
 }
 
-// PackTermRoleExt packs TermRole and low ExtFlags bits for storage adapters.
-func PackTermRoleExt(role TermRole, ext uint16) uint8 {
-	return packTermRoleExt(role, ext)
+// CorpusSize 返回语料单元总数 N（nil 接收者返回 0），供只读倒排窄视图消费。
+func (idx *Index) CorpusSize() int {
+	if idx == nil {
+		return 0
+	}
+	return idx.N
 }
 
-// UnpackTermRoleExt unpacks TermRole and low ExtFlags bits for storage adapters.
-func UnpackTermRoleExt(re uint8) (TermRole, uint16) {
-	return unpackTermRoleExt(re)
+// UnitTime 返回单元的 occurredAt/narratedAt/ingestedAt 三时钟坐标；nil 接收者或越界单元返回 ok=false。
+func (idx *Index) UnitTime(unit int32) (occurredAt, narratedAt, ingestedAt int64, ok bool) {
+	if idx == nil || unit < 0 || int(unit) >= len(idx.UnitMeta) {
+		return 0, 0, 0, false
+	}
+	meta := idx.UnitMeta[unit]
+	return meta.OccurredAt, meta.NarratedAt, meta.IngestedAt, true
 }
 
 // FinalizeMasses computes IDF masses and per-document term slices after storage loading.

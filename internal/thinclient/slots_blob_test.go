@@ -45,7 +45,7 @@ func TestAtomSlotsPackedRoundtrip(t *testing.T) {
 // TestMigrateBackgroundSlotBlobs rewrites legacy JSON rows in place and leaves
 // already-packed rows untouched.
 func TestMigrateBackgroundSlotBlobs(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "vault.db"))
+	db, err := sql.Open("sqlite", vaultTestDSN("file:"+filepath.Join(t.TempDir(), "vault.db")))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

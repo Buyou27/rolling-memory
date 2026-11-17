@@ -79,7 +79,7 @@ kb:
       enabled: false             # 视频关键帧 caption 渠道（VLM/OCR；接线 = 实现驱动并 RegisterCaptionDriver）
       provider: ""
     ffmpeg_bin: ffmpeg           # 抽帧/音轨工具（PATH 查找；可用性由运维巡检端点探测，工具缺失 ⇒ 响亮失败）
-    frame_seconds: 30            # 关键帧步长（秒；缺省 30；R12 视频收益未验证，读数前不翻缺省）
+    frame_seconds: 30            # 关键帧步长（秒；缺省 30；未经视频链路实测验证前不要修改缺省）
     # 媒体工具执行预算（工作量自适应——原为固定 180s 硬编码，
     # 长音视频/多页 pdf 会「每次必超 ⇒ 永久失败」，作业重试无益）。预算 = 基数 + 工作量 × 比例；
     # 工作量上限由 kb.limits（max_minutes/max_pages）约束 ⇒ 预算有界且全部显式。非正一律取缺省。

@@ -13,11 +13,12 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	st := e.ensureClusterState()
 	sc := e.ensureQueryScratch(idx.N, st.clusterN)
 
-	queryHashes := make([]uint64, 0, len(qTerms))
+	queryHashes := sc.queryHashes[:0]
 	for h := range qTerms {
 		queryHashes = append(queryHashes, h)
 	}
 	sortUint64Asc(queryHashes)
+	sc.queryHashes = queryHashes
 
 	const (
 		rmBitUpper          uint8 = 1 << 0
@@ -35,10 +36,34 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	highDFThresh := idx.HighDFThreshold()
 	meanBits := st.entryMeanBits
 
-	hashGroup := make(map[uint64]uint64, len(queryHashes))
-	detachedFrag := make(map[uint64]bool, len(queryHashes))
-	detachedSlot2 := make(map[uint64]bool, len(queryHashes))
-	famMinDF := make(map[uint64]int, len(queryHashes))
+	hashGroup := sc.hashGroup
+	if hashGroup == nil {
+		hashGroup = make(map[uint64]uint64, len(queryHashes))
+		sc.hashGroup = hashGroup
+	} else {
+		clear(hashGroup)
+	}
+	detachedFrag := sc.detachedFrag
+	if detachedFrag == nil {
+		detachedFrag = make(map[uint64]bool, len(queryHashes))
+		sc.detachedFrag = detachedFrag
+	} else {
+		clear(detachedFrag)
+	}
+	detachedSlot2 := sc.detachedSlot2
+	if detachedSlot2 == nil {
+		detachedSlot2 = make(map[uint64]bool, len(queryHashes))
+		sc.detachedSlot2 = detachedSlot2
+	} else {
+		clear(detachedSlot2)
+	}
+	famMinDF := sc.famMinDF
+	if famMinDF == nil {
+		famMinDF = make(map[uint64]int, len(queryHashes))
+		sc.famMinDF = famMinDF
+	} else {
+		clear(famMinDF)
+	}
 	for _, h := range queryHashes {
 		qTerm := qTerms[h]
 		isOrdDay := qTerm.Role == RoleClosedBeacon && qTerm.Flags&rmFlagCompanion == 0 && qTerm.ExtFlags == ExtFlagSeenMorphOrClos
@@ -78,10 +103,22 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		hashGroup[h] = group
 	}
 
-	properSlots := make(map[TermPosition]int)
+	properSlots := sc.properSlots
+	if properSlots == nil {
+		properSlots = make(map[TermPosition]int, 16)
+		sc.properSlots = properSlots
+	} else {
+		clear(properSlots)
+	}
 	var compoundPartner map[uint64]uint64
 	if len(qPositions) > 0 {
-		primaryAtPos := make(map[TermPosition]uint64, len(qTerms)*2)
+		primaryAtPos := sc.primaryAtPos
+		if primaryAtPos == nil {
+			primaryAtPos = make(map[TermPosition]uint64, len(qTerms)*2)
+			sc.primaryAtPos = primaryAtPos
+		} else {
+			clear(primaryAtPos)
+		}
 		for h, qa := range qTerms {
 			if qa.Role == RolePrimary {
 				for _, p := range qPositions[h] {
@@ -190,9 +227,27 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		sc.dmPool = append(sc.dmPool, m)
 		delete(groupDays, k)
 	}
-	groupRigid := make(map[uint64]bool, len(queryHashes))
-	groupProper := make(map[uint64]bool, len(queryHashes))
-	hasBroadComp := make(map[uint64]bool, len(queryHashes))
+	groupRigid := sc.groupRigid
+	if groupRigid == nil {
+		groupRigid = make(map[uint64]bool, len(queryHashes))
+		sc.groupRigid = groupRigid
+	} else {
+		clear(groupRigid)
+	}
+	groupProper := sc.groupProper
+	if groupProper == nil {
+		groupProper = make(map[uint64]bool, len(queryHashes))
+		sc.groupProper = groupProper
+	} else {
+		clear(groupProper)
+	}
+	hasBroadComp := sc.hasBroadComp
+	if hasBroadComp == nil {
+		hasBroadComp = make(map[uint64]bool, len(queryHashes))
+		sc.hasBroadComp = hasBroadComp
+	} else {
+		clear(hasBroadComp)
+	}
 	for _, h := range queryHashes {
 		g, ok := hashGroup[h]
 		if !ok {
@@ -276,8 +331,20 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 
 	totalDaysM := st.totalDaysM
-	kappaOcc := make(map[uint64]float64, len(groupUnits))
-	anchorKappa := make(map[uint64]float64, len(groupUnits))
+	kappaOcc := sc.kappaOcc
+	if kappaOcc == nil {
+		kappaOcc = make(map[uint64]float64, len(groupUnits))
+		sc.kappaOcc = kappaOcc
+	} else {
+		clear(kappaOcc)
+	}
+	anchorKappa := sc.anchorKappa
+	if anchorKappa == nil {
+		anchorKappa = make(map[uint64]float64, len(groupUnits))
+		sc.anchorKappa = anchorKappa
+	} else {
+		clear(anchorKappa)
+	}
 	for g, um := range groupUnits {
 		n := float64(len(um))
 		dObs := float64(len(groupDays[g]))
@@ -298,8 +365,13 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	hasSpecificProper := false
 	// specificProperDFFraction (~4.98%, calibrated at 1/e^3) caps the document
 	// frequency of a proper noun that still qualifies as a specific entity anchor.
+	// 守卫 min 1：N<=20 时 int(N·fraction) 截断为 0 会把专名特异性判定与折叠截止
+	// （rareInflectedTermMaxDF 同源上界）整体关停。
 	const specificProperDFFraction = 0.049787068367863944
 	specificPropMax := int(float64(idx.N) * specificProperDFFraction)
+	if specificPropMax < 1 {
+		specificPropMax = 1
+	}
 	openingBroadClock := make(map[uint64]bool, 4)
 	minClockUnits := 0
 	hasBodyProper := false
@@ -353,7 +425,13 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 		}
 	}
-	isAnchorGroup := make(map[uint64]bool, len(groupUnits))
+	isAnchorGroup := sc.isAnchorGroup
+	if isAnchorGroup == nil {
+		isAnchorGroup = make(map[uint64]bool, len(groupUnits))
+		sc.isAnchorGroup = isAnchorGroup
+	} else {
+		clear(isAnchorGroup)
+	}
 	aGen := sc.nextAnchorGen()
 	uAnchorGen := sc.unitAnchorGen[:idx.N]
 	cAnchorGen := sc.clusterAnchorGen[:st.clusterN]
@@ -374,8 +452,8 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	// per-unit wall-clock offsets degrade smoothly.
 	const dayPeriod = int64(86400)
 	const dayHalfPeriod = dayPeriod / 2
-	anchorTimes := make([]int64, 0, 64)
-	anchorUnitList := make([]int32, 0, 64)
+	anchorTimes := sc.anchorTimes[:0]
+	anchorUnitList := sc.anchorUnitList[:0]
 	hasAnchor := false
 	for g, um := range groupUnits {
 		if len(um) == 0 || len(um) > highDFThresh {
@@ -421,8 +499,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		}
 	}
 	sortInt32Asc(anchorUnitList)
+	sc.anchorUnitList = anchorUnitList
 	sc.anchorTimeSlots = anchorTimedSlots
 	sortInt64Asc(anchorTimes)
+	sc.anchorTimes = anchorTimes
 	nearestAnchorDT := func(u int32) int64 {
 		ts := st.refTimes[u]
 		if ts <= 0 || len(anchorTimes) == 0 {
@@ -467,7 +547,13 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 		}
 	}
-	shellScale := make(map[uint64]float64, len(queryHashes))
+	shellScale := sc.shellScale
+	if shellScale == nil {
+		shellScale = make(map[uint64]float64, len(queryHashes))
+		sc.shellScale = shellScale
+	} else {
+		clear(shellScale)
+	}
 	if hasAnchor {
 		for g, um := range groupUnits {
 			if isAnchorGroup[g] || groupRigid[g] || kappaOcc[g] >= invE*invE || len(groupAnchorUnits[g]) <= maxAnchorProtectedUnits {
@@ -486,7 +572,13 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		}
 	}
 
-	groups := make(map[uint64]float64, len(queryHashes))
+	groups := sc.groups
+	if groups == nil {
+		groups = make(map[uint64]float64, len(queryHashes))
+		sc.groups = groups
+	} else {
+		clear(groups)
+	}
 	candidates := sc.candidates[:idx.N]
 	unitStructGate := sc.unitStructGate[:idx.N]
 	dGen := sc.resetDirtyUnits(idx.N)
@@ -504,8 +596,20 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 
 	var extraGroups map[uint64][]uint64
 	if len(qPositions) > 0 {
-		slotPrim := make(map[TermPosition]uint64, len(queryHashes)*2)
-		slotPure := make(map[TermPosition]bool, len(queryHashes)*2)
+		slotPrim := sc.slotPrim
+		if slotPrim == nil {
+			slotPrim = make(map[TermPosition]uint64, len(queryHashes)*2)
+			sc.slotPrim = slotPrim
+		} else {
+			clear(slotPrim)
+		}
+		slotPure := sc.slotPure
+		if slotPure == nil {
+			slotPure = make(map[TermPosition]bool, len(queryHashes)*2)
+			sc.slotPure = slotPure
+		} else {
+			clear(slotPure)
+		}
 		for _, h := range queryHashes {
 			if g := hashGroup[h]; g == h && !detachedFrag[g] {
 				isPure := qTerms[h].Flags&rmFlagCompanion == 0
@@ -626,7 +730,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				}
 				unitEntries := st.docEntriesOf(u)
 				if len(unitEntries) > 0 {
-					candidates[u].upsertMatch(group, matchedMass, 0, qTerm.Bits, unitEntries, false)
+					candidates[u].upsertMatch(sc, group, matchedMass, 0, qTerm.Bits, unitEntries, false)
 				}
 			}
 			continue
@@ -634,6 +738,9 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		group := hashGroup[h]
 		isPrimH := st.isPrimaryOf(h)
 		dfH := idx.TermDF(h)
+		// The stem-fold cutoff is an independent engineering bound (host-word DF
+		// tier eligible for stem folding); specificPropMax bounds proper-anchor
+		// specificity. They serve different roles and keep separate thresholds.
 		const rareInflectedTermMaxDF = 21
 		if h == group && !groupRigid[group] && !groupProper[group] && anchorKappa[group] < invE && (dfH <= rareInflectedTermMaxDF || dfH <= specificPropMax) {
 			for _, ch := range queryHashes {
@@ -800,18 +907,19 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			if e.FlagsGain > 0 && docEntry.flags&docGainMask != 0 {
 				matchedMass *= 1.0 + e.FlagsGain/math.E
 			}
-			c.upsertMatch(group, matchedMass, p.entry, docEntry.bits, unitEntries, true)
+			c.upsertMatch(sc, group, matchedMass, p.entry, docEntry.bits, unitEntries, true)
 			for _, altG := range extraGroups[h] {
-				c.upsertMatch(altG, matchedMass*invE, p.entry, docEntry.bits, unitEntries, false)
+				c.upsertMatch(sc, altG, matchedMass*invE, p.entry, docEntry.bits, unitEntries, false)
 			}
 		}
 	}
 
-	groupKeys := make([]uint64, 0, len(groups))
+	groupKeys := sc.groupKeys[:0]
 	for g := range groups {
 		groupKeys = append(groupKeys, g)
 	}
 	sortUint64Asc(groupKeys)
+	sc.groupKeys = groupKeys
 	var total, sumG2 float64
 	for _, g := range groupKeys {
 		m := groups[g]
@@ -898,7 +1006,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		return !detachedFrag[g] && qa.Role == RoleClosedBeacon && idx.TermDF(h) <= highDFThresh
 	}
 	phraseWitness := sc.phraseWitness[:idx.N]
-	for _, pair := range rmQueryDyadsWithPositions(qTerms, qPositions) {
+	for _, pair := range rmQueryDyadsWithPositionsInto(sc, qTerms, qPositions) {
 		posts := st.phrasePostings(pair)
 		if len(posts) == 0 {
 			continue
@@ -1038,11 +1146,12 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			byEpisodeActive[ep] = append(byEpisodeActive[ep], u)
 		}
 	}
-	activeEpisodes := make([]int32, 0, len(byEpisodeActive))
+	activeEpisodes := sc.activeEpisodes[:0]
 	for ep := range byEpisodeActive {
 		activeEpisodes = append(activeEpisodes, ep)
 	}
 	sortInt32Asc(activeEpisodes)
+	sc.activeEpisodes = activeEpisodes
 	// tightBurstAffinityFloor (~0.9514, exp(-e^-3)) is the temporal affinity
 	// threshold above which two records are treated as a near-simultaneous burst.
 	const tightBurstAffinityFloor = 0.9514319102438668
@@ -1174,7 +1283,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		}
 	}
 
-	sort.Slice(sc.dirtyUnits, func(i, j int) bool { return sc.dirtyUnits[i] < sc.dirtyUnits[j] })
+	sortInt32Asc(sc.dirtyUnits)
 
 	// 3. Intra-sentence pair compactness (residual proximity + pair synergy) and SpacetimeCluster peer corroboration.
 	var peak float64
@@ -1194,14 +1303,16 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			o := &candidates[u]
 			return coreLex[u] + o.phrase + o.entity
 		}
+		strengthPool := sc.unitStrengthPool[:0]
 		for ep, units := range corefByEpisode {
-			sort.Slice(units, func(i, j int) bool {
-				si, sj := strengthOf(units[i]), strengthOf(units[j])
-				if si != sj {
-					return si > sj
-				}
-				return units[i] < units[j]
-			})
+			strengthPool = strengthPool[:0]
+			for _, u := range units {
+				strengthPool = append(strengthPool, rmUnitStrength{unit: u, strength: strengthOf(u)})
+			}
+			sort.Sort(rmUnitStrengthSort(strengthPool))
+			for i, it := range strengthPool {
+				units[i] = it.unit
+			}
 			corefByEpisode[ep] = units
 		}
 
@@ -1434,11 +1545,12 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 		if len(groupW) < minPop || sc == nil {
 			return
 		}
-		gKeys := make([]uint64, 0, len(groupW))
+		gKeys := sc.latticeGKeys[:0]
 		for g := range groupW {
 			gKeys = append(gKeys, g)
 		}
-		sort.Slice(gKeys, func(i, j int) bool { return gKeys[i] < gKeys[j] })
+		sortUint64Asc(gKeys)
+		sc.latticeGKeys = gKeys
 		var totW float64
 		for _, g := range gKeys {
 			totW += groupW[g]
@@ -1446,7 +1558,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 		if totW <= 0 {
 			return
 		}
-		sort.Slice(hashes, func(i, j int) bool { return hashes[i] < hashes[j] })
+		sortUint64Asc(hashes)
 
 		if len(gKeys) > 64 {
 			numWords := (len(gKeys) + 63) / 64
@@ -1537,7 +1649,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 			if len(activeUnits) == 0 {
 				return
 			}
-			sort.Slice(activeUnits, func(i, j int) bool { return activeUnits[i] < activeUnits[j] })
+			sortInt32Asc(activeUnits)
 			deltaCache := make(map[string]float64, len(activeUnits))
 			for _, u := range activeUnits {
 				slotU := unitSlot[u]
@@ -1655,8 +1767,14 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 		if len(activeUnits) == 0 {
 			return
 		}
-		sort.Slice(activeUnits, func(i, j int) bool { return activeUnits[i] < activeUnits[j] })
-		deltaCache := make(map[uint64]float64, len(activeUnits))
+		sortInt32Asc(activeUnits)
+		deltaCache := sc.latticeDeltaCache
+		if deltaCache == nil {
+			deltaCache = make(map[uint64]float64, len(activeUnits))
+			sc.latticeDeltaCache = deltaCache
+		} else {
+			clear(deltaCache)
+		}
 		for _, u := range activeUnits {
 			mask := uMask[u]
 			gain, ok := deltaCache[mask]
@@ -1703,9 +1821,21 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 		}
 	}
 
-	groupDF := make(map[uint64]int, len(qTerms))
-	groupW := make(map[uint64]float64, len(qTerms))
-	activeHashes := make([]uint64, 0, len(qTerms))
+	groupDF := sc.latticeGroupDF
+	if groupDF == nil {
+		groupDF = make(map[uint64]int, len(qTerms))
+		sc.latticeGroupDF = groupDF
+	} else {
+		clear(groupDF)
+	}
+	groupW := sc.latticeGroupW
+	if groupW == nil {
+		groupW = make(map[uint64]float64, len(qTerms))
+		sc.latticeGroupW = groupW
+	} else {
+		clear(groupW)
+	}
+	activeHashes := sc.latticeHashes[:0]
 	for h := range qTerms {
 		m, ok := idx.TermMass(h)
 		dfH := idx.TermDF(h)
@@ -1728,15 +1858,34 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 			groupDF[g] = dfH
 		}
 	}
+	sc.latticeHashes = activeHashes
 	evalPass(activeHashes, hashGroup, groupW, groupDF, true, 3, false)
 
 	eulerFirstHorizon := int(float64(idx.N) / math.E)
 	const rmRigidDigitQtyMask uint8 = (1 << 2) | (1 << 7)
 	hasMidRigid := false
-	qGroupMid := make(map[uint64]uint64, len(qTerms))
-	groupDFMid := make(map[uint64]int, len(qTerms))
-	groupWMid := make(map[uint64]float64, len(qTerms))
-	midHashes := make([]uint64, 0, len(qTerms))
+	qGroupMid := sc.latticeQGroupMid
+	if qGroupMid == nil {
+		qGroupMid = make(map[uint64]uint64, len(qTerms))
+		sc.latticeQGroupMid = qGroupMid
+	} else {
+		clear(qGroupMid)
+	}
+	groupDFMid := sc.latticeGroupDFMid
+	if groupDFMid == nil {
+		groupDFMid = make(map[uint64]int, len(qTerms))
+		sc.latticeGroupDFMid = groupDFMid
+	} else {
+		clear(groupDFMid)
+	}
+	groupWMid := sc.latticeGroupWMid
+	if groupWMid == nil {
+		groupWMid = make(map[uint64]float64, len(qTerms))
+		sc.latticeGroupWMid = groupWMid
+	} else {
+		clear(groupWMid)
+	}
+	midHashes := sc.latticeMidHashes[:0]
 	for h, qa := range qTerms {
 		m, ok := idx.TermMass(h)
 		if !ok || m <= 0 {
@@ -1763,6 +1912,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 			hasMidRigid = true
 		}
 	}
+	sc.latticeMidHashes = midHashes
 	if hasMidRigid {
 		evalPass(midHashes, qGroupMid, groupWMid, groupDFMid, false, 4, true)
 	}

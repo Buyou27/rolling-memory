@@ -960,14 +960,7 @@ func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon
 	//    harness identity when the child process environment does not carry host-specific variables.
 	if cwd, err := os.Getwd(); err == nil && cwd != "" {
 		if text.DetectGitWorkspaceName(cwd) != "" {
-			harnessHint := ""
-			if resolveZCodeInFlightToolDirectory(ids.UTCNow()) != "" {
-				harnessHint = "zcode"
-			} else if saved := readSavedPresence(); strings.HasPrefix(saved.Carrier, "harness:") {
-				if h := strings.TrimPrefix(saved.Carrier, "harness:"); h != "" && h != "cli" {
-					harnessHint = h
-				}
-			}
+			harnessHint := resolvedHarnessHint(readSavedPresence(), resolveZCodeInFlightToolDirectory(ids.UTCNow()) != "")
 			coords := text.DetectHarnessPresence(cwd, harnessHint, "")
 			if inferred := calibrateLocusFromArguments(arguments, coords.Locus, true); inferred != "" {
 				coords.Locus = inferred
@@ -995,7 +988,7 @@ func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon
 	// 2. L2 Hook State Fallback: read hook-written active_workspace.json when daemon cwd is outside a git repo (e.g. $HOME),
 	//    and self-calibrate Locus against explicit repository coordinates in the tool payload so concurrent multi-window
 	//    sessions never cross-contaminate each other's repository locus.
-	if coords := readSavedPresence(); !coords.IsEmpty() {
+	if coords := applyLiveHarnessIdentity(readSavedPresence()); !coords.IsEmpty() {
 		if inferred := calibrateLocusFromArguments(arguments, coords.Locus, false); inferred != "" {
 			coords.Locus = inferred
 		}
@@ -1004,6 +997,40 @@ func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon
 		}
 	}
 	return mergeExplicit(text.PresenceCoordinates{})
+}
+
+// resolvedHarnessHint picks the harness identity for daemon-side presence. The
+// live process environment outranks the ZCode in-flight tool directory, which
+// outranks the shared saved-carrier file: a daemon spawned by one host must
+// never inherit another host's stored identity (Codex/DSH calls were stamped
+// harness:zcode whenever the last saved presence came from ZCode).
+func resolvedHarnessHint(saved text.PresenceCoordinates, inFlightZCode bool) string {
+	if h := text.DetectHarnessFromEnv(); h != "" {
+		return h
+	}
+	if inFlightZCode {
+		return "zcode"
+	}
+	if h := strings.TrimPrefix(saved.Carrier, "harness:"); h != "" && h != "cli" {
+		return h
+	}
+	return ""
+}
+
+// applyLiveHarnessIdentity stamps the live environment's harness onto saved
+// coordinates when the daemon process itself runs inside a host and the saved
+// carrier names a different one. A matching carrier keeps the saved
+// incarnation untouched (it may carry a subagent role).
+func applyLiveHarnessIdentity(coords text.PresenceCoordinates) text.PresenceCoordinates {
+	h := text.DetectHarnessFromEnv()
+	if h == "" {
+		return coords
+	}
+	if want := "harness:" + h; coords.Carrier != want {
+		coords.Carrier = want
+		coords.Incarnation = text.NormalizeHierarchicalPath("coding/" + h + "/main")
+	}
+	return coords
 }
 
 func isRepoIdentByte(b byte) bool {

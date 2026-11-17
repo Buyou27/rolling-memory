@@ -533,7 +533,7 @@ func DetectHarnessPresence(cwd, harnessName, subrole string) PresenceCoordinates
 	locus := DetectGitWorkspaceName(cwd)
 	h := strings.ToLower(strings.TrimSpace(harnessName))
 	if h == "" {
-		h = detectHarnessFromEnv()
+		h = DetectHarnessFromEnv()
 	}
 	if h == "" {
 		h = "cli"
@@ -666,9 +666,23 @@ func CanonicalAssistantScopeVariants(scope, assistantID string) []string {
 	return out
 }
 
-func detectHarnessFromEnv() string {
+// DetectHarnessFromEnv returns the harness fingerprint carried by the process
+// environment, or "" when no host-specific marker is present. Callers holding a
+// fallback identity (a saved presence file, a plugin declaration) must consult
+// this first: a child process spawned by one host inherits another host's
+// exported variables, so a live fingerprint always outranks a stored carrier.
+//
+// Ordering is by marker strength: session-scoped markers stamped by the host
+// itself come before plain shell exports that every descendant inherits.
+func DetectHarnessFromEnv() string {
 	if v := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_HARNESS")); v != "" {
 		return strings.ToLower(v)
+	}
+	// DeepSeek Harness stamps these only on the processes it spawns; a DSH
+	// session started inside another host's terminal also carries that host's
+	// plain exports, so DSH must be asked before ZCode.
+	if os.Getenv("DSH_SESSION_ID") != "" || os.Getenv("DSH_SHELL") != "" {
+		return "dsh"
 	}
 	if os.Getenv("ZCODE_SESSION_ID") != "" || os.Getenv("ZCODE_WORKSPACE") != "" || strings.Contains(strings.ToLower(os.Getenv("TERM_PROGRAM")), "zcode") {
 		return "zcode"
@@ -681,6 +695,12 @@ func detectHarnessFromEnv() string {
 	}
 	if os.Getenv("WINDSURF_SESSION") != "" {
 		return "windsurf"
+	}
+	// Codex stamps its thread id on the processes it spawns and points
+	// CODEX_HOME at its store; a plain shell export of CODEX_HOME is weaker
+	// evidence than any marker above, so this stays last.
+	if os.Getenv("CODEX_THREAD_ID") != "" || os.Getenv("CODEX_HOME") != "" {
+		return "codex"
 	}
 	// Unknown host: return empty so DetectHarnessPresence stamps the generic
 	// "cli" carrier. Naming a concrete harness here (the historical hardcoded

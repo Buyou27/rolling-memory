@@ -19,13 +19,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/rocareer/rolling-memory/internal/cloudcred"
 	"github.com/rocareer/rolling-memory/internal/config"
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/evalns"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/langpack"
-	"github.com/rocareer/rolling-memory/internal/langpack/en"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 	ramesdk "github.com/rocareer/rolling-memory/sdk/go"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
@@ -117,8 +114,9 @@ const (
 )
 
 // 本地明文索引/召回面：
-//   - product：唯一默认面，与用户日常使用的产品金库完全同源（langpack.ConfigureDefault
-//     最大能力装配 + thinclient.RememberEpisodic 摄入 + thinclient.RecallWithOptions 召回）；
+//   - product：唯一默认面，与用户日常使用的产品金库完全同源（闭集谐波/单位/地理表全开、
+//     RB 原生伴随词展开 plain.CanonicalCompanionTags、thinclient.RememberEpisodic 摄入与
+//     thinclient.RecallWithOptions 召回）；
 //   - eval：仅用于显式 `--pulse-tokenizer standard|fts5-trigram` 的对照切词实验。
 const (
 	LocalIndexSurfaceProduct = "product"
@@ -161,25 +159,24 @@ func normalizePulseTokenizer(mode string) string {
 	}
 }
 
-// packBPELexemeHarmonicSentence 将单句明文编码为全量最大能力脉冲帧：
-// 启用全部客户端谐波表（common 128 + multi 208 全语种计量/统计单位表 + ISO 3166 L0-L3 地理表）
-// 与全部规范外挂（128k BPE 先验宽度、Exact/Stem/Morph 奇偶配对词族谐波、内联粘连符号提取、
-// 无空格 SEA 单位提取与 ISO 日历同态信标及英文自然月份对齐）。
-func packBPELexemeHarmonicSentence(enc *plain.BlindEncoder, sentence string, sentIdx int) []plain.BlindTokenAtom {
-	return en.PackSentence(enc, sentence, sentIdx)
+// packBPELexemeHarmonicSentence 将单句明文编码为标准词元装饰脉冲帧。
+func packBPELexemeHarmonicSentence(enc *plain.BlindEncoder, sentence string, _ int) []plain.BlindTokenAtom {
+	if enc == nil {
+		enc = plain.NewBlindEncoder(plain.DemoSecret)
+	}
+	clone := enc.CloneWithPepper(nil)
+	clone.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
+		EnableStructuredDates: true,
+		Expander:              plain.CanonicalCompanionTags,
+	})
+	return clone.PackSentenceTerms(sentence)
 }
 
-// packLocalOfflineShannonSentence aliases the shared max-capability packer.
-// Single source lives in internal/langpack so the product
-// vault and the evaluator can never drift into two atomization schemes.
-var packLocalOfflineShannonSentence = langpack.PackMaxCapabilitySentence
+var packLocalOfflineShannonSentence = packBPELexemeHarmonicSentence
 
-// kernelDelegatingPacker 把内核唯一明文打包器（langpack/en.PackSentence @ plain）
-// 适配为 SDK 存储的 packer 接口。两侧密钥派生一致（pepper→SHA-256），
-// 因此脉冲 {h,b,f} 逐位同构；SDK 侧不再维护第二套分词实现。
 func kernelDelegatingPacker(enc *plain.BlindEncoder) ramesdk.SentenceAtomPacker {
 	return func(_ *ramesdk.BlindEncoder, sentence string, sentIdx int) []ramesdk.BlindTokenAtom {
-		atoms := en.PackSentence(enc, sentence, sentIdx)
+		atoms := packBPELexemeHarmonicSentence(enc, sentence, sentIdx)
 		out := make([]ramesdk.BlindTokenAtom, len(atoms))
 		for i, a := range atoms {
 			out[i] = ramesdk.BlindTokenAtom{H: a.H, RawBitsX10: a.RawBitsX10, ClassFlags: a.ClassFlags}
@@ -192,7 +189,6 @@ func applyPulseTokenizer(store *ramesdk.JSONFileStore, mode string, secret []byt
 	if store == nil || store.BlindEncoder == nil {
 		return
 	}
-	// 内核编码器（唯一分词/打包实现）；与 SDK store 使用同一密钥素材。
 	kenc := plain.NewBlindEncoder(secret)
 	norm := normalizePulseTokenizer(mode)
 	switch norm {
@@ -209,28 +205,17 @@ func applyPulseTokenizer(store *ramesdk.JSONFileStore, mode string, secret []byt
 			Segmenter:       plain.FTS5TrigramSegmenter,
 			HarmonicOverlay: true,
 		})
-	case "en", "zh", "zh-cn", "zh-tw", "ja", "ko", "sea", "th", "lo", "km", "de", "nl", "sv", "multi":
-		kenc.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{EnableStructuredDates: true})
-		_ = langpack.Configure(kenc, norm)
-		store.BlindEncoder.SetCanonicalHarmonics(ramesdk.CanonicalHarmonicOptions{EnableStructuredDates: true})
-		store.BlindEncoder.SetSegmenterOptions(ramesdk.SegmenterPackOptions{
-			SentenceAtomPacker: kernelDelegatingPacker(kenc),
-			HarmonicOverlay:    true,
-		})
 	default:
-		kenc.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{EnableStructuredDates: true})
-		kenc.SetSegmenterOptions(plain.SegmenterPackOptions{
-			Segmenter:          en.SegmentSentence,
-			SentenceAtomPacker: packBPELexemeHarmonicSentence,
-			HarmonicOverlay:    true,
+		kenc.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
+			EnableStructuredDates: true,
+			Expander:              plain.CanonicalCompanionTags,
 		})
-		store.BlindEncoder.SetCanonicalHarmonics(ramesdk.CanonicalHarmonicOptions{EnableStructuredDates: true})
-		store.BlindEncoder.SetSegmenterOptions(ramesdk.SegmenterPackOptions{
-			SentenceAtomPacker: func(enc *ramesdk.BlindEncoder, sentence string, sentIdx int) []ramesdk.BlindTokenAtom {
-				return kernelDelegatingPacker(kenc)(enc, sentence, sentIdx)
-			},
-			HarmonicOverlay: true,
+		kenc.SetSegmenterOptions(plain.SegmenterPackOptions{HarmonicOverlay: true})
+		store.BlindEncoder.SetCanonicalHarmonics(ramesdk.CanonicalHarmonicOptions{
+			EnableStructuredDates: true,
+			Expander:              plain.CanonicalCompanionTags,
 		})
+		store.BlindEncoder.SetSegmenterOptions(ramesdk.SegmenterPackOptions{HarmonicOverlay: true})
 	}
 }
 
@@ -428,6 +413,9 @@ type CloudEngine struct {
 
 	identityOnce sync.Once
 	identityErr  error
+	// localIdentityOnce 串行化本地模式的租户坐标准备：并行 Recall 会并发进入 CheckHealth，
+	// 默认租户坐标与客户端坐标只写一次（Once 自带内存屏障），此后 CheckHealth 只读。
+	localIdentityOnce sync.Once
 
 	localVaultMu      sync.Mutex
 	localVaultDB      *sql.DB
@@ -601,18 +589,12 @@ func cloudEndpoint(cfg *config.Config) string {
 	if cfg != nil && strings.TrimSpace(cfg.Cloud.BaseURL) != "" {
 		return normalizeCloudEndpoint(cfg.Cloud.BaseURL)
 	}
-	if accountURL, _, err := cloudcred.Ensure(context.Background()); err == nil && strings.TrimSpace(accountURL) != "" {
-		return normalizeCloudEndpoint(accountURL)
-	}
 	return defaultCloudEndpoint
 }
 
-// cloudAPIKey 按显式程度解析评测凭据（Fail-Closed：三者皆无即报错，绝不回退任何编译内置密钥）：
+// cloudAPIKey 按显式程度解析评测凭据（Fail-Closed：皆无即报错，绝不回退任何编译内置密钥）：
 //  1. 环境变量 ROLLING_MEMORY_BRAIN_KEY；
-//  2. 显式配置 cloud.sync（cfg.SyncKey：APIKeyEnv / APIKeyFile）；
-//  3. 本机账户态（cloudcred.Ensure：向本机控制面申请 / 续签的 mem2.* 数据面签名钥）。
-//
-// 端点参数只用于错误定位，不参与凭据选择；端点本身仍按 env → 配置 → 默认独立解析。
+//  2. 显式配置 cloud.sync（cfg.SyncKey：APIKeyEnv / APIKeyFile）。
 func cloudAPIKey(cfg *config.Config, endpoint string) (string, error) {
 	if value := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY")); value != "" {
 		return value, nil
@@ -628,20 +610,13 @@ func cloudAPIKey(cfg *config.Config, endpoint string) (string, error) {
 			cfgErr = err
 		}
 	}
-	_, accountKey, accountErr := cloudcred.Ensure(context.Background())
-	if accountKey = strings.TrimSpace(accountKey); accountErr == nil && accountKey != "" {
-		return accountKey, nil
-	}
 	if endpoint == "" {
 		endpoint = defaultCloudEndpoint
 	}
-	if accountErr == nil {
-		accountErr = errors.New("本机账户态未提供数据面签名钥")
-	}
 	if cfgErr != nil {
-		return "", fmt.Errorf("cloud evaluation credential for %s is unresolved: set ROLLING_MEMORY_BRAIN_KEY, configure cloud.sync (%v), or sign in to the local control plane for a data-plane signed key (%v)", endpoint, cfgErr, accountErr)
+		return "", fmt.Errorf("cloud evaluation credential for %s is unresolved: set ROLLING_MEMORY_BRAIN_KEY or configure cloud.sync (%v)", endpoint, cfgErr)
 	}
-	return "", fmt.Errorf("cloud evaluation credential for %s is unresolved: set ROLLING_MEMORY_BRAIN_KEY, configure cloud.sync, or sign in to the local control plane for a data-plane signed key (%v)", endpoint, accountErr)
+	return "", fmt.Errorf("cloud evaluation credential for %s is unresolved: set ROLLING_MEMORY_BRAIN_KEY or configure cloud.sync", endpoint)
 }
 
 // evalVaultSecretFromKey 返回本地明文金库的盲化 pepper：对短 TTL 的 `mem2.<payload>.<sig>`
@@ -793,10 +768,12 @@ func (e *CloudEngine) CheckHealth(ctx context.Context) error {
 		return errors.New("cloud evaluation engine is not initialized")
 	}
 	if NormalizePulseMode(e.PulseMode) == PulseModeLocalPlain {
-		if e.TenantID == "" {
-			e.TenantID = "user"
-		}
-		e.Client.TenantID = e.TenantID
+		e.localIdentityOnce.Do(func() {
+			if e.TenantID == "" {
+				e.TenantID = "user"
+			}
+			e.Client.TenantID = e.TenantID
+		})
 		return nil
 	}
 	e.identityOnce.Do(func() {
@@ -855,13 +832,9 @@ func (e *CloudEngine) Metadata() map[string]any {
 		"local_fallback":         false,
 	}
 	if e.localIndexSurface() == LocalIndexSurfaceProduct {
-		language := evalLangpackName()
 		indexSurface := "product-maxcap"
-		switch {
-		case strings.EqualFold(language, "off"):
+		if strings.EqualFold(evalHarmonicsName(), "off") {
 			indexSurface = "product-plain"
-		case !strings.EqualFold(language, langpack.MaxCapabilityLanguage):
-			indexSurface = "product-langpack-" + language
 		}
 		meta["configured_local_index_surface"] = indexSurface
 	} else if NormalizePulseMode(e.PulseMode) == PulseModeLocalPlain {
@@ -1599,15 +1572,12 @@ func (e *CloudEngine) localIndexSurface() string {
 	return LocalIndexSurfaceEval
 }
 
-// evalLangpackName mirrors the product vault's assembly selection. Empty means the
-// shared strongest default (langpack.MaxCapabilityLanguage); an explicit language
-// pack or "off" remains a diagnostic override.
-func evalLangpackName() string {
-	language := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_LANGPACK"))
-	if language == "" {
-		return langpack.MaxCapabilityLanguage
+func evalHarmonicsName() string {
+	harmonics := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_HARMONICS"))
+	if harmonics == "" {
+		return "max"
 	}
-	return language
+	return harmonics
 }
 
 // localVaultMeta binds the derived SQLite vault to the exact store bytes and index surface.
@@ -1616,7 +1586,7 @@ type localVaultMeta struct {
 	Schema       int    `json:"schema"`
 	StoreSHA256  string `json:"store_sha256"`
 	IndexSurface string `json:"index_surface"`
-	Langpack     string `json:"langpack,omitempty"`
+	Harmonics    string `json:"harmonics,omitempty"`
 	Tokenizer    string `json:"tokenizer"`
 	Ingestion    string `json:"ingestion"`
 	Documents    int    `json:"documents"`
@@ -1634,18 +1604,26 @@ func (e *CloudEngine) localVaultMetaFor(storeSHA string, documents int) localVau
 	}
 	meta.Ingestion = "direct-insert"
 	if meta.IndexSurface == LocalIndexSurfaceProduct {
-		meta.Langpack = evalLangpackName()
+		meta.Harmonics = evalHarmonicsName()
 		meta.Ingestion = "product-client"
 	}
 	return meta
 }
 
 // configureLocalVault applies the index configuration of the selected surface.
-// 产品面与 internal/api 的唯一 Vault 装配点共用 langpack.ConfigureDefault：默认即
-// 最强装配（max-capability packer + 结构化日期信标）；显式语言包/`off` 仅作诊断覆盖。
 func (e *CloudEngine) configureLocalVault(v *thinclient.Vault) error {
 	if e.localIndexSurface() == LocalIndexSurfaceProduct {
-		return langpack.ConfigureDefault(v, evalLangpackName())
+		if strings.EqualFold(evalHarmonicsName(), "off") {
+			v.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{})
+			v.SetSegmenterOptions(plain.SegmenterPackOptions{})
+			return nil
+		}
+		v.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
+			EnableStructuredDates: true,
+			Expander:              plain.CanonicalCompanionTags,
+		})
+		v.SetSegmenterOptions(plain.SegmenterPackOptions{HarmonicOverlay: true})
+		return nil
 	}
 	switch normalizePulseTokenizer(e.PulseTokenizer) {
 	case PulseTokenizerStandard:
@@ -1658,11 +1636,11 @@ func (e *CloudEngine) configureLocalVault(v *thinclient.Vault) error {
 			HarmonicOverlay: true,
 		})
 	default:
-		v.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{EnableStructuredDates: true})
-		v.SetSegmenterOptions(plain.SegmenterPackOptions{
-			SentenceAtomPacker: packLocalOfflineShannonSentence,
-			HarmonicOverlay:    true,
+		v.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
+			EnableStructuredDates: true,
+			Expander:              plain.CanonicalCompanionTags,
 		})
+		v.SetSegmenterOptions(plain.SegmenterPackOptions{HarmonicOverlay: true})
 	}
 	return nil
 }
@@ -1702,7 +1680,7 @@ func (e *CloudEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 	storeSHA := sha256.Sum256(raw)
 	wantMeta := e.localVaultMetaFor(hex.EncodeToString(storeSHA[:]), len(docs))
 
-	// 复用派生金库：store 字节、索引面、语言包、切词臂与文档数全部一致才打开；
+	// 复用派生金库：store 字节、索引面、谐波装配、切词臂与文档数全部一致才打开；
 	// 任一不符即整库重建，避免「配置换了但检索仍跑旧索引」的静默漂移。
 	if metaRaw, readErr := os.ReadFile(metaPath); readErr == nil {
 		var have localVaultMeta

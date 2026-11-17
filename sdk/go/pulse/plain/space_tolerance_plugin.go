@@ -139,11 +139,11 @@ func (a *TermExtractor) ExtractSpaceFaultFusion(text string) SpaceFaultFusion {
 // (e.g. "of a", "and in", "in St", "I had") are adjacent in normal prose,
 // sqrt(df(L)*df(R)) >> df(L+R)*e^2 and the pseudo-fusion is suppressed without
 // any word list or character-length threshold.
-func (a *TermExtractor) mergeQuerySpaceFaultFusionSents(idx *Index, canonical string, sents []string, qTerms map[uint64]Term) {
+func (a *TermExtractor) mergeQuerySpaceFaultFusionSents(idx QueryIndexView, canonical string, sents []string, qTerms map[uint64]Term) {
 	if qTerms == nil {
 		return
 	}
-	if idx == nil {
+	if queryIndexAbsent(idx) {
 		a.ExtractSpaceFaultFusion(canonical).MergeInto(qTerms, nil)
 		return
 	}

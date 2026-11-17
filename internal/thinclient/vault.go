@@ -354,6 +354,7 @@ func RoleTaggedAuthors(text string) []string {
 
 type vaultCachedDocSlots struct {
 	rawText    string
+	termMeta   map[uint64]core.Term
 	termCounts map[uint64]int
 	sentHashes [][]uint64
 	docLen     int
@@ -374,6 +375,7 @@ type vaultDocEntry struct {
 	locus         string
 	refPointer    string
 	contentDigest []byte
+	termMeta      map[uint64]core.Term
 	termCounts    map[uint64]int
 	sentHashes    [][]uint64
 	allHashes     []uint64
@@ -1214,7 +1216,7 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		bgRef:       &vaultBgSlotsRef{},
 	}
 	if len(explicitSecret) > 0 {
-		h := sha256.Sum256(plain.DeriveBlindPepper(explicitSecret))
+		h := sha256.Sum256(explicitSecret)
 		v.secretKey = h
 		return v, nil
 	}
@@ -1372,16 +1374,23 @@ func SplitWords(sent string) []string {
 
 // PackBlindPacket splits text into sentences and packs a zero-plaintext BlindPulsePacket via sdk/go/pulse/plain.
 func (v *Vault) PackBlindPacket(docID string, text string, occurredAt int64) (BlindPulsePacket, []string) {
-	if v != nil && (v.segOpts.Segmenter != nil || v.segOpts.SentenceAtomPacker != nil) {
-		return v.PackBlindPacketWithSegmenter(docID, text, occurredAt, v.segOpts)
-	}
-	var key [32]byte
-	if v != nil {
-		key = v.secretKey
-	}
+	return v.packBlindPacketWithKey(v.secretKey, docID, text, occurredAt)
+}
+
+// packBlindPacketWithKey 以给定键控密钥打包，保留 Vault 的 segOpts/harmOpts（统一构造路径）。
+func (v *Vault) packBlindPacketWithKey(key [32]byte, docID, text string, occurredAt int64) (BlindPulsePacket, []string) {
 	enc := plain.NewBlindEncoderFromRawKey(key)
 	if v != nil {
 		enc.SetCanonicalHarmonics(v.harmOpts)
+	}
+	if v != nil && (v.segOpts.Segmenter != nil || v.segOpts.SentenceAtomPacker != nil) {
+		rmPkt, sents := enc.PackBlindPacketWithSegmenter(docID, text, occurredAt, v.segOpts)
+		return BlindPulsePacket{
+			UnitID:         rmPkt.UnitID,
+			OccurredAt:     rmPkt.OccurredAt,
+			Slots:          rmPkt.Slots,
+			SentenceFrames: rmPkt.SentenceFrames,
+		}, sents
 	}
 	sdkPkt, sents := enc.PackBlindPacket(docID, text, occurredAt)
 	return BlindPulsePacket{
@@ -2713,8 +2722,32 @@ func (v *Vault) scanInlineDocsSince(ctx context.Context, prevMax int64) ([]inlin
 func (v *Vault) packDocCacheEntry(docID, rawText string, occ int64) vaultCachedDocSlots {
 	pkt, _ := v.PackBlindPacket(docID, rawText, occ)
 	allHashes := make([]uint64, 0, len(pkt.Slots))
+	tMeta := make(map[uint64]core.Term, len(pkt.Slots)/2+4)
 	for _, ds := range pkt.Slots {
 		allHashes = append(allHashes, ds.H)
+		if ds.H == 0 {
+			continue
+		}
+		bits := ds.RawBitsX10
+		if bits == 0 {
+			bits = 32
+		}
+		role := core.RolePrimary
+		ext := core.ExtFlagSeenPrimary
+		if (ds.RawBitsX10&1) == 1 && (ds.ClassFlags&FlagHasConn) != 0 {
+			role = core.RoleMorphStem
+			ext = core.ExtFlagSeenMorphOrClos
+		}
+		if cur, ok := tMeta[ds.H]; !ok || bits > cur.Bits {
+			tMeta[ds.H] = core.Term{
+				Hash:     ds.H,
+				Bits:     bits,
+				Flags:    ds.ClassFlags,
+				Role:     role,
+				ExtFlags: ext,
+				Group:    ds.H,
+			}
+		}
 	}
 	tCounts := make(map[uint64]int, len(pkt.Slots))
 	docLen := 0
@@ -2750,6 +2783,7 @@ func (v *Vault) packDocCacheEntry(docID, rawText string, occ int64) vaultCachedD
 	}
 	return vaultCachedDocSlots{
 		rawText:    rawText,
+		termMeta:   tMeta,
 		termCounts: tCounts,
 		sentHashes: sHashes,
 		docLen:     docLen,
@@ -2988,9 +3022,20 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 						}
 						v.slotCacheMu.Unlock()
 					} else {
+						// The aggregate fingerprint is read before the full row scan. A concurrent
+						// INSERT can therefore leave baseInline newer than prevMax; treat the delta
+						// as a set union so the next incremental build cannot append that row again.
+						baseDocIDs := make(map[string]struct{}, len(baseInline))
+						for _, doc := range baseInline {
+							baseDocIDs[doc.docID] = struct{}{}
+						}
 						appended := make([]vaultDocEntry, 0, len(newRows))
 						addedLen := 0
 						for _, r := range newRows {
+							if _, exists := baseDocIDs[r.docID]; exists {
+								continue
+							}
+							baseDocIDs[r.docID] = struct{}{}
 							entry := v.packDocCacheEntry(r.docID, r.rawText, r.occ)
 							appended = append(appended, vaultDocEntry{
 								docID:      r.docID,
@@ -3000,6 +3045,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 								coord64:    r.coord64,
 								waveBar:    r.waveBar,
 								locus:      r.locus,
+								termMeta:   entry.termMeta,
 								termCounts: entry.termCounts,
 								sentHashes: entry.sentHashes,
 								allHashes:  entry.allHashes,
@@ -3021,7 +3067,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 						inlineDocs = merged
 						inlineTotalLen = baseInlineLen + addedLen
 						inlineFromCache = true
-						inlineGrew = true
+						inlineGrew = len(appended) > 0
 						v.slotCacheMu.Lock()
 						v.snapRef.inlineDocCnt = docCnt
 						v.snapRef.inlineDocRowSum = docRowSum
@@ -3168,6 +3214,7 @@ afterInlineCacheCheck:
 				coord64:    r.coord64,
 				waveBar:    r.waveBar,
 				locus:      r.locus,
+				termMeta:   r.entry.termMeta,
 				termCounts: r.entry.termCounts,
 				sentHashes: r.entry.sentHashes,
 				allHashes:  r.entry.allHashes,

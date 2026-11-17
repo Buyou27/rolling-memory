@@ -21,7 +21,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	previous := time.Local
+	// UTC stays for the whole process: restoring time.Local after m.Run would
+	// write a global while goroutines outliving their test (vault snapshot
+	// refreshes) may still read it, and the process exits immediately after.
 	time.Local = time.UTC
 	// Host identity variables are cleared for the whole test binary: the
 	// developer's terminal may itself run inside a coding harness, and an
@@ -36,7 +38,6 @@ func TestMain(m *testing.M) {
 		_ = os.Unsetenv(key)
 	}
 	code := m.Run()
-	time.Local = previous
 	os.Exit(code)
 }
 

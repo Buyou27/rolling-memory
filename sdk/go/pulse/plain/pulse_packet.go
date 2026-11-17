@@ -6,7 +6,6 @@ package plain
 import (
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -24,7 +23,6 @@ const (
 	LayerNoetic            = "noetic"
 	ModeLocalPlain         = "local_plain"
 	ModePulsePlain         = "pulse_plain"
-	ModePulseCipher        = "pulse_cipher"
 	CalendarBeaconWidthX10 = calBeaconCarrierBitsX10
 )
 
@@ -70,27 +68,6 @@ func ExtractPulsePrimaryDyads(frames [][]PulseSlot) []PhraseDyad {
 		}
 	}
 	return ExtractAdjacentPhrases(primaryFrames)
-}
-
-// DeriveBlindPepper extracts a rotation-invariant tenant blind pepper from a short-lived
-// `mem2.<payload_b64>.<sig>` data-plane signed key (`rame-tenant-vault:<tid>:<uid>`),
-// or returns secret unchanged for static keys/phrases.
-func DeriveBlindPepper(secret []byte) []byte {
-	trimmed := strings.TrimSpace(string(secret))
-	if strings.HasPrefix(trimmed, "mem2.") {
-		if parts := strings.Split(trimmed, "."); len(parts) == 3 {
-			if raw, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
-				var claims struct {
-					Tid string `json:"tid"`
-					UID string `json:"uid"`
-				}
-				if json.Unmarshal(raw, &claims) == nil && strings.TrimSpace(claims.Tid) != "" {
-					return []byte("rame-tenant-vault:" + strings.TrimSpace(claims.Tid) + ":" + strings.TrimSpace(claims.UID))
-				}
-			}
-		}
-	}
-	return secret
 }
 
 type BlindPulsePacket struct {

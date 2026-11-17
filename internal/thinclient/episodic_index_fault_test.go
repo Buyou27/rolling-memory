@@ -17,7 +17,7 @@ import (
 )
 
 func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestEpisodicIndexSwappedRows(t *testing.T) {
 
 func TestEpisodicIndexSourceDeleteCascade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.sqlite")
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", vaultTestDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}

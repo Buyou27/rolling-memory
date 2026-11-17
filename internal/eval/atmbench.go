@@ -21,7 +21,6 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/langpack"
 	ramesdk "github.com/rocareer/rolling-memory/sdk/go"
 )
 
@@ -187,10 +186,11 @@ func HydrateATMSGMItem(scope string, it *ATMSGMItem) {
 		it.OccurredAt = ParseATMTimestamp(it.Timestamp)
 	}
 	if it.Modality == "email" {
+		// 邮件正文保持固定 4 行头（ID/Timestamp/Summary/Detail）：Subject 只随高分辨率
+		// 子块标题块交付、不进正文，子块行号锚定与冻结基线口径依赖此布局。
 		it.FullText = strings.Join([]string{
 			"ID: " + it.ItemID,
 			"Timestamp: " + it.Timestamp,
-			"Subject: " + it.Subject,
 			"Summary: " + it.Summary,
 			"Detail: " + it.Detail,
 		}, "\n")
@@ -719,30 +719,6 @@ func atmCloudDocuments(items []*ATMSGMItem) []CloudDocument {
 }
 
 // IngestATMCorpus writes source-faithful SGM units through the strict cloud SDK.
-// buildATMCorpusOnlineDF 预扫描全语料构建词级文档频次表（df, totalDocs），供在线 DF 共轭洗脱注入：
-// 与 maxcap 打包器同源的分句/分词（ramesdk.SplitSentences + ramesdk.SplitWords，词面小写去空白），
-// 每文档内按词面去重（文档频次定义），零高级拓扑算子依赖。
-func buildATMCorpusOnlineDF(items []*ATMSGMItem) (map[string]int, int) {
-	df := make(map[string]int, 1<<16)
-	for _, it := range items {
-		if it == nil {
-			continue
-		}
-		seen := make(map[string]bool, 64)
-		for _, sent := range ramesdk.SplitSentences(it.FullText) {
-			for _, w := range ramesdk.SplitWords(sent) {
-				lw := strings.ToLower(strings.TrimSpace(w))
-				if lw == "" || seen[lw] {
-					continue
-				}
-				seen[lw] = true
-				df[lw]++
-			}
-		}
-	}
-	return df, len(items)
-}
-
 func IngestATMCorpus(engine *CloudEngine, items []*ATMSGMItem, forceRebuild, reuse bool, logf func(string, ...any)) (CloudManifest, float64, error) {
 	start := time.Now()
 	documents := atmCloudDocuments(items)
@@ -1009,17 +985,6 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 			return nil, err
 		}
 		return verification, nil
-	}
-	// 在线 DF 单向高频套话消光律（默认开启；RM 端零高级拓扑算子的在线 DF 修正，ROLLING_MEMORY_ONLINE_DF=0 可关闭作对照臂）：
-	// 在语料打包前以两遍预扫描构建全语料在线文档频次 (df, totalDocs) 注入 langpack.PackMaxCapabilitySentence：
-	// 遵循「提问分布与陈述库分布非对称性定律」，严禁将 !isHigh 提问语法词因陈述库低 df 误提振，
-	// 仅对 df/N > 1/(e^2+e) 的高频泛滥词施加连续对数消光、对 df/N > 1/e 的极端刷屏模板词执行贝叶斯停时冲突洗脱。
-	if !opts.Oracle && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_ONLINE_DF")) != "0" {
-		dfMap, totalDocs := buildATMCorpusOnlineDF(items)
-		langpack.SetMaxCapOnlineCorpusDF(dfMap, totalDocs)
-		defer langpack.SetMaxCapOnlineCorpusDF(nil, 0)
-		logf("[atm-eval] online DF injected before packing: vocab=%d total_docs=%d corpus_limit=%d",
-			len(dfMap), totalDocs, opts.CorpusLimit)
 	}
 	if !opts.Oracle {
 		prepared, ingestSec, err = IngestATMCorpus(engine, items, opts.Rebuild, opts.ReusePrepare, logf)

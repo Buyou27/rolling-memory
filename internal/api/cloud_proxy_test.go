@@ -48,9 +48,9 @@ func TestLiveUpstreamThinBrainFacade_UserID10(t *testing.T) {
 
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", baseURL)
 	t.Setenv("ROLLING_MEMORY_USER_ID", "10")
-	// No key override: the data-plane credential resolves from the machine
-	// account state (cloudcred) like every other end-side live path; skip when
-	// the host has neither an ambient nor a durable credential.
+	// No key override: the data-plane credential resolves from the ambient
+	// environment/configuration like every other end-side live path; skip when
+	// the host has no credential configured.
 	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "")
 
 	dir := t.TempDir()

@@ -19,7 +19,7 @@ import (
 
 func TestEpisodicBackfillEncodingFailureStopsBeforeCursor(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestEpisodicBackfillEncodingFailureStopsBeforeCursor(t *testing.T) {
 
 func TestEpisodicBackfillCorruptItemDoesNotBlock(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "vault.sqlite"))
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(dir, "vault.sqlite")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -174,13 +174,27 @@ func (e *BlindEncoder) SetCanonicalHarmonics(opts CanonicalHarmonicOptions) {
 
 func NewBlindEncoder(secret []byte) *BlindEncoder {
 	enc := &BlindEncoder{}
-	pepper := DeriveBlindPepper(secret)
-	if len(pepper) > 0 {
-		enc.secretKey = sha256.Sum256(pepper)
+	if len(secret) > 0 {
+		enc.secretKey = sha256.Sum256(secret)
 	} else {
 		_, _ = rand.Read(enc.secretKey[:])
 	}
 	return enc
+}
+
+// CloneWithPepper 以新 pepper 派生键控编码器并完整保留 segOpts/harmOpts 配置；
+// pepper 为空时沿用原键控密钥（不触发随机换键）。nil 接收者等价于 NewBlindEncoder。
+func (e *BlindEncoder) CloneWithPepper(pepper []byte) *BlindEncoder {
+	if e == nil {
+		return NewBlindEncoder(pepper)
+	}
+	clone := &BlindEncoder{segOpts: e.segOpts, harmOpts: e.harmOpts}
+	if len(pepper) > 0 {
+		clone.secretKey = sha256.Sum256(pepper)
+	} else {
+		clone.secretKey = e.secretKey
+	}
+	return clone
 }
 
 func NewBlindEncoderFromRawKey(rawKey [32]byte) *BlindEncoder {

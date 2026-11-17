@@ -1172,6 +1172,9 @@ func (c *Client) RecallWithOptions(ctx context.Context, queryPlaintext string, o
 			seenCand := make(map[string]bool, len(cloudHits)+len(localHits))
 			mergedCands := make([]CloudQueryHit, 0, len(cloudHits)+len(localHits))
 			for _, ch := range cloudHits {
+				if seenCand[ch.UnitID] {
+					continue
+				}
 				seenCand[ch.UnitID] = true
 				if localW, inLocal := localWeightByID[ch.UnitID]; inLocal {
 					sdkNorm := localW / topLocalScore
@@ -1207,20 +1210,18 @@ func (c *Client) RecallWithOptions(ctx context.Context, queryPlaintext string, o
 		resolved := make([]LocalResolvedHit, 0, topK+8)
 		usableLocal := 0
 		tailSorted := false
-		hydrateStart := time.Now()
 		maxProbes := topK * 4
 		if maxProbes < 64 {
 			maxProbes = 64
 		}
+		// 交付列表必须仅由金库与查询决定：不设墙钟断流；确定性上界 = maxProbes 与
+		// 「已获 topK 条可用命中」两个条件。需要限时的调用方经 ctx 取消，循环按其保已得结果退出。
 		for i := 0; i < len(cloudHits) && i < maxProbes; i++ {
 			if i == 256 && !tailSorted && len(cloudHits) > 256 {
 				tailSorted = true
 				sort.SliceStable(cloudHits[256:], func(a, b int) bool {
 					return cloudHitLess(cloudHits[256+a], cloudHits[256+b])
 				})
-			}
-			if usableLocal >= 4 && time.Since(hydrateStart) > 1500*time.Millisecond {
-				break
 			}
 			ch := cloudHits[i]
 			if err := ctx.Err(); err != nil {

@@ -319,11 +319,7 @@ func (v *Vault) queryFTS5BM25ScoresWithDF(queryText string, limit int, totalDocs
 
 // PackBlindPacketWithSegmenter packs plaintext into a BlindPulsePacket using pluggable SegmenterPackOptions via sdk/go/pulse/plain.
 func (v *Vault) PackBlindPacketWithSegmenter(docID string, text string, occurredAt int64, opts SegmenterPackOptions) (BlindPulsePacket, []string) {
-	var key [32]byte
-	if v != nil {
-		key = v.secretKey
-	}
-	enc := plain.NewBlindEncoderFromRawKey(key)
+	enc := plain.NewBlindEncoderFromRawKey(v.secretKey)
 	if v != nil {
 		enc.SetCanonicalHarmonics(v.harmOpts)
 	}

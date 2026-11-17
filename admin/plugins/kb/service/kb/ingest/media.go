@@ -92,7 +92,7 @@ type MediaCaps struct {
 const (
 	// DefaultFFmpegBin 抽帧/音轨工具（PATH 查找）
 	DefaultFFmpegBin = "ffmpeg"
-	// DefaultFrameSeconds 关键帧步长（秒；R12 视频收益未验证，读数前不翻缺省）
+	// DefaultFrameSeconds 关键帧步长（秒；未经视频链路实测验证前不要修改缺省）
 	DefaultFrameSeconds = 30
 )
 

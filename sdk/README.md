@@ -2,7 +2,7 @@
 
 **[English](README.md) · [简体中文](README.zh-CN.md)**
 
-This directory contains the official **zero-dependency Go Client SDK** (`sdk/go`) for the **Rolling Autonoetic Memory Engine (`RAME` · `/open/memory/v1/*`)**, along with the golden test vector suite (`go/spec/golden_vectors.json`), public tokenizer/shaping/closedset base (`go/public`), and pulse codecs (`go/pulse/{plain,cipher}`).
+This directory contains the official **zero-dependency Go Client SDK** (`sdk/go`) for the **Rolling Autonoetic Memory Engine (`RAME` · `/open/memory/v1/*`)**, along with the golden test vector suite (`go/spec/golden_vectors.json`), the public tokenizer/shaping/closedset base (`go/public`), and the plaintext pulse codec (`go/pulse/plain`).
 
 **SDK Version: `1.11.3`** (semver · independently versioned from the wire spec `RAME-BlindPulse-v1`). The SDK exposes it as `ramesdk.SDKVersion`. **Any SDK change must bump this version**; the SDK must stay byte-for-byte aligned with the wire spec, and no external service or host may consume the encoder by importing the engine's internal retrieval packages.
 
@@ -12,14 +12,18 @@ This directory contains the official **zero-dependency Go Client SDK** (`sdk/go`
 
 | Language | Path | Runtime & Dependencies | Verification Command |
 |---|---|---|---|
-| **Go** | [`sdk/go/ramesdk.go`](go/ramesdk.go) · `sdk/go/public/` · `sdk/go/pulse/` · `sdk/go/api/` | Go 1.26+ standard library only (`crypto/hmac`, `crypto/sha256`, `unicode`) | `go test -v ./sdk/go/...` |
+| **Go** | [`sdk/go/ramesdk.go`](go/ramesdk.go) · `sdk/go/public/` · `sdk/go/pulse/plain/` | Go 1.26+ standard library only (`crypto/hmac`, `crypto/sha256`, `unicode`) | `go test -v ./sdk/go/...` |
 | **Spec & Golden Vectors** | [`sdk/go/spec/golden_vectors.json`](go/spec/golden_vectors.json) | Canonical test vectors (English/CamelCase, CJK sliding bigrams, multilingual Japanese/Korean/Arabic/code, punctuation) | Verified automatically by `TestCrossLanguageSDKGoldenParity` |
+
+### 1.1 Core-free encoder layout
+
+- `ramesdk.go` retains the cloud Client, stores, HTTP contracts, and public DTOs. `encoder_facade.go` is the only client-side encoding entry point and delegates `pulse/plain`; `public/termdoc` holds the stdlib-only `Term`/`Doc` leaf types and `QueryIndexView`. The engine's retrieval `core` is never required by an SDK mirror.
 
 ---
 
 ## 2. `RAME-BlindPulse-v1` Deterministic Client Algorithm Specification
 
-To guarantee **zero drift** between the RAME service, the shipped client, and multi-language SDKs while strictly adhering to **100% language-agnostic zero-tuning rules (zero lexicons, zero character-count prefix stem truncation)**, every SDK implements the exact same 4-stage encoder pipeline:
+To guarantee **zero drift** between the RAME service and every shipped SDK client while strictly adhering to **100% language-agnostic zero-tuning rules (zero lexicons, zero character-count prefix stem truncation)**, every SDK implements the exact same 4-stage encoder pipeline:
 
 ### Stage 1: 256-Bit Local Key Derivation & `KeyedHash64`
 - Given a user secret byte string $S$: $K_{\text{user}} = \text{SHA-256}(S) \in \{0,1\}^{256}$.
@@ -74,14 +78,11 @@ To guarantee **zero drift** between the RAME service, the shipped client, and mu
 When a client hashes surface tokens directly with `HMAC-SHA256(K_user, lower(w))`, two equivalent expressions across languages, symbols, or date formats—such as `"50 kg"` vs. `"50 千克"`, `"$100"` vs. `"100 USD"`, `"Tokyo"` vs. `"東京"`, or `"2026/11/8"` vs. `"2026年11月8日"`—produce completely unrelated 64-bit hashes `h`.
 
 **Canonical Harmonic Tables** are **optional client-side gain add-ons** (`SetCanonicalHarmonics` / `set_canonical_harmonics` / `setCanonicalHarmonics`) that attach an additional **normalized blind companion tag** alongside the original surface token pulse before the packet leaves the client:
-1. **Built-In Four-Language SDK Capabilities**:
+1. **Built-In Canonical Companion Tables**:
    - **Structured Date ISO Beacons (`EnableStructuredDates`)**: Zero-lexicon state machine recognizing `YYYY/M/D`, `YYYY.MM.DD`, and `YYYY年M月D日` and emitting a companion cipher pulse for the canonical `YYYY-MM-DD` string (`b = 284`, `f = FlagHasDigit | FlagHasConn`). Since SDK `1.11.0` the same state machine also emits the dedicated calendar-beacon companion pulse `H(K_user, "cal:YYYY-MM-DD")` (`b = 588`, same `f`) immediately before the ISO pulse — an opaque calendar anchor the cloud engine consumes for calendar-axis resonance. The addition is purely additive: the ISO pulse above is unchanged, and the companion appears only when `EnableStructuredDates` is on.
    - **ISO 3166 L0–L3 Geographic Hierarchy Table (`LookupISO3166GeoHarmonics` / `lookup_iso3166_geo_harmonics` / `lookupISO3166GeoHarmonics`)**: Maps multilingual country, region/province, and major city names to canonical 1st-order (`@geo:cc:<iso2>`) and 2nd-order (`@geo:cont:<cont>` / `@dim:geo`) tags.
-   - **Merged Closed-Set Harmonics Table (`LookupClosedSetHarmonics` / `lookup_closed_set_harmonics` / `lookupClosedSetHarmonics`)**: One built-in lookup over the merged closed-set axes—geography, kinship, roles, calendar, biology, objects, venues, and SI/IEC/ISO 4217 units with statistical dimension tags (`@unit:*` / `@dim:*`)—composable with custom expanders via `CombineHarmonicExpanders` / `combine_harmonic_expanders` / `combineHarmonicExpanders` and enabled through `SetCanonicalHarmonics`.
+   - **Merged Closed-Set Harmonics Table (`LookupClosedSetHarmonics` / `lookup_closed_set_harmonics` / `lookupClosedSetHarmonics`)**: One built-in lookup over the merged closed-set axes—geography, kinship, roles, calendar, biology, objects, venues, and SI/IEC/ISO 4217 units with statistical dimension tags (`@unit:*` / `@dim:*`): multilingual unit words and symbols (`kilograms` / `千克` / `キログラム` $\to$ `@unit:mass:kg`, `@dim:mass`), international currency symbols/codes (`$`, `€`, `¥`, `usd`, `cny` $\to$ `@unit:curr:*`, `@dim:money`), and statistical notations (`%`, `p99`, `avg` $\to$ `@unit:stat:*`, `@dim:stat`)—composable with custom expanders via `CombineHarmonicExpanders` / `combine_harmonic_expanders` / `combineHarmonicExpanders` and enabled through `SetCanonicalHarmonics`.
    - **Custom `HarmonicExpander` Callback**: Any application can map domain symbols or ontology terms to up to 2 canonical tags per token.
-2. **Go Client Companion Suite (`internal/langpack`)**:
-   - **Universal SI / ISO 4217 / Statistical Core (`langpack/common`)**: Maps international currency symbols/codes (`$`, `€`, `£`, `¥`, `₩`, `₹`, `usd`, `eur`, `cny` $\to$ `@unit:curr:*`, `@dim:money`), physical measurement symbols (`kg`, `km`, `kwh`, `psi`, `gb` $\to$ `@unit:*`, `@dim:*`), and statistical notations (`%`, `p99`, `avg`, `max` $\to$ `@unit:stat:*`, `@dim:stat`).
-   - **Multilingual Measurement & Morphological Pack (`langpack/multi` & per-language packs)**: Aligns multilingual unit words (`kilograms` / `千克` / `公斤` / `キログラム` / `킬로그램` / `กิโลกรัม` $\to$ `@unit:mass:kg`, `@dim:mass`) and morphological variants onto the same canonical tags.
 
 ### 4.2 Client-Side Mechanism: Attaching a Blind Normalized Label
 Harmonic tables operate **100% on the client side** as a pure blind-tag overlay:
@@ -92,7 +93,7 @@ Harmonic tables operate **100% on the client side** as a pure blind-tag overlay:
 3. **100% Cipher Pulse Consistency (Server-Irreversible, Zero Plaintext)**: Because `H(t_1)` and `H(t_2)` are computed locally via `HMAC-SHA256(K_user, tag)` into 64-bit integer pulses (`{h, b, f}`), **harmonic values are themselves cipher pulses, never plaintext**. Because the server does not hold $K_{\text{user}}$, it can never reverse a harmonic hash `h` or know what the harmonic content represents (it cannot tell whether a companion pulse came from a weight unit, a currency, a date, or a city). Whether a user writes `"50 kg"` or `"50 千克"`, both packets retain their distinct primary hashes (`H("kg")` vs. `H("千克")`) while sharing the identical companion hash `H("@unit:mass:kg")`—effectively **attaching a shared normalization label to both cipher tokens without revealing either the token or the label to the server**.
 
 ### 4.3 Why It Is a Pure Gain Add-On (Not Cheating, Optional by Design)
-- **Works Without It (Zero Hard Dependency)**: The memory engine and all four SDKs run out of the box with `SetCanonicalHarmonics` disabled (`EnableStructuredDates = false`, `Expander = nil`). Without harmonic tables, exact token and subword recall work normally; enabling harmonic tables simply provides additional cross-notation and cross-lingual recall gain.
+- **Works Without It (Zero Hard Dependency)**: The memory engine and the SDK run out of the box with `SetCanonicalHarmonics` disabled (`EnableStructuredDates = false`, `Expander = nil`). Without harmonic tables, exact token and subword recall work normally; enabling harmonic tables simply provides additional cross-notation and cross-lingual recall gain.
 - **Blind Tag Normalization, Not Corpus Tailoring or Cheating**:
   - **Harmonic Values Are Blind Pulses (Server Cannot Reverse or Inspect Them)**: Canonical strings like `"@unit:mass:kg"` or `"@geo:cc:jp"` exist only inside client memory during encoding and **never appear on the wire**. On the wire and on the server, a harmonic value is just an opaque 64-bit integer `h` derived with the user's secret key $K_{\text{user}}$—the server has zero knowledge of the harmonic's meaning or category.
   - **Zero Corpus Mutation**: The user's raw text in local storage and the primary token pulses are never altered, fabricated, or filtered.

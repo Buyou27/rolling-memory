@@ -892,7 +892,7 @@ func SelectPreProbeConnectivityHints(entityLabels []string, relCounts map[string
 	return entities, relations
 }
 
-// MinEvidenceQuorumRows 最小证据量闸（架构契约 · 完美标准级证伪根治）：
+// MinEvidenceQuorumRows 最小证据量闸（架构契约）：
 // max(断言数, 源轮数) 低于该值的微样本域禁评 S 级——满分也只能封顶 A（样本不足），
 // 杜绝 n=1 域冒充「Theoretically Perfect」（读侧配额口径沿用）。
 const MinEvidenceQuorumRows = 32

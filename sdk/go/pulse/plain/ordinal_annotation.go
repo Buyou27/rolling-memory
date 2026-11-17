@@ -39,8 +39,8 @@ type OrdinalSpanAnnotation struct {
 //     noise; survivors merge into runs tolerating one missing day.
 //  4. Emission gate: unambiguous dominant run; polarity picks the boundary
 //     (begin -> first day, end -> last day).
-func (a *TermExtractor) ResolveOrdinalSpanAnnotation(idx *Index, queryText string) *OrdinalSpanAnnotation {
-	if a == nil || a.enc == nil || idx == nil || idx.N == 0 || queryText == "" {
+func (a *TermExtractor) ResolveOrdinalSpanAnnotation(idx QueryIndexView, queryText string) *OrdinalSpanAnnotation {
+	if a == nil || a.enc == nil || queryIndexAbsent(idx) || idx.CorpusSize() == 0 || queryText == "" {
 		return nil
 	}
 	var hasBegin, hasEnd bool
@@ -64,7 +64,7 @@ func (a *TermExtractor) ResolveOrdinalSpanAnnotation(idx *Index, queryText strin
 	}
 
 	qTerms, _, _ := a.ExtractQueryWithPositions(idx, queryText)
-	nOverE := float64(idx.N) / math.E
+	nOverE := float64(idx.CorpusSize()) / math.E
 	var anchorH uint64
 	var anchorMass float64
 	for h, qa := range qTerms {
@@ -79,7 +79,7 @@ func (a *TermExtractor) ResolveOrdinalSpanAnnotation(idx *Index, queryText strin
 		if g == 0 {
 			g = h
 		}
-		if m, ok := idx.TermMass(g); ok && m > anchorMass {
+		if m, ok := idx.TermMassOf(g); ok && m > anchorMass {
 			anchorMass = m
 			anchorH = h
 		}
@@ -93,8 +93,15 @@ func (a *TermExtractor) ResolveOrdinalSpanAnnotation(idx *Index, queryText strin
 	maxUnits := 0
 	idx.ForEachPostingUnit(anchorH, func(unit int32) {
 		d := noDay
-		if int(unit) < len(idx.UnitMeta) {
-			if ts := idx.UnitMeta[unit].RefTime(); ts > 0 {
+		if occurredAt, narratedAt, ingestedAt, ok := idx.UnitTime(unit); ok {
+			ts := occurredAt
+			if ts <= 0 {
+				ts = narratedAt
+			}
+			if ts <= 0 {
+				ts = ingestedAt
+			}
+			if ts > 0 {
 				d = ts / 86400
 			}
 		}
