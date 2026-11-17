@@ -6,7 +6,7 @@ Rolling Memory's MCP server is a newline-delimited JSON-RPC 2.0 process over std
 
 Under the **Rolling Autonoetic Memory Engine memory model**, the agent **never needs to call a manual memory-writing tool**:
 - **L1 `Background`**: Mounted local workspace directories are chunked in-place; the initial mount indexes in full, then file-level mtime/size and per-chunk SHA-256 deltas keep unchanged chunks out of the work queue (plaintext stays on local disk, indexed locally). Mounting is idempotent per physical file — the same folder imported twice, or a parent folder together with one of its subfolders, never indexes anything twice (a file belongs to its deepest mount). Removing a mount only clears the entries of files no other mount covers; files still covered by another mounted folder keep their index and traces.
-- **L2 `Episodic`**: Every conversation turn is captured losslessly by the background watcher after a quiet window (the `rolling-memory mcp` process runs the watcher; run `rolling-memory sync reconcile` to reconcile immediately) — **raw plaintext is locked 100% in the local SQLite vault** and indexed locally.
+- **L2 `Episodic`**: A background watcher can import conversation turns from supported local sources; `rolling-memory sync reconcile` requests a scan. Capture is not complete for every host or transcript format. See [conversation collection and manual import](harness.md#45-conversation-collection-and-manual-import).
 - **L3 `Noetic`**: Every `recall` query that hits real evidence units automatically crystallizes a local `Noetic` trace linking the query and `cited_unit_ids[]` (**Recall IS Memory / Retrieval-Induced Consolidation**).
 
 ---
@@ -106,7 +106,7 @@ When available, `meta.cue_coverage` measures the share of unique cue atoms found
 | Fact not held locally | `result.isError = false`, `absent = true` | First-class epistemic state, not an error |
 
 Lifecycle hook (`UserPromptSubmit` → `hook recall --json`) is fail-open (always exits `0`):
-- **Single Hook (`UserPromptSubmit` Only)**: Following the principle that *actions not requiring an LLM decision do not need a hook*, only `UserPromptSubmit` runs. It does **not** blindly inject search results; it emits a 1-line strong hint so the **LLM decides when and what to `recall`**, while the plugin core automatically harvests the previous completed turn into the local vault as content-addressed `layer="episodic"` (`ep_<sha256>`).
+- **Prompt Hook (`UserPromptSubmit`)**: Where installed and supported by the host, the hook can remind the agent to call `recall` and assist local synchronization. It does not guarantee that every completed turn is imported.
 - **MCP `recall` (`L3 Noetic`)**: When the agent calls `recall`, relevant memories are retrieved and crystallized into `layer="noetic"` (`nt_*`) with `cited_unit_ids[]`.
 - **Zero Egress**: queries, conversations, and memory all stay inside the local SQLite vault — this release is pure local mode and nothing leaves the machine.
 

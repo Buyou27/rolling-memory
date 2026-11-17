@@ -170,10 +170,11 @@ type UnitRelationProfile struct {
 }
 
 type unitGroupItem struct {
-	group  uint64
-	weight float64
-	isCore bool
-	pos    []uint32
+	group    uint64
+	weight   float64
+	isCore   bool
+	pos      []uint32
+	posExact []TermPosition
 }
 
 type unitGroupProfile struct {
@@ -193,6 +194,7 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 		return unitGroupProfile{}
 	}
 	const rmRigidMask uint8 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 7)
+	wide := st.hasWidePos()
 
 	if sc == nil {
 		items := make([]unitGroupItem, 0, len(entries))
@@ -217,12 +219,16 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 				g = entry.id
 			}
 			var cp []uint32
+			var cpx []TermPosition
 			if withPos {
 				if pos := st.entryPositionsOf(entry); len(pos) > 0 {
 					cp = append([]uint32(nil), pos...)
+					if wide {
+						cpx = st.entryPositionsExactOf(entry)
+					}
 				}
 			}
-			items = append(items, unitGroupItem{group: g, weight: w, isCore: core, pos: cp})
+			items = append(items, unitGroupItem{group: g, weight: w, isCore: core, pos: cp, posExact: cpx})
 		}
 		if len(items) == 0 {
 			return unitGroupProfile{}
@@ -243,6 +249,10 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 				if withPos && len(items[i].pos) > 0 {
 					cur.pos = append(cur.pos, items[i].pos...)
 					sortUint32Asc(cur.pos)
+				}
+				if withPos && len(items[i].posExact) > 0 {
+					cur.posExact = append(cur.posExact, items[i].posExact...)
+					sort.Sort(termPositionSort(cur.posExact))
 				}
 				i++
 			}
@@ -281,14 +291,20 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 			g = entry.id
 		}
 		var cp []uint32
+		var cpx []TermPosition
 		if withPos {
 			if pos := st.entryPositionsOf(entry); len(pos) > 0 {
 				pBase := len(sc.profilePosPool)
 				sc.profilePosPool = append(sc.profilePosPool, pos...)
 				cp = sc.profilePosPool[pBase:len(sc.profilePosPool):len(sc.profilePosPool)]
+				if wide {
+					pBaseExact := len(sc.profilePosExactPool)
+					sc.profilePosExactPool = st.entryPositionsExactInto(entry, sc.profilePosExactPool)
+					cpx = sc.profilePosExactPool[pBaseExact:len(sc.profilePosExactPool):len(sc.profilePosExactPool)]
+				}
 			}
 		}
-		sc.profileItemPool = append(sc.profileItemPool, unitGroupItem{group: g, weight: w, isCore: core, pos: cp})
+		sc.profileItemPool = append(sc.profileItemPool, unitGroupItem{group: g, weight: w, isCore: core, pos: cp, posExact: cpx})
 	}
 	items := sc.profileItemPool[baseItem:]
 	if len(items) == 0 {
@@ -304,8 +320,12 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 		i++
 		if i < len(items) && items[i].group == cur.group {
 			mergedPosStart := len(sc.profilePosPool)
+			mergedPosExactStart := len(sc.profilePosExactPool)
 			if withPos && len(cur.pos) > 0 {
 				sc.profilePosPool = append(sc.profilePosPool, cur.pos...)
+			}
+			if withPos && len(cur.posExact) > 0 {
+				sc.profilePosExactPool = append(sc.profilePosExactPool, cur.posExact...)
 			}
 			for i < len(items) && items[i].group == cur.group {
 				if items[i].weight > cur.weight {
@@ -317,11 +337,18 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 				if withPos && len(items[i].pos) > 0 {
 					sc.profilePosPool = append(sc.profilePosPool, items[i].pos...)
 				}
+				if withPos && len(items[i].posExact) > 0 {
+					sc.profilePosExactPool = append(sc.profilePosExactPool, items[i].posExact...)
+				}
 				i++
 			}
 			if withPos && len(sc.profilePosPool) > mergedPosStart {
 				cur.pos = sc.profilePosPool[mergedPosStart:len(sc.profilePosPool):len(sc.profilePosPool)]
 				sortUint32Asc(cur.pos)
+			}
+			if withPos && len(sc.profilePosExactPool) > mergedPosExactStart {
+				cur.posExact = sc.profilePosExactPool[mergedPosExactStart:len(sc.profilePosExactPool):len(sc.profilePosExactPool)]
+				sort.Sort(termPositionSort(cur.posExact))
 			}
 		}
 		items[outIdx] = cur
@@ -466,13 +493,16 @@ func evalUnrelatedBystanderBorrowFromProfiles(profS, profNb unitGroupProfile, af
 // anchors `sharedMask` with `explainee`, bounded by the Anchor-Quota
 // Hyperbolic Capacity Envelope min(1, Z_local * A_raw / M_comp,0) and gated by
 // the explainee's uncompensated salient missing mass exp(-I_{>μ}(explainee \ explainer) / μ).
-func computeDirectedLocalExplainWork(sc *rmQueryScratch, explainer unitGroupProfile, sharedMask []bool, anchorRawNats, explaineeSalientMissing, explaineeMu float64, qTerms map[uint64]struct{}) float64 {
+func computeDirectedLocalExplainWork(sc *rmQueryScratch, st *rmClusterState, explainer unitGroupProfile, sharedMask []bool, anchorRawNats, explaineeSalientMissing, explaineeMu float64, qTerms map[uint64]struct{}) float64 {
 	if anchorRawNats <= 0 || len(explainer.items) == 0 {
 		return 0
 	}
+	wide := st != nil && st.hasWidePos()
 	var anchorPacked []uint32
+	var anchorExact []TermPosition
 	if sc != nil {
 		anchorPacked = sc.explainAnchorPool[:0]
+		anchorExact = sc.explainAnchorExactPool[:0]
 	}
 	var coreAnchorNats float64
 	hasAnyPos := false
@@ -485,10 +515,14 @@ func computeDirectedLocalExplainWork(sc *rmQueryScratch, explainer unitGroupProf
 			if len(explainer.items[i].pos) > 0 {
 				anchorPacked = append(anchorPacked, explainer.items[i].pos...)
 			}
+			if wide && len(explainer.items[i].posExact) > 0 {
+				anchorExact = append(anchorExact, explainer.items[i].posExact...)
+			}
 		}
 	}
 	if sc != nil {
 		sc.explainAnchorPool = anchorPacked
+		sc.explainAnchorExactPool = anchorExact
 	}
 	if coreAnchorNats <= 0 {
 		return 0
@@ -498,6 +532,9 @@ func computeDirectedLocalExplainWork(sc *rmQueryScratch, explainer unitGroupProf
 	}
 	if len(anchorPacked) > 1 {
 		sortUint32Asc(anchorPacked)
+	}
+	if wide && len(anchorExact) > 1 {
+		sort.Sort(termPositionSort(anchorExact))
 	}
 	// Apply conditional entropy gain: reduce rawCompSum by the probability that
 	// the unit's focal features are already implied by the Query-Conditional Anchor.
@@ -516,7 +553,22 @@ func computeDirectedLocalExplainWork(sc *rmQueryScratch, explainer unitGroupProf
 		}
 
 		var kern float64
-		if len(anchorPacked) > 0 && len(it.pos) > 0 {
+		if wide {
+			if len(anchorExact) > 0 && len(it.posExact) > 0 {
+				dist := closestExactSlot(it.posExact, anchorExact)
+				if dist < 0 {
+					continue
+				}
+				if dist < 1 {
+					dist = 1
+				}
+				kern = math.Exp(-float64(dist-1) * invE)
+			} else if !hasAnyPos {
+				kern = invE * invE
+			} else {
+				continue
+			}
+		} else if len(anchorPacked) > 0 && len(it.pos) > 0 {
 			dist := closestPackedSlot(it.pos, anchorPacked)
 			if dist < 0 {
 				continue
@@ -561,6 +613,7 @@ func (e *Engine) EvaluateUnitPairRelation(unitIDU, unitIDV string) (UnitRelation
 		return UnitRelationPeer{}, false
 	}
 	st := e.ensureClusterState()
+	e.ensureQueryScratch(idx.N, st.clusterN).resetProfilePools()
 	highDFThresh := idx.HighDFThreshold()
 	profU := e.buildUnitGroupProfile(st, u, highDFThresh)
 	profV := e.buildUnitGroupProfile(st, v, highDFThresh)
@@ -594,8 +647,8 @@ func (e *Engine) evalPairFromProfilesQ(st *rmClusterState, u int32, profU unitGr
 		}
 	}
 
-	selfExplain := computeDirectedLocalExplainWork(e.queryScratch, profU, ix.sharedMaskU, ix.sharedMin, ix.peerSalientEx, profV.muMass, qSet)
-	peerExplain := computeDirectedLocalExplainWork(e.queryScratch, profV, ix.sharedMaskV, ix.sharedMin, ix.selfSalientEx, profU.muMass, qSet)
+	selfExplain := computeDirectedLocalExplainWork(e.queryScratch, st, profU, ix.sharedMaskU, ix.sharedMin, ix.peerSalientEx, profV.muMass, qSet)
+	peerExplain := computeDirectedLocalExplainWork(e.queryScratch, st, profV, ix.sharedMaskV, ix.sharedMin, ix.selfSalientEx, profU.muMass, qSet)
 
 	return UnitRelationPeer{
 		UnitID:              idx.UnitIDs[v],
@@ -630,6 +683,7 @@ func (e *Engine) InspectUnitRelations(unitID string, topK int) (UnitRelationProf
 		topK = 10
 	}
 	st := e.ensureClusterState()
+	e.ensureQueryScratch(idx.N, st.clusterN).resetProfilePools()
 	highDFThresh := idx.HighDFThreshold()
 	profU := e.buildUnitGroupProfile(st, u, highDFThresh)
 	out := UnitRelationProfile{
@@ -837,6 +891,7 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 		maxHops = defaultMaxExplanationChainHops
 	}
 	st := e.ensureClusterState()
+	e.ensureQueryScratch(idx.N, st.clusterN).resetProfilePools()
 	highDFThresh := idx.HighDFThreshold()
 	profCur := e.buildUnitGroupProfile(st, u0, highDFThresh)
 	if len(profCur.items) == 0 {
@@ -1272,6 +1327,7 @@ func (e *Engine) ApplyUnitRelationMarginalFilter(hits []Hit, qTerms map[uint64]T
 	}
 	idx := e.Index
 	st := e.ensureClusterState()
+	e.ensureQueryScratch(idx.N, st.clusterN).resetProfilePools()
 	highDFThresh := idx.HighDFThreshold()
 	subFloor := 1.0 - invE
 	identityFloor := 1.0 - invE*invE

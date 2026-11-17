@@ -5,9 +5,12 @@ package text
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type ctxPresenceCoordsKey struct{}
@@ -707,4 +710,55 @@ func DetectHarnessFromEnv() string {
 	// "zcode") would write a false identity into the presence state — the
 	// console then reports ZCode as active on machines that never ran it.
 	return ""
+}
+
+// SavePresenceFile atomically replaces the shared active_workspace.json with
+// the latest writer's coordinates. The document holds only the latest writer's
+// coordinates — the locus is the canonical workspace name (repository root
+// basename) or "", and no per-locus session map is accumulated — so every
+// consumer (MCP presence resolution, reconcile, console) reads one schema.
+// Writers are last-writer-wins across processes; a lock stale for more than
+// two seconds is reaped, and the temp-file rename keeps readers on a complete
+// document.
+func SavePresenceFile(stateDir string, coords PresenceCoordinates, session string, updatedAt int64) error {
+	if strings.TrimSpace(stateDir) == "" || coords.IsEmpty() {
+		return nil
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	statePath := filepath.Join(stateDir, "active_workspace.json")
+	lockPath := statePath + ".lock"
+	for attempt := 0; attempt < 8; attempt++ {
+		if info, err := os.Stat(lockPath); err == nil && time.Since(info.ModTime()) > 2*time.Second {
+			_ = os.Remove(lockPath)
+		}
+		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = lock.Close()
+			defer os.Remove(lockPath)
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	data, err := json.Marshal(map[string]any{
+		"world":       coords.World,
+		"carrier":     coords.Carrier,
+		"locus":       coords.Locus,
+		"incarnation": coords.Incarnation,
+		"session_id":  session,
+		"updated_at":  updatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", statePath, os.Getpid(), time.Now().UnixNano())
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, statePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }

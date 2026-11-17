@@ -385,6 +385,7 @@ func TestROIAdoptionIntersectionAudit(t *testing.T) {
 
 func TestROIAdoptionMultiHarnessJSONL(t *testing.T) {
 	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
 	path := filepath.Join(tmpHome, ".local", "share", "rolling-memory", "memory.db")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

@@ -673,6 +673,14 @@ func (c *Client) IngestPacket(ctx context.Context, pkt BlindPulsePacket) (CloudI
 	}
 	resp := CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer, PulseMode: wirePkt.PulseMode}
 	if c.Endpoint != "" && !isLocalPulseMode(c.Mode) {
+		if !c.IsPlaintextMode() {
+			// pulse_cipher carries zero plaintext: drop caller-supplied RawText and
+			// reject the degenerate raw-text-only packet before it reaches the wire.
+			wirePkt.RawText = ""
+			if len(wirePkt.Slots) == 0 && len(wirePkt.SentenceFrames) == 0 && strings.TrimSpace(wirePkt.AtomsB64) == "" {
+				return CloudIngestResponse{}, errors.New("ramesdk: raw-text-only ingest requires pulse_plain; pulse_cipher needs a client-encoded pulse")
+			}
+		}
 		if err := c.postJSON(ctx, "/ingest", wirePkt, &resp); err != nil {
 			return CloudIngestResponse{}, err
 		}

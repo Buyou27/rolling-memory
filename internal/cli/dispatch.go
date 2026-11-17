@@ -120,10 +120,16 @@ func (a *application) fail(err error) int {
 	}
 	message := ids.Redact(err.Error())
 	if a.args.Flag("json") {
-		text, dumpErr := ids.PyJSONDump(ids.OrderedMap{
+		envelope := ids.OrderedMap{
 			{Key: "ok", Value: false},
 			{Key: "error", Value: message},
-		}, false, false, false)
+		}
+		// 携带稳定错误码的错误原样透出 error_code：调用方按码分类，不匹配文案。
+		var coded interface{ ErrorCode() string }
+		if errors.As(err, &coded) {
+			envelope = append(envelope, ids.JSONPair{Key: "error_code", Value: coded.ErrorCode()})
+		}
+		text, dumpErr := ids.PyJSONDump(envelope, false, false, false)
 		if dumpErr == nil {
 			a.printf("%s\n", text)
 		}
@@ -396,14 +402,13 @@ func (a *application) tryDaemonRecall() (int, bool) {
 		RenderMaxChars:  renderMaxChars,
 		NeedRendered:    !isJSONOrProbe,
 	}
-	resp, err := mcp.CallUnixDaemonRecall(context.Background(), "", payload)
+	resp, err := mcp.CallUnixDaemonRecall(context.Background(), "", cfg, payload)
 	if err != nil {
-		var engErr *mcp.EngineRecallError
-		if errors.As(err, &engErr) {
-			return a.fail(engErr), true
+		var notSent *mcp.DaemonRecallNotSentError
+		if errors.As(err, &notSent) {
+			return 0, false
 		}
-		// Transport / socket failure: fall back to in-process execution transparently.
-		return 0, false
+		return a.fail(err), true
 	}
 	if isJSONOrProbe {
 		if a.args.String("result_mode") == "probe" {
@@ -700,6 +705,13 @@ func (a *application) runConfig() int {
 
 func (a *application) runMCP() int {
 	a.setEnvFromArgs()
+	cfg, err := config.Load(config.LoadOptions{})
+	if err != nil {
+		return a.fail(err)
+	}
+	if cfg.Mode != "local" {
+		return a.fail(errors.New("mcp requires local mode and local_plain"))
+	}
 	if a.args.Flag("daemon") {
 		if err := mcp.ServeUnix(mcp.DefaultUnixSocketPath(), nil, a.backgroundMCPAutoWatch); err != nil {
 			a.errorf("error: %s\n", ids.Redact(err.Error()))
@@ -720,7 +732,6 @@ func (a *application) runMCP() int {
 		return 0
 	}
 	if mcp.ShouldUseUnixDaemon(a.args.String("db")) {
-		go func() { _ = mcp.EnsureUnixDaemon(mcp.DefaultUnixSocketPath()) }()
 		if err := mcp.ServeWithDaemonProxy(a.stdin, a.stdout); err != nil {
 			if isBrokenPipe(err) {
 				return 0

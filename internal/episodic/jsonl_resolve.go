@@ -4,7 +4,7 @@
 package episodic
 
 import (
-	"crypto/sha256"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,32 +13,44 @@ import (
 )
 
 type cachedJSONLTurns struct {
-	modNano int64
-	size    int64
-	sum     [32]byte
-	hasSum  bool
-	turns   [][]Segment
+	sum   [32]byte
+	bytes int
+	turns [][]Segment
 }
 
 var (
 	jsonlTurnsCache      sync.Map
 	jsonlTurnsCacheCount int
+	jsonlTurnsCacheBytes int
 	jsonlTurnsCacheMu    sync.Mutex
 )
 
-const maxJSONLTurnsCacheFiles = 256
+const (
+	maxJSONLTurnsCacheFiles = 256
+	// Cache limits bound retained parsed text and per-segment bookkeeping. Large
+	// transcripts still resolve through the streaming path without being cached.
+	maxJSONLTurnsCacheEntryBytes = 8 * 1024 * 1024
+	maxJSONLTurnsCacheBytes      = 64 * 1024 * 1024
+)
 
 func storeJSONLTurnsCache(path string, entry cachedJSONLTurns) {
 	jsonlTurnsCacheMu.Lock()
-	if jsonlTurnsCacheCount >= maxJSONLTurnsCacheFiles {
+	defer jsonlTurnsCacheMu.Unlock()
+	if old, ok := jsonlTurnsCache.Load(path); ok {
+		jsonlTurnsCacheBytes -= old.(cachedJSONLTurns).bytes
+		jsonlTurnsCacheCount--
+		jsonlTurnsCache.Delete(path)
+	}
+	if jsonlTurnsCacheCount >= maxJSONLTurnsCacheFiles || jsonlTurnsCacheBytes+entry.bytes > maxJSONLTurnsCacheBytes {
 		jsonlTurnsCache.Range(func(k, _ any) bool {
 			jsonlTurnsCache.Delete(k)
 			return true
 		})
 		jsonlTurnsCacheCount = 0
+		jsonlTurnsCacheBytes = 0
 	}
 	jsonlTurnsCacheCount++
-	jsonlTurnsCacheMu.Unlock()
+	jsonlTurnsCacheBytes += entry.bytes
 	jsonlTurnsCache.Store(path, entry)
 }
 
@@ -57,104 +69,64 @@ func jsonlTurnSegments(path string, turnIndex int) ([]Segment, error) {
 	if err != nil {
 		return nil, err
 	}
-	const hashThreshold = 256 * 1024
-	if info.Size() > hashThreshold {
-		if val, ok := jsonlTurnsCache.Load(path); ok {
-			cached := val.(cachedJSONLTurns)
-			if cached.modNano == info.ModTime().UnixNano() && cached.size == info.Size() {
-				if turnIndex >= len(cached.turns) || len(cached.turns[turnIndex]) == 0 {
-					return nil, fmt.Errorf("episodic: turn %d not found in %s", turnIndex, path)
-				}
-				out := make([]Segment, len(cached.turns[turnIndex]))
-				copy(out, cached.turns[turnIndex])
-				return out, nil
-			}
-		}
-	}
-
-	raw, err := os.ReadFile(path)
+	sum, err := hashJSONLSource(context.Background(), path)
 	if err != nil {
 		return nil, err
 	}
-	var sum [32]byte
-	hasSum := info.Size() <= hashThreshold
-	if hasSum {
-		sum = sha256.Sum256(raw)
-		if val, ok := jsonlTurnsCache.Load(path); ok {
-			cached := val.(cachedJSONLTurns)
-			if cached.hasSum && cached.sum == sum {
-				if turnIndex >= len(cached.turns) || len(cached.turns[turnIndex]) == 0 {
-					return nil, fmt.Errorf("episodic: turn %d not found in %s", turnIndex, path)
-				}
-				out := make([]Segment, len(cached.turns[turnIndex]))
-				copy(out, cached.turns[turnIndex])
-				return out, nil
+	if val, ok := jsonlTurnsCache.Load(path); ok {
+		cached := val.(cachedJSONLTurns)
+		if cached.sum == sum {
+			if turnIndex >= len(cached.turns) || len(cached.turns[turnIndex]) == 0 {
+				return nil, fmt.Errorf("episodic: turn %d not found in %s", turnIndex, path)
 			}
+			out := make([]Segment, len(cached.turns[turnIndex]))
+			copy(out, cached.turns[turnIndex])
+			return out, nil
 		}
 	}
 
 	var turns [][]Segment
-	current := -1
-	var pendingAssist []Segment
-	flushPending := func() {
-		if current < 0 || len(pendingAssist) == 0 {
-			pendingAssist = pendingAssist[:0]
-			return
+	var result []Segment
+	cacheBytes := 0
+	cacheable := true
+	err = VisitJSONLTurns(context.Background(), path, func(turn JSONLTurn, _ bool) error {
+		if turn.Index == turnIndex {
+			result = append([]Segment(nil), turn.Segments...)
 		}
-		for _, seg := range pendingAssist {
-			seg.Index = len(turns[current])
-			turns[current] = append(turns[current], seg)
-		}
-		pendingAssist = pendingAssist[:0]
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if isJSONLToolCallLine(line) {
-			pendingAssist = pendingAssist[:0]
-			continue
-		}
-		role, texts, occurredAt := parseJSONLLine(line)
-		if role != "" && len(texts) != 0 {
-			if role == RoleUser {
-				flushPending()
-				current++
-				for len(turns) <= current {
-					turns = append(turns, nil)
-				}
+		if cacheable {
+			// Account for segment and slice overhead as well as text bytes.
+			cacheBytes += 24 + len(turn.Segments)*64
+			for _, segment := range turn.Segments {
+				cacheBytes += len(segment.Text) + len(segment.Role)
 			}
-			if current >= 0 {
-				if role == RoleAssistant {
-					for _, text := range texts {
-						pendingAssist = append(pendingAssist, Segment{
-							Role:       role,
-							Text:       text,
-							OccurredAt: occurredAt,
-						})
-					}
-				} else {
-					for _, text := range texts {
-						turns[current] = append(turns[current], Segment{
-							Role:       role,
-							Text:       text,
-							OccurredAt: occurredAt,
-							Index:      len(turns[current]),
-						})
-					}
-				}
+			if cacheBytes > maxJSONLTurnsCacheEntryBytes {
+				cacheable = false
+				turns = nil
+			} else {
+				turns = append(turns, turn.Segments)
 			}
 		}
-	}
-	flushPending()
-	storeJSONLTurnsCache(path, cachedJSONLTurns{
-		modNano: info.ModTime().UnixNano(),
-		size:    info.Size(),
-		sum:     sum,
-		hasSum:  hasSum,
-		turns:   turns,
+		return nil
 	})
-	if turnIndex >= len(turns) || len(turns[turnIndex]) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	afterSum, err := hashJSONLSource(context.Background(), path)
+	if err != nil {
+		return nil, err
+	}
+	if after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) || !os.SameFile(info, after) || afterSum != sum {
+		return nil, fmt.Errorf("episodic: transcript changed while resolving: %s", path)
+	}
+	if cacheable {
+		storeJSONLTurnsCache(path, cachedJSONLTurns{sum: sum, bytes: cacheBytes, turns: turns})
+	}
+	if len(result) == 0 {
 		return nil, fmt.Errorf("episodic: turn %d not found in %s", turnIndex, path)
 	}
-	out := make([]Segment, len(turns[turnIndex]))
-	copy(out, turns[turnIndex])
-	return out, nil
+	return result, nil
 }

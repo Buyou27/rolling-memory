@@ -2,13 +2,13 @@
 
 **[简体中文](plugin-console.md) · [English](../plugin-console.md)**
 
-Rolling Memory 随仓提供基于纯 Go SQLite 的完整 Web 管理控制台（`rolling-memory panel`），作为系统唯一的可视化管理与观测面板，将记忆引擎的实时运行监控、独立记忆控制台、ROI 与认知效能监控、力导向记忆图谱、记忆治理、冻结基准评测、插件管理与开源文档中心整合在同一工作台中。
+Rolling Memory 随仓提供基于纯 Go SQLite 的完整 Web 管理控制台（`rolling-memory panel`），作为系统唯一的可视化管理与观测面板，将记忆引擎的实时运行监控、独立记忆控制台、ROI 与认知效能监控、力导向记忆图谱、记忆治理、冻结基准评测、插件管理与文档中心整合在同一工作台中。
 
 ![Rolling Memory Live Console — 本地金库遥测、MCP recall 账本与记忆资产增长](../assets/live-console-zh.webp)
 
 *Live Console 一览（本地模式）：本地金库实时遥测、MCP `recall` 账本与三层记忆资产增长。*
 
-> **从源码编译与启动（`admin/`）**：本项目后台管理控制台（`admin/` 目录）已随仓完整开源（目录结构与二次开发指南见仓内 `admin/README.md`），不分发预编译后台构建包，请直接从源码本地编译运行：
+> **从源码编译与启动（`admin/`）**：本项目后台管理控制台（`admin/` 目录）源码随仓提供；许可和署名详见 [LICENSE](../../LICENSE) 与 [NOTICE](../../NOTICE)，目录结构与二次开发指南见仓内 `admin/README.md`。不分发预编译后台构建包，请直接从源码本地编译运行：
 >
 > 1. **编译前端静态资源**（产出至 `admin/web/dist/`）：
 >    ```bash
@@ -32,7 +32,9 @@ Rolling Memory 随仓提供基于纯 Go SQLite 的完整 Web 管理控制台（`
 >    cd admin/web && npm run dev
 >    ```
 >
-> **默认仅本机可访问**：控制台默认只监听 `127.0.0.1`，并且只接受发往本机地址（`localhost` / `127.0.0.1`）的请求——它能读写你全部的本地记忆，而开箱账号是公开写明的。需要从其他设备访问时，将环境变量 `SERVER_HOST`（或 `~/.local/share/rolling-memory/admin/config/config.yaml` 的 `server.host`）设为 `0.0.0.0` 或指定网卡地址，并先修改默认口令。
+>    **前端供给——两种模式都支持：** `npm run dev` 启动 Vite 热更新开发服（前端改动即时生效，无需构建）；`npm run build` 生成 `admin/web/dist/` 静态产物，可用 `rolling-memory panel --serve-web ./dist --web-port 8008` 托管（供给端无需 Node 运行时）。无源码树的安装态由构建好的 `web-dist/` 供给，经 `rolling-memory panel --update` 从发布通道刷新。
+>
+> **默认仅本机可访问**：控制台默认只监听 `127.0.0.1`，并且只接受发往本机地址（`localhost` / `127.0.0.1`）的请求——它能读写你全部的本地记忆。开箱账号为 **`rolling` / `rolling`**（公开写明；本机打开时登录页提供一键填入）。登录后可在「**常规管理 → 个人资料**」随时修改口令，新口令保存在你的本地控制台库中、升级不覆盖。需要从其他设备访问时，将环境变量 `SERVER_HOST`（或 `~/.local/share/rolling-memory/admin/config/config.yaml` 的 `server.host`）设为 `0.0.0.0` 或指定网卡地址，并先修改默认口令。
 
 ---
 
@@ -45,7 +47,7 @@ Web 管理控制台左侧导航栏按职能划分为七个一级频道，日常�
 | 1 | **控制台** (`dashboard`) | `实时控制台` · `记忆控制台` (`/#/admin/dashboard/artifacts`) · `ROI 监控屏` · `记忆图谱` | 基于零轮询 WebSocket 实时流的引擎遥测与 5 组 ECharts 图表、独立记忆控制台（100% 向量无关与 LLM 无关的本地记忆引擎连接状态、本地明文金库遥测与运行开关）、记忆 ROI 与认知效能监控台（1 小时 / 24 小时 / 7 天 / 30 天 / 全量五档监控窗，实测 L3 认知结晶与跨层引证转化、跨会话记忆复用倍数、`tokenz-r` 分形干句提纯预算、零拷贝指针占比、多工作区冷热覆盖矩阵与金牌高复用记忆榜），以及基于 Web Worker 力导向与碰撞检测的交互式记忆图谱（零轮询 WebSocket 实时流自动刷新；**当前为预览功能**——见 §2.6） |
 | 2 | **记忆管理** (`plugin/rolling-memory`) | `检索调试` · `记忆总览` · `L1 文档与代码` · `L2 会话记录` · `L3 检索沉淀` | **检索调试**与 Agent 走同一条 `recall` 链路：可选工作区锚（同项目证据排前、其他结果不删）、「最近 Agent 检索」一键重放，默认只读（不写入 L3）；三层页面分别浏览挂载目录分块、Harness 会话记录与 Agent 检索沉淀，支持多维筛选、原文切片溯源与删除，L3 行可「在调试台重放」 |
 | 3 | **评测** (`plugin/rolling-memory/eval-dir`) | `评测实验室` · `剑桥 ATM-Bench 榜单` · `LoCoMo-Backboard 榜单` | 剑桥 ATM-Bench（`--suite atm`，`hard / 1013` 第一主基准）与 LoCoMo（`200 / 1540` 对照参照）本地复现与在线评测；两张独立榜单页分别展示剑桥大学 ATM-Bench 多模态个人记忆主榜单（官方 `Recall@10` 口径、Main-1013 / Hard-31 双 Tab）与密码学锁定的 `locomo-backboard` 对照榜单 |
-| 4 | **帮助中心** (`help`) | `帮助与文档` · `开源仓库与声明` | 独立通用开源文档模块，直接对接 `docs/zh-CN/` 与 `docs/` 全套双语技术文档、根级 `DECLARATION.md` 诚实免责声明与 `LICENSE` 许可协议 |
+| 4 | **帮助中心** (`help`) | `帮助与文档` · `仓库与声明` | 独立文档模块，直接对接 `docs/zh-CN/` 与 `docs/` 全套双语技术文档、根级 `DECLARATION.md` 诚实免责声明与 `LICENSE` 许可协议 |
 | 5 | **权限管理** (`auth`) | `角色组管理` · `管理员管理` · `菜单规则管理` · `管理员日志管理` | RBAC 权限树、菜单规则与操作日志审计 |
 | 6 | **常规管理** (`routine`) | `系统配置` · `个人资料` | 站点基础参数与管理员个人资料配置 |
 | 7 | **插件** (`plugin-center`) | `插件管理` · `仓库来源` · `插件清单` | 宿主插件生命周期管理（安装/启用/停用/卸载）、`local`/`http`/`git` 仓库来源配置与清单同步预演 |

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/store"
@@ -206,6 +207,102 @@ func TestMissingTranscriptReturnsError(t *testing.T) {
 	// path, not the os.Stat decoration.
 	if err.Error() != path {
 		t.Fatalf("missing transcript error = %q, want %q", err, path)
+	}
+}
+
+func TestIncompleteJSONLLineDoesNotAdvanceCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.jsonl")
+	first := `{"role":"user","content":"first"}` + "\n"
+	partial := `{"role":"assistant","content":"sec`
+	writeFile(t, path, first+partial)
+	st := newStore(t)
+	result, err := transcript.ImportTranscript(st, path, "mem:test", nil, "shared", 0, 500)
+	if err != nil || result["messages"] != 1 || result["offset"] != 1 {
+		t.Fatalf("partial import = %#v err=%v", result, err)
+	}
+	offset, err := transcript.CurrentOffset(st, path, "partial")
+	if err != nil || offset != 1 {
+		t.Fatalf("offset=%d err=%v", offset, err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`ond"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err = transcript.ImportTranscript(st, path, "mem:test", nil, "shared", offset, 500)
+	if err != nil || result["messages"] != 1 || result["offset"] != 2 {
+		t.Fatalf("completed import = %#v err=%v", result, err)
+	}
+}
+
+func TestValidUnterminatedJSONLMessageIsImported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "complete.jsonl")
+	writeFile(t, path, `{"role":"user","content":"one"}`+"\n"+`{"role":"assistant","content":"two"}`)
+	messages, next, total, _, _, err := transcript.ReadMessages(path, nil, 0, 500)
+	if err != nil || len(messages) != 2 || messages[1].Text != "two" || next != 2 || total != 2 {
+		t.Fatalf("messages=%+v next=%d total=%d err=%v", messages, next, total, err)
+	}
+}
+
+func TestJSONLToolUseNarrationExcluded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tools.jsonl")
+	writeFile(t, path, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"narration"},{"type":"tool_use","name":"shell"}]}}`+"\n"+
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}`+"\n")
+	messages, _, _, _, _, err := transcript.ReadMessages(path, nil, 0, 500)
+	if err != nil || len(messages) != 1 || messages[0].Text != "answer" {
+		t.Fatalf("messages=%+v err=%v", messages, err)
+	}
+}
+
+func TestCompressedMessagesAndCorruptInput(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderCRC(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	raw := `{"type":"user/message","time":1794407222466,"data":{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"question"}]}}` + "\n" +
+		`{"type":"assistant/message","data":{"message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}}` + "\n"
+	compressed := encoder.EncodeAll([]byte(raw), nil)
+	path := filepath.Join(t.TempDir(), "session.jsonl.zstd")
+	if err := os.WriteFile(path, compressed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages, next, total, _, _, err := transcript.ReadMessages(path, nil, 0, 500)
+	if err != nil || len(messages) != 2 || next != 2 || total != 2 || messages[0].Text != "question" || messages[0].OccurredAt != 1794407222 || messages[1].Text != "answer" {
+		t.Fatalf("messages=%+v next=%d total=%d err=%v", messages, next, total, err)
+	}
+	if err := os.WriteFile(path, compressed[:len(compressed)-2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := newStore(t)
+	if _, err := transcript.ImportTranscript(st, path, "mem:test", nil, "shared", 0, 500); err == nil {
+		t.Fatal("truncated compressed transcript accepted")
+	}
+	if count := countRows(t, st, "transcript_cursor"); count != 0 {
+		t.Fatalf("corrupt transcript saved %d cursors", count)
+	}
+}
+
+func TestUnknownAndKnownMessageTimes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "times.jsonl")
+	writeFile(t, path, `{"role":"user","content":"unknown"}`+"\n"+
+		`{"role":"assistant","created_at":"2026-11-18T00:00:00Z","content":"known"}`+"\n")
+	messages, _, _, _, _, err := transcript.ReadMessages(path, nil, 0, 500)
+	if err != nil || len(messages) != 2 || messages[0].OccurredAt != 0 || messages[1].OccurredAt != 1794960000 {
+		t.Fatalf("messages=%+v err=%v", messages, err)
+	}
+	st := newStore(t)
+	if _, err := transcript.ImportTranscript(st, path, "mem:test", nil, "shared", 0, 500); err != nil {
+		t.Fatal(err)
+	}
+	var occurred int64
+	if err := st.DB().QueryRow("SELECT occurred_at FROM trace WHERE text = ?", "unknown").Scan(&occurred); err != nil || occurred != 0 {
+		t.Fatalf("unknown occurred_at=%d err=%v", occurred, err)
 	}
 }
 

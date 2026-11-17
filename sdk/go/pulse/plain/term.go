@@ -109,7 +109,6 @@ func (a *TermExtractor) atomizeSentenceListInto(
 			framePrimaries = make([]TermSample, 0, len(words))
 		}
 		wordIndex := 0
-		dateSlotOpened := false
 		var currentGroup uint64
 		var currentHostBits uint16
 		var pos TermPosition
@@ -124,10 +123,11 @@ func (a *TermExtractor) atomizeSentenceListInto(
 				slotRole = RolePrimary
 				currentHostBits = raw.RawBitsX10
 				if wordIndex >= len(words) {
-					if !dateSlotOpened {
-						docSlot++
-						dateSlotOpened = true
-					}
+					// Primaries beyond the word list (structured-date carriers and
+					// adaptive piece terms) each take their own consecutive slot:
+					// sharing one sentence-end slot collapsed multi-date carriers and
+					// locked every following real-word primary into a single position.
+					docSlot++
 					currentGroup = raw.H
 					grp = currentGroup
 					pos = TermPosition{Sentence: sentenceAt, Slot: docSlot}

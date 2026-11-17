@@ -4,9 +4,9 @@ Copyright (c) 2026 Rocareer & Rolling-Memory Organization (Author & Chief Archit
 This product's first-party source code is licensed under the PolyForm Noncommercial
 License 1.0.0 (SPDX: PolyForm-Noncommercial-1.0.0, see LICENSE): free to use, modify,
 and share for any noncommercial purpose; commercial use and commercial distribution
-require a separate written commercial license. The client SDK libraries under `sdk/`
-are separately licensed under the Apache License 2.0 (see `sdk/LICENSE`). Third-party
-components below remain under their respective upstream licenses.
+require a separate written commercial license. The client SDK under `sdk/` is
+licensed under the same PolyForm Noncommercial License 1.0.0 (see `sdk/LICENSE`).
+Third-party components below remain under their respective upstream licenses.
 
 Required Notice: Copyright (c) 2026 Rocareer & the Rolling-Memory
 Organization (https://github.com/rocareer/rolling-memory)
@@ -22,6 +22,56 @@ Third-Party Open-Source Component Notices
    - golang.org/x/text, golang.org/x/crypto, golang.org/x/sys
      License: BSD-3-Clause
      Copyright (c) The Go Authors.
+   - github.com/klauspost/compress (zstd decoder)
+     License: BSD-3-Clause
+     Copyright (c) 2012 The Go Authors; Copyright (c) 2019 Klaus Post.
+
+     Redistribution and use in source and binary forms, with or without
+     modification, are permitted provided that the following conditions are met:
+     * Redistributions of source code must retain the above copyright notice,
+       this list of conditions and the following disclaimer.
+     * Redistributions in binary form must reproduce the above copyright notice,
+       this list of conditions and the following disclaimer in the documentation
+       and/or other materials provided with the distribution.
+     * Neither the name of Google Inc. nor the names of its contributors may be
+       used to endorse or promote products derived from this software without
+       specific prior written permission.
+
+     THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+     AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+     IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+     ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+     LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+     CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+     SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+     INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+     CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+     ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+     POSSIBILITY OF SUCH DAMAGE.
+   - gopkg.in/yaml.v3
+     Licenses: MIT (libyaml-derived files) and Apache-2.0 (remaining files)
+     Copyright (c) 2006-2011 Kirill Simonov; Copyright (c) 2011-2019 Canonical Ltd.
+
+     Permission is hereby granted, free of charge, to any person obtaining a copy of
+     this software and associated documentation files (the "Software"), to deal in
+     the Software without restriction, including without limitation the rights to
+     use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+     of the Software, and to permit persons to whom the Software is furnished to do
+     so, subject to the following conditions:
+
+     The above copyright notice and this permission notice shall be included in all
+     copies or substantial portions of the Software.
+
+     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+     SOFTWARE.
+
+     The remaining files are licensed under the Apache License, Version 2.0.
+     Copyright 2011-2016 Canonical Ltd. See https://www.apache.org/licenses/LICENSE-2.0.
    - github.com/pelletier/go-toml/v2
      License: MIT
      Copyright (c) Thomas Pelletier.

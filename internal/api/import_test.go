@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
@@ -84,6 +85,86 @@ func TestImportFileTranscriptUsesTheAdapter(t *testing.T) {
 	}
 }
 
+func TestImportFilePreservesOccurrenceAndRecordingTimes(t *testing.T) {
+	memory := newMemory(t)
+	path := writeTranscript(t, "times.jsonl", strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"quartz unknown time evidence"}}`,
+		`{"type":"assistant","timestamp":"2026-11-18T00:00:00Z","message":{"role":"assistant","content":"sapphire dated evidence"}}`,
+	}, "\n")+"\n")
+	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		text     string
+		occurred int64
+	}{
+		{"quartz unknown time evidence", 0},
+		{"sapphire dated evidence", 1794960000},
+	} {
+		var traceOccurred, recorded, vaultOccurred int64
+		var docID string
+		err := memory.Store.DB().QueryRow(`SELECT t.occurred_at, t.recorded_at, d.occurred_at, d.doc_id
+			FROM trace t JOIN thin_vault_docs d ON d.doc_id = 'ep_' || t.hash WHERE t.text = ?`, fixture.text).
+			Scan(&traceOccurred, &recorded, &vaultOccurred, &docID)
+		if err != nil || traceOccurred != fixture.occurred || vaultOccurred != fixture.occurred || recorded != testNow {
+			t.Fatalf("%q occurrence/recording = %d/%d/%d, doc=%q err=%v", fixture.text, traceOccurred, recorded, vaultOccurred, docID, err)
+		}
+		result, err := memory.Recall(api.RecallRequest{Cue: fixture.text, NoCrystallize: true})
+		if err != nil || len(result.Bands) == 0 {
+			t.Fatalf("recall %q: %+v %v", fixture.text, result, err)
+		}
+		found := false
+		for _, band := range result.Bands {
+			for _, node := range band["nodes"].([]map[string]any) {
+				if node["id"] == docID {
+					found = true
+					if node["occurred_at"] != fixture.occurred || (fixture.occurred == 0 && node["time"] != "") {
+						t.Fatalf("recall occurrence for %q: %+v", fixture.text, node)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing imported document %q in %+v", docID, result.Bands)
+		}
+		if fixture.occurred == 0 {
+			recent, err := memory.Recall(api.RecallRequest{Mode: "recent", NoCrystallize: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found = false
+			for _, band := range recent.Bands {
+				for _, node := range band["nodes"].([]map[string]any) {
+					if node["id"] == docID {
+						found = true
+						if node["time"] != "" || band["time_label"] != "" {
+							t.Fatalf("recent assigned a time to unknown source: %+v", band)
+						}
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("recent omitted unknown-time document %q", docID)
+			}
+		}
+	}
+	const existingTime = int64(123456789)
+	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_docs SET occurred_at = ?, inserted_at = ? WHERE raw_text = ?`, existingTime, existingTime, "quartz unknown time evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
+		t.Fatal(err)
+	}
+	var traces, docs int
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs)`).Scan(&traces, &docs); err != nil || traces != 2 || docs != 2 {
+		t.Fatalf("repeat import: traces=%d docs=%d err=%v", traces, docs, err)
+	}
+	var occurred, inserted int64
+	if err := memory.Store.DB().QueryRow(`SELECT occurred_at, inserted_at FROM thin_vault_docs WHERE raw_text = ?`, "quartz unknown time evidence").Scan(&occurred, &inserted); err != nil || occurred != existingTime || inserted != existingTime {
+		t.Fatalf("repeat import changed existing vault row: occurred=%d inserted=%d err=%v", occurred, inserted, err)
+	}
+}
+
 // TestImportFileTranscriptReplayCapsAtMessageCount verifies that replay on
 // import caps max_traces at the message count of the imported batch.
 func TestImportFileTranscriptReplayCapsAtMessageCount(t *testing.T) {
@@ -125,7 +206,7 @@ func TestImportFileTranscriptHonoursSessionAndAudience(t *testing.T) {
 	memory := newMemory(t)
 	path := writeTranscript(t, "chat.txt", "老张养了一只猫。\n")
 	session := "hand-over"
-	result, err := memory.ImportFile(path, nil, &session, "private", false)
+	result, err := memory.ImportFile(path, nil, &session, "public", false)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -136,14 +217,14 @@ func TestImportFileTranscriptHonoursSessionAndAudience(t *testing.T) {
 	if err := memory.Store.DB().QueryRow("SELECT audience, session FROM trace").Scan(&audience, &stored); err != nil {
 		t.Fatalf("trace row: %v", err)
 	}
-	if audience != "private" || stored != "hand-over" {
+	if audience != "public" || stored != "hand-over" {
 		t.Fatalf("trace audience=%q session=%q", audience, stored)
 	}
 }
 
-// TestImportFileTranscriptCapsAtImportLines verifies the DefaultImportLines
-// (500) cap and total_lines accounting.
-func TestImportFileTranscriptCapsAtImportLines(t *testing.T) {
+// TestImportFileTranscriptPaginates verifies that an explicit import consumes
+// every batch and reports totals for the entire file.
+func TestImportFileTranscriptPaginates(t *testing.T) {
 	memory := newMemory(t)
 	var builder strings.Builder
 	for index := 0; index < 600; index++ {
@@ -155,13 +236,12 @@ func TestImportFileTranscriptCapsAtImportLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if result["messages"] != transcript.DefaultImportLines || result["inserted"] != transcript.DefaultImportLines {
+	if result["messages"] != 600 || result["inserted"] != 600 || result["offset"] != 600 || result["total_lines"] != 600 {
 		t.Fatalf("import = %#v", result)
 	}
-	// read_messages stops at the cap one line later, so total_lines is cap+1
-	// (standard reads the 501st line, then breaks).
-	if result["total_lines"] != transcript.DefaultImportLines+1 {
-		t.Fatalf("total_lines = %#v", result["total_lines"])
+	var count int
+	if err := memory.Store.DB().QueryRow("SELECT count(*) FROM trace").Scan(&count); err != nil || count != 600 {
+		t.Fatalf("trace count=%d err=%v", count, err)
 	}
 }
 

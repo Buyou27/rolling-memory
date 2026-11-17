@@ -9,6 +9,10 @@ import (
 )
 
 func (st *rmClusterState) closestFamilySlot(entries []rmDocEntry, a, b rmFeatureMatch) int {
+	if a.entry < 0 || b.entry < 0 {
+		// Mass-only synthetic matches carry no positions: no family proximity.
+		return -1
+	}
 	if st.hasWidePos() {
 		return st.closestFamilySlotExact(entries, a, b)
 	}
@@ -45,6 +49,10 @@ func (st *rmClusterState) closestFamilySlot(entries []rmDocEntry, a, b rmFeature
 // closestFamilySlotExact 是 closestFamilySlot 的精确坐标分支：宽语料下打包钳位会让
 // 远端句折叠为同句并伪造最小槽距，此处以 (句, 槽) 原值计算；窄语料永不进入。
 func (st *rmClusterState) closestFamilySlotExact(entries []rmDocEntry, a, b rmFeatureMatch) int {
+	if a.entry < 0 || b.entry < 0 {
+		// Mass-only synthetic matches carry no positions: no family proximity.
+		return -1
+	}
 	if len(a.positions) <= 1 && len(b.positions) <= 1 {
 		return closestExactSlot(st.entryPositionsExactOf(entries[a.entry]), st.entryPositionsExactOf(entries[b.entry]))
 	}
@@ -391,6 +399,10 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		wideFocal := st.hasWidePos()
 		var anchorExact []TermPosition
 		for _, m := range c.matches {
+			if m.entry < 0 {
+				// Mass-only synthetic matches carry no local positions.
+				continue
+			}
 			if detachedFrag != nil && detachedFrag[m.group] {
 				continue
 			}

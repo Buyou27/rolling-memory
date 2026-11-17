@@ -911,6 +911,39 @@ func applyATMUnscoredAccounting(summary map[string]any, results []map[string]any
 	}
 }
 
+// applyATMOfficialCategoryScores 把 by_category 的分类分改写成官方分型口径：
+// 每题的官方分（list_recall 连续 Jaccard / number EM / open_end 判官，即行内
+// qs_score）逐行四位取整后按题型求均值。0.5 阈值二值 verdict 只服务五桶归因，
+// 自造的二值分类均值不得出现在工件里（与 admin 面板 live 复算同尺）。
+func applyATMOfficialCategoryScores(summary map[string]any, results []map[string]any) {
+	buckets, ok := summary["by_category"].(map[string]any)
+	if !ok {
+		return
+	}
+	sums := map[string]float64{}
+	counts := map[string]int{}
+	for _, row := range results {
+		scored, _ := row["qs_scored"].(bool)
+		if !scored {
+			continue
+		}
+		score, ok := row["qs_score"].(float64)
+		if !ok {
+			continue
+		}
+		category := pyStr(firstTruthy(row["category"], "?"))
+		sums[category] += PyRound(score, 4)
+		counts[category]++
+	}
+	for category, bucket := range buckets {
+		object, ok := bucket.(map[string]any)
+		if !ok || counts[category] == 0 {
+			continue
+		}
+		object["judge_correct"] = PyRound(sums[category]/float64(counts[category]), 4)
+	}
+}
+
 // RunATM 执行 ATM-Bench 完整评测（与 eval.Run 同签名并输出兼容 summary + ATM 专属扩展指标）。
 func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 	logf := opts.Log
@@ -1241,6 +1274,9 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 
 	summary := Aggregate(results, arm)
+	// 官方分型口径：by_category 的分类分取每题官方分均值（见 helper 注释），
+	// 覆盖 Aggregate 的二值 verdict 分类均值。
+	applyATMOfficialCategoryScores(summary, results)
 	ks := []int{1, 5, 10, 25, 50, 100}
 	recSums := make(map[string]float64, len(ks))
 	allHit10Sum := 0.0
@@ -1349,8 +1385,15 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 		return nil, err
 	}
-	_ = writeResults(filepath.Join(opts.OutDir, "results-"+arm+".jsonl"), results)
-	_ = writeJSON(filepath.Join(opts.OutDir, "summary-"+arm+".json"), summary)
+	// 分片/抽样运行的工件名带窗口后缀：与全量运行同名会互相覆盖（先跑 offset=0
+	// 再跑 offset=1 曾把前一片结果写没），窗口进名后两片各自留档。
+	artifact := arm + runWindowSuffix(opts)
+	if err := writeResults(filepath.Join(opts.OutDir, "results-"+artifact+".jsonl"), results); err != nil {
+		return nil, err
+	}
+	if err := writeJSON(filepath.Join(opts.OutDir, "summary-"+artifact+".json"), summary); err != nil {
+		return nil, err
+	}
 	return summary, nil
 }
 

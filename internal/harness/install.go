@@ -16,10 +16,23 @@ func Install(harnesses []Harness, options InstallOptions) *Report {
 		report.Add("*", "binary", "-", StatusError, err.Error())
 		return report
 	}
+	// A bare install (no --lang) resumes the persisted language preference so a
+	// zh-CN user's re-run never silently flips the installed skill to English;
+	// the first install on a fresh machine keeps the documented "en" default.
+	if report.Options.Lang == "" {
+		if saved := ReadSavedInstallLang(report.Options.Home); saved != "" {
+			report.Options.Lang = saved
+		} else {
+			report.Options.Lang = "en"
+		}
+	}
 	ensureBinary(report.Options, report)
+	if len(report.Failures()) > 0 {
+		return report
+	}
 	if report.Options.Lang != "" && !report.Options.MCPOnly {
 		adminLang := AdminLangFor(report.Options.Lang)
-		if !report.Options.DryRun {
+		if !report.Options.DryRun && !report.Options.Project && options.Lang != "" {
 			if written, err := WriteAdminDefaultLang(report.Options.Home, report.Options.Lang); err == nil && written != "" {
 				adminLang = written
 			}
@@ -64,15 +77,27 @@ func Uninstall(harnesses []Harness, options InstallOptions) *Report {
 		if !report.Options.MCPOnly {
 			uninstallSkill(harness, report.Options, report)
 		}
+		start := len(report.Actions)
 		uninstallMCP(harness, report.Options, report)
 		if !report.Options.MCPOnly {
-			uninstallHooks(harness, report.Options, report)
-			uninstallInstructions(harness, report.Options, report)
+			failed := false
+			for _, action := range report.Actions[start:] {
+				if failedStatus(action.Status) {
+					failed = true
+					break
+				}
+			}
+			if failed {
+				report.Add(harness.ID, "hooks", "-", StatusSkipped, "retained because MCP uninstall failed")
+				report.Add(harness.ID, "instructions", "-", StatusSkipped, "retained because MCP uninstall failed")
+			} else {
+				uninstallHooks(harness, report.Options, report)
+				uninstallInstructions(harness, report.Options, report)
+			}
 		}
 	}
-	if !report.Options.MCPOnly {
-		// Like the hook cleanup, a stale desktop launcher never outlives the
-		// installation; ours is removed whether or not the flag was repeated.
+	if !report.Options.MCPOnly && !report.Options.Project {
+		// The desktop launcher is a user-level surface, not a project artifact.
 		uninstallDesktopShortcut(report.Options, report)
 	}
 	return report

@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -16,9 +17,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/api"
@@ -44,6 +47,8 @@ const (
 	daemonIdleBudget = 2 * time.Hour
 	// daemonWatchdogInterval checks whether the on-disk binary was replaced or the daemon went idle.
 	daemonWatchdogInterval = 5 * time.Second
+	// daemonIdentityVersion identifies the verified MCP forwarding protocol.
+	daemonIdentityVersion = 1
 )
 
 // DefaultUnixSocketPath returns the canonical Unix domain socket path for the
@@ -79,14 +84,18 @@ func normalizeUnixSocketPath(cand string) string {
 //
 // Invariants:
 //  1. Explicit `ROLLING_MEMORY_DAEMON=0|false|off` always disables daemon routing.
-//  2. Explicit `ROLLING_MEMORY_DAEMON_SOCKET` always enables daemon routing (for tests/custom setups).
-//  3. Inside `go test` binaries (`*.test`) without an explicit socket override, daemon routing is
+//  2. Platforms without peer verification never route through the daemon.
+//  3. Explicit `ROLLING_MEMORY_DAEMON_SOCKET` enables daemon routing on supported platforms.
+//  4. Inside `go test` binaries (`*.test`) without an explicit socket override, daemon routing is
 //     disabled so unit and golden tests stay 100% isolated in-process.
-//  4. Only requests targeting the default primary vault (`config.DefaultDBPath()`) route to the
+//  5. Only requests targeting the default primary vault (`config.DefaultDBPath()`) route to the
 //     shared daemon; custom `--db` paths (such as evaluation stores) run in-process.
 func ShouldUseUnixDaemon(dbPath string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(DaemonEnableEnv))) {
 	case "0", "false", "off", "no":
+		return false
+	}
+	if !unixDaemonPeerVerificationAvailable() {
 		return false
 	}
 	if strings.TrimSpace(os.Getenv(DaemonSocketEnv)) != "" {
@@ -126,10 +135,51 @@ func sameFileOrCleanPath(a, b string) bool {
 
 // UnixHealthResponse is returned by GET /v1/health on the local Unix socket.
 type UnixHealthResponse struct {
-	OK           bool   `json:"ok"`
-	PID          int    `json:"pid"`
-	DB           string `json:"db"`
-	ExeModTimeNS int64  `json:"exe_mtime_ns"`
+	OK              bool   `json:"ok"`
+	PID             int    `json:"pid"`
+	DB              string `json:"db"`
+	ExeModTimeNS    int64  `json:"exe_mtime_ns"`
+	IdentityVersion int    `json:"identity_version"`
+	Mode            string `json:"mode"`
+	PulseMode       string `json:"pulse_mode"`
+	ConfigID        string `json:"config_id"`
+}
+
+func unixDaemonConfigID(cfg *config.Config) (string, error) {
+	if cfg == nil || cfg.Mode != "local" {
+		return "", errors.New("daemon requires local mode and local_plain")
+	}
+	resolved := *cfg
+	if resolved.Path == "" || resolved.DB == "" || resolved.Log == "" {
+		return "", errors.New("daemon configuration identity is incomplete")
+	}
+	var err error
+	if resolved.Path, err = filepath.Abs(resolved.Path); err != nil {
+		return "", err
+	}
+	if resolved.DB, err = filepath.Abs(resolved.DB); err != nil {
+		return "", err
+	}
+	if resolved.Log, err = filepath.Abs(resolved.Log); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(resolved)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func unixDaemonHealth(cfg *config.Config, exeMTime int64) (UnixHealthResponse, error) {
+	id, err := unixDaemonConfigID(cfg)
+	if err != nil {
+		return UnixHealthResponse{}, err
+	}
+	return UnixHealthResponse{
+		OK: true, PID: os.Getpid(), DB: cfg.DB, ExeModTimeNS: exeMTime,
+		IdentityVersion: daemonIdentityVersion, Mode: cfg.Mode, PulseMode: "local_plain", ConfigID: id,
+	}, nil
 }
 
 // UnixRecallPayload carries a CLI or Admin Console recall request over the local Unix socket.
@@ -177,9 +227,8 @@ type UnixRecallResponse struct {
 	Rendered    string         `json:"rendered,omitempty"`
 }
 
-// UnixHydrateItem names one zero-copy `@ref:` pointer to resolve into speech text.
-// DocID is optional: when present the daemon additionally verifies the resolved
-// content against the sealed episodic index before answering.
+// UnixHydrateItem names an indexed document and its zero-copy `@ref:` pointer.
+// Both fields are required to verify the source before returning speech text.
 type UnixHydrateItem struct {
 	DocID string `json:"doc_id,omitempty"`
 	Ref   string `json:"ref"`
@@ -195,13 +244,14 @@ type UnixHydratePayload struct {
 }
 
 // UnixHydrateResult is the canonical text of one requested pointer. Verified is true
-// when the sealed episodic index confirmed the resolved content digest.
+// when the sealed episodic index confirmed the content at ActualRef.
 type UnixHydrateResult struct {
-	DocID    string `json:"doc_id,omitempty"`
-	Ref      string `json:"ref"`
-	Text     string `json:"text,omitempty"`
-	Verified bool   `json:"verified,omitempty"`
-	Error    string `json:"error,omitempty"`
+	DocID     string `json:"doc_id,omitempty"`
+	Ref       string `json:"ref"`
+	ActualRef string `json:"actual_ref,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Verified  bool   `json:"verified,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // UnixHydrateResponse is returned by POST /v1/hydrate on the local Unix socket.
@@ -247,6 +297,15 @@ type UnixDocumentResponse struct {
 // source file, so the batch cap stays far below the pointer-hydration cap).
 const maxUnixDocumentItems = 64
 
+// DaemonRecallNotSentError identifies failures before a recall request was written.
+// Only this class can be retried in the caller's own process without duplication.
+type DaemonRecallNotSentError struct {
+	Err error
+}
+
+func (e *DaemonRecallNotSentError) Error() string { return e.Err.Error() }
+func (e *DaemonRecallNotSentError) Unwrap() error { return e.Err }
+
 // EngineRecallError wraps an application-level error returned by `Memory.Recall`
 // inside the daemon so the caller reports it directly instead of re-running locally.
 type EngineRecallError struct {
@@ -271,6 +330,9 @@ func newUnixHTTPClient(sockPath string, timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	return &http.Client{
 		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return dialer.DialContext(ctx, "unix", sockPath)
@@ -314,23 +376,79 @@ func PingUnixDaemon(sockPath string, timeout time.Duration) (*UnixHealthResponse
 	return &out, nil
 }
 
+func requestUnixDaemonControl(sockPath, path string, cfg *config.Config) error {
+	conn, reader, err := verifiedUnixDaemonConn(sockPath, cfg)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://unix"+path, strings.NewReader(`{}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := req.Write(conn); err != nil {
+		return err
+	}
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("daemon control returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err != nil || len(body) > maxHTTPBody || reader.Buffered() != 0 || json.Unmarshal(body, &result) != nil || !result.OK {
+		return errors.New("invalid daemon control response")
+	}
+	return nil
+}
+
 func requestUnixDaemonShutdown(sockPath string) {
-	client := newUnixHTTPClient(sockPath, 500*time.Millisecond)
-	resp, err := client.Post("http://unix/v1/shutdown", "application/json", strings.NewReader(`{}`))
-	if err == nil && resp != nil {
-		_ = resp.Body.Close()
+	cfg, err := config.Load(config.LoadOptions{})
+	if err == nil {
+		_ = requestUnixDaemonControl(sockPath, "/v1/shutdown", cfg)
 	}
 }
 
 // ShutdownUnixDaemon asks the local Unix domain socket daemon (if running) to
 // step down cleanly so a freshly updated binary takes over on the next request.
-func ShutdownUnixDaemon(sockPath string) {
+func ShutdownUnixDaemon(sockPath string) error {
 	if sockPath == "" {
 		sockPath = DefaultUnixSocketPath()
 	} else {
 		sockPath = normalizeUnixSocketPath(sockPath)
 	}
-	requestUnixDaemonShutdown(sockPath)
+	info, err := os.Lstat(sockPath)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(config.LoadOptions{})
+	if err != nil {
+		return err
+	}
+	if err := requestUnixDaemonControl(sockPath, "/v1/shutdown", cfg); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(daemonStartupWait)
+	for time.Now().Before(deadline) {
+		current, err := os.Lstat(sockPath)
+		if errors.Is(err, os.ErrNotExist) || (err == nil && !os.SameFile(info, current)) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	return errors.New("daemon shutdown was not confirmed")
 }
 
 // InvalidateUnixDaemonCaches notifies the running local Unix domain socket daemon
@@ -342,51 +460,301 @@ func InvalidateUnixDaemonCaches(sockPath string) {
 	} else {
 		sockPath = normalizeUnixSocketPath(sockPath)
 	}
-	if _, err := os.Stat(sockPath); err != nil {
-		return
-	}
-	client := newUnixHTTPClient(sockPath, 300*time.Millisecond)
-	resp, err := client.Post("http://unix/v1/invalidate", "application/json", strings.NewReader(`{}`))
-	if err == nil && resp != nil {
-		_ = resp.Body.Close()
+	cfg, err := config.Load(config.LoadOptions{})
+	if err == nil {
+		_ = requestUnixDaemonControl(sockPath, "/v1/invalidate", cfg)
 	}
 }
 
-// EnsureUnixDaemon verifies that a live up-to-date daemon is listening on sockPath,
-// spawning one in the background if needed and waiting briefly for the socket to bind.
+// unixDaemonSocketLease pins the socket inode in a private directory. The lock
+// covers creation, publication, service, and cleanup across daemon processes.
+type unixDaemonSocketLease struct {
+	dir        *os.File
+	dirPath    string
+	anchor     string
+	sockPath   string
+	parentInfo os.FileInfo
+	owned      os.FileInfo
+}
+
+var errUnixDaemonStarting = errors.New("daemon socket lease is held")
+
+// unixDaemonLeaseDir resolves the private lease directory for sockPath. It sits
+// beside the published socket whenever the anchor fits the path budget, so the
+// published path itself is never rewritten to make room for the lease. Only
+// when the adjacent anchor would exceed the budget does it fall back to a
+// stable short directory under the system temp dir.
+func unixDaemonLeaseDir(sockPath string) string {
+	sum := sha256.Sum256([]byte(filepath.Base(sockPath)))
+	beside := filepath.Join(filepath.Dir(sockPath), ".rm-socket-"+hex.EncodeToString(sum[:8]))
+	if len(beside)+len("/socket") <= maxUnixSocketPathLen {
+		return beside
+	}
+	sum = sha256.Sum256([]byte(sockPath))
+	base := filepath.Join(os.TempDir(), "rm-"+hex.EncodeToString(sum[:6]))
+	if len(base)+len("/.rm-socket-")+16+len("/socket") > maxUnixSocketPathLen {
+		base = filepath.Join("/tmp", "rm-"+hex.EncodeToString(sum[:6]))
+	}
+	return filepath.Join(base, ".rm-socket-"+hex.EncodeToString(sum[:8]))
+}
+
+func acquireUnixDaemonSocketLease(sockPath string, create bool) (*unixDaemonSocketLease, error) {
+	if !unixDaemonPeerVerificationAvailable() {
+		return nil, errors.New("daemon socket lease is unavailable on this platform")
+	}
+	dirPath := unixDaemonLeaseDir(sockPath)
+	if create {
+		if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(dirPath, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	parent, err := os.Stat(filepath.Dir(sockPath))
+	if err != nil {
+		return nil, err
+	}
+	if !parent.IsDir() || !unixDaemonFileOwned(parent) || parent.Mode().Perm()&0o022 != 0 {
+		return nil, fmt.Errorf("unsafe daemon socket parent directory: %s", filepath.Dir(sockPath))
+	}
+	info, err := os.Lstat(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || !unixDaemonFileOwned(info) || info.Mode().Perm() != 0o700 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return nil, fmt.Errorf("unsafe daemon socket lease directory: %s", dirPath)
+	}
+	dir, err := os.Open(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := dir.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		_ = dir.Close()
+		return nil, errors.New("daemon socket lease directory changed")
+	}
+	if err := unixDaemonLock(dir); err != nil {
+		_ = dir.Close()
+		if unixDaemonLockBusy(err) {
+			return nil, errUnixDaemonStarting
+		}
+		return nil, err
+	}
+	current, err := os.Lstat(dirPath)
+	if err != nil || !os.SameFile(opened, current) {
+		_ = dir.Close()
+		return nil, errors.New("daemon socket lease directory changed")
+	}
+	return &unixDaemonSocketLease{dir: dir, dirPath: dirPath, anchor: filepath.Join(dirPath, "socket"), sockPath: sockPath, parentInfo: parent}, nil
+}
+
+func (lease *unixDaemonSocketLease) close() {
+	if lease.dir != nil {
+		_ = lease.dir.Close()
+		lease.dir = nil
+	}
+}
+
+func (lease *unixDaemonSocketLease) directoryUnchanged() bool {
+	if lease.dir == nil {
+		return false
+	}
+	opened, err := lease.dir.Stat()
+	if err != nil {
+		return false
+	}
+	parent, err := os.Stat(filepath.Dir(lease.sockPath))
+	if err != nil || !parent.IsDir() || !unixDaemonFileOwned(parent) || parent.Mode().Perm()&0o022 != 0 || !os.SameFile(lease.parentInfo, parent) {
+		return false
+	}
+	current, err := os.Lstat(lease.dirPath)
+	return err == nil && current.IsDir() && unixDaemonFileOwned(current) && current.Mode().Perm() == 0o700 &&
+		current.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) == 0 && os.SameFile(opened, current)
+}
+
+// recover removes only a socket previously published from this lease's pinned
+// inode. A refused connection alone is insufficient: a socket can be bound but
+// not yet listening. Unmarked and replaced paths are never removed.
+func (lease *unixDaemonSocketLease) recover() error {
+	if !lease.directoryUnchanged() {
+		return errors.New("daemon socket lease directory changed")
+	}
+	anchor, err := os.Lstat(lease.anchor)
+	if errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(lease.sockPath); err == nil {
+			return fmt.Errorf("unmarked daemon socket path: %s", lease.sockPath)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if anchor.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(anchor) {
+		return errors.New("invalid daemon socket anchor")
+	}
+	if lease.owned != nil && !os.SameFile(lease.owned, anchor) {
+		return errors.New("daemon socket anchor was replaced")
+	}
+	current, err := os.Lstat(lease.sockPath)
+	if err == nil {
+		if current.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(current) || !os.SameFile(anchor, current) {
+			return errors.New("daemon socket path does not match its anchor")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	conn, dialErr := net.DialTimeout("unix", lease.anchor, daemonPingTimeout)
+	if dialErr == nil {
+		_ = conn.Close()
+		return errors.New("daemon socket anchor is still listening")
+	}
+	if !unixDaemonConnectionRefused(dialErr) {
+		return fmt.Errorf("cannot establish daemon socket state: %w", dialErr)
+	}
+	if !lease.directoryUnchanged() {
+		return errors.New("daemon socket lease directory changed")
+	}
+	pinned, err := os.Lstat(lease.anchor)
+	if err != nil || !os.SameFile(anchor, pinned) {
+		return errors.New("daemon socket anchor changed")
+	}
+	if current != nil {
+		if err := lease.removeStaleSocket(anchor); err != nil {
+			return err
+		}
+	}
+	return os.Remove(lease.anchor)
+}
+
+// removeStaleSocket deletes the published path only after moving it into the
+// lease directory and re-verifying the moved entry, so a path replaced by
+// another same-user process between the check and the delete is never removed.
+func (lease *unixDaemonSocketLease) removeStaleSocket(anchor os.FileInfo) error {
+	if !lease.directoryUnchanged() {
+		return errors.New("daemon socket lease directory changed")
+	}
+	latest, err := os.Lstat(lease.sockPath)
+	if err != nil || latest.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(latest) || !os.SameFile(anchor, latest) {
+		return errors.New("daemon socket path changed")
+	}
+	return lease.stageAndRemoveStaleSocket(anchor)
+}
+
+// stageAndRemoveStaleSocket atomically moves the published path entry into the
+// lease directory, verifies the moved entry is the pinned socket, and only then
+// deletes it. Anything else is moved back to where it was and reported, never
+// deleted, so a concurrent replacement can never lose a file.
+func (lease *unixDaemonSocketLease) stageAndRemoveStaleSocket(anchor os.FileInfo) error {
+	staged := filepath.Join(lease.dirPath, "stale")
+	if err := os.Rename(lease.sockPath, staged); err != nil {
+		return fmt.Errorf("stage stale daemon socket: %w", err)
+	}
+	stagedInfo, err := os.Lstat(staged)
+	if err != nil || stagedInfo.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(stagedInfo) || !os.SameFile(anchor, stagedInfo) {
+		if _, statErr := os.Lstat(lease.sockPath); statErr == nil {
+			return fmt.Errorf("daemon socket path was replaced during recovery: moved entry kept at %s", staged)
+		}
+		if restoreErr := os.Rename(staged, lease.sockPath); restoreErr != nil {
+			return fmt.Errorf("daemon socket path was replaced and could not be restored: %w", restoreErr)
+		}
+		return errors.New("daemon socket path was replaced during recovery")
+	}
+	return os.Remove(staged)
+}
+
+// EnsureUnixDaemon validates an existing daemon or starts one when no socket exists.
+// Only sockets owned by the lease protocol can be recovered automatically.
 func EnsureUnixDaemon(sockPath string) error {
+	cfg, err := config.Load(config.LoadOptions{})
+	if err != nil {
+		return err
+	}
+	return ensureUnixDaemon(sockPath, cfg)
+}
+
+func ensureUnixDaemon(sockPath string, cfg *config.Config) error {
+	return ensureUnixDaemonContext(context.Background(), sockPath, cfg)
+}
+
+func ensureUnixDaemonContext(ctx context.Context, sockPath string, cfg *config.Config) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := unixDaemonConfigID(cfg); err != nil {
+		return err
+	}
 	if sockPath == "" {
 		sockPath = DefaultUnixSocketPath()
 	} else {
 		sockPath = normalizeUnixSocketPath(sockPath)
 	}
-	myMTime := currentExeModTimeNS()
-	if health, err := PingUnixDaemon(sockPath, daemonPingTimeout); err == nil && health != nil {
-		// Only ask the running daemon to step down when the caller binary is strictly
-		// newer by >2s (e.g. a freshly compiled binary invoked before the daemon's 5s
-		// self-watchdog tick). Sibling install copies (`~/.local/bin` vs
-		// `~/.local/share/rolling-memory/bin`) copied in the same second differ by a few
-		// milliseconds and must never evict each other.
-		if myMTime == 0 || health.ExeModTimeNS == 0 || myMTime <= health.ExeModTimeNS+int64(2*time.Second) {
-			return nil
+	if info, err := os.Lstat(sockPath); err == nil {
+		if info.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(info) {
+			return fmt.Errorf("unsafe daemon socket path: %s", sockPath)
 		}
-		requestUnixDaemonShutdown(sockPath)
-		time.Sleep(80 * time.Millisecond)
-	}
-	if err := spawnUnixDaemonProcess(sockPath); err != nil {
+		conn, _, verifyErr := verifiedUnixDaemonConnContext(ctx, sockPath, cfg)
+		if verifyErr == nil {
+			return conn.Close()
+		}
+		if !unixDaemonConnectionRefused(verifyErr) {
+			return verifyErr
+		}
+		// Recovery happens in the new daemon while it holds the lease through
+		// publication, so competing starters cannot remove each other's socket.
+		lease, leaseErr := acquireUnixDaemonSocketLease(sockPath, false)
+		if errors.Is(leaseErr, errUnixDaemonStarting) {
+			return waitUnixDaemon(ctx, sockPath, cfg)
+		}
+		if errors.Is(leaseErr, os.ErrNotExist) {
+			return fmt.Errorf("unmarked daemon socket %s: after confirming no daemon is running, remove this socket manually and retry", sockPath)
+		}
+		if leaseErr != nil {
+			return fmt.Errorf("daemon socket cannot be safely recovered (%v): %w", verifyErr, leaseErr)
+		}
+		anchor, anchorErr := os.Lstat(lease.anchor)
+		current, currentErr := os.Lstat(sockPath)
+		valid := anchorErr == nil && currentErr == nil && anchor.Mode()&os.ModeSocket != 0 &&
+			current.Mode()&os.ModeSocket != 0 && unixDaemonFileOwned(anchor) && unixDaemonFileOwned(current) && os.SameFile(anchor, current)
+		lease.close()
+		if errors.Is(anchorErr, os.ErrNotExist) && currentErr == nil && current.Mode()&os.ModeSocket != 0 && unixDaemonFileOwned(current) && os.SameFile(info, current) {
+			return fmt.Errorf("unmarked daemon socket %s: after confirming no daemon is running, remove this socket manually and retry", sockPath)
+		}
+		if !valid {
+			return errors.New("daemon socket is unmarked or has changed; refusing automatic recovery")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := spawnUnixDaemonProcess(sockPath, cfg); err != nil {
+		return err
+	}
+	return waitUnixDaemon(ctx, sockPath, cfg)
+}
+
+func waitUnixDaemon(ctx context.Context, sockPath string, cfg *config.Config) error {
 	deadline := time.Now().Add(daemonStartupWait)
 	for time.Now().Before(deadline) {
-		if _, err := PingUnixDaemon(sockPath, 100*time.Millisecond); err == nil {
-			return nil
+		if _, err := os.Lstat(sockPath); err == nil {
+			conn, _, verifyErr := verifiedUnixDaemonConnContext(ctx, sockPath, cfg)
+			if verifyErr == nil {
+				return conn.Close()
+			}
 		}
-		time.Sleep(30 * time.Millisecond)
+		timer := time.NewTimer(30 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return fmt.Errorf("local memory daemon did not bind %s within %s", sockPath, daemonStartupWait)
 }
 
-func spawnUnixDaemonProcess(sockPath string) error {
+func spawnUnixDaemonProcess(sockPath string, cfg *config.Config) error {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -397,7 +765,7 @@ func spawnUnixDaemonProcess(sockPath string) error {
 	}
 	defer devNull.Close()
 
-	cmd := exec.Command(exe, "mcp", "--daemon")
+	cmd := exec.Command(exe, "mcp", "--daemon", "--config", cfg.Path, "--db", cfg.DB, "--mode", cfg.Mode, "--scope", cfg.Scope)
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
@@ -410,17 +778,30 @@ func spawnUnixDaemonProcess(sockPath string) error {
 	return nil
 }
 
-// CallUnixDaemonRecall executes a recall request against the shared local Unix socket
-// daemon, auto-starting the daemon if it is not yet running.
-func CallUnixDaemonRecall(ctx context.Context, sockPath string, payload UnixRecallPayload) (*UnixRecallResponse, error) {
+// CallUnixDaemonRecall executes a recall request using the caller's resolved configuration.
+func CallUnixDaemonRecall(ctx context.Context, sockPath string, cfg *config.Config, payload UnixRecallPayload) (*UnixRecallResponse, error) {
 	if sockPath == "" {
 		sockPath = DefaultUnixSocketPath()
 	} else {
 		sockPath = normalizeUnixSocketPath(sockPath)
 	}
-	if err := EnsureUnixDaemon(sockPath); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if _, err := unixDaemonConfigID(cfg); err != nil {
+		return nil, err
+	}
+	if err := ensureUnixDaemonContext(ctx, sockPath, cfg); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	conn, reader, err := verifiedUnixDaemonConnContext(ctx, sockPath, cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -429,26 +810,46 @@ func CallUnixDaemonRecall(ctx context.Context, sockPath string, payload UnixReca
 	if payload.BudgetMS != nil && *payload.BudgetMS > 0 {
 		timeout = time.Duration(*payload.BudgetMS)*time.Millisecond + 30*time.Second
 	}
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, &DaemonRecallNotSentError{Err: err}
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/v1/recall", bytes.NewReader(raw))
 	if err != nil {
-		return nil, err
+		return nil, &DaemonRecallNotSentError{Err: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := newUnixHTTPClient(sockPath, timeout)
-	resp, err := client.Do(req)
+	if err := req.Write(conn); err != nil {
+		return nil, fmt.Errorf("daemon recall outcome unknown: %w", err)
+	}
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon recall outcome unknown: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody))
-	if err != nil {
-		return nil, err
+	if len(body) > maxHTTPBody || reader.Buffered() != 0 {
+		return nil, errors.New("invalid daemon response stream")
 	}
 	var out UnixRecallResponse
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode daemon response (status %d): %w", resp.StatusCode, err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("invalid trailing daemon response")
 	}
 	if out.Result != nil {
 		if norm, ok := normalizeJSONValue(out.Result).(map[string]any); ok {
@@ -463,6 +864,9 @@ func CallUnixDaemonRecall(ctx context.Context, sockPath string, payload UnixReca
 	if resp.StatusCode == http.StatusConflict {
 		return nil, fmt.Errorf("daemon db mismatch: %s", out.Error)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("daemon recall failed with status %d", resp.StatusCode)
+	}
 	if !out.OK {
 		if out.EngineError && out.Error != "" {
 			return nil, &EngineRecallError{Msg: out.Error}
@@ -475,14 +879,92 @@ func CallUnixDaemonRecall(ctx context.Context, sockPath string, payload UnixReca
 	return &out, nil
 }
 
+// Peer credentials and health identity protect against accidental reuse of an
+// incompatible daemon. They do not authenticate arbitrary code running as the same user.
+func verifiedUnixDaemonConn(sockPath string, cfg *config.Config) (net.Conn, *bufio.Reader, error) {
+	return verifiedUnixDaemonConnContext(context.Background(), sockPath, cfg)
+}
+
+func verifiedUnixDaemonConnContext(ctx context.Context, sockPath string, cfg *config.Config) (net.Conn, *bufio.Reader, error) {
+	configID, err := unixDaemonConfigID(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	dialer := net.Dialer{Timeout: daemonPingTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", sockPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	fail := func(err error) (net.Conn, *bufio.Reader, error) {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	pid, err := verifyUnixDaemonPeer(conn)
+	if err != nil {
+		return fail(fmt.Errorf("daemon peer verification: %w", err))
+	}
+	deadline := time.Now().Add(daemonPingTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fail(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://unix/v1/health", nil)
+	if err != nil {
+		return fail(err)
+	}
+	if err := req.Write(conn); err != nil {
+		return fail(err)
+	}
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		return fail(err)
+	}
+	var health UnixHealthResponse
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+	closeErr := resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Close || readErr != nil || closeErr != nil || len(body) > maxHTTPBody ||
+		json.Unmarshal(body, &health) != nil || reader.Buffered() != 0 {
+		return fail(errors.New("invalid daemon health response"))
+	}
+	if !health.OK || health.PID != pid || health.IdentityVersion != daemonIdentityVersion ||
+		health.Mode != "local" || health.PulseMode != "local_plain" || health.ConfigID != configID ||
+		!sameFileOrCleanPath(health.DB, cfg.DB) {
+		return fail(errors.New("daemon mode or configuration identity mismatch"))
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	return conn, reader, nil
+}
+
 // ForwardToolCallToUnixDaemon forwards an MCP `tools/call` request from a lightweight
 // stdio session to the shared local Unix domain socket daemon, injecting the caller
 // window's resolved PresenceCoordinates so per-window repository isolation is preserved.
 func ForwardToolCallToUnixDaemon(requestID any, arguments map[string]any, presence *text.PresenceCoordinates) (any, bool) {
 	sockPath := DefaultUnixSocketPath()
-	if err := EnsureUnixDaemon(sockPath); err != nil {
-		return nil, false
+	fail := func(err error) (any, bool) {
+		return toolError(requestID, fmt.Errorf("local daemon: %w", err), io.Discard), true
 	}
+	cfg, err := config.Load(config.LoadOptions{})
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := unixDaemonConfigID(cfg); err != nil {
+		return fail(err)
+	}
+	if err := ensureUnixDaemon(sockPath, cfg); err != nil {
+		return fail(err)
+	}
+	conn, reader, err := verifiedUnixDaemonConn(sockPath, cfg)
+	if err != nil {
+		return fail(err)
+	}
+	defer conn.Close()
 	forwardedArgs := make(map[string]any, len(arguments)+3)
 	for k, v := range arguments {
 		forwardedArgs[k] = v
@@ -509,25 +991,93 @@ func ForwardToolCallToUnixDaemon(requestID any, arguments map[string]any, presen
 	}
 	raw, err := json.Marshal(rpcReq)
 	if err != nil {
-		return nil, false
+		return fail(err)
 	}
-	client := newUnixHTTPClient(sockPath, 65*time.Second)
-	resp, err := client.Post("http://unix/mcp", "application/json", bytes.NewReader(raw))
+	if err := conn.SetDeadline(time.Now().Add(65 * time.Second)); err != nil {
+		return fail(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://unix/mcp", bytes.NewReader(raw))
 	if err != nil {
-		return nil, false
+		return fail(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := req.Write(conn); err != nil {
+		return fail(err)
+	}
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		return fail(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, false
+		return fail(fmt.Errorf("daemon returned status %d", resp.StatusCode))
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+	if err != nil || len(body) > maxHTTPBody || reader.Buffered() != 0 {
+		return fail(errors.New("invalid daemon response stream"))
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil || string(envelope["jsonrpc"]) != `"2.0"` {
+		return fail(errors.New("invalid daemon JSON-RPC response"))
+	}
+	wantID, err := json.Marshal(requestID)
+	if err != nil || !bytes.Equal(bytes.TrimSpace(envelope["id"]), wantID) {
+		return fail(errors.New("daemon JSON-RPC response ID mismatch"))
+	}
+	result, hasResult := envelope["result"]
+	rpcError, hasError := envelope["error"]
+	if hasResult == hasError {
+		return fail(errors.New("invalid daemon JSON-RPC result"))
+	}
+	var object map[string]json.RawMessage
+	if hasResult {
+		if json.Unmarshal(result, &object) != nil || object == nil {
+			return fail(errors.New("invalid daemon JSON-RPC result"))
+		}
+		var content []json.RawMessage
+		if json.Unmarshal(object["content"], &content) != nil || content == nil {
+			return fail(errors.New("invalid daemon tool result"))
+		}
+		for _, block := range content {
+			var item map[string]json.RawMessage
+			var kind string
+			if json.Unmarshal(block, &item) != nil || item == nil || json.Unmarshal(item["type"], &kind) != nil || kind == "" {
+				return fail(errors.New("invalid daemon tool result"))
+			}
+			if kind == "text" {
+				var text string
+				if json.Unmarshal(item["text"], &text) != nil || bytes.Equal(bytes.TrimSpace(item["text"]), []byte("null")) {
+					return fail(errors.New("invalid daemon tool result"))
+				}
+			}
+		}
+		if raw, ok := object["isError"]; ok {
+			var isError bool
+			if json.Unmarshal(raw, &isError) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				return fail(errors.New("invalid daemon tool result"))
+			}
+		}
+	} else {
+		if json.Unmarshal(rpcError, &object) != nil || object == nil {
+			return fail(errors.New("invalid daemon JSON-RPC error"))
+		}
+		var code int
+		var message string
+		if json.Unmarshal(object["code"], &code) != nil || json.Unmarshal(object["message"], &message) != nil ||
+			bytes.Equal(bytes.TrimSpace(object["code"]), []byte("null")) || bytes.Equal(bytes.TrimSpace(object["message"]), []byte("null")) {
+			return fail(errors.New("invalid daemon JSON-RPC error"))
+		}
 	}
 	var rpcResp any
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, maxHTTPBody))
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&rpcResp); err != nil {
-		return nil, false
+		return fail(err)
 	}
 	return normalizeJSONValue(rpcResp), true
 }
+
+type unixDaemonMemoryKey struct{}
 
 // ServeUnix runs the shared single-instance local memory daemon on sockPath.
 // It hosts both `/v1/recall` (for CLI and Admin Console) and `/mcp` (for stdio MCP proxies),
@@ -540,30 +1090,61 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 		sockPath = normalizeUnixSocketPath(sockPath)
 	}
 	myMTime := currentExeModTimeNS()
-	if health, err := PingUnixDaemon(sockPath, daemonPingTimeout); err == nil && health != nil {
-		if myMTime == 0 || health.ExeModTimeNS == 0 || myMTime <= health.ExeModTimeNS+int64(2*time.Second) {
-			// Another up-to-date daemon is already serving this socket.
-			return nil
+	var daemonCfg *config.Config
+	var err error
+	if memory != nil {
+		daemonCfg = memory.Config
+	} else {
+		daemonCfg, err = config.Load(config.LoadOptions{})
+		if err != nil {
+			return err
 		}
-		requestUnixDaemonShutdown(sockPath)
-		time.Sleep(80 * time.Millisecond)
 	}
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
-		return fmt.Errorf("mcp unix: mkdir %s: %w", filepath.Dir(sockPath), err)
-	}
-	_ = os.Remove(sockPath)
-	listener, err := net.Listen("unix", sockPath)
+	health, err := unixDaemonHealth(daemonCfg, myMTime)
 	if err != nil {
-		return fmt.Errorf("mcp unix: listen %s: %w", sockPath, err)
+		return err
 	}
-	_ = os.Chmod(sockPath, 0o600)
-	sockInfo, _ := os.Stat(sockPath)
+	lease, err := acquireUnixDaemonSocketLease(sockPath, true)
+	if err != nil {
+		return fmt.Errorf("mcp unix: socket lease: %w", err)
+	}
+	defer lease.close()
+	if err := lease.recover(); err != nil {
+		return fmt.Errorf("mcp unix: socket recovery: %w", err)
+	}
+	listener, err := net.Listen("unix", lease.anchor)
+	if err != nil {
+		return fmt.Errorf("mcp unix: listen %s: %w", lease.anchor, err)
+	}
+	if unixListener, ok := listener.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
+	}
+	lease.owned, err = os.Lstat(lease.anchor)
+	if err != nil || lease.owned.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(lease.owned) {
+		_ = listener.Close()
+		return errors.New("daemon socket anchor unavailable after listen")
+	}
 	defer func() {
 		_ = listener.Close()
-		if cur, err := os.Stat(sockPath); err == nil && sockInfo != nil && os.SameFile(sockInfo, cur) {
-			_ = os.Remove(sockPath)
-		}
+		_ = lease.recover()
 	}()
+	if err := os.Chmod(lease.anchor, 0o600); err != nil {
+		return err
+	}
+	if !lease.directoryUnchanged() {
+		return errors.New("daemon socket lease directory changed")
+	}
+	anchor, err := os.Lstat(lease.anchor)
+	if err != nil || !os.SameFile(lease.owned, anchor) {
+		return errors.New("daemon socket anchor was replaced")
+	}
+	if err := os.Link(lease.anchor, sockPath); err != nil {
+		return fmt.Errorf("mcp unix: publish %s: %w", sockPath, err)
+	}
+	published, err := os.Lstat(sockPath)
+	if err != nil || published.Mode()&os.ModeSocket == 0 || !unixDaemonFileOwned(published) || !os.SameFile(lease.owned, published) {
+		return errors.New("daemon socket changed during publication")
+	}
 
 	lazy := NewLazyMemory()
 	if memory != nil {
@@ -579,14 +1160,28 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Warm the 522MB SQLite corpus snapshot in the background immediately after binding
-	// the socket so health probes succeed right away and user queries hit warm RAM.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	defer signal.Stop(signals)
 	go func() {
-		if mem, err := lazy.Get(); err == nil && mem != nil {
-			_ = mem.Warmup(ctx)
+		select {
+		case <-signals:
+			_ = listener.Close()
+		case <-ctx.Done():
 		}
 	}()
+
+	// Bind health and requests to the opened memory's effective configuration.
+	active, err := lazy.Get()
+	if err != nil {
+		return err
+	}
+	activeID, err := unixDaemonConfigID(active.Config)
+	if err != nil || activeID != health.ConfigID {
+		_ = lazy.Close()
+		return errors.New("daemon configuration changed during startup")
+	}
+	go func() { _ = active.Warmup(ctx) }()
 	if onStart != nil {
 		go onStart(ctx)
 	}
@@ -597,34 +1192,26 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 	var srv *http.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		dbPath := config.DefaultDBPath()
-		if memory != nil && memory.Config != nil && memory.Config.DB != "" {
-			dbPath = memory.Config.DB
+		current, getErr := lazy.Get()
+		if getErr != nil || current == nil {
+			http.Error(w, "daemon memory unavailable", http.StatusServiceUnavailable)
+			return
 		}
-		writeJSON(w, http.StatusOK, UnixHealthResponse{
-			OK:           true,
-			PID:          os.Getpid(),
-			DB:           dbPath,
-			ExeModTimeNS: myMTime,
-		})
+		currentHealth, healthErr := unixDaemonHealth(current.Config, myMTime)
+		if healthErr != nil || currentHealth.ConfigID != health.ConfigID {
+			http.Error(w, "daemon configuration changed", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, currentHealth)
 	})
 	mux.HandleFunc("/v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		// Stop accepting new connections once the reply has flushed; the serving
+		// loop then drains in-flight requests in one place for every trigger.
 		go func() {
 			time.Sleep(15 * time.Millisecond)
-			if cur, err := os.Stat(sockPath); err == nil && sockInfo != nil && os.SameFile(sockInfo, cur) {
-				_ = os.Remove(sockPath)
-			}
 			_ = listener.Close()
-			deadline := time.Now().Add(2 * time.Second)
-			for inFlight.Load() > 0 && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond)
-			}
-			cancel()
-			if srv != nil {
-				_ = srv.Close()
-			}
 		}()
 	})
 	mux.HandleFunc("/v1/recall", func(w http.ResponseWriter, r *http.Request) {
@@ -635,7 +1222,17 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 		activity.Store(time.Now().UnixNano())
 		inFlight.Add(1)
 		defer inFlight.Add(-1)
-		handleUnixRecall(w, r, memory, lazy)
+		current, getErr := lazy.Get()
+		if getErr != nil || current == nil {
+			http.Error(w, "daemon memory unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		currentID, configErr := unixDaemonConfigID(current.Config)
+		if configErr != nil || currentID != health.ConfigID {
+			http.Error(w, "daemon configuration changed", http.StatusConflict)
+			return
+		}
+		handleUnixRecall(w, r, current, nil)
 	})
 	mux.HandleFunc("/v1/hydrate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -678,8 +1275,20 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 		activity.Store(time.Now().UnixNano())
 		inFlight.Add(1)
 		defer inFlight.Add(-1)
+		current, getErr := lazy.Get()
+		if getErr != nil || current == nil {
+			http.Error(w, "daemon memory unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		currentID, configErr := unixDaemonConfigID(current.Config)
+		if configErr != nil || currentID != health.ConfigID {
+			http.Error(w, "daemon configuration changed", http.StatusConflict)
+			return
+		}
 		r.Host = "127.0.0.1"
 		r.Header.Del("Origin")
+		// Bind dispatch to the same memory whose configuration was checked above.
+		r = r.WithContext(context.WithValue(r.Context(), unixDaemonMemoryKey{}, current))
 		mcpHandler.ServeHTTP(w, r)
 	})
 
@@ -721,12 +1330,37 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 	}()
 
 	err = srv.Serve(listener)
-	_ = srv.Close()
+	quiescentUnixDaemon(&inFlight)
+	cancel()
+	closeUnixDaemon(srv)
 	_ = lazy.Close()
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+// quiescentUnixDaemon waits briefly for in-flight requests to finish so a
+// retirement never cuts a response mid-write.
+func quiescentUnixDaemon(inFlight *atomic.Int64) bool {
+	deadline := time.Now().Add(shutdownDeadline)
+	for inFlight.Load() > 0 {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
+}
+
+// closeUnixDaemon stops the server after a retirement trigger closed the
+// listener. A bounded graceful Shutdown flushes responses still being written,
+// and Close bounds the wait so a stuck connection cannot block exit.
+func closeUnixDaemon(srv *http.Server) {
+	shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), shutdownDeadline)
+	defer stopShutdown()
+	_ = srv.Shutdown(shutdownCtx)
+	_ = srv.Close()
 }
 
 func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *api.Memory, lazy *LazyMemory) {
@@ -820,12 +1454,17 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *api.Memory
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleUnixHydrate resolves display pointers to their canonical speech text: the same
-// `ResolveEpisodicPointerLive` resolver every product surface uses (turn segmentation,
-// conversation-noise stripping, segment/chunk addressing), with the sealed episodic
-// index as an identity check whenever the caller supplies a document id. Display
-// layers (Admin Console panels, layer browsers) therefore never re-implement
-// segmentation and can never drift from ingest.
+func episodicHydrateTurn(ref string) string {
+	ref = strings.TrimSpace(ref)
+	index := strings.LastIndex(ref, "#")
+	if index <= strings.LastIndex(ref, ":") {
+		return ""
+	}
+	return ref[:index]
+}
+
+// handleUnixHydrate resolves display pointers only after the sealed episodic index
+// verifies the document, pointer, and source content.
 func handleUnixHydrate(w http.ResponseWriter, r *http.Request, memory *api.Memory, lazy *LazyMemory) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHTTPBody))
 	if err != nil {
@@ -861,29 +1500,29 @@ func handleUnixHydrate(w http.ResponseWriter, r *http.Request, memory *api.Memor
 	if tc, tcErr := active.ThinClient(); tcErr == nil && tc != nil {
 		vault = tc.Vault
 	}
+	if vault == nil {
+		writeJSON(w, http.StatusServiceUnavailable, UnixHydrateResponse{OK: false, Error: "local vault unavailable"})
+		return
+	}
 	out := UnixHydrateResponse{OK: true, Texts: make([]UnixHydrateResult, 0, len(items))}
 	for _, item := range items {
 		ref := strings.TrimSpace(item.Ref)
-		res := UnixHydrateResult{DocID: item.DocID, Ref: ref}
+		docID := strings.TrimSpace(item.DocID)
+		res := UnixHydrateResult{DocID: docID, Ref: ref}
 		if ref == "" {
 			res.Error = "empty ref"
-			out.Texts = append(out.Texts, res)
-			continue
-		}
-		if vault != nil && strings.TrimSpace(item.DocID) != "" {
-			if text, vErr := vault.LoadVerifiedEpisodicPointer(item.DocID, ref); vErr == nil && strings.TrimSpace(text) != "" {
-				res.Text, res.Verified = text, true
-				out.Texts = append(out.Texts, res)
-				continue
-			}
-		}
-		text, rErr := thinclient.ResolveEpisodicPointerLive(ref)
-		if rErr != nil {
-			res.Error = rErr.Error()
+		} else if docID == "" {
+			res.Error = "doc_id required"
+		} else if vault.EpisodicPointerFor(docID) != ref {
+			res.Error = "document pointer mismatch"
+		} else if text, actualRef, vErr := vault.LoadVerifiedEpisodicPointerSource(docID, ref); vErr != nil {
+			res.Error = vErr.Error()
 		} else if strings.TrimSpace(text) == "" {
 			res.Error = "empty content"
+		} else if primaryTurn, actualTurn := episodicHydrateTurn(ref), episodicHydrateTurn(actualRef); primaryTurn == "" || actualTurn != primaryTurn {
+			res.Error = "source provenance unavailable"
 		} else {
-			res.Text = text
+			res.Text, res.ActualRef, res.Verified = text, actualRef, true
 		}
 		out.Texts = append(out.Texts, res)
 	}

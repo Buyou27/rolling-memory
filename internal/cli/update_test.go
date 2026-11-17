@@ -85,6 +85,8 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 	t.Setenv("HOME", tempHome)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tempHome, ".local", "share"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tempHome, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tempHome, ".local", "state"))
+	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", filepath.Join(tempHome, "absent.sock"))
 	installDir := filepath.Join(tempHome, ".local", "share", "rolling-memory", "bin")
 	linkDir := filepath.Join(tempHome, ".local", "bin")
 	mockApp := filepath.Join(tempHome, "Applications", "Rolling-Memory.app")
@@ -179,6 +181,9 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 	}
 	if updRes["updated"] != true {
 		t.Fatalf("expected updated=true, got %v", updRes)
+	}
+	if updRes["daemon_refreshed"] != false {
+		t.Fatalf("absent daemon must not be reported as refreshed: %v", updRes)
 	}
 	if got, _ := os.ReadFile(targetBin); !bytes.Equal(got, newCLIBin) {
 		t.Fatalf("binary was not updated: %q", string(got))

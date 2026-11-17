@@ -111,6 +111,46 @@ func TestStripConversationNoise(t *testing.T) {
 			body: "拍平形态含 `[thinking]`、`<thinking>…</thinking>` 与 \"<system-reminder>x</system-reminder>\"。",
 			want: "拍平形态含 `[thinking]`、`<thinking>…</thinking>` 与 \"<system-reminder>x</system-reminder>\"。",
 		},
+		{
+			name: "claude task notification envelope",
+			body: "<task-notification>\n<task-id>b4ot1q964</task-id>\n<output-file>/tmp/x</output-file>\n</task-notification>\n继续审计。",
+			want: "继续审计。",
+		},
+		{
+			name: "claude ide selection envelope",
+			body: "<ide_selection>The user selected the lines 106 to 111 from /Users/albert/app.go</ide_selection>看看这段",
+			want: "看看这段",
+		},
+		{
+			name: "claude ide opened file envelope",
+			body: "<ide_opened_file>The user opened the file /Users/albert/app.go in the IDE.</ide_opened_file>",
+			want: "",
+		},
+		{
+			name: "claude command envelopes",
+			body: "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>\n<local-command-stdout>Compacted</local-command-stdout>",
+			want: "",
+		},
+		{
+			name: "claude slash command with trailing user text",
+			body: "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>真正的问题",
+			want: "真正的问题",
+		},
+		{
+			name: "codex turn aborted envelope",
+			body: "<turn_aborted>\nThe user interrupted the previous turn.\n</turn_aborted>",
+			want: "",
+		},
+		{
+			name: "codex environment context envelope",
+			body: "<environment_context>\n  <cwd>/Users/albert</cwd>\n</environment_context>问题在这里",
+			want: "问题在这里",
+		},
+		{
+			name: "unpaired host envelope mention survives",
+			body: "查一下 <task-notification> 这个标签是谁写的。",
+			want: "查一下 <task-notification> 这个标签是谁写的。",
+		},
 	}
 	for _, tc := range cases {
 		if got := StripConversationNoise(tc.body); got != tc.want {

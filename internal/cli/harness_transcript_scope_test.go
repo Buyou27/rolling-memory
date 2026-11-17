@@ -12,9 +12,8 @@ import (
 	"time"
 )
 
-// seedUnimportableDSHStore writes DeepSeek Harness transcripts in the host layout
-// under a private DSH_HOME and returns the sessions root.
-func seedUnimportableDSHStore(t *testing.T, home string, mtime time.Time) string {
+// seedDSHStore writes DeepSeek Harness transcript paths under a private DSH_HOME.
+func seedDSHStore(t *testing.T, home string, mtime time.Time) string {
 	t.Helper()
 	dshHome := filepath.Join(home, "dsh-home")
 	t.Setenv("DSH_HOME", dshHome)
@@ -34,14 +33,9 @@ func seedUnimportableDSHStore(t *testing.T, home string, mtime time.Time) string
 	return sessions
 }
 
-// TestDiscoverEpisodicScanSourcesSkipsHostsWithoutATurnReader pins the scope of
-// the importer: a host whose transcripts this build cannot parse (DSH: zstd
-// frames) is counted in the console inventory but never enumerated here, because
-// reading them would hold the shared scan cursor on files that keep growing and
-// starve the hosts that do import. Hosts with a turn reader are untouched.
-func TestDiscoverEpisodicScanSourcesSkipsHostsWithoutATurnReader(t *testing.T) {
+func TestDiscoverEpisodicScanSourcesIncludesDSH(t *testing.T) {
 	home := t.TempDir()
-	seedUnimportableDSHStore(t, home, time.Now())
+	seedDSHStore(t, home, time.Now())
 	claudePath := filepath.Join(home, ".claude", "projects", "demo", "s1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(claudePath), 0o755); err != nil {
 		t.Fatalf("mkdir claude: %v", err)
@@ -54,8 +48,8 @@ func TestDiscoverEpisodicScanSourcesSkipsHostsWithoutATurnReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover dsh: %v", err)
 	}
-	if len(dshSources) != 0 {
-		t.Fatalf("dsh scan sources = %d, want 0 while no turn reader exists: %+v", len(dshSources), dshSources)
+	if len(dshSources) != 2 {
+		t.Fatalf("dsh scan sources = %d, want 2: %+v", len(dshSources), dshSources)
 	}
 	claudeSources, err := discoverEpisodicScanSources(context.Background(), home, "claude-code")
 	if err != nil {
@@ -66,36 +60,25 @@ func TestDiscoverEpisodicScanSourcesSkipsHostsWithoutATurnReader(t *testing.T) {
 	}
 }
 
-// TestHarnessTranscriptPatternsOnlyCoverImportableHosts keeps the change detector
-// aligned with the importer: a host that cannot be imported must not keep the
-// auto-sync gate dirty with its own writes.
-func TestHarnessTranscriptPatternsOnlyCoverImportableHosts(t *testing.T) {
+func TestHarnessTranscriptPatternsCoverImportableHosts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DSH_HOME", filepath.Join(home, "dsh-home"))
 	patterns := harnessTranscriptPatterns(home)
 	if len(patterns) == 0 {
 		t.Fatal("transcript patterns are empty")
 	}
-	for _, pattern := range patterns {
-		if strings.Contains(pattern, ".dsh") {
-			t.Fatalf("non-importable host leaked into the change detector: %q", pattern)
-		}
-	}
 	joined := strings.Join(patterns, "\n")
-	for _, want := range []string{".claude", ".codex", ".zcode"} {
+	for _, want := range []string{".claude", ".codex", ".zcode", "dsh-home"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("importable host missing from the change detector: %s", want)
 		}
 	}
 }
 
-// TestLatestHarnessTranscriptMTimeIgnoresUnimportableTranscipts locks the same
-// boundary at the mtime level: appending to a DSH transcript cannot arm a
-// reconcile pass that has nothing to import.
-func TestLatestHarnessTranscriptMTimeIgnoresUnimportableTranscipts(t *testing.T) {
+func TestLatestHarnessTranscriptMTimeIncludesDSH(t *testing.T) {
 	home := t.TempDir()
 	base := time.Unix(1700000000, 0)
-	sessions := seedUnimportableDSHStore(t, home, base)
+	sessions := seedDSHStore(t, home, base)
 	_ = os.Chtimes(sessions, base, base)
 	before := latestHarnessTranscriptMTime(home)
 	target := filepath.Join(sessions, "--demo-repo--", "session-aaa", "session.v4.jsonl.zstd")
@@ -103,7 +86,7 @@ func TestLatestHarnessTranscriptMTimeIgnoresUnimportableTranscipts(t *testing.T)
 	if err := os.Chtimes(target, newer, newer); err != nil {
 		t.Fatalf("chtimes dsh transcript: %v", err)
 	}
-	if after := latestHarnessTranscriptMTime(home); after != before {
-		t.Fatalf("latest transcript mtime moved with an unimportable store: %d -> %d", before, after)
+	if after := latestHarnessTranscriptMTime(home); after <= before || after != newer.Unix() {
+		t.Fatalf("latest transcript mtime did not track DSH: %d -> %d", before, after)
 	}
 }

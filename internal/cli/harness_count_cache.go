@@ -7,11 +7,9 @@ package cli
 //
 // `sync status` used to rescan every harness transcript (five harnesses, up to 2000
 // turns each, JSON-decoding tens of thousands of rows) on every call, and a reconcile
-// pass did it twice more. The counts only change when the harness store changes or
-// when the local vault grows, so they are memoised in `thin_vault_meta` under a
-// fingerprint of both. A cache hit costs one small row read instead of a full scan;
-// any doubt (missing store, unreadable cache, fingerprint drift) falls back to the
-// scan, so a stale cache can never be reported as truth.
+// pass did it twice more. Counts are memoised in `thin_vault_meta` with a store
+// fingerprint and vault count. A cache hit can be stale within the TTL; the vault
+// count cannot detect replacement of one unit by another at the same total.
 
 import (
 	"database/sql"
@@ -26,17 +24,15 @@ import (
 
 const (
 	harnessCountCachePrefix = "harness_count_cache:"
-	// harnessCountCacheTTL bounds how stale a memoised count may be. A live harness
-	// store rewrites its WAL every second, so a fingerprint-only cache can never hit
-	// while the user is working; the TTL is what makes a repeated `sync status` (a
-	// panel poll, a second command in the same minute) cheap. Counts change only when
-	// a turn is finished, so one minute of staleness is far below the noise floor of
-	// a "backlog size" reading, and any local import still invalidates it at once
-	// through the vault-unit component of the key.
+	// Version 2 excludes rows whose counts may have been inferred from global growth.
+	harnessCountCacheVersion = 2
+	// The TTL avoids rescanning active stores on every status poll. A vault count
+	// change invalidates the cache because the changed units have no harness identity.
 	harnessCountCacheTTL = 300
 )
 
 type harnessCountCache struct {
+	Version      int   `json:"version"`
 	Fingerprint  int64 `json:"fp"`
 	VaultUnits   int   `json:"vault"`
 	ComputedAt   int64 `json:"computed_at"`
@@ -91,7 +87,7 @@ func loadHarnessCountCache(db *sql.DB, harnessID, home string, vaultUnits int) (
 		return harnessCountCache{}, false
 	}
 	var cached harnessCountCache
-	if err := json.Unmarshal(raw, &cached); err != nil {
+	if err := json.Unmarshal(raw, &cached); err != nil || cached.Version != harnessCountCacheVersion {
 		return harnessCountCache{}, false
 	}
 	// The scan classifies every turn it returns as synced or unsynced, so the cached
@@ -100,26 +96,10 @@ func loadHarnessCountCache(db *sql.DB, harnessID, home string, vaultUnits int) (
 	if cached.LocalTurns != cached.Synced+cached.Unsynced {
 		return harnessCountCache{}, false
 	}
-	withinTTL := time.Now().Unix()-cached.ComputedAt < harnessCountCacheTTL
 	if cached.VaultUnits != vaultUnits {
-		// Within the TTL window, if the local episodic vault grew by at most the
-		// previously unsynced backlog (e.g. background auto-sync or an explicit
-		// reconcile imported pending turns), fold the delta in place instead of
-		// rescanning the multi-GB harness WAL. Any shrink or growth beyond the
-		// known backlog falls through to a full scan.
-		if withinTTL && vaultUnits > cached.VaultUnits && vaultUnits-cached.VaultUnits <= cached.Unsynced {
-			delta := vaultUnits - cached.VaultUnits
-			cached.Synced += delta
-			cached.Unsynced -= delta
-			cached.VaultUnits = vaultUnits
-			if rawUpdated, mErr := json.Marshal(cached); mErr == nil {
-				_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
-					harnessCountCachePrefix+harnessID, []byte(strings.TrimSpace(string(rawUpdated))))
-			}
-			return cached, true
-		}
 		return harnessCountCache{}, false
 	}
+	withinTTL := time.Now().Unix()-cached.ComputedAt < harnessCountCacheTTL
 	if withinTTL {
 		return cached, true
 	}
@@ -139,7 +119,7 @@ func storeHarnessCountCache(db *sql.DB, harnessID, home string, vaultUnits, sess
 		return
 	}
 	raw, err := json.Marshal(harnessCountCache{
-		Fingerprint: fingerprint, VaultUnits: vaultUnits, ComputedAt: time.Now().Unix(),
+		Version: harnessCountCacheVersion, Fingerprint: fingerprint, VaultUnits: vaultUnits, ComputedAt: time.Now().Unix(),
 		Sessions: sessions, LocalTurns: localTurns, Synced: synced, Unsynced: unsynced, LastActiveAt: lastActiveAt,
 	})
 	if err != nil {

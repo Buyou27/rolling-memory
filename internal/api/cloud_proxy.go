@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -409,11 +410,18 @@ func (m *Memory) rememberImportedTracesToVault(scope string, session *string) er
 		if text == "" {
 			continue
 		}
-		occurred := tr.OccurredAt
-		if occurred == 0 {
-			occurred = tr.RecordedAt
+		var meta struct {
+			Source string `json:"source"`
+			Locus  string `json:"locus"`
 		}
-		if _, err := tc.RememberEpisodic(context.Background(), "ep_"+tr.Hash, text, occurred); err != nil {
+		locus := ""
+		if json.Unmarshal([]byte(tr.MetaJSON), &meta) == nil && (meta.Source == "stop_payload" || meta.Source == "user_prompt_submit") {
+			locus = strings.TrimSpace(meta.Locus)
+		}
+		// File imports and hook traces do not establish the current process persona.
+		// Hook-captured locus is retained only when it was recorded with that trace.
+		tc.SetIdentity("", "", locus)
+		if _, err := tc.RememberEpisodic(context.Background(), "ep_"+tr.Hash, text, tr.OccurredAt); err != nil {
 			return err
 		}
 	}
@@ -948,40 +956,46 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 	groupOrder := make([]string, 0, len(hits))
 	groups := make(map[string]*episodicTurnGroup, len(hits))
 	standalone := make([]thinclient.LocalResolvedHit, 0, len(hits))
-	for _, h := range hits {
-		if h.SourceUnavailable {
-			sourceUnavailable[h.UnitID] = true
-			continue
-		}
+	for i := range hits {
+		h := &hits[i]
 		pointer := ""
 		if tc.Vault != nil {
 			pointer = tc.Vault.EpisodicPointerFor(h.UnitID)
 		}
 		if pointer == "" {
-			standalone = append(standalone, h)
+			if h.SourceUnavailable {
+				sourceUnavailable[h.UnitID] = true
+			} else {
+				standalone = append(standalone, *h)
+			}
 			continue
 		}
-		if strings.HasPrefix(strings.TrimSpace(h.RawPlaintext), "@ref:") {
-			sourceUnavailable[h.UnitID] = true
-		}
-		ref, segmentIndex := splitTurnRefSegment(pointer)
-		if ref == strings.TrimSpace(pointer) {
-			// A whole-turn pointer cannot prove authority over its constituent segments.
+		resolved, actualRef, verifyErr := tc.Vault.LoadVerifiedEpisodicPointerSource(h.UnitID, pointer)
+		primaryTurn, _ := splitTurnRefSegment(pointer)
+		ref, segmentIndex := splitTurnRefSegment(actualRef)
+		// A different segment in the same turn shares the primary's provenance.
+		// Another turn has no authenticated audience or source-specific metadata.
+		if verifyErr != nil || primaryTurn == strings.TrimSpace(pointer) || ref == strings.TrimSpace(actualRef) || ref != primaryTurn || strings.TrimSpace(resolved) == "" || strings.HasPrefix(strings.TrimSpace(resolved), "@ref:") {
+			h.SourceUnavailable = true
 			sourceUnavailable[h.UnitID] = true
 			continue
 		}
+		h.SourceUnavailable = false
+		h.RawPlaintext = resolved
+		h.DistilledPlaintext = resolved
+		h.Authors = thinclient.RoleTaggedAuthors(resolved)
 		group := groups[ref]
 		if group == nil {
-			group = &episodicTurnGroup{ref: ref, rawPointer: pointer, hitIndex: segmentIndex, score: h.FinalWeight, unitID: h.UnitID, authors: h.Authors}
+			group = &episodicTurnGroup{ref: ref, rawPointer: actualRef, hitIndex: segmentIndex, score: h.FinalWeight, unitID: h.UnitID, authors: h.Authors}
 			groups[ref] = group
 			groupOrder = append(groupOrder, ref)
 		}
 		group.hits = append(group.hits, map[string]any{
-			"unit": h.UnitID, "pointer": pointer, "segment": segmentIndex, "verified": h.RawPlaintext,
+			"unit": h.UnitID, "pointer": actualRef, "segment": segmentIndex, "verified": resolved,
 		})
 		if h.FinalWeight > group.score {
 			group.score = h.FinalWeight
-			group.rawPointer = pointer
+			group.rawPointer = actualRef
 			group.hitIndex = segmentIndex
 			group.unitID = h.UnitID
 			group.authors = h.Authors
@@ -1021,7 +1035,7 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 	for _, ref := range groupOrder {
 		group := groups[ref]
 		// Lineage establishes association, not authorization to deliver another hit:
-		// only segments actually matched by retrieval and verified via LoadVerifiedEpisodicPointer are delivered.
+		// only segments matched by retrieval and verified against their source are delivered.
 		sort.SliceStable(group.hits, func(i, j int) bool {
 			left := group.hits[i]["segment"].(int)
 			right := group.hits[j]["segment"].(int)
@@ -1036,14 +1050,6 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		for _, hit := range group.hits {
 			unit := hit["unit"].(string)
 			resolved, _ := hit["verified"].(string)
-			if strings.TrimSpace(resolved) == "" || strings.HasPrefix(strings.TrimSpace(resolved), "@ref:") {
-				var verifyErr error
-				resolved, verifyErr = tc.Vault.LoadVerifiedEpisodicPointer(unit, hit["pointer"].(string))
-				if verifyErr != nil {
-					sourceUnavailable[unit] = true
-					continue
-				}
-			}
 			if ts := timeByDoc[unit]; ts > turnOccurredAt {
 				turnOccurredAt = ts
 			}

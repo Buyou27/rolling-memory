@@ -939,13 +939,13 @@ func TestSpatialCoordinatesAndCompositeFreeBlocks(t *testing.T) {
 		Author:     "Alice",
 		OccurredAt: 1700000100,
 		FileURL:    "file:///docs/architecture.md",
-		BlockID:    "sec-wave-cell",
+		BlockID:    "sec-overview",
 		LineStart:  10,
 		LineEnd:    42,
 	}
 	pkt, _ := enc.PackBlindPacketWithMeta("doc-spatial", "Wave cell resonance.", meta)
 	wantDocH := enc.KeyedHash64("file:///docs/architecture.md")
-	wantBlkH := enc.KeyedHash64("sec-wave-cell")
+	wantBlkH := enc.KeyedHash64("sec-overview")
 	if pkt.DocHash != wantDocH || pkt.BlockHash != wantBlkH || pkt.LineStart != 10 || pkt.LineEnd != 42 {
 		t.Fatalf("PackBlindPacketWithMeta spatial mismatch: got doc_h=%d block_h=%d lines=%d..%d, want doc_h=%d block_h=%d",
 			pkt.DocHash, pkt.BlockHash, pkt.LineStart, pkt.LineEnd, wantDocH, wantBlkH)

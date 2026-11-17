@@ -28,6 +28,10 @@ import rawBackgroundVsGrepZh from './content/docs/zh-CN/background-vs-grep.md?ra
 import rawBackgroundVsGrepEn from './content/docs/background-vs-grep.md?raw'
 import rawUsbPortableZh from './content/docs/zh-CN/usb-portable.md?raw'
 import rawUsbPortableEn from './content/docs/usb-portable.md?raw'
+import rawEssaySimilarityZh from './content/docs/zh-CN/essays/memory-retrieval-is-not-similarity-search.md?raw'
+import rawEssaySimilarityEn from './content/docs/essays/memory-retrieval-is-not-similarity-search.md?raw'
+import rawEssayBridgingZh from './content/docs/zh-CN/essays/semantic-bridging-creates-no-new-information.md?raw'
+import rawEssayBridgingEn from './content/docs/essays/semantic-bridging-creates-no-new-information.md?raw'
 
 /** 帮助中心文档图片资源：content/docs/assets/ 下的图片经 Vite 打包为本地 URL，离线可显。 */
 const docAssets = import.meta.glob('./content/docs/assets/*', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
@@ -516,5 +520,71 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
         ],
         rawZh: rawUsbPortableZh,
         rawEn: rawUsbPortableEn,
+    },
+    {
+        id: 'docs-essay-memory-retrieval',
+        scope: 'docs',
+        repoFullName: 'rocareer/rolling-memory',
+        path: 'docs/essays/memory-retrieval-is-not-similarity-search.md',
+        icon: 'lucide-lightbulb',
+        category: 'overview',
+        badgeZh: '理念随笔',
+        badgeEn: 'Essay',
+        url: `${MAIN_REPO_URL}/blob/main/docs/essays/memory-retrieval-is-not-similarity-search.md`,
+        shortTitleZh: '记忆检索不是相似度检索',
+        shortTitleEn: 'Memory Retrieval Is Not Similarity Search',
+        titleZh: 'docs/zh-CN/essays/memory-retrieval-is-not-similarity-search.md · 记忆检索不是相似度检索（理念随笔）',
+        titleEn: 'docs/essays/memory-retrieval-is-not-similarity-search.md · Memory Retrieval Is Not Similarity Search (Essay)',
+        summaryZh:
+            '为什么相似度不该做记忆检索的主键：提问与答案的不对称、复读对相似度的膨胀效应、记忆问题的事件结构，以及把某个具体的模型版本嵌进记忆格式的长期代价——以及按判别力排序的替代路线。',
+        summaryEn:
+            'Why similarity should not be the primary key of memory retrieval: the asymmetry of questions and answers, repetition inflation, the event structure of memory questions, and the long-term cost of embedding a model version into the memory format — plus the alternative of ranking by discriminating power.',
+        sectionsZh: [
+            '从“切块—嵌入—余弦排序”的默认管线讲起：它为什么答不对那类最重要的问题',
+            '对称的相似度 vs. 不对称的问答：回声记录为何天然压倒携带新答案的解释记录',
+            '记忆的问题是事件问题：时间、主体、变化应当长在索引里，而不是事后撒在距离上',
+            '替代路线：按判别力（语料自信息 × 跨形式确定性对齐）排序——可质问、可复核、不绑定模型版本',
+        ],
+        sectionsEn: [
+            'Starting from the chunk-embed-cosine default pipeline: why it misses the questions that matter most',
+            'Symmetric similarity vs. asymmetric questions and answers: why echoing records naturally beat the record carrying the new answer',
+            'Memory questions are event questions: time, actors, and change belong in the index, not sprinkled on top of a distance',
+            'The alternative: ranking by discriminating power (corpus self-information × deterministic cross-form alignment) — interrogable, re-checkable, tied to no model version',
+        ],
+        rawZh: rawEssaySimilarityZh,
+        rawEn: rawEssaySimilarityEn,
+    },
+    {
+        id: 'docs-essay-semantic-bridging',
+        scope: 'docs',
+        repoFullName: 'rocareer/rolling-memory',
+        path: 'docs/essays/semantic-bridging-creates-no-new-information.md',
+        icon: 'lucide-book-open',
+        category: 'overview',
+        badgeZh: '理念随笔',
+        badgeEn: 'Essay',
+        url: `${MAIN_REPO_URL}/blob/main/docs/essays/semantic-bridging-creates-no-new-information.md`,
+        shortTitleZh: '语义搭桥不产生新信息',
+        shortTitleEn: 'Semantic Bridging Creates No New Information',
+        titleZh: 'docs/zh-CN/essays/semantic-bridging-creates-no-new-information.md · 语义搭桥不产生新信息（理念随笔）',
+        titleEn: 'docs/essays/semantic-bridging-creates-no-new-information.md · Semantic Bridging Creates No New Information (Essay)',
+        summaryZh:
+            '图谱、摘要与指代消解都在做同一件事——语义搭桥；桥不产生新信息，理解该发生在读取那一刻：数据处理不等式、预消化悖论，以及“摘要和原文从来不是两个证人”。',
+        summaryEn:
+            'Graphs, summaries, and coreference resolution all do one thing — semantic bridging; a bridge creates no new information, and comprehension belongs to the moment the question arrives: the data processing inequality, the pre-digestion paradox, and why a summary and its original are not two witnesses.',
+        sectionsZh: [
+            '什么算搭桥：嵌入、摘要、图谱、指代消解——把同一件事的不同说法拉近',
+            '信息学上桥不生产信息：数据处理不等式、投影只换坐标系、私人指称不在任何模型的世界知识里',
+            '指代消解是最好的例子：消解等于读上下文；查询里的指代由握有当前会话的宿主解决',
+            '预消化悖论：写在前面为未知问题预付理解成本，写在读取那一刻只付一次——含“派生不增加独立证据”',
+        ],
+        sectionsEn: [
+            'What counts as a bridge: embeddings, summaries, graphs, coreference — pulling different statements of the same thing closer together',
+            'In information terms a bridge produces nothing: the data processing inequality, projections that change coordinates but not content, and private referents that no pretrained model knows',
+            'Coreference is the best example: resolution equals reading context; references in queries are resolved by the host holding the current session',
+            'The pre-digestion paradox: paying comprehension early for unknown questions vs. paying once at read time — with derived explanations adding no independent evidence',
+        ],
+        rawZh: rawEssayBridgingZh,
+        rawEn: rawEssayBridgingEn,
     },
 ]

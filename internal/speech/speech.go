@@ -26,12 +26,28 @@ import (
 
 // injectedTags are the harness context envelopes stripped from speech. Each one is
 // only removed as a complete "<tag …>…</tag>" pair, so a quoted mention survives.
+// The host envelope set was verified against live Claude Code and Codex
+// transcripts, where every listed tag was observed as a complete pair in
+// user-role rows: task-notification / ide_selection / ide_opened_file /
+// command-name / local-command-stdout (Claude Code) and turn_aborted /
+// environment_context (Codex). Tags stay in this list only while they carry
+// that evidence; add new ones together with the transcript sample that shows
+// them, and never strip an unpaired occurrence (it may be quoted speech).
 var injectedTags = []string{
 	"rolling-memory-recall",
 	"rolling-memory-boot",
 	"system-reminder",
 	"untrusted_gen_ui_state",
 	"thinking",
+	"task-notification",
+	"ide_selection",
+	"ide_opened_file",
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"turn_aborted",
+	"environment_context",
 }
 
 var recallTagPrefixRE = regexp.MustCompile(`(?i)^[a-z0-9][a-z0-9-]*-recall`)

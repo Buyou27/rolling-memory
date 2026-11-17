@@ -1003,6 +1003,16 @@ CREATE TABLE IF NOT EXISTS thin_vault_episodic_lineage (
 	PRIMARY KEY (turn_ref, doc_id)
 );
 CREATE INDEX IF NOT EXISTS idx_thin_vault_episodic_lineage_doc ON thin_vault_episodic_lineage(doc_id);
+CREATE TABLE IF NOT EXISTS thin_vault_episodic_sources (
+	turn_ref TEXT NOT NULL,
+	doc_id TEXT NOT NULL,
+	ref_pointer TEXT NOT NULL,
+	content_digest BLOB NOT NULL,
+	source_mac BLOB NOT NULL,
+	PRIMARY KEY (turn_ref, doc_id, ref_pointer)
+);
+CREATE INDEX IF NOT EXISTS idx_thin_vault_episodic_sources_doc ON thin_vault_episodic_sources(doc_id);
+CREATE TRIGGER IF NOT EXISTS thin_episodic_sources_delete AFTER DELETE ON thin_vault_docs BEGIN DELETE FROM thin_vault_episodic_sources WHERE doc_id = OLD.doc_id; END;
 CREATE TABLE IF NOT EXISTS thin_vault_deleted_units (
 	unit_id TEXT PRIMARY KEY,
 	layer TEXT NOT NULL DEFAULT '',
@@ -1114,8 +1124,10 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_docs', 'thin_vault_noetic', 'thin_vault_docs_fts')`).Scan(&readyCnt)
 			if readyCnt == 3 {
 				var hasLineage int
-				if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_episodic_lineage', 'thin_vault_deleted_units')`).Scan(&hasLineage); err != nil || hasLineage < 2 {
-					_, _ = db.Exec(episodicLineageDDL)
+				if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name IN ('thin_vault_episodic_lineage', 'thin_vault_episodic_sources', 'thin_vault_deleted_units')) OR (type = 'trigger' AND name = 'thin_episodic_sources_delete')`).Scan(&hasLineage); err != nil || hasLineage < 4 {
+					if _, err := db.Exec(episodicLineageDDL); err != nil {
+						return nil, err
+					}
 				}
 				if err := initEpisodicIndex(db); err != nil {
 					return nil, err
@@ -1415,14 +1427,24 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 	if layer != "background" && layer != "noetic" {
 		layer = "episodic"
 	}
-	_, err = v.db.Exec(`
+	tx, err := v.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if layer == LayerEpisodic {
+		if err := checkEpisodicTombstone(tx, docID); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(`
 			INSERT INTO thin_vault_docs(
 				doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json,
 				assistant_id, incarnation_id, locus
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(doc_id) DO UPDATE SET
 				layer = excluded.layer,
-				occurred_at = excluded.occurred_at,
+				occurred_at = CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END,
 				inserted_at = CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END,
 				raw_text = excluded.raw_text,
 				sentences_json = excluded.sentences_json,
@@ -1434,11 +1456,22 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 				assistant_id = excluded.assistant_id,
 				incarnation_id = excluded.incarnation_id,
 				locus = excluded.locus`,
-		docID, layer, occurredAt, occurredAt, rawText, string(sentsJSON),
+		docID, layer, occurredAt, time.Now().Unix(), rawText, string(sentsJSON),
 		resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON),
 		v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus,
 	)
-	if err == nil && v.slotCacheMu != nil {
+	if err != nil {
+		return err
+	}
+	if v.hasFTS5 {
+		if ftsErr := ftsReplaceRow(tx, docID, rawText); ftsErr != nil {
+			return fmt.Errorf("thinclient: FTS mirror write for %s: %w", docID, ftsErr)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if v.slotCacheMu != nil {
 		v.slotCacheMu.Lock()
 		delete(v.slotCache, docID)
 		if v.snapRef != nil {
@@ -1446,16 +1479,6 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 		}
 		v.slotCacheMu.Unlock()
 		v.scheduleSnapshotRefresh()
-	}
-	if err != nil {
-		return err
-	}
-	if v.hasFTS5 {
-		// The FTS mirror is the recall candidate leg; a silent failure would leave the
-		// unit permanently unfindable, so the write is reported and retried by callers.
-		if ftsErr := ftsReplaceRow(v.db, docID, rawText); ftsErr != nil {
-			return fmt.Errorf("thinclient: FTS mirror write for %s: %w", docID, ftsErr)
-		}
 	}
 	return nil
 }
@@ -1470,14 +1493,22 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 	if err != nil {
 		return err
 	}
-	_, err = v.db.Exec(`
+	tx, err := v.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := checkEpisodicTombstone(tx, docID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
 			INSERT INTO thin_vault_docs(
 				doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json,
 				assistant_id, incarnation_id, locus
 			) VALUES (?, 'episodic', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(doc_id) DO UPDATE SET
 				layer = excluded.layer,
-				occurred_at = excluded.occurred_at,
+				occurred_at = CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END,
 				inserted_at = CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END,
 				raw_text = excluded.raw_text,
 				sentences_json = excluded.sentences_json,
@@ -1489,11 +1520,27 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 				assistant_id = excluded.assistant_id,
 				incarnation_id = excluded.incarnation_id,
 				locus = excluded.locus`,
-		docID, occurredAt, occurredAt, strings.TrimSpace(refPointer),
+		docID, occurredAt, time.Now().Unix(), strings.TrimSpace(refPointer),
 		resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON),
 		v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus,
 	)
-	if err == nil && v.slotCacheMu != nil {
+	if err != nil {
+		return err
+	}
+	if v.hasFTS5 {
+		if ftsErr := ftsDeleteRow(tx, docID); ftsErr != nil {
+			return fmt.Errorf("thinclient: FTS mirror delete for %s: %w", docID, ftsErr)
+		}
+	}
+	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if v.slotCacheMu != nil {
 		v.slotCacheMu.Lock()
 		delete(v.slotCache, docID)
 		if v.snapRef != nil {
@@ -1502,15 +1549,6 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 		v.slotCacheMu.Unlock()
 		v.scheduleSnapshotRefresh()
 	}
-	if err != nil {
-		return err
-	}
-	if v.hasFTS5 {
-		if ftsErr := ftsDeleteRow(v.db, docID); ftsErr != nil {
-			return fmt.Errorf("thinclient: FTS mirror delete for %s: %w", docID, ftsErr)
-		}
-	}
-	_ = v.RecordEpisodicLineage(turnRef, docID, occurredAt)
 	return nil
 }
 
@@ -1525,11 +1563,18 @@ func (v *Vault) RecordEpisodicLineage(turnRef, docID string, occurredAt int64) e
 	if turnRef == "" || docID == "" {
 		return nil
 	}
-	_, err := v.db.Exec(
-		`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`,
-		turnRef, docID, occurredAt,
-	)
-	return err
+	tx, err := v.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := checkEpisodicTombstone(tx, docID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) SELECT ?, doc_id, ? FROM thin_vault_docs WHERE doc_id = ?`, turnRef, occurredAt, docID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LoadLocalDocumentLayer retrieves the stored cognitive layer ("background" | "episodic" | "noetic") for docID.
@@ -1839,13 +1884,6 @@ func (v *Vault) LoadLocalDocument(docID string) (rawText string, distilledText s
 	if strings.HasPrefix(strings.TrimSpace(rawText), "@ref:") && !inlineEvidence {
 		liveText, rErr := v.LoadVerifiedEpisodicPointer(docID, strings.TrimSpace(rawText))
 		if rErr != nil {
-			if v.slotCacheMu != nil && v.CorpusSize() >= 2048 {
-				v.slotCacheMu.Lock()
-				if v.slotCache != nil {
-					v.slotCache["@unavail_doc:"+docID] = vaultCachedDocSlots{docLen: -1}
-				}
-				v.slotCacheMu.Unlock()
-			}
 			return "", "", nil, rErr
 		}
 		rawText = liveText
@@ -1917,7 +1955,7 @@ func LoadEpisodicTurnSegments(turnRef string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		segments, err := episodic.ZCodeTurnSegments(zdb, parts[0], parts[1])
+		segments, _, err := episodic.ZCodeTurnSegmentsUpTo(zdb, parts[0], parts[1], int(^uint(0)>>1))
 		if err != nil {
 			return nil, err
 		}
@@ -2036,66 +2074,20 @@ func episodicSegmentChunk(rendered string, segmentIndex, chunkIndex int, hasChun
 	return chunks[chunkIndex], nil
 }
 
-type zcodeTurnCacheItem struct {
-	segs     []episodic.Segment
-	complete bool
-}
-
-var (
-	zcodeTurnSegsMu       sync.RWMutex
-	zcodeTurnResolveLocks [32]sync.Mutex
-	zcodeTurnSegsCache    = make(map[string]zcodeTurnCacheItem, 128)
-)
-
 // resolveZCodeSegmentLive hydrates one speech segment (or one chunk of it) of a ZCode turn.
 func resolveZCodeSegmentLive(sessionID, userMsgID string, segmentIndex, chunkIndex int, hasChunk bool) (string, error) {
-	home, _ := os.UserHomeDir()
-	turnKey := home + "\x00" + sessionID + "\x00" + userMsgID
-	zcodeTurnSegsMu.RLock()
-	item, cached := zcodeTurnSegsCache[turnKey]
-	zcodeTurnSegsMu.RUnlock()
-	if !cached || (segmentIndex >= len(item.segs) && !item.complete) {
-		var h uint32 = 2166136261
-		for i := 0; i < len(turnKey); i++ {
-			h = (h ^ uint32(turnKey[i])) * 16777619
-		}
-		lock := &zcodeTurnResolveLocks[h&31]
-		lock.Lock()
-		zcodeTurnSegsMu.RLock()
-		item, cached = zcodeTurnSegsCache[turnKey]
-		zcodeTurnSegsMu.RUnlock()
-		if !cached || (segmentIndex >= len(item.segs) && !item.complete) {
-			zdb, err := openZCodeReadOnly()
-			if err != nil {
-				lock.Unlock()
-				return "", err
-			}
-			segs, complete, err := episodic.ZCodeTurnSegmentsUpTo(zdb, sessionID, userMsgID, segmentIndex+1)
-			if err != nil {
-				lock.Unlock()
-				return "", err
-			}
-			if len(segs) > 0 {
-				item = zcodeTurnCacheItem{segs: segs, complete: complete}
-				zcodeTurnSegsMu.Lock()
-				if len(zcodeTurnSegsCache) >= 8192 {
-					for k := range zcodeTurnSegsCache {
-						delete(zcodeTurnSegsCache, k)
-						if len(zcodeTurnSegsCache) <= 6144 {
-							break
-						}
-					}
-				}
-				zcodeTurnSegsCache[turnKey] = item
-				zcodeTurnSegsMu.Unlock()
-			}
-		}
-		lock.Unlock()
+	zdb, err := openZCodeReadOnly()
+	if err != nil {
+		return "", err
 	}
-	if segmentIndex >= len(item.segs) {
+	segments, _, err := episodic.ZCodeTurnSegmentsUpTo(zdb, sessionID, userMsgID, segmentIndex+1)
+	if err != nil {
+		return "", err
+	}
+	if segmentIndex >= len(segments) {
 		return "", fmt.Errorf("thinclient: segment %d out of range for %s", segmentIndex, userMsgID)
 	}
-	rendered := "[" + item.segs[segmentIndex].Role + "] " + item.segs[segmentIndex].Text
+	rendered := episodicunit.Text(segments[segmentIndex].Role, segments[segmentIndex].Text)
 	return episodicSegmentChunk(rendered, segmentIndex, chunkIndex, hasChunk, userMsgID)
 }
 
@@ -2112,42 +2104,15 @@ func openZCodeReadOnly() (*sql.DB, error) {
 	return zcodeReadHandle(zdbPath)
 }
 
-var (
-	jsonlTurnSegsMu    sync.RWMutex
-	jsonlTurnSegsCache = make(map[string][]episodic.Segment, 128)
-)
-
 // resolveJSONLSegmentLive hydrates one speech segment (or one chunk of it) of a JSONL turn.
 func resolveJSONLSegmentLive(absPath, turnStr string, segmentIndex, chunkIndex int, hasChunk bool) (string, error) {
 	targetTurn, err := strconv.Atoi(strings.TrimSpace(turnStr))
 	if err != nil || targetTurn < 0 {
 		return "", fmt.Errorf("invalid turn index %q", turnStr)
 	}
-	var segments []episodic.Segment
-	if st, statErr := os.Stat(absPath); statErr == nil && st.Size() >= 65536 {
-		cacheKey := fmt.Sprintf("%s\x00%d\x00%d\x00%d", absPath, st.Size(), st.ModTime().UnixNano(), targetTurn)
-		jsonlTurnSegsMu.RLock()
-		cachedSegs, ok := jsonlTurnSegsCache[cacheKey]
-		jsonlTurnSegsMu.RUnlock()
-		if ok {
-			segments = cachedSegs
-		} else {
-			segments, err = episodic.JSONLTurnSegments(absPath, targetTurn)
-			if err != nil {
-				return "", err
-			}
-			jsonlTurnSegsMu.Lock()
-			if len(jsonlTurnSegsCache) >= 256 {
-				jsonlTurnSegsCache = make(map[string][]episodic.Segment, 128)
-			}
-			jsonlTurnSegsCache[cacheKey] = segments
-			jsonlTurnSegsMu.Unlock()
-		}
-	} else {
-		segments, err = episodic.JSONLTurnSegments(absPath, targetTurn)
-		if err != nil {
-			return "", err
-		}
+	segments, err := episodic.JSONLTurnSegments(absPath, targetTurn)
+	if err != nil {
+		return "", err
 	}
 	if segmentIndex >= len(segments) {
 		return "", fmt.Errorf("thinclient: segment %d out of range for %s", segmentIndex, absPath)
@@ -4262,8 +4227,8 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]CloudQuery
 			}
 			surp2 := surp * surp / 1024
 			g15 := vEffW * (surp * (1024 + surp/2) / 1024) / 32
-			g20 := vEffW * surp2 / 64
-			sGain := ((g15 + g20) / 2) * colloquialModPerm / 1000
+			gSurp2 := vEffW * surp2 / 64
+			sGain := ((g15 + gSurp2) / 2) * colloquialModPerm / 1000
 			if totalDocs >= 16 && docFreq > totalDocs/2 && (fl&(FlagHasDigit|FlagHasUpper|FlagHasCamel)) == 0 {
 				sGain /= 3
 			}
@@ -5065,41 +5030,45 @@ func windowsURIPath(path string) (string, bool) {
 // zcodeReadHandle caches one read-only handle on the ZCode session store.
 // Resolving a zero-copy pointer used to open (and close) a SQLite connection per
 // call: a multi-hundred-unit reconcile pass paid a schema read and a WAL index load
-// per pointer, which dominated the pass. The handle is read-only, single-connection
-// and short-lived when idle, so it never holds a read mark that would block the
-// host's checkpointing.
+// per pointer, which dominated the pass. The read-only handle is shared and has no
+// long-lived read transaction, so it does not hold a read mark between queries.
 var (
-	zcodeReadOnce sync.Once
+	zcodeReadMu   sync.Mutex
+	zcodeReadPath string
+	zcodeReadInfo os.FileInfo
 	zcodeReadDB   *sql.DB
-	zcodeReadErr  error
 )
 
 func zcodeReadHandle(path string) (*sql.DB, error) {
-	zcodeReadOnce.Do(func() {
-		// Paths carrying URI metacharacters must be percent-encoded; otherwise the
-		// driver silently parses the remainder as query or fragment and opens a
-		// different file. Windows drive paths take the percent-encoded form as well
-		// so the drive letter stays in the URI path instead of becoming the
-		// authority. Inlined (not ids.SQLiteFileURI) because the ultra-thin client
-		// must not import algorithm packages.
-		dsnPath := "file:" + path
-		if uriPath, ok := windowsURIPath(path); ok {
-			dsnPath = (&url.URL{Scheme: "file", Path: uriPath}).String()
-		} else if strings.ContainsAny(path, "?#") {
-			dsnPath = (&url.URL{Scheme: "file", Path: path}).String()
-		}
-		handle, err := sql.Open("sqlite", dsnPath+"?mode=ro&_pragma=busy_timeout(1500)&_pragma=cache_size(-32768)&_pragma=temp_store(MEMORY)")
-		if err != nil {
-			zcodeReadErr = err
-			return
-		}
-		handle.SetMaxOpenConns(2)
-		handle.SetMaxIdleConns(2)
-		handle.SetConnMaxIdleTime(0)
-		handle.SetConnMaxLifetime(0)
-		zcodeReadDB = handle
-	})
-	return zcodeReadDB, zcodeReadErr
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	zcodeReadMu.Lock()
+	defer zcodeReadMu.Unlock()
+	if zcodeReadDB != nil && zcodeReadPath == path && os.SameFile(zcodeReadInfo, info) {
+		return zcodeReadDB, nil
+	}
+	// Encode URI metacharacters and Windows drive paths before opening SQLite.
+	dsnPath := "file:" + path
+	if uriPath, ok := windowsURIPath(path); ok {
+		dsnPath = (&url.URL{Scheme: "file", Path: uriPath}).String()
+	} else if strings.ContainsAny(path, "?#") {
+		dsnPath = (&url.URL{Scheme: "file", Path: path}).String()
+	}
+	handle, err := sql.Open("sqlite", dsnPath+"?mode=ro&_pragma=busy_timeout(1500)&_pragma=cache_size(-32768)&_pragma=temp_store(MEMORY)")
+	if err != nil {
+		return nil, err
+	}
+	handle.SetMaxOpenConns(2)
+	handle.SetMaxIdleConns(2)
+	handle.SetConnMaxIdleTime(0)
+	handle.SetConnMaxLifetime(0)
+	if zcodeReadDB != nil {
+		_ = zcodeReadDB.Close()
+	}
+	zcodeReadPath, zcodeReadInfo, zcodeReadDB = path, info, handle
+	return handle, nil
 }
 
 func resolveZCodeTurnLive(sessionID, userMsgID string) (string, error) {

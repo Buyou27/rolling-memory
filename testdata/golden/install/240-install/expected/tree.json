@@ -6,20 +6,12 @@
     "<HOME>/.claude/CLAUDE.md.rolling-memory.<TS>.bak",
     "<HOME>/.claude/settings.json.rolling-memory.<TS>.bak",
     "<HOME>/.codebuddy/mcp.json.rolling-memory.<TS>.bak",
-    "<HOME>/.codex/AGENTS.md.rolling-memory.<TS>.bak",
-    "<HOME>/.codex/config.toml.rolling-memory.<TS>.bak",
-    "<HOME>/.codex/config.toml.rolling-memory.<TS>.bak",
-    "<HOME>/.dsh/AGENTS.md.rolling-memory.<TS>.bak",
-    "<HOME>/.dsh/profiles/web/cordis.patch.yml.rolling-memory.<TS>.bak",
-    "<HOME>/.dsh/profiles/web/cordis.patch.yml.rolling-memory.<TS>.bak",
-    "<HOME>/.zcode/cli/config.json.rolling-memory.<TS>.bak",
-    "<HOME>/.zcode/cli/config.json.rolling-memory.<TS>.bak",
     "<HOME>/.zcode/cli/config.json.rolling-memory.<TS>.bak",
     "<HOME>/.zcode/cli/config.json.rolling-memory.<TS>.bak"
   ],
   "files": [
     {
-      "content": "# Claude Code notes\n\nKeep answers short. Prefer `rg` over `grep`.\n",
+      "content": "# Claude Code notes\n\nKeep answers short. Prefer `rg` over `grep`.\n\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.claude/CLAUDE.md"
@@ -49,25 +41,25 @@
       "path": "<HOME>/.codebuddy/mcp.json"
     },
     {
-      "content": "",
+      "content": "<!-- rolling-memory:begin -->\n## Rolling-Memory (rolling-memory)\nYour persistent memory is connected via MCP `rolling-memory` (tool `recall` · 回忆).\n- At task start, understand intent; call `recall` with a specific `cue` for unclear cross-session context, architectural boundaries or historical decisions, or unknown entrypoints before a blind search. Skip recall for self-contained tasks with known coordinates and no historical coupling; call `recall` when stuck or facing an error before troubleshooting.\n- `absent: true` means you have no prior memory of it -- it is not an error; never invent memory content.\nDetails: the `rolling-memory` skill.\n<!-- rolling-memory:end -->\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.codex/AGENTS.md"
     },
     {
-      "content": "model = \"gpt-5\"\n",
+      "content": "model = \"gpt-5\"\n\n[mcp_servers.rolling-memory]\ncommand = \"/usr/local/bin/other-tool\"\nargs = [\"serve\"]\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.codex/config.toml"
     },
     {
-      "content": "{\n  \"default_lang\": \"en\",\n  \"lang\": \"en\",\n  \"updated_at\": \"2026-10-27T12:00:00Z\"\n}\n",
+      "content": "{\n  \"hooks\": {\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<CASE>/bin/rolling-memory hook recall --json\",\n            \"timeout\": 15\n          }\n        ]\n      }\n    ]\n  }\n}\n",
       "executable": false,
       "kind": "text",
-      "path": "<HOME>/.config/rolling-memory/ui-lang.json"
+      "path": "<HOME>/.codex/hooks.json"
     },
     {
-      "content": "",
+      "content": "<!-- rolling-memory:begin -->\n## Rolling-Memory (rolling-memory)\nYour persistent memory is connected via MCP `rolling-memory` (tool `recall` · 回忆).\n- At task start, understand intent; call `recall` with a specific `cue` for unclear cross-session context, architectural boundaries or historical decisions, or unknown entrypoints before a blind search. Skip recall for self-contained tasks with known coordinates and no historical coupling; call `recall` when stuck or facing an error before troubleshooting.\n- `absent: true` means you have no prior memory of it -- it is not an error; never invent memory content.\nDetails: the `rolling-memory` skill.\n<!-- rolling-memory:end -->\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.dsh/AGENTS.md"
@@ -85,7 +77,7 @@
       "path": "<HOME>/.zcode/AGENTS.md"
     },
     {
-      "content": "{\n  \"hooks\": {\n    \"enabled\": true,\n    \"events\": {}\n  },\n  \"mcp\": {\n    \"servers\": {\n      \"other-tool\": {\n        \"args\": [\n          \"serve\"\n        ],\n        \"command\": \"/usr/local/bin/other-tool\",\n        \"type\": \"stdio\"\n      }\n    }\n  }\n}\n",
+      "content": "{\n  \"hooks\": {\n    \"enabled\": false,\n    \"events\": {}\n  },\n  \"mcp\": {\n    \"servers\": {\n      \"other-tool\": {\n        \"args\": [\n          \"serve\"\n        ],\n        \"command\": \"/usr/local/bin/other-tool\",\n        \"type\": \"stdio\"\n      }\n    }\n  }\n}\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.zcode/cli/config.json"

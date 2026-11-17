@@ -6,7 +6,7 @@ Rolling Memory 的 MCP server 是一个 stdio 进程（`rolling-memory mcp`）�
 
 在 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 记忆模型下，Agent **完全不需要手动调用写记忆工具**：
 - **L1 `Background`（背景层）**：用户挂载的本地目录文件由客户端原位分块；挂载时全量建索引，之后按文件 mtime/size 与块级 SHA-256 增量核对（原文始终留在本地磁盘，本地索引）；同一物理文件只索引一次——重复导入同一目录、或父目录与其子目录同时挂载都不会重复入库（文件归属最深的挂载点）；移除挂载只会移除没有被其他挂载覆盖的文件索引，仍被其他挂载目录覆盖的文件保留索引与溯源。
-- **L2 `Episodic`（情景层）**：每轮对话在静默窗口后由后台自动落库（`rolling-memory mcp` 进程内置后台巡检；也可 `rolling-memory sync reconcile` 立即对齐）无损写入，**原始明文 100% 锁死在本机 SQLite 金库**并在本地建索引；
+- **L2 `Episodic`（情景层）**：后台巡检可从受支持的本地来源导入对话轮次；`rolling-memory sync reconcile` 可请求扫描。采集并不覆盖所有宿主和转录格式，详见[对话采集范围与手工导入](harness.md#45-对话采集范围与手工导入)。
 - **L3 `Noetic`（自知/巩固层）**：每一次执行 `recall`（回忆）命中真实单元时，自动将当前提问与被引证单元句柄实时固化为本地 `Noetic` 结晶（**回忆即记忆、回忆即巩固**）。
 
 ---
@@ -109,13 +109,13 @@ rolling-memory mcp        # 构建产物 bin/rolling-memory，或 install 生成
 
 ---
 
-## 4. 轻量生命周期 Hook（LLM 自主决策 + 插件核心自动收割）
+## 4. 轻量生命周期 Hook
 
 遵循「**不需要 LLM 决策的动作不设 Hook**」原则，系统仅挂载**唯一一个 `UserPromptSubmit` Hook**：
 
 | 事件 | 命令 | 行为 |
 |---|---|---|
-| `UserPromptSubmit` | `rolling-memory hook recall --json` | ① **不自动检索塞记忆**：仅注入 1 行极简强提示，提醒 Agent 在需要历史背景/入口/排障时**由 LLM 自主决定调用 `recall` 工具**；<br>② **插件核心自动收割 `Episodic`**：顺手在后台将上一轮已闭合的完整问答（跳过当前未回答的新提问）按内容寻址（`ep_<sha256>`）锁入本地金库为 L2 `episodic` |
+| `UserPromptSubmit` | `rolling-memory hook recall --json` | 在宿主支持且已安装钩子时，可提醒 Agent 按需调用 `recall` 并协助本地同步；不保证每个已完成轮次都被导入。 |
 
 - **全链路 Fail-Open**：任何异常均退出 `0`，仅记日志，绝不阻塞宿主会话。
 - **回声抑制账本**：同一 session + prompt（或相同渲染内容）在 1 小时窗口内自动去重，不重复占用上下文。

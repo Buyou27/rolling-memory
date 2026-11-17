@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -47,9 +48,37 @@ CREATE TABLE IF NOT EXISTS rm_citations (
     unit_id  TEXT NOT NULL,
     cited_id TEXT NOT NULL,
     ord      INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (unit_id, cited_id)
+    PRIMARY KEY (unit_id, ord)
 );
 `
+
+// migrateLegacyCitationsPrimaryKey rebuilds the pre-(unit_id, ord) citations
+// table in place. The legacy (unit_id, cited_id) key collapsed duplicate, self
+// and empty citations at write time, so persisted snapshots diverged from
+// BuildIndex metadata; every surviving row is carried over as-is.
+func migrateLegacyCitationsPrimaryKey(db *sql.DB) error {
+	var ddl sql.NullString
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rm_citations'`).Scan(&ddl); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if !strings.Contains(ddl.String, "PRIMARY KEY (unit_id, cited_id)") {
+		return nil
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE rm_citations_migrate (unit_id TEXT NOT NULL, cited_id TEXT NOT NULL, ord INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (unit_id, ord))`,
+		`INSERT INTO rm_citations_migrate(unit_id, cited_id, ord) SELECT unit_id, cited_id, ord FROM rm_citations`,
+		`DROP TABLE rm_citations`,
+		`ALTER TABLE rm_citations_migrate RENAME TO rm_citations`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("rm/store: migrate legacy rm_citations key: %w", err)
+		}
+	}
+	return nil
+}
 
 // EncodePositionsBlob encodes sentence and slot positions for storage.
 func EncodePositionsBlob(posList []TermPosition) []byte {
@@ -145,6 +174,9 @@ func OpenStoreWithOptions(db *sql.DB, opts StoreOptions) (*Store, error) {
 		if _, err := db.Exec(SQLiteSchema); err != nil {
 			return nil, fmt.Errorf("rm/store: apply %s schema: %w", DialectSQLite, err)
 		}
+		if err := migrateLegacyCitationsPrimaryKey(db); err != nil {
+			return nil, err
+		}
 	}
 	return &Store{db: db, ownsDB: opts.OwnsDB}, nil
 }
@@ -195,6 +227,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(SQLiteSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	if err := migrateLegacyCitationsPrimaryKey(db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	return &Store{
 		db:     db,
@@ -280,6 +316,19 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// PackTermPersistFlags packs the persistable term columns into the class_flags
+// integer: bits 0-7 ClassFlags, bits 8-15 roleExt (Role + low 3 ExtFlags bits),
+// bits 16-31 the full 16-bit ExtFlags. Rows written before the high-ext
+// persistence keep those bits at zero, so the layout stays backward compatible
+// without a schema change.
+func PackTermPersistFlags(flags uint8, role TermRole, extFlags uint16) int64 {
+	return int64(flags) | (int64(PackTermRoleExt(role, extFlags)) << 8) | (int64(extFlags) << 16)
+}
+
+// TermPersistExtFlags returns the full 16-bit ExtFlags carried in the persisted
+// class_flags value (bits 16-31).
+func TermPersistExtFlags(packed int64) uint16 { return uint16(packed >> 16) }
+
 // Ingest 在单个事务内批量写入文档与原子倒排行。
 // 对同一 UnitID 的重复入库按最后一份文档整体替换（与 BuildIndex 的「最后一份为准」
 // 语义一致）：先清该单元的旧原子行，再写新行，避免旧哈希残留污染 df 与倒排。
@@ -342,9 +391,6 @@ func (s *Store) Ingest(docs []Doc) error {
 			return err
 		}
 		for ord, cid := range d.CitedIDs {
-			if cid == "" || cid == d.UnitID {
-				continue
-			}
 			if _, err := citeStmt.Exec(d.UnitID, cid, ord); err != nil {
 				return err
 			}
@@ -360,7 +406,7 @@ func (s *Store) Ingest(docs []Doc) error {
 			} else if term.Sent > 0 && term.Slot > 0 {
 				posBlob = EncodePositionsBlob([]TermPosition{{Sentence: int(term.Sent - 1), Slot: int(term.Slot - 1)}})
 			}
-			packedFlags := int64(term.Flags) | (int64(PackTermRoleExt(term.Role, term.ExtFlags)) << 8)
+			packedFlags := PackTermPersistFlags(term.Flags, term.Role, term.ExtFlags)
 			if _, err := termStmt.Exec(int64(hash), d.UnitID, int64(term.Bits), packedFlags, int64(term.Group), int64(occ), posBlob); err != nil {
 				return err
 			}
@@ -463,7 +509,7 @@ func (s *Store) LoadIndex() (*Index, error) {
 			citeRows.Close()
 			return nil, err
 		}
-		if u, ok := idx.UnitOf[unitID]; ok && citedID != "" {
+		if u, ok := idx.UnitOf[unitID]; ok {
 			idx.UnitMeta[u].CitedIDs = append(idx.UnitMeta[u].CitedIDs, citedID)
 		}
 	}
@@ -551,6 +597,14 @@ func (s *Store) LoadIndex() (*Index, error) {
 				idx.UnitRoleExt[unit] = make(map[uint64]uint8, hint/2+1)
 			}
 			idx.UnitRoleExt[unit][h] = re8
+		}
+		// Restore the full 16-bit ExtFlags (bits 16-31); low-3-only values stay out of
+		// UnitExtFlags, matching how BuildIndex only records high-carrying entries.
+		if ext := TermPersistExtFlags(classFlags); ext&^uint16(0x07) != 0 {
+			if idx.UnitExtFlags[unit] == nil {
+				idx.UnitExtFlags[unit] = make(map[uint64]uint16, hint/2+1)
+			}
+			idx.UnitExtFlags[unit][h] |= ext
 		}
 		if len(posBlob) > 0 {
 			if idx.UnitPositions[unit] == nil {

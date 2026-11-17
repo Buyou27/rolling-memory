@@ -75,3 +75,8 @@ obsidian) · **③ Rainbow positive** (high-density R7 aurora on paper white) ·
 
 A standalone preview page for all twelve masters is available at
 [`rolling-memory-brand-r7-final.html`](rolling-memory-brand-r7-final.html).
+
+### `Avatar` (2 files)
+
+- [`svg/org-avatar-1024.png`](svg/org-avatar-1024.png) — repository avatar (GitHub / Gitee), 1024×1024, edition ④ treatment fitted to 72% so circular crops keep the mark intact
+- [`svg/org-avatar-1024.svg`](svg/org-avatar-1024.svg) — editable source of the same avatar

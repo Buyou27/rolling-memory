@@ -14,7 +14,7 @@ In day-to-day coding, relying on `grep` alone hits four common walls where local
 
 | Dimension | Standard Code Search (`grep` / `ripgrep`) | Rolling Memory (Local Verbatim Vault + Lexical-Statistical Search) |
 |---|---|---|
-| **1. Remembering the symptom, not the symbol name** | **Requires guessing the exact identifier in code**: If you ask *"Where did we fix that status-bar flicker bug?"* and the variable is named `sseStreamDebounce`, `grep "flicker"` returns `0` hits, so the agent spends several turns guessing keywords with `find` and `grep`. | **Finds coordinates from past discussions**: As long as that debugging session happened in a past conversation, the vault holds the verbatim discussion and file path (e.g., `admin/.../dashboard.vue`), letting a symptom query jump straight to the file. |
+| **1. Remembering the symptom, not the symbol name** | **Requires guessing the exact identifier in code**: If you ask *"Where did we fix that status-bar flicker bug?"* and the variable is named `sseStreamDebounce`, `grep "flicker"` returns `0` hits, so the agent spends several turns guessing keywords with `find` and `grep`. | **Finds coordinates from imported discussions**: If the discussion was imported and matches the query, `recall` can return the passage and file path. |
 | **2. "Why we didn't do X" (negative knowledge)** | **Code only shows what was kept, not why an alternative was rejected**: Current source files rarely explain *"Why did we roll back Approach A last week?"*, so a new session can easily repeat the same mistake. | **Preserves past troubleshooting & rollback notes**: Keeps the verbatim record of why an approach failed or which cross-file invariant must be maintained, so future sessions can look it up. |
 | **3. Separating stale notes from recent decisions** | **Flat and timeless**: Old notes, comments, and recent changes sit side by side without a session timeline. | **Timestamped with temporal proximity weighting**: Every record carries its timestamp, and ranking weights temporal proximity and demotes cross-day duplicates. |
 | **4. Connecting context across sessions** | **Isolated line matches**: Scans only current files on disk without linking multi-turn troubleshooting conversations across days. | **Session & adjacent-sentence co-occurrence**: Uses term-family grouping, two-sentence window co-occurrence, and past citation links (`cited_unit_ids[]`) to surface related passages together. |
@@ -42,17 +42,17 @@ Most agent memory services rely on **online vector embeddings** or **background 
 
 ## Q3: Every harness vendor already has its own memory feature (`CLAUDE.md` / `AGENTS.md`, `MEMORY.md` auto-notes, Cursor Rules) — why use this too?
 
-Keeping core rules in `AGENTS.md` / `CLAUDE.md` and using host Auto-Memory is great practice (we use them every day), but host built-in memory and Rolling Memory **are not "either/or" substitutes — they complement each other like a sticky note on your desk versus a full-history black-box recorder**:
+Core rules in `AGENTS.md` / `CLAUDE.md`, host Auto-Memory, and Rolling Memory can complement one another: notes provide a concise guide, while imported sources provide material for local retrieval.
 
 1. **Host auto-notes cost turns to write and only capture the tip of the iceberg**:
    - Built-in auto-memory typically relies on the agent deciding mid-task to call a file-write tool and save a short note into `MEMORY.md`. Every time the agent stops to write a note, that tool call itself **costs an extra `100k–400k` context round-trip**; worse, everything the agent didn't think was important enough to write down at the time (an error stack from three days ago, a file path or flag mentioned in passing) vanishes when the session closes.
-   - Rolling Memory quietly indexes completed conversation turns in local SQLite in the background at zero token cost and zero prompt footprint at rest. When your curated notes don't cover a detail, `recall` can pull the original passage from your full conversation history.
+   - Rolling Memory can index supported conversation sources in local SQLite without an agent writing a note. `recall` can retrieve imported passages; automatic coverage is limited, and other sources may require manual import. See [conversation collection](harness.md#45-conversation-collection-and-manual-import).
 2. **Always-on files bloat the context window if you dump everything into them**:
-   - `AGENTS.md` and `MEMORY.md` indexes are injected **in full on every single turn**, which is ideal for a few dozen core project invariants. Dumping hundreds of debugging post-mortems into them burns billed tokens on every prompt and dilutes attention (*Lost-in-the-Middle*).
+   - Instruction and memory files can provide concise project rules, but hosts differ in when and how they load them. Large files may consume more context and make important instructions harder to find.
    - Rolling Memory keeps thousands of historical records at **0 prompt token cost** at rest, retrieving only a few hundred tokens when a relevant question actually comes up.
 3. **One shared local memory across all your harnesses (breaking vendor silos)**:
    - Developers frequently switch between ZCode, Claude Code, Codex, Cursor, Windsurf, and Cline. Each vendor's built-in memory is an **isolated silo** — a bug you solved in Claude Code is invisible when you switch to Cursor or Codex.
-   - `rolling-memory install` wires 10 harnesses to a single unified local SQLite vault in one command, so a troubleshooting session in one tool is immediately searchable from all the others.
+   - Connected tools can query the same local SQLite vault, including records imported from supported sources. Connecting a tool does not itself import that tool's conversation history.
 4. **Verbatim ground-truth transcripts when model-written summaries get things wrong**:
    - Host auto-memories are model-generated summaries; if the model misunderstood something when writing the note, that mistaken summary stays in your notes. Rolling Memory never rewrites facts — it preserves the verbatim passage and provenance so you can always verify what was actually said.
 

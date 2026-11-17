@@ -5,6 +5,7 @@ package harness
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -90,13 +91,39 @@ func groupHooks(group any) []any {
 	return hooks
 }
 
-func groupHasCommand(group any, command string) bool {
-	for _, hook := range groupHooks(group) {
-		if hookCommandOf(hook) == command {
-			return true
-		}
+func groupCommandStatus(group any, command string) (int, int) {
+	object, ok := asObject(group)
+	if !ok {
+		return 0, 0
 	}
-	return false
+	validGroup := true
+	if matcher, found := objectGet(object, "matcher"); found {
+		value, ok := matcher.(string)
+		validGroup = ok && (value == "" || value == "*")
+	}
+	valid := 0
+	invalid := 0
+	for _, hook := range groupHooks(group) {
+		if hookCommandOf(hook) != command {
+			continue
+		}
+		entry, ok := asObject(hook)
+		if !ok {
+			invalid++
+			continue
+		}
+		kind, _ := objectGet(entry, "type")
+		if kind != "command" || !validGroup {
+			invalid++
+			continue
+		}
+		if enabled, exists := objectGet(entry, "enabled"); exists && enabled != true {
+			invalid++
+			continue
+		}
+		valid++
+	}
+	return valid, invalid
 }
 
 func groupIsOurs(group any, options InstallOptions) bool {
@@ -108,30 +135,120 @@ func groupIsOurs(group any, options InstallOptions) bool {
 	return false
 }
 
-func installHooks(harness Harness, options InstallOptions, report *Report) {
+func hooksTargetPath(harness Harness, options InstallOptions) (string, bool) {
 	if harness.HooksKind == "" || harness.HooksPath == nil {
+		return "", false
+	}
+	if !options.Project {
+		return *harness.HooksPath, true
+	}
+	switch harness.ID {
+	case "claude-code":
+		return filepath.Join(options.Cwd, ".claude", "settings.json"), true
+	case "codex":
+		// Codex reads a project-level .codex/hooks.json alongside the user file.
+		return filepath.Join(options.Cwd, ".codex", "hooks.json"), true
+	default:
+		return "", false
+	}
+}
+
+func removeOwnedHooks(group any, options InstallOptions) (any, int, bool) {
+	object, ok := asObject(group)
+	if !ok {
+		return group, 0, true
+	}
+	hooks := groupHooks(group)
+	kept := make([]any, 0, len(hooks))
+	removed := 0
+	for _, hook := range hooks {
+		if hookIsOurs(hookCommandOf(hook), options) {
+			removed++
+		} else {
+			kept = append(kept, hook)
+		}
+	}
+	if removed == 0 {
+		return group, 0, true
+	}
+	if len(kept) == 0 && len(object) == 1 {
+		return nil, removed, false
+	}
+	return objectSet(object, "hooks", kept), removed, true
+}
+
+func claudeHooksDisabled(harness Harness, options InstallOptions, data ids.OrderedMap) (bool, error) {
+	if harness.ID != "claude-code" {
+		return false, nil
+	}
+	settings := []ids.OrderedMap{data}
+	if options.Project && harness.HooksPath != nil {
+		user, err := loadJSONFile(*harness.HooksPath)
+		if err != nil {
+			return false, err
+		}
+		settings = append(settings, user)
+	}
+	for _, config := range settings {
+		if value, found := objectGet(config, "disableAllHooks"); found {
+			disabled, ok := value.(bool)
+			if !ok {
+				return false, fmt.Errorf("disableAllHooks is not a boolean")
+			}
+			if disabled {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func hooksEnabled(harness Harness, options InstallOptions, data ids.OrderedMap, path string, report *Report) bool {
+	disabled, err := claudeHooksDisabled(harness, options, data)
+	if err != nil || disabled {
+		detail := "Claude hooks are disabled"
+		if err != nil {
+			detail = "cannot determine Claude hook setting: " + err.Error()
+		}
+		report.Add(harness.ID, "hooks", path, StatusConflict, detail)
+		return false
+	}
+	if len(harness.HooksEnabledKeys) > 0 {
+		if enabled, found := jsonLookup(data, harness.HooksEnabledKeys); found {
+			if flag, ok := enabled.(bool); !ok || !flag {
+				report.Add(harness.ID, "hooks", path, StatusConflict, "hooks are disabled or the enable switch is invalid")
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func installHooks(harness Harness, options InstallOptions, report *Report) {
+	path, supported := hooksTargetPath(harness, options)
+	if !supported {
 		report.Add(harness.ID, "hooks", "-", StatusSkipped,
 			"no hook surface; agent-driven remember/recall only")
-		return
-	}
-	path := *harness.HooksPath
-	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasHooks && !options.Force {
-		if zcodeHasGlobalHooks(harness, options) {
-			if options.DryRun {
-				report.Add(harness.ID, "hooks", path, StatusPlanned, "dedupe global hooks (provided by plugin "+plugin.ID+")")
-				return
-			}
-			tmpReport := newReport("uninstall", options)
-			uninstallHooks(harness, options, tmpReport)
-			report.Add(harness.ID, "hooks", path, StatusRemoved, "deduped; provided by plugin "+plugin.ID)
-			return
-		}
-		report.Add(harness.ID, "hooks", path, StatusUnchanged, "1 event (provided by plugin "+plugin.ID+")")
 		return
 	}
 	data, err := loadJSONFile(path)
 	if err != nil {
 		report.Add(harness.ID, "hooks", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
+	if !hooksEnabled(harness, options, data, path, report) {
+		return
+	}
+	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasHooks && !options.Force {
+		if zcodeHasGlobalHooks(harness, options) {
+			report.Add(harness.ID, "hooks", path, StatusConflict, "existing hooks retained; plugin "+plugin.ID+" is also active")
+			return
+		}
+		report.Add(harness.ID, "hooks", path, StatusUnchanged, "1 event (declared by plugin "+plugin.ID+")")
+		return
+	}
+	if !jsonPathIsObject(data, harness.HooksKeys) {
+		report.Add(harness.ID, "hooks", path, StatusConflict, "hooks path contains a non-object value")
 		return
 	}
 	events, data, ok := jsonTable(data, harness.HooksKeys, true)
@@ -155,17 +272,43 @@ func installHooks(harness Harness, options InstallOptions, report *Report) {
 				continue
 			}
 		}
-		already := false
+		malformed := false
+		for _, group := range groups {
+			object, ok := asObject(group)
+			if !ok {
+				malformed = true
+				break
+			}
+			value, found := objectGet(object, "hooks")
+			if _, ok := asArray(value); !found || !ok {
+				malformed = true
+				break
+			}
+		}
+		if malformed {
+			problems = append(problems, command.Event+": invalid hook group")
+			continue
+		}
+		valid := 0
+		invalid := 0
 		stale := false
 		for _, group := range groups {
-			if groupHasCommand(group, command.Command) {
-				already = true
-			}
+			groupValid, groupInvalid := groupCommandStatus(group, command.Command)
+			valid += groupValid
+			invalid += groupInvalid
 			if groupIsOurs(group, options) {
 				stale = true
 			}
 		}
-		if already {
+		if invalid > 0 {
+			problems = append(problems, command.Event+": matching hook is disabled or has incompatible type/matcher")
+			continue
+		}
+		if valid > 1 {
+			problems = append(problems, command.Event+": duplicate matching hooks")
+			continue
+		}
+		if valid == 1 {
 			continue
 		}
 		if stale && !options.Force {
@@ -174,10 +317,10 @@ func installHooks(harness Harness, options InstallOptions, report *Report) {
 		}
 		kept := make([]any, 0, len(groups)+1)
 		for _, group := range groups {
-			if groupIsOurs(group, options) {
-				continue
+			updated, _, keep := removeOwnedHooks(group, options)
+			if keep {
+				kept = append(kept, updated)
 			}
-			kept = append(kept, group)
 		}
 		kept = append(kept, hookGroup(command.Command, command.Timeout, harness.HooksExtras))
 		events = objectSet(events, command.Event, kept)
@@ -190,13 +333,6 @@ func installHooks(harness Harness, options InstallOptions, report *Report) {
 	if !dirty {
 		report.Add(harness.ID, "hooks", path, StatusUnchanged, "1 event")
 		return
-	}
-	if len(harness.HooksEnabledKeys) > 0 {
-		keys := harness.HooksEnabledKeys
-		last := keys[len(keys)-1]
-		data, _ = jsonTableWith(data, keys[:len(keys)-1], true, func(section ids.OrderedMap) ids.OrderedMap {
-			return objectSet(section, last, true)
-		})
 	}
 	data, _ = jsonTableWith(data, harness.HooksKeys, true, func(ids.OrderedMap) ids.OrderedMap {
 		return events
@@ -217,14 +353,49 @@ func installHooks(harness Harness, options InstallOptions, report *Report) {
 	report.Add(harness.ID, "hooks", path, StatusInstalled, "UserPromptSubmit")
 }
 
+func sharedHookInUse(harness Harness, options InstallOptions) (bool, error) {
+	paths := mcpTargetPaths(harness, options)
+	if len(paths) == 0 {
+		return false, nil
+	}
+	for _, path := range paths {
+		data, err := loadJSONFile(path)
+		if err != nil {
+			return false, err
+		}
+		if !jsonPathIsObject(data, harness.MCPKeys) {
+			return false, fmt.Errorf("MCP path contains a non-object value")
+		}
+		table, _, ok := jsonTable(data, harness.MCPKeys, false)
+		if !ok {
+			continue
+		}
+		for _, pair := range table {
+			if entryIsOurs(pair.Value, options) && (pair.Key != options.Name || !options.DryRun) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func uninstallHooks(harness Harness, options InstallOptions, report *Report) {
-	if harness.HooksKind == "" || harness.HooksPath == nil {
-		report.Add(harness.ID, "hooks", "-", StatusSkipped, "no hook surface")
+	path, supported := hooksTargetPath(harness, options)
+	if !supported {
+		report.Add(harness.ID, "hooks", "-", StatusSkipped, "no hook surface for this scope")
 		return
 	}
-	path := *harness.HooksPath
 	if !fileExists(path) {
 		report.Add(harness.ID, "hooks", path, StatusSkipped, "config file not present")
+		return
+	}
+	inUse, err := sharedHookInUse(harness, options)
+	if err != nil {
+		report.Add(harness.ID, "hooks", path, StatusConflict, "cannot determine shared hook users: "+err.Error())
+		return
+	}
+	if inUse {
+		report.Add(harness.ID, "hooks", path, StatusSkipped, "shared hook retained for another MCP registration")
 		return
 	}
 	data, err := loadJSONFile(path)
@@ -245,19 +416,32 @@ func uninstallHooks(harness Harness, options InstallOptions, report *Report) {
 		}
 		groups, isArray := asArray(groupsValue)
 		if !isArray {
-			continue
+			report.Add(harness.ID, "hooks", path, StatusConflict, event.Event+": not a list")
+			return
+		}
+		for _, group := range groups {
+			object, ok := asObject(group)
+			if !ok {
+				report.Add(harness.ID, "hooks", path, StatusConflict, event.Event+": invalid hook group")
+				return
+			}
+			value, found := objectGet(object, "hooks")
+			if _, ok := asArray(value); !found || !ok {
+				report.Add(harness.ID, "hooks", path, StatusConflict, event.Event+": invalid hook group")
+				return
+			}
 		}
 		kept := make([]any, 0, len(groups))
 		for _, group := range groups {
-			if groupIsOurs(group, options) {
-				continue
+			updated, count, keep := removeOwnedHooks(group, options)
+			removed += count
+			if keep {
+				kept = append(kept, updated)
 			}
-			kept = append(kept, group)
 		}
-		removed += len(groups) - len(kept)
 		if len(kept) > 0 {
 			events = objectSet(events, event.Event, kept)
-		} else {
+		} else if len(groups) > 0 {
 			events = objectDelete(events, event.Event)
 		}
 	}
@@ -289,13 +473,21 @@ func uninstallHooks(harness Harness, options InstallOptions, report *Report) {
 }
 
 func checkHooks(harness Harness, options InstallOptions, report *Report) {
-	if harness.HooksKind == "" || harness.HooksPath == nil {
-		report.Add(harness.ID, "hooks", "-", StatusSkipped, "not supported")
+	path, supported := hooksTargetPath(harness, options)
+	if !supported {
+		report.Add(harness.ID, "hooks", "-", StatusSkipped, "not supported for this scope")
 		return
 	}
 	// A check reports the wiring that is on disk, not whether --with-hooks was
 	// passed to this check run.
-	path := *harness.HooksPath
+	data, err := loadJSONFile(path)
+	if err != nil {
+		report.Add(harness.ID, "hooks", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
+	if !hooksEnabled(harness, options, data, path, report) {
+		return
+	}
 	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasHooks {
 		if zcodeHasGlobalHooks(harness, options) {
 			report.Add(harness.ID, "hooks", path, StatusConflict,
@@ -309,31 +501,52 @@ func checkHooks(harness Harness, options InstallOptions, report *Report) {
 		report.Add(harness.ID, "hooks", path, StatusSkipped, "not wired")
 		return
 	}
-	data, err := loadJSONFile(path)
-	if err != nil {
-		report.Add(harness.ID, "hooks", path, StatusError, "cannot parse: "+err.Error())
-		return
-	}
 	events, _, _ := jsonTable(data, harness.HooksKeys, false)
 	missing := make([]string, 0)
+	invalid := make([]string, 0)
+	duplicates := make([]string, 0)
 	for _, command := range hookCommands(options) {
 		groupsValue, found := objectGet(events, command.Event)
 		groups, _ := asArray(groupsValue)
-		foundCommand := false
+		valid := 0
+		invalidCount := 0
 		if found {
 			for _, group := range groups {
-				if groupHasCommand(group, command.Command) {
-					foundCommand = true
-					break
-				}
+				groupValid, groupInvalid := groupCommandStatus(group, command.Command)
+				valid += groupValid
+				invalidCount += groupInvalid
 			}
 		}
-		if !foundCommand {
+		if invalidCount > 0 {
+			invalid = append(invalid, command.Event)
+		}
+		if valid > 1 {
+			duplicates = append(duplicates, command.Event)
+		}
+		if valid == 0 {
 			missing = append(missing, command.Event)
 		}
 	}
+	if len(duplicates) > 0 {
+		report.Add(harness.ID, "hooks", path, StatusConflict, "duplicate matching hooks ("+strings.Join(duplicates, ", ")+")")
+		return
+	}
+	if len(invalid) > 0 {
+		report.Add(harness.ID, "hooks", path, StatusConflict, "matching hooks disabled or incompatible ("+strings.Join(invalid, ", ")+")")
+		return
+	}
 	if len(missing) == 0 {
-		report.Add(harness.ID, "hooks", path, StatusOK, "1 event")
+		detail := "1 event"
+		if len(harness.HooksEnabledKeys) > 0 {
+			if _, found := jsonLookup(data, harness.HooksEnabledKeys); !found {
+				// ZCode 的配置文件钩子默认关闭：如实提示总开关未设置（宿主仍会跳过
+				// 这些钩子）。状态语义保持「检查只报告我们写下的接线」，也绝不替
+				// 用户翻转宿主全局开关；需要真正运行时在宿主里打开该开关。
+				detail = "1 event · " + strings.Join(harness.HooksEnabledKeys, ".") +
+					" is not set; configuration-file hooks stay disabled until the host switch is on"
+			}
+		}
+		report.Add(harness.ID, "hooks", path, StatusOK, detail)
 		return
 	}
 	report.Add(harness.ID, "hooks", path, StatusSkipped, "not wired ("+strings.Join(missing, ", ")+")")

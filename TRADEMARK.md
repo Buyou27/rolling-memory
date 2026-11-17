@@ -2,9 +2,8 @@
 
 **[English](TRADEMARK.md) · [简体中文](docs/zh-CN/TRADEMARK.md)**
 
-The PolyForm Noncommercial 1.0.0 license (and the Apache-2.0 license for `sdk/`)
-grants noncommercial copyright and patent rights as specified in `LICENSE`. It
-does **not** grant trademark rights.
+The PolyForm Noncommercial 1.0.0 license grants noncommercial copyright and
+patent rights as specified in `LICENSE`. It does **not** grant trademark rights.
 
 ## Names and marks
 

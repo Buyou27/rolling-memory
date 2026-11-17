@@ -114,14 +114,11 @@
                                     <el-tag v-else-if="h.detected" size="small" type="info" effect="plain">INSTALLED</el-tag>
                                 </div>
                                 <div class="hp-wiring">
-                                    <span :class="{ ok: h.skill_wired }">Skill {{ h.skill_wired ? '✓' : '·' }}</span>
-                                    <span :class="{ ok: h.mcp_wired }">MCP {{ h.mcp_wired ? '✓' : '·' }}</span>
-                                    <span v-if="h.hooks_supported" :class="{ ok: h.hooks_wired }">Hooks {{ h.hooks_wired ? '✓' : '·' }}</span>
+                                    <span :class="{ ok: h.detected && h.skill_wired }">Skill {{ h.skill_wired ? '✓' : '·' }}</span>
+                                    <span :class="{ ok: h.detected && h.mcp_wired }">MCP {{ h.mcp_wired ? '✓' : '·' }}</span>
+                                    <span v-if="h.hooks_supported" :class="{ ok: h.detected && h.hooks_wired }">Hooks {{ h.hooks_wired ? '✓' : '·' }}</span>
                                 </div>
-                                <!-- 两条能力分开显示：会话清单可发现（sessions_scan_supported）就显示
-                                     会话数；轮次内容可读（turns_scan_supported）才显示 Turns。
-                                     宿主能发现会话但读不了内容时（如 dsh 的 zstd 转录），
-                                     隐藏 Turns 而不是把「未统计」写成 0/0。 -->
+                                <!-- 会话清单与轮次内容分别标记支持，未知时不显示零计数。 -->
                                 <div class="hp-stats" v-if="showsSessions(h) || showsTurns(h)">
                                     <span v-if="showsSessions(h)"
                                         >Sessions: <b>{{ h.sessions_count || 0 }}</b></span
@@ -415,10 +412,9 @@ const stats = ref<any>({
 })
 
 const envHealth = ref<any>({ harnesses: [], health_checks: [], layers: {} })
-// 会话清单与轮次内容是两个独立能力：DSH 的会话能被发现（计数如实），
-// 但其 zstd 转录本构建尚不解析 ⇒ 只显示会话数，不显示 0/0 的 Turns。
-const showsSessions = (h: any) => (h.sessions_scan_supported ?? h.turns_scan_supported ?? true) !== false
-const showsTurns = (h: any) => h.turns_scan_supported !== false
+// 会话清单与轮次内容是两个独立能力，未声明支持时不把未知写成零。
+const showsSessions = (h: any) => h.sessions_scan_supported === true
+const showsTurns = (h: any) => h.turns_scan_supported === true
 const healthKnown = computed(
     () =>
         typeof envHealth.value.health_score === 'number' &&
@@ -448,7 +444,11 @@ const layerAlign = (layer: string) => envHealth.value?.layers?.[layer] || {}
 // 否则环境面板（单次约 9s）尚在途中时，本地模式的页面会先闪出一条「远端云端: —」。
 const isLocalMode = computed(() => envHealth.value?.mode !== 'cloud')
 const alignmentKnown = (layer: string) =>
-    Boolean(envHealth.value?.layers?.[layer] && (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true)))
+    Boolean(
+        envHealth.value?.layers?.[layer] &&
+        (layer !== 'episodic' || envHealth.value.layers.episodic.alignment_known === true) &&
+        (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true))
+    )
 const layerTagType = (layer: string) => (!alignmentKnown(layer) ? 'info' : layerAlign(layer).aligned ? 'success' : 'warning')
 const layerStatus = (layer: string) => {
     if (!alignmentKnown(layer)) return t('plugin.rolling-memory.overview.unknownStatus')

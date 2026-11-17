@@ -675,19 +675,57 @@ func fileSHA256(path string) (string, error) {
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
+func checkFileExportTraceAudiences(payload map[string]any) error {
+	value, exists := payload["traces"]
+	if !exists {
+		return nil
+	}
+	traces, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("file export contains invalid traces")
+	}
+	for _, item := range traces {
+		trace, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("file export contains an invalid trace")
+		}
+		audience, ok := trace["audience"].(string)
+		if !ok || (audience != "shared" && audience != "public") {
+			return fmt.Errorf("file export contains a restricted or unknown trace audience: background transcript scanning cannot enforce file privacy")
+		}
+	}
+	return nil
+}
+
 // ImportFile imports a JSON export, or falls back to the transcript adapter
 // for plain text transcripts.
 func (m *Memory) ImportFile(path string, scope, session *string, audience string, replay bool) (map[string]any, error) {
+	if audience != "" && audience != "shared" && audience != "public" {
+		return nil, fmt.Errorf("restricted or unknown audience file import is unavailable: background transcript scanning cannot enforce file privacy; keep sensitive files outside scanned directories until source-level access controls are supported")
+	}
 	effectiveScope := pickString(scope, m.Config.Scope)
 	if err := m.checkLocalVaultScope(effectiveScope); err != nil {
 		return nil, err
+	}
+	target := expandUser(path)
+	var exportPayload map[string]any
+	if strings.EqualFold(filepath.Ext(target), ".json") {
+		raw, err := os.ReadFile(target)
+		if err == nil {
+			payload := map[string]any{}
+			if json.Unmarshal(raw, &payload) == nil && asString(payload["format"]) == version.ExportFormat {
+				if err := checkFileExportTraceAudiences(payload); err != nil {
+					return nil, err
+				}
+				exportPayload = payload
+			}
+		}
 	}
 	if m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") {
 		if err := m.bindLocalVaultScope(); err != nil {
 			return nil, err
 		}
 	}
-	target := expandUser(path)
 	drainPending := func(capCount int) (map[string]any, error) {
 		limit := m.Config.Hooks.MaxTraces
 		if capCount > 0 {
@@ -708,36 +746,42 @@ func (m *Memory) ImportFile(path string, scope, session *string, audience string
 			"llm_calls": 0, "warnings": []any{},
 		}, nil
 	}
-	if strings.EqualFold(filepath.Ext(target), ".json") {
-		raw, err := os.ReadFile(target)
-		if err == nil {
-			payload := map[string]any{}
-			if err := json.Unmarshal(raw, &payload); err == nil {
-				if asString(payload["format"]) == version.ExportFormat {
-					imported, err := m.ImportData(payload, &effectiveScope)
-					if err != nil {
-						return nil, err
-					}
-					if err := m.rememberImportedTracesToVault(effectiveScope, session); err != nil {
-						return nil, err
-					}
-					if replay {
-						rep, err := drainPending(0)
-						if err != nil {
-							return nil, err
-						}
-						imported["replay"] = rep
-					}
-					return imported, nil
-				}
-			}
+	if exportPayload != nil {
+		imported, err := m.ImportData(exportPayload, &effectiveScope)
+		if err != nil {
+			return nil, err
 		}
+		if err := m.rememberImportedTracesToVault(effectiveScope, session); err != nil {
+			return nil, err
+		}
+		if replay {
+			rep, err := drainPending(0)
+			if err != nil {
+				return nil, err
+			}
+			imported["replay"] = rep
+		}
+		return imported, nil
 	}
-	result, err := transcript.ImportTranscript(m.Store, target, effectiveScope, session,
-		audience, 0, transcript.DefaultImportLines)
-	if err != nil {
-		return nil, err
+	var result map[string]any
+	messages, inserted, offset := 0, 0, 0
+	for {
+		page, err := transcript.ImportTranscript(m.Store, target, effectiveScope, session,
+			audience, offset, transcript.DefaultImportLines)
+		if err != nil {
+			return nil, err
+		}
+		messages += asInt(page["messages"])
+		inserted += asInt(page["inserted"])
+		result = page
+		next := asInt(page["offset"])
+		if next <= offset || next >= asInt(page["total_lines"]) {
+			break
+		}
+		offset = next
 	}
+	result["messages"] = messages
+	result["inserted"] = inserted
 	if err := m.rememberImportedTracesToVault(effectiveScope, nil); err != nil {
 		return nil, err
 	}

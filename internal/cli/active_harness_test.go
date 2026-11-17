@@ -5,6 +5,7 @@ package cli
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -186,11 +187,8 @@ func TestHarnessEnvDefinitionsExtendsOnFootprintOrActive(t *testing.T) {
 	}
 }
 
-// TestHarnessCountCacheFoldsPendingImportDeltaWithinTTL 锁定计数缓存折叠契约：
-// 在 TTL 窗口内，当后台自动同步或手动 reconcile 导入了未同步积压（0 < delta <= Unsynced）时，
-// loadHarnessCountCache 直接原地折叠 Synced += delta / Unsynced -= delta 并返回命中，
-// 避免每轮自动导入都作废缓存触发 GB 级 WAL 重扫；而超出 Unsynced 或单元减少时如实失效。
-func TestHarnessCountCacheFoldsPendingImportDeltaWithinTTL(t *testing.T) {
+// A global vault count cannot attribute newly imported turns to a harness.
+func TestHarnessCountCacheInvalidatesOnVaultCountChange(t *testing.T) {
 	home := t.TempDir()
 	zdbDir := filepath.Join(home, ".zcode", "cli", "db")
 	if err := os.MkdirAll(zdbDir, 0o755); err != nil {
@@ -210,23 +208,23 @@ func TestHarnessCountCacheFoldsPendingImportDeltaWithinTTL(t *testing.T) {
 
 	storeHarnessCountCache(vdb, "zcode", home, 100, 12, 80, 20, 100, 1700000000)
 
-	// 1. 后台导入了 5 条积压（vaultUnits 100 → 105，delta=5 <= Unsynced=20）→ 命中并折叠为 Synced=85, Unsynced=15
-	c1, ok := loadHarnessCountCache(vdb, "zcode", home, 105)
-	if !ok {
-		t.Fatalf("expected cache hit when folding pending import delta")
+	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); !ok || cached.Synced != 80 || cached.Unsynced != 20 {
+		t.Fatalf("unchanged vault cache = %+v, %v", cached, ok)
 	}
-	if c1.Synced != 85 || c1.Unsynced != 15 || c1.LocalTurns != 100 || c1.VaultUnits != 105 {
-		t.Fatalf("unexpected folded cache: %+v", c1)
+	for _, vaultUnits := range []int{105, 130, 99} {
+		if cached, ok := loadHarnessCountCache(vdb, "zcode", home, vaultUnits); ok {
+			t.Fatalf("vault count %d must trigger a rescan, got %+v", vaultUnits, cached)
+		}
 	}
-
-	// 2. 超出已知积压的增长（vaultUnits 105 → 130，delta=25 > Unsynced=15）→ 必须失效重扫
-	if _, ok := loadHarnessCountCache(vdb, "zcode", home, 130); ok {
-		t.Fatalf("expected cache miss when vault growth exceeds unsynced backlog")
+	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); !ok || cached.Synced != 80 || cached.Unsynced != 20 {
+		t.Fatalf("other-harness growth must not mutate cached counts: %+v, %v", cached, ok)
 	}
-
-	// 3. 单元减少（删除记忆，vaultUnits 105 → 100）→ 必须失效重扫
-	if _, ok := loadHarnessCountCache(vdb, "zcode", home, 100); ok {
-		t.Fatalf("expected cache miss when vault shrinks")
+	legacy := `{"fp":1,"vault":100,"computed_at":` + fmt.Sprint(time.Now().Unix()) + `,"local_turns":100,"synced":85,"unsynced":15}`
+	if _, err := vdb.Exec(`UPDATE thin_vault_meta SET v = ? WHERE k = ?`, []byte(legacy), harnessCountCachePrefix+"zcode"); err != nil {
+		t.Fatal(err)
+	}
+	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); ok {
+		t.Fatalf("legacy row may contain guessed attribution: %+v", cached)
 	}
 }
 
@@ -282,16 +280,18 @@ func TestHarnessTranscriptChangedSinceDetectsNestedJSONLAndDSH(t *testing.T) {
 	}
 	markHarnessTranscriptSynced(dbConn, home)
 
-	// A DSH transcript that advances must NOT arm the gate: this build inventories
-	// DSH sessions but cannot read their turn content yet, so DSH's constant writes
-	// would otherwise keep an auto-sync pass dirty that has nothing to import.
+	// DSH transcripts are importable, so their changes must arm the episodic gate.
 	dshFile := filepath.Join(dshDir, "session.v4.jsonl.zstd")
 	if err := os.WriteFile(dshFile, []byte("{}\n"), 0o644); err != nil {
 		t.Fatalf("write dsh: %v", err)
 	}
 	dshTime := newerTime.Add(10 * time.Second)
 	_ = os.Chtimes(dshFile, dshTime, dshTime)
+	if !harnessTranscriptChangedSince(dbConn, home) {
+		t.Fatal("expected DSH transcript change to arm the episodic gate")
+	}
+	markHarnessTranscriptSynced(dbConn, home)
 	if harnessTranscriptChangedSince(dbConn, home) {
-		t.Fatal("expected an unimportable DSH transcript not to arm the episodic gate")
+		t.Fatal("expected unchanged DSH transcript after marking synced")
 	}
 }

@@ -16,14 +16,14 @@
     },
     {
       "component": "hooks",
-      "detail": "1 entries",
+      "detail": "no hooks section",
       "harness": "zcode",
       "path": "<HOME>/.zcode/cli/config.json",
-      "status": "removed"
+      "status": "skipped"
     },
     {
       "component": "instructions",
-      "detail": "half marker found; fix by hand",
+      "detail": "ambiguous or incomplete marker; fix by hand",
       "harness": "zcode",
       "path": "<HOME>/.zcode/AGENTS.md",
       "status": "conflict"
@@ -65,24 +65,24 @@
     },
     {
       "component": "mcp",
-      "detail": "",
+      "detail": "entry is not ours; not touching it",
       "harness": "codex",
       "path": "<CFG>",
-      "status": "removed"
+      "status": "conflict"
     },
     {
       "component": "hooks",
-      "detail": "no hook surface",
+      "detail": "retained because MCP uninstall failed",
       "harness": "codex",
       "path": "-",
       "status": "skipped"
     },
     {
       "component": "instructions",
-      "detail": "",
+      "detail": "retained because MCP uninstall failed",
       "harness": "codex",
-      "path": "<HOME>/.codex/AGENTS.md",
-      "status": "removed"
+      "path": "-",
+      "status": "skipped"
     },
     {
       "component": "skill",
@@ -93,24 +93,24 @@
     },
     {
       "component": "mcp",
-      "detail": "",
+      "detail": "cannot safely parse DSH patch: DSH patch must be a sequence",
       "harness": "dsh",
       "path": "<HOME>/.dsh/profiles/web/cordis.patch.yml",
-      "status": "removed"
+      "status": "conflict"
     },
     {
       "component": "hooks",
-      "detail": "no hook surface",
+      "detail": "retained because MCP uninstall failed",
       "harness": "dsh",
       "path": "-",
       "status": "skipped"
     },
     {
       "component": "instructions",
-      "detail": "",
+      "detail": "retained because MCP uninstall failed",
       "harness": "dsh",
-      "path": "<HOME>/.dsh/AGENTS.md",
-      "status": "removed"
+      "path": "-",
+      "status": "skipped"
     },
     {
       "component": "skill",
@@ -128,7 +128,7 @@
     },
     {
       "component": "hooks",
-      "detail": "no hook surface",
+      "detail": "no hook surface for this scope",
       "harness": "codebuddy",
       "path": "-",
       "status": "skipped"

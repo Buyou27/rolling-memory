@@ -391,15 +391,3 @@ func PickTimeAnchor(wins []TimeWindow) int64 {
 	}
 	return anchor
 }
-
-// Exported helpers for cross-package test & service delegation.
-func TwDay(y, m, d int) TimeWindow { return twDay(y, m, d) }
-func TwMonth(y, m int) TimeWindow  { return twMonth(y, m) }
-func TwYear(y int) TimeWindow      { return twYear(y) }
-func TwClock(y, m, d, h, mi, s int, hasSec bool) TimeWindow {
-	return twClock(y, m, d, h, mi, s, hasSec)
-}
-func PickRelAnchor(abs []TimeWindow, loc *time.Location) (time.Time, bool) {
-	return pickRelAnchor(abs, loc)
-}
-func EpochInWindow(tv, from, to int64) bool { return epochInWindow(tv, from, to) }

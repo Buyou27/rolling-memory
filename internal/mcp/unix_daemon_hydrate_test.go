@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rocareer/rolling-memory/internal/thinclient"
 	_ "modernc.org/sqlite"
 )
 
@@ -61,6 +62,20 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 	seedZCodeTurnFixture(t, home)
 
 	memory := newMemory(t)
+	tc, err := memory.ThinClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := "@ref:zcode:sess_hydrate_fixture:msg_hydrate_u1"
+	for _, fixture := range []struct{ id, ref, text string }{
+		{"ep_question", turn + "#0", "[user] fixture question"},
+		{"ep_answer", turn + "#1", "[assistant] fixture reply body"},
+	} {
+		packet, _ := tc.Vault.PackBlindPacket(fixture.id, fixture.text, testNow)
+		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, testNow, fixture.ref, turn, fixture.text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+			t.Fatalf("seed indexed pointer: %v", err)
+		}
+	}
 	// Unix socket paths are capped at 104 bytes on BSD/macOS; a short /tmp base keeps
 	// this test independent of the (long) t.TempDir prefix.
 	sockDir, err := os.MkdirTemp("/tmp", "rm-hyd-")
@@ -107,40 +122,92 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 		return resp.StatusCode, out
 	}
 
-	// 1. Canonical segmentation: #0 is the user question, #1 the assistant text part
-	//    (the reasoning part is not speech and must not shift the index).
-	status, out := post(UnixHydratePayload{Items: []UnixHydrateItem{{Ref: "@ref:zcode:sess_hydrate_fixture:msg_hydrate_u1#1"}}})
-	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 {
-		t.Fatalf("unexpected hydrate response: %d %+v", status, out)
-	}
-	if got := strings.TrimSpace(out.Texts[0].Text); got != "[assistant] fixture reply body" {
-		t.Fatalf("unexpected segment text: %q", got)
-	}
-	if out.Texts[0].Verified || out.Texts[0].Error != "" {
-		t.Fatalf("pointer without document id must be served unverified and without error: %+v", out.Texts[0])
+	// A valid document and pointer resolve the indexed segment, not the reasoning part.
+	status, out := post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_answer", Ref: turn + "#1"}}})
+	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 || out.Texts[0].Text != "[assistant] fixture reply body" || out.Texts[0].ActualRef != turn+"#1" || !out.Texts[0].Verified || out.Texts[0].Error != "" {
+		t.Fatalf("verified hydrate response: %d %+v", status, out)
 	}
 
-	// 2. A document id whose sealed index is absent must degrade to the live
-	//    canonical resolution instead of failing the batch.
-	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_fixture_doc", Ref: "@ref:zcode:sess_hydrate_fixture:msg_hydrate_u1#0"}}})
-	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 {
-		t.Fatalf("unexpected hydrate response: %d %+v", status, out)
-	}
-	if got := strings.TrimSpace(out.Texts[0].Text); got != "[user] fixture question" {
-		t.Fatalf("unexpected segment text: %q", got)
-	}
-
-	// 3. Unknown pointers surface a per-item error without failing the whole batch.
+	// Missing identity, wrong identity, and a pointer into a different indexed unit
+	// must never fall back to the live source, even when that source exists.
 	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{
-		{Ref: "@ref:zcode:sess_hydrate_fixture:msg_hydrate_u1#1"},
-		{Ref: "@ref:zcode:sess_hydrate_fixture:msg_missing#0"},
-		{Ref: "   "},
+		{Ref: turn + "#1"},
+		{DocID: "ep_missing", Ref: turn + "#0"},
+		{DocID: "ep_question", Ref: turn + "#1"},
+		{DocID: "ep_question", Ref: turn},
+		{DocID: "ep_question", Ref: "   "},
+		{DocID: "ep_question", Ref: turn + "#0"},
 	}})
-	if status != http.StatusOK || !out.OK || len(out.Texts) != 3 {
+	if status != http.StatusOK || !out.OK || len(out.Texts) != 6 {
 		t.Fatalf("unexpected hydrate response: %d %+v", status, out)
 	}
-	if out.Texts[1].Error == "" || out.Texts[2].Error == "" {
-		t.Fatalf("missing pointers must carry per-item errors: %+v", out.Texts)
+	for i, item := range out.Texts[:5] {
+		if item.Error == "" || item.Text != "" || item.Verified {
+			t.Fatalf("unverified item %d returned content: %+v", i, item)
+		}
+	}
+	if item := out.Texts[5]; item.Error != "" || !item.Verified || item.Text != "[user] fixture question" {
+		t.Fatalf("valid item in mixed batch: %+v", item)
+	}
+
+	// The same content in a different turn is not enough to establish its audience
+	// or source metadata, whether requested explicitly or reached as a fallback.
+	alternatePath := filepath.Join(t.TempDir(), "alternate.jsonl")
+	alternateBody := `{"type":"user","message":{"role":"user","content":"fixture question"}}` + "\n"
+	if err := os.WriteFile(alternatePath, []byte(alternateBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alternateTurn := "@ref:jsonl:" + alternatePath + ":0"
+	packet, _ := tc.Vault.PackBlindPacket("ep_question", "[user] fixture question", testNow)
+	if err := tc.Vault.SaveLocalEpisodicPointerIndexed("ep_question", testNow, alternateTurn+"#0", alternateTurn, "[user] fixture question", packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		t.Fatal(err)
+	}
+	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: alternateTurn + "#0"}}})
+	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 || out.Texts[0].Error == "" || out.Texts[0].Text != "" || out.Texts[0].ActualRef != "" || out.Texts[0].Verified {
+		t.Fatalf("explicit alternate source returned content: %d %+v", status, out)
+	}
+	sourcePath := filepath.Join(home, ".zcode", "cli", "db", "db.sqlite")
+	sourceDB, err := sql.Open("sqlite", sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceDB.Exec(`UPDATE part SET data = '{"type":"text","text":"changed primary"}' WHERE message_id = 'msg_hydrate_u1'`); err != nil {
+		_ = sourceDB.Close()
+		t.Fatal(err)
+	}
+	if err := sourceDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, actual, err := tc.Vault.LoadVerifiedEpisodicPointerSource("ep_question", turn+"#0"); err != nil || got != "[user] fixture question" || actual != alternateTurn+"#0" {
+		t.Fatalf("alternate source control: %q %q %v", got, actual, err)
+	}
+	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: turn + "#0"}}})
+	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 || out.Texts[0].Error == "" || out.Texts[0].Text != "" || out.Texts[0].ActualRef != "" || out.Texts[0].Verified {
+		t.Fatalf("alternate source fallback returned content: %d %+v", status, out)
+	}
+
+	// A resegmented source returns the digest-matching text and its actual position.
+	sourceDB, err = sql.Open("sqlite", sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceDB.Exec(`UPDATE part SET data = '{"type":"text","text":"fixture question"}' WHERE message_id = 'msg_hydrate_u1'; INSERT INTO part (message_id, sequence, data) VALUES ('msg_hydrate_u1', -1, '{"type":"text","text":"unindexed secret"}')`); err != nil {
+		_ = sourceDB.Close()
+		t.Fatal(err)
+	}
+	_ = sourceDB.Close()
+	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: turn + "#0"}}})
+	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 || out.Texts[0].Text != "[user] fixture question" || out.Texts[0].ActualRef != turn+"#1" || !out.Texts[0].Verified || out.Texts[0].Error != "" {
+		t.Fatalf("relocated hydrate response: %d %+v", status, out)
+	}
+
+	// Corrupting the sealed index must prevent hydration despite a readable source.
+	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id = 'ep_question'`); err != nil {
+		t.Fatal(err)
+	}
+	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: turn + "#0"}}})
+	if status != http.StatusOK || !out.OK || len(out.Texts) != 1 || out.Texts[0].Error == "" || out.Texts[0].Text != "" || out.Texts[0].Verified {
+		t.Fatalf("corrupt index returned content: %d %+v", status, out)
 	}
 
 	// 4. Non-POST methods are rejected.

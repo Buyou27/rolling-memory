@@ -84,7 +84,7 @@ done
 
 ## License & sign-off
 
-The repository's first-party code is licensed to users under the [PolyForm Noncommercial License 1.0.0](LICENSE) (the SDK under [Apache License 2.0](sdk/LICENSE)), and the project also sells separate commercial licenses. To keep that dual-licensing possible without a CLA form, **inbound contributions are accepted under the Apache License 2.0**: by submitting a contribution you agree that it is provided under Apache-2.0, which allows the maintainers to redistribute it under the project's noncommercial and commercial license terms. Sign off every commit with `git commit -s` (Developer Certificate of Origin 1.1); no separate CLA is required. Preserve third-party attribution in [NOTICE](NOTICE).
+The repository's first-party code — including the client SDK under `sdk/` ([license copy](sdk/LICENSE)) — is licensed to users under the [PolyForm Noncommercial License 1.0.0](LICENSE), and the project also sells separate commercial licenses. To keep that dual-licensing possible without a CLA form, **inbound contributions are accepted under the Apache License 2.0**: by submitting a contribution you agree that it is provided under Apache-2.0, which allows the maintainers to redistribute it under the project's noncommercial and commercial license terms. Sign off every commit with `git commit -s` (Developer Certificate of Origin 1.1); no separate CLA is required. Preserve third-party attribution in [NOTICE](NOTICE).
 
 ## Security
 

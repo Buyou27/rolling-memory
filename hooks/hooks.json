@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall --json",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook\" recall --json",
             "timeout": 15
           }
         ]

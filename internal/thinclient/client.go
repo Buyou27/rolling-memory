@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -945,6 +946,9 @@ func localIngestResponse(docID, layer string, sentenceCount int) CloudIngestResp
 // several turns): the vault row keeps one pointer, the lineage table keeps every
 // occurrence. Chunked units pass an empty refPointer, so their text is stored locally.
 func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, turnRef, livePlaintext string, occurredAt int64) (CloudIngestResponse, error) {
+	if occurredAt < 0 {
+		occurredAt = 0
+	}
 	st := c.activeStore()
 	pkt, sents := st.PackBlindPacket(docID, livePlaintext, occurredAt)
 	pkt.Layer = LayerEpisodic
@@ -955,6 +959,8 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 		if usePointer {
 			if err := c.Vault.SaveLocalEpisodicPointerIndexed(docID, occurredAt, refPointer, turnRef, livePlaintext, pkt, resp); err == nil {
 				return nil
+			} else if errors.Is(err, ErrEpisodicUnitDeleted) || !errors.Is(err, ErrEpisodicIndexItem) {
+				return err
 			} else if verifyEpisodicPointerSource(refPointer, livePlaintext) == nil {
 				var sameInline int
 				checkErr := c.Vault.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs d WHERE d.doc_id = ? AND d.raw_text = ? AND (d.layer = 'episodic' OR d.layer = '') AND NOT EXISTS (SELECT 1 FROM thin_vault_episodic_index i WHERE i.doc_id = d.doc_id) AND NOT EXISTS (SELECT 1 FROM thin_vault_episodic_lineage l WHERE l.doc_id = d.doc_id AND l.turn_ref = d.raw_text))`, docID, livePlaintext).Scan(&sameInline)
@@ -979,8 +985,16 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 			if err != nil {
 				return err
 			}
+			tx, err := c.Vault.db.Begin()
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			if err := checkEpisodicTombstone(tx, docID); err != nil {
+				return err
+			}
 			// Never replace a different source, even if another writer claims this ID.
-			result, err := c.Vault.db.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id) DO UPDATE SET occurred_at=excluded.occurred_at, inserted_at=CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END, sentences_json=excluded.sentences_json, address_uri=excluded.address_uri, coord64=excluded.coord64, waveform_bar=excluded.waveform_bar, doc_macro_wave=excluded.doc_macro_wave, kept_indices_json=excluded.kept_indices_json, assistant_id=excluded.assistant_id, incarnation_id=excluded.incarnation_id, locus=excluded.locus WHERE thin_vault_docs.raw_text=excluded.raw_text`, docID, occurredAt, occurredAt, livePlaintext, string(sentsJSON), resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON), c.Vault.identity.AssistantID, c.Vault.identity.IncarnationID, c.Vault.identity.Locus)
+			result, err := tx.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id) DO UPDATE SET occurred_at=CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END, inserted_at=CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END, sentences_json=excluded.sentences_json, address_uri=excluded.address_uri, coord64=excluded.coord64, waveform_bar=excluded.waveform_bar, doc_macro_wave=excluded.doc_macro_wave, kept_indices_json=excluded.kept_indices_json, assistant_id=excluded.assistant_id, incarnation_id=excluded.incarnation_id, locus=excluded.locus WHERE thin_vault_docs.raw_text=excluded.raw_text`, docID, occurredAt, time.Now().Unix(), livePlaintext, string(sentsJSON), resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON), c.Vault.identity.AssistantID, c.Vault.identity.IncarnationID, c.Vault.identity.Locus)
 			if err != nil {
 				return err
 			}
@@ -991,19 +1005,27 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 			if changed == 0 {
 				return fmt.Errorf("thinclient: episodic document already exists with different source")
 			}
-			c.Vault.clearSlotCache()
 			if c.Vault.hasFTS5 {
-				if ftsErr := ftsReplaceRow(c.Vault.db, docID, livePlaintext); ftsErr != nil {
+				if ftsErr := ftsReplaceRow(tx, docID, livePlaintext); ftsErr != nil {
 					return fmt.Errorf("thinclient: FTS mirror write for %s: %w", docID, ftsErr)
 				}
 			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			c.Vault.clearSlotCache()
 			return nil
+		}
+		if c.Vault != nil {
+			resp.Layer = LayerEpisodic
 		}
 		if err := st.SaveLocalPlaintext(docID, occurredAt, livePlaintext, sents, resp); err != nil {
 			return err
 		}
 		if c.Vault != nil {
-			_ = c.Vault.RecordEpisodicLineage(turnRef, docID, occurredAt)
+			if err := c.Vault.RecordEpisodicLineage(turnRef, docID, occurredAt); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

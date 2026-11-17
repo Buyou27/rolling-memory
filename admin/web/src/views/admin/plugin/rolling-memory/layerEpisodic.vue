@@ -22,13 +22,9 @@
                 <span class="stat-value">{{ stats.episodic_cell_count || 0 }}</span>
             </div>
             <div class="stat-item" :class="epiAlign.harness_unsynced_turns > 0 ? 'warning' : 'info'">
-                <span class="stat-label"
-                    >{{ t('plugin.rolling-memory.overview.envLabel') }} ({{
-                        envHealth.active_harness_label || t('plugin.rolling-memory.overview.unknownStatus')
-                    }})</span
-                >
+                <span class="stat-label">{{ t('plugin.rolling-memory.overview.harnessesTitle') }}</span>
                 <span class="stat-value">
-                    <template v-if="!envHealth.layers?.episodic">
+                    <template v-if="!alignmentKnown">
                         {{ t('plugin.rolling-memory.overview.unknownStatus') }}
                     </template>
                     <template v-else-if="epiAlign.harness_unsynced_turns > 0">
@@ -185,7 +181,7 @@
                             <el-tag v-else-if="h.detected" size="small" type="info" effect="plain">INSTALLED</el-tag>
                         </div>
                         <el-button
-                            v-if="h.detected && h.turns_scan_supported !== false"
+                            v-if="h.detected && h.turns_scan_supported === true"
                             link
                             type="primary"
                             size="small"
@@ -309,10 +305,9 @@ const healthLoadingText = computed(() =>
 )
 
 const envHealth = ref<any>({ harnesses: [], layers: {}, episodic_index: {} })
-// 会话清单与轮次内容是两个独立能力：DSH 的会话能被发现（计数如实），
-// 但其 zstd 转录本构建尚不解析 ⇒ 只显示会话数，不显示 0/0 的 Turns。
-const showsSessions = (h: any) => (h.sessions_scan_supported ?? h.turns_scan_supported ?? true) !== false
-const showsTurns = (h: any) => h.turns_scan_supported !== false
+// 会话清单与轮次内容是两个独立能力，未声明支持时不把未知写成零。
+const showsSessions = (h: any) => h.sessions_scan_supported === true
+const showsTurns = (h: any) => h.turns_scan_supported === true
 const epiIndex = computed(() => envHealth.value?.episodic_index || {})
 
 const handleToggleAutoSync = async (val: string | number | boolean) => {
@@ -340,7 +335,10 @@ const handleToggleAutoSync = async (val: string | number | boolean) => {
 const epiAlign = computed(() => envHealth.value?.layers?.episodic || {})
 const isLocalMode = computed(() => envHealth.value?.mode !== 'cloud')
 const alignmentKnown = computed(() =>
-    Boolean(envHealth.value?.layers?.episodic && (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true)))
+    Boolean(
+        envHealth.value?.layers?.episodic?.alignment_known === true &&
+        (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true))
+    )
 )
 
 const onStatsLoaded = (payload: any) => {

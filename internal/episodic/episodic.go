@@ -16,11 +16,11 @@
 package episodic
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -488,75 +488,15 @@ func JSONLTurns(path string) ([]JSONLTurn, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("episodic: empty jsonl path")
 	}
-	raw, err := os.ReadFile(strings.TrimSpace(path))
+	turns := make([]JSONLTurn, 0, 16)
+	err := VisitJSONLTurns(context.Background(), path, func(turn JSONLTurn, _ bool) error {
+		turns = append(turns, turn)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	turns := make([]JSONLTurn, 0, 16)
-	current := -1
-	var pendingAssist []Segment
-	flushPending := func() {
-		if current < 0 || len(pendingAssist) == 0 {
-			pendingAssist = pendingAssist[:0]
-			return
-		}
-		turn := &turns[current]
-		for _, seg := range pendingAssist {
-			seg.Index = len(turn.Segments)
-			turn.Segments = append(turn.Segments, seg)
-			if seg.OccurredAt > turn.OccurredAt {
-				turn.OccurredAt = seg.OccurredAt
-			}
-		}
-		pendingAssist = pendingAssist[:0]
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if isJSONLToolCallLine(line) {
-			// A tool call in the same turn means the preceding assistant text was
-			// step narration, not the turn's answer.
-			pendingAssist = pendingAssist[:0]
-			continue
-		}
-		role, texts, occurredAt := parseJSONLLine(line)
-		if role == "" || len(texts) == 0 {
-			continue
-		}
-		if role == RoleUser {
-			flushPending()
-			turns = append(turns, JSONLTurn{Index: len(turns)})
-			current = len(turns) - 1
-		}
-		if current < 0 {
-			continue
-		}
-		if role == RoleAssistant {
-			for _, txt := range texts {
-				pendingAssist = append(pendingAssist, Segment{
-					Role: role, Text: txt, OccurredAt: occurredAt,
-				})
-			}
-			continue
-		}
-		turn := &turns[current]
-		for _, txt := range texts {
-			turn.Segments = append(turn.Segments, Segment{
-				Role: role, Text: txt, OccurredAt: occurredAt, Index: len(turn.Segments),
-			})
-		}
-		if occurredAt > turn.OccurredAt {
-			turn.OccurredAt = occurredAt
-		}
-	}
-	flushPending()
-	out := make([]JSONLTurn, 0, len(turns))
-	for _, turn := range turns {
-		if len(turn.Segments) == 0 {
-			continue
-		}
-		turn.Index = len(out)
-		out = append(out, turn)
-	}
-	return out, nil
+	return turns, nil
 }
 
 // isJSONLToolCallLine reports whether a JSONL transcript line records a standalone
@@ -572,7 +512,10 @@ func isJSONLToolCallLine(line string) bool {
 	if !strings.Contains(trimmed, "function_call") &&
 		!strings.Contains(trimmed, "custom_tool_call") &&
 		!strings.Contains(trimmed, "web_search_call") &&
-		!strings.Contains(trimmed, "local_shell_call") {
+		!strings.Contains(trimmed, "local_shell_call") &&
+		!strings.Contains(trimmed, "tool_use") &&
+		!strings.Contains(trimmed, "tool-call") &&
+		!strings.Contains(trimmed, `"tool/call"`) {
 		return false
 	}
 	var obj map[string]any
@@ -586,7 +529,7 @@ func isJSONLToolCallLine(line string) bool {
 		}
 		return false
 	}
-	if topType, _ := obj["type"].(string); checkType(topType) {
+	if topType, _ := obj["type"].(string); checkType(topType) || topType == "tool/call" {
 		return true
 	}
 	if payload, ok := obj["payload"].(map[string]any); ok && payload != nil {
@@ -594,7 +537,31 @@ func isJSONLToolCallLine(line string) bool {
 			return true
 		}
 	}
+	message, _ := obj["message"].(map[string]any)
+	if obj["type"] == "assistant/message" {
+		data, _ := obj["data"].(map[string]any)
+		message, _ = data["message"].(map[string]any)
+	}
+	if message != nil && normalizeRole(asJSONString(message["role"])) == RoleAssistant {
+		if asJSONString(message["stop_reason"]) == "tool_use" {
+			return true
+		}
+		if blocks, ok := message["content"].([]any); ok {
+			for _, block := range blocks {
+				item, _ := block.(map[string]any)
+				switch item["type"] {
+				case "tool_use", "tool-call":
+					return true
+				}
+			}
+		}
+	}
 	return false
+}
+
+func asJSONString(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 // JSONLTurnSegments enumerates one turn of a JSONL transcript by ordinal.
@@ -606,6 +573,14 @@ func JSONLTurnSegments(path string, turnIndex int) ([]Segment, error) {
 // shapes the supported harnesses write (`message`/`payload` envelopes with string
 // or block-list content) and returns one text per content block: a segment is a
 // part, never a merged message.
+// ParseJSONLSpeech parses one JSONL speech row using the same rules as turn scans.
+func ParseJSONLSpeech(line string) (role string, texts []string, occurredAt int64) {
+	if isJSONLToolCallLine(line) {
+		return "", nil, 0
+	}
+	return parseJSONLLine(line)
+}
+
 func parseJSONLLine(line string) (role string, texts []string, occurredAt int64) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
@@ -619,10 +594,32 @@ func parseJSONLLine(line string) (role string, texts []string, occurredAt int64)
 		return "", nil, 0
 	}
 	message, _ := obj["message"].(map[string]any)
-	if message == nil {
-		if payload, ok := obj["payload"].(map[string]any); ok && payload != nil {
-			if pType, _ := payload["type"].(string); pType == "message" || payload["role"] != nil {
-				message = payload
+	switch obj["type"] {
+	case "user/message":
+		data, _ := obj["data"].(map[string]any)
+		source, _ := data["source"].(map[string]any)
+		kind, _ := source["kind"].(string)
+		role, _ := data["role"].(string)
+		if kind != "user" || role != "user" {
+			return "", nil, 0
+		}
+		message = data
+	case "assistant/message":
+		data, _ := obj["data"].(map[string]any)
+		message, _ = data["message"].(map[string]any)
+		role, _ := message["role"].(string)
+		if role != "assistant" {
+			return "", nil, 0
+		}
+	default:
+		if eventType, _ := obj["type"].(string); strings.Contains(eventType, "/") {
+			return "", nil, 0
+		}
+		if message == nil {
+			if payload, ok := obj["payload"].(map[string]any); ok && payload != nil {
+				if pType, _ := payload["type"].(string); pType == "message" || payload["role"] != nil {
+					message = payload
+				}
 			}
 		}
 	}
@@ -680,7 +677,14 @@ func parseJSONLLine(line string) (role string, texts []string, occurredAt int64)
 	if len(texts) == 0 {
 		return "", nil, 0
 	}
-	return speaker, texts, parseUnixSeconds(obj["timestamp"])
+	timestamp := obj["timestamp"]
+	if timestamp == nil {
+		timestamp = obj["created_at"]
+	}
+	if timestamp == nil {
+		timestamp = obj["time"]
+	}
+	return speaker, texts, parseUnixSeconds(timestamp)
 }
 
 func parseUnixSeconds(value any) int64 {

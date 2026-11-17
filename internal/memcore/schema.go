@@ -71,10 +71,7 @@ const (
 	//   - +1 Misc Band (unanchored / companion assertions);
 	//   - +2 Evidence Bands (1 Evidence-Lines band [E#k] + 1 Evidence-Artifacts band [A#m]);
 	//   - Total = 0–99 Bands.
-	MaxPrimaryBands       = 96
-	MaxMiscBands          = 1
-	MaxEvidenceBands      = 2
-	MaxTotalDeliveryBands = MaxPrimaryBands + MaxMiscBands + MaxEvidenceBands // 99
+	MaxPrimaryBands = 96
 
 	BandIDXO                = BandIDPrefix + "xo"
 	BandIDMisc              = BandIDPrefix + "misc"
@@ -144,56 +141,6 @@ func IsEpisodeBandID(bandID string) bool {
 
 // Closed-set enumerations shared 1:1 between PostgreSQL and SQLite schemas.
 var (
-	NodeKinds = []string{
-		"referent",
-		"relation_type",
-		"assertion",
-		"role",
-		"expression",
-		"incarnation",
-	}
-
-	NodeStatuses = []string{
-		"provisional",
-		"active",
-		"merged",
-		"retired",
-	}
-
-	Audiences = []string{"private", "group", "shared", "public"}
-
-	AudienceRank = map[string]int{
-		"private": 0,
-		"group":   1,
-		"shared":  2,
-		"public":  3,
-	}
-
-	Warrants = []string{"referential", "performative", "procedural", "experiential"}
-
-	WarrantSet = map[string]bool{
-		"referential":  true,
-		"performative": true,
-		"procedural":   true,
-		"experiential": true,
-	}
-
-	Worlds = []string{"actual", "fictional", "hypothetical", "dream"}
-
-	WorldSet = map[string]bool{
-		"actual":       true,
-		"fictional":    true,
-		"hypothetical": true,
-		"dream":        true,
-	}
-
-	Carriers = []string{"real", "virtual"}
-
-	CarrierSet = map[string]bool{
-		"real":    true,
-		"virtual": true,
-	}
-
 	// GapReasons is the 4-value closed set for unbound slots (subject_gap / object_gap / holder_gap).
 	GapReasons = []string{
 		"absent_in_source",
@@ -211,28 +158,6 @@ var (
 
 	// TemporalClasses canonical closed set + legacy client values accepted by NormalizeTemporalClass.
 	TemporalClasses = []string{"dated", "atemporal", "unknown"}
-
-	TemporalSet = map[string]bool{
-		"dated":     true,
-		"atemporal": true,
-		"unknown":   true,
-		// Legacy client values accepted and normalized when mapping to canonical schema:
-		"past":    true,
-		"present": true,
-		"future":  true,
-	}
-
-	AssertionStatuses = []string{
-		"active",
-		"superseded",
-		"expired",
-		"disputed",
-		"retracted",
-	}
-
-	LoopStates = []string{"open", "fulfilled", "waived", "broken"}
-
-	EventSources = []string{"", "explicit", "relative_resolved"}
 
 	// CanonicalMetaKinds defines the 8-kind cognitive-algebra closed set for memory_meta.meta_kind
 	// (4 concept/relation topology kinds + 4 proposition/epistemic dynamics kinds, 1:1 with PostgreSQL CHECK constraint).

@@ -73,6 +73,28 @@ func TestChunkSplitsOnlyAtSentenceBoundaries(t *testing.T) {
 
 // TestChunkKeepsSmallUnitIntact pins the fast path: a unit that already fits is
 // returned verbatim as a single chunk.
+func TestSegmentUnitsPreservesOccurrenceTime(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		turnTime    int64
+		segmentTime int64
+		want        int64
+	}{
+		{name: "unknown", want: 0},
+		{name: "segment", segmentTime: 100, want: 100},
+		{name: "turn", turnTime: 200, segmentTime: 100, want: 200},
+		{name: "negative unknown", turnTime: -1, segmentTime: -2, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			segment := episodic.Segment{Role: "user", Text: "sample", OccurredAt: tc.segmentTime}
+			units := SegmentUnits("mem:test", "@ref:zcode:s1:m1", segment, tc.turnTime, true)
+			if len(units) != 1 || units[0].OccurredAt != tc.want {
+				t.Fatalf("units = %+v, want occurred_at %d", units, tc.want)
+			}
+		})
+	}
+}
+
 func TestChunkKeepsSmallUnitIntact(t *testing.T) {
 	text := "[user] 把缓存按 docID 失效。"
 	if got := Chunk(text, TokenBudget); len(got) != 1 || got[0] != text {

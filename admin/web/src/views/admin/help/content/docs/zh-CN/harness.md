@@ -8,7 +8,7 @@
 
 Rolling Memory 的机械记忆核本身与具体 Coding Agent 宿主完全解耦；不同宿主之间的差异仅在于四项配置落点：**技能根目录（Skill Root）**、**MCP 服务注册文件**、**生命周期 Hooks 事件**与**全局/项目级指令文件**。
 
-`rolling-memory install` 将「四项配置面 × 多家主流宿主」收敛为统一注册表，实现一条命令完成备份、幂等写入与实时 MCP 握手自检（`install --check`）。
+`rolling-memory install` 为多种宿主提供统一配置入口，支持备份与幂等写入。`install --check` 检查注册项，并单独探测所选启动器。
 
 ---
 
@@ -18,7 +18,7 @@ Rolling Memory 的机械记忆核本身与具体 Coding Agent 宿主完全解耦
 |---|---|---|
 | **仅提供 MCP + 手工贴配置** | 提供 stdio MCP server，由用户自行查找各宿主的 JSON / TOML 路径并手写配置片段 | 用户需自行处理路径差异、转义格式与 PATH 裁剪问题；无自动备份、无冲突保护 |
 | **单一宿主专用插件** | 绑定单一 IDE 或 CLI 的专有扩展接口与专有命令格式 | 跨工具切换时记忆与习惯割裂，无法在多款 Agent 之间共用同一本地记忆库 |
-| **`install` 统一注册表 + 原生插件双轨（本项目）** | 通用 stdio MCP（单工具 `recall` · 回忆）+ `install` 自动适配多宿主配置 + 原生插件自动去重 + `install --check` 真握手核验 | 一条命令接入全机宿主，共享同一个本地 SQLite 明文金库，装完即刻校验 |
+| **`install` 注册表与原生插件** | stdio MCP（单工具 `recall` · 回忆）、多宿主配置及独立启动器探测 | 配置已探测的宿主；遇冲突需人工核查，并在宿主会话中验证加载情况 |
 
 ---
 
@@ -36,27 +36,27 @@ SQLite 明文金库 (WAL + FTS5)  ← 本地存储层：本地明文金库
 
 - **机械核（`api` / `mcp` / `cli` / `hooks`）零宿主耦合**：不依赖任何特定宿主 SDK，仅通过标准进程协议通信（MCP 为逐行 JSON-RPC 2.0，CLI 为 argv/stdin，Hooks 为 JSON stdin → JSON stdout）。
 - **适配层（`internal/harness`）只做保守接线**：负责将启动器路径写入宿主配置文件、同步 `SKILL.md`、按需挂载 Hooks 与指令块，不介入任何记忆语义。
-- **提醒型钩子 · 检索 100% 由 Agent 驱动**：可选的逐轮钩子（`--with-hooks`）**绝不自动检索记忆**——`recall` 始终由 Agent 自己调用；钩子只负责保持本地捕获侧新鲜（对话轮次与已挂载的背景目录），并每隔数轮提醒 Agent `recall` 可用。
+- **提醒型钩子与 Agent 主动检索**：可选的逐轮钩子（`--with-hooks`）不自动检索记忆，由 Agent 决定何时调用 `recall`。钩子和后台扫描可导入受支持的本地来源，但不保证捕获全部对话。
 - **收口 `recall` 自评与自定义 `SKILL.md`**：`SKILL.md` 最末尾设有独立可选区块（`§5 收口如实评价`），约定 Agent 在本轮调用过 `recall` 时，于最终回复收尾附一行简短复盘（报告本轮调用次数、预计节省的盲搜/排障往返及具体依据、以及召回内容是否真正有帮助）。用户可随时打开已安装的 `<技能根>/rolling-memory/SKILL.md` 直接修改或删去末尾这一区块（或在 `rolling-memory install` 时传入 `--skill-file <路径>`）。
 
 ---
 
 ## 4. 支持的宿主矩阵
 
-### 4.1 默认自动探测宿主（5 家）
+### 4.1 宿主注册位置
 
 | 宿主 | 技能根（用户级） | MCP 注册位置 | 生命周期 Hooks | 指令文件（用户级 / 项目级） |
 |---|---|---|---|---|
 | **ZCode** | `~/.zcode/skills/` | `~/.zcode/cli/config.json` → `mcp.servers` | ✅ `hooks.events`（需 `hooks.enabled=true`） | `~/.zcode/AGENTS.md` / `AGENTS.md` |
 | **Claude Code** | `~/.claude/skills/` | `~/.claude.json` → `mcpServers`（项目级 `.mcp.json`） | ✅ `~/.claude/settings.json` → `hooks` | `~/.claude/CLAUDE.md` / `CLAUDE.md` |
-| **Codex** | `~/.codex/skills/` | `~/.codex/config.toml` → `[mcp_servers.<name>]` | —（由 Skill 驱动） | `~/.codex/AGENTS.md` / `AGENTS.md` |
+| **Codex** | `~/.codex/skills/` | `~/.codex/config.toml` → `[mcp_servers.<name>]` | ✅ `~/.codex/hooks.json`（可选，`--with-hooks`；首次需在 Codex 内评审信任） | `~/.codex/AGENTS.md` / `AGENTS.md` |
 | **DeepSeek Harness (`dsh`)** | `~/.dsh/skills/`（`$DSH_HOME`） | `~/.dsh/profiles/<profile>/cordis.patch.yml` → `dsh-mcp-client` | —（由 Skill 驱动） | `~/.dsh/AGENTS.md` / `AGENTS.md` |
 | **CodeBuddy** | `~/.codebuddy/skills/` | `~/.codebuddy/mcp.json` → `mcpServers` | —（由 Skill 驱动） | — / `CODEBUDDY.md` |
 
-### 4.2 显式扩展宿主（5 家）与原生插件去重
+### 4.2 其他宿主与原生插件
 
-- **扩展宿主**：可通过 `rolling-memory install <id>` 显式指定接入 **Cursor**（`cursor` → `~/.cursor/mcp.json`）、**Windsurf**（`windsurf` → `~/.codeium/windsurf/mcp_config.json`）与 **Cline / Roo Code**（`cline` → `~/.cline/mcp_settings.json`），**WorkBuddy**（`workbuddy` → `~/.workbuddy/mcp.json`，即 WorkBuddy 自身连接器文档给出的路径；带点 `~/.workbuddy/.mcp.json` 作为旧宿主版本的兼容载体一并写入；技能根 `~/.workbuddy/skills`，无会话 Hooks；在 WorkBuddy 插件市场安装本插件即可同时接好技能与 MCP 服务，无需命令行步骤），以及 **豆包**（`doubao` → 双技能根 `~/Doubao/skills` 与 `~/.agents/skills`，即客户端自报的 `local_skill_paths`；本地技能收集器把两处扫入其 `# Skill Catalog`，并把其中的 USER skill 上传到账号做跨设备同步。MCP 连接器由豆包 manifest 下发投影、本地命令受 `mcp_command_path_policy` 约束（不接受任意绝对路径或包装脚本），故 `install` 只写技能并如实报 `skipped`；工具面走**地址式连接器**（`rolling-memory mcp --http` 起本地 URL，把地址填进 App，见 §4.4）。
-- **原生插件双路去重**：当检测到 ZCode 或 Claude Code 已启用自包含原生插件（`.zcode-plugin` / `.claude-plugin`）时，`install` 会自动清理全局配置文件中的重复挂载，收敛为单一路径。
+- **其他宿主**：安装器也会探测 **Cursor**、**Windsurf**、**Cline / Roo Code**、**WorkBuddy** 和**豆包**。如需只选择特定宿主，可通过 `rolling-memory install <id>` 指定。请检查安装输出和宿主当前的配置位置：不同宿主版本使用的路径可能不同。WorkBuddy 插件包含技能、MCP 注册项和提示钩子，但需要先单独安装本地 CLI；宿主不提供插件根路径时，MCP 启动器使用已安装的本地 CLI，缺少 CLI 则无法启动，也不会自动下载。豆包的 MCP 连接器需手工配置（见 §4.4）。
+- **原生插件**：启用的插件声明了同名技能或 MCP 服务时，`install` 会保留已有配置，并在需要时报告冲突，不会自动删除。请核查宿主配置和插件状态；插件声明不代表宿主已加载。
 
 ### 4.3 三类安全配置文件写手
 
@@ -93,7 +93,7 @@ rolling-memory mcp --http                                    # 默认 http://127
 rolling-memory mcp --http --addr 127.0.0.1:9000 --path /mcp  # 需要换端口 / 路径时
 ```
 
-在豆包的连接器表单里选 **Streamable HTTP**，填 `http://127.0.0.1:8765/mcp`（若表单只给 SSE 选项，填 `http://127.0.0.1:8765/sse`）。保存后新开会话，工具列表应出现 `recall`（回忆）——记忆面只有这一个工具：对话轮次由 Hooks 自动捕获，`recall` 负责检索并把证据结晶为记忆。
+在豆包的连接器表单里选 **Streamable HTTP**，填 `http://127.0.0.1:8765/mcp`（若表单只给 SSE 选项，填 `http://127.0.0.1:8765/sse`）。保存后新开会话，工具列表应出现 `recall`（回忆）。连接工具不会自动导入豆包对话；采集范围见下节。
 
 - 服务只绑回环地址（默认 `127.0.0.1`）、请求体上限 8 MiB、跨源请求拒绝；进程需常驻，建议交给系统服务托管。
 - `install doubao` 的 MCP 一行仍显示 `skipped` 属**如实反映**：注册面在豆包侧（凭证加密存储 + manifest 下发），命令行写不进去，只能由你在 App 内填地址。
@@ -101,6 +101,12 @@ rolling-memory mcp --http --addr 127.0.0.1:9000 --path /mcp  # 需要换端口 /
 **排查**：技能未出现时，先确认两个技能根下都有 `SKILL.md`；再查豆包运行期日志 `~/Library/Application Support/Doubao/sdk_storage/log/saman_<日期>.log`，搜 `local_skill_paths`（客户端自报技能根）、`scan_local_skills`（扫描结果与 `item_count`）、`[MCP_SERVICE] get all tools … connector_count=`（MCP 装载实况）。地址式连接器未生效时先本地验证服务：`curl -s http://127.0.0.1:8765/mcp -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`。
 
 **卸载**：`rolling-memory install doubao --uninstall`（只删本工具写入的技能文件，豆包侧账号副本需在 App 内移除）。
+
+### 4.5 对话采集范围与手工导入
+
+安装 MCP 服务或技能与采集对话历史是两件事。后台扫描器读取 ZCode 的本地会话数据库，以及 ZCode、Claude Code、Codex、DSH、CodeBuddy 和 WorkBuddy 的部分转录文件位置。它支持 Codex 的 `.jsonl.zst` 归档，以及已观察到的 v4 格式 DSH 压缩 `.jsonl.zstd` 会话：用户消息须具有 `source.kind: user`，只有匹配的 `turn/start` 与 `turn/end` 事件确认成功完成（`reason.kind: completed`）的轮次才会导入。未知格式和无法确认成功完成的轮次不导入；不保证覆盖子代理对话。CodeBuddy 和 WorkBuddy 的预设 JSONL 位置可能与宿主实际存储不一致。Cursor、Windsurf、Cline 和豆包没有自动对话扫描器。已安装且受宿主支持的钩子也不能保证这些来源完整。
+
+其他来源可导出或准备受支持的 JSONL 或文本对话文件，用 `rolling-memory import /path/to/transcript` 手工导入并检查结果。文件导入仅接受 `shared` 或 `public` 受众；由于后台扫描无法执行文件级访问控制，受限或未知受众会被拒绝。请勿将敏感文件放入扫描目录；已有副本不会自动删除。手工导入和后台扫描均不保证完整或无损采集。工具契约见 [mcp.md](mcp.md)。检索与存储使用本地明文 `local_plain`；安装或更新软件是单独的操作，可能需要联网。
 
 ---
 
@@ -143,7 +149,7 @@ rolling-memory install --uninstall
 | **第 1 层：技能就位** | 宿主技能目录存在 `SKILL.md` 且包含完整 frontmatter | 运行 `rolling-memory install --check`；新开会话可见对应技能名称 |
 | **第 2 层：MCP 已注册** | 宿主配置文件中存在合法的 `rolling-memory` 服务条目 | 运行 `rolling-memory install --check` 自动解析校验 |
 | **第 3 层：进程握手通过** | 真实拉起 MCP 子进程，校验 `initialize` 与 `tools/list` 恰返回 `recall` 单工具 | `install --check` 顶部 `server ok · rolling-memory ... · tools: recall` |
-| **第 4 层：会话行为闭环** | 新会话追问历史背景时自动触发 `recall`（回忆即巩固 `Noetic`），生命周期钩子与后台同步进程将已完成的对话轮次自动收进本地金库并作为 `Episodic` 落库 | 在新会话中提问或查看 `~/.local/state/rolling-memory/rolling-memory.log` |
+| **第 4 层：会话行为** | 检查 Agent 是否调用 `recall`，以及预期来源是否已导入 | 在新会话中追问历史并检查本地记录；来源覆盖范围见 §4.5 |
 
 ---
 
@@ -197,7 +203,7 @@ rolling-memory update --check --json
 ```
 
 - **SHA-256 强校验（Fail-Closed）**：每个下载产物（`rolling-memory-<os>-<arch>`、`rolling-admin-<os>-<arch>`、`web-dist.tar.gz`）在替换本地文件前均强制比对发布渠道的 `SHA256SUMS`；若校验缺失或不匹配则立即中止，绝不污染既有二进制。
-- **守护进程与控制台平滑热切换**：CLI 二进制完成原子替换后，自动通知本机常驻守护进程（`engine.sock`）优雅下线，使下一次 MCP 或 CLI 请求即刻由新版二进制接管；若 Web 控制台处于运行中，升级完成后会自动重启控制台服务。
+- **本地守护进程安全边界**：共享的本地守护进程只有在用户、身份和配置核验通过后才能被控制。旧版或无法核验的守护进程不会被自动停止；无法完成核验的请求会报错。请求发送后若发生失败，不会自动重试。共享守护进程以可信的本机用户为边界，不能保证抵御同一用户运行的任意代码。
 - **本地金库零触碰安全承诺**：升级全过程仅替换可执行文件、前端静态资源与宿主配置项，**永不修改、清空或覆盖用户的本地 SQLite 明文金库（`~/.local/share/rolling-memory/memory.db`）**；数据库表结构演进均在打开时原位幂等迁移。
 - **零开发环境依赖（免装 Git / Go / Node.js / Python）**：
   - `install.sh` 与 `install.ps1` 默认直接拉取经 `SHA256SUMS` 强校验的预编译静态二进制（POSIX 下自适应 `curl` 或 `wget`，Windows 下原生支持 x64 与 ARM64，并在主发布源不可达时自动回退备用镜像源）。

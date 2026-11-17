@@ -145,10 +145,9 @@ func computeLocomoCorpusFingerprint(home, vaultPath string) string {
 	paths := []string{
 		vaultPath,
 		vaultPath + ".manifest.json",
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "locomo-recall-run2.jsonl"),
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-pulse-cipher-none.jsonl"),
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-pulse-cipher-llm.jsonl"),
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-pulse-cipher-llm-judge.jsonl"),
+		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-none.jsonl"),
+		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-llm.jsonl"),
+		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-llm-judge.jsonl"),
 	}
 	paths = append(paths, resolveLocomoSnapshotPaths(home)...)
 	var b strings.Builder
@@ -420,13 +419,12 @@ func loadLocomoCorpusWithSnapshots(useSnapshots bool) (*locomoCachedCorpus, erro
 	dataDir := resolveEvalDataDir(home)
 	tierQs, _ := loadTierQuestions(dataDir, "100")
 
-	// 读取已有的云端真实召回记录（按文件从旧到新合并，最新重跑的全量记录覆盖旧记录）
+	// 读取已有的本地明文召回记录（按文件从旧到新合并，最新重跑的全量记录覆盖旧记录）
 	cloudHitsByQID := make(map[string][]string)
 	resultFiles := []string{
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "locomo-recall-run2.jsonl"),
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-pulse-cipher-none.jsonl"),
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-pulse-cipher-llm.jsonl"),
-		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-pulse-cipher-llm-judge.jsonl"),
+		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-none.jsonl"),
+		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-llm.jsonl"),
+		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-llm-judge.jsonl"),
 	}
 	for _, jsonlPath := range resultFiles {
 		if rawJSONL, err := os.ReadFile(jsonlPath); err == nil {

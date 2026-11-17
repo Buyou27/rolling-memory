@@ -169,7 +169,7 @@ func TestSyncReconcileImportsWorkBuddyJSONLTurns(t *testing.T) {
 	}
 	nowMS := time.Now().Add(-5 * time.Minute).UnixMilli()
 	lines := `{"id":"u1","timestamp":` + jsonNumberString(nowMS) + `,"type":"message","role":"user","content":[{"type":"input_text","text":"在 16 机器上同步 WorkBuddy 会话记忆。"}]}` + "\n" +
-		`{"id":"a1","timestamp":` + jsonNumberString(nowMS+2000) + `,"type":"message","role":"assistant","content":[{"type":"output_text","text":"WorkBuddy JSONL 会话已成功扫描并入库。"}]}` + "\n"
+		`{"id":"a1","timestamp":` + jsonNumberString(nowMS+2000) + `,"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"output_text","text":"WorkBuddy JSONL 会话已成功扫描并入库。"}]}}` + "\n"
 	if err := os.WriteFile(filepath.Join(projDir, "conv-1.jsonl"), []byte(lines), 0o644); err != nil {
 		t.Fatalf("write workbuddy transcript: %v", err)
 	}
@@ -193,6 +193,79 @@ func TestSyncReconcileImportsWorkBuddyJSONLTurns(t *testing.T) {
 	wbAfter := harnessItem(t, postSt, "workbuddy")
 	if wbAfter["synced_turns_count"] != float64(2) || wbAfter["unsynced_turns_count"] != float64(0) {
 		t.Fatalf("workbuddy status after reconcile = %+v", wbAfter)
+	}
+}
+
+func TestSyncStatusAggregatesHostsAndReportsUnknown(t *testing.T) {
+	env := newEnv(t)
+	dbPath := filepath.Join(env.base, "multi-host.db")
+	t.Setenv("ROLLING_MEMORY_HARNESS", "claude-code")
+	for _, fixture := range []struct{ hostDir, session, text string }{
+		{".claude", "claude", "first host pending"},
+		{".codex", "codex", "second host pending"},
+	} {
+		var path string
+		if fixture.hostDir == ".codex" {
+			path = filepath.Join(os.Getenv("HOME"), fixture.hostDir, "sessions", fixture.session+".jsonl")
+		} else {
+			path = filepath.Join(os.Getenv("HOME"), fixture.hostDir, "projects", "demo", fixture.session+".jsonl")
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"type":"user","message":{"role":"user","content":"` + fixture.text + `"}}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":"next ` + fixture.session + `"}}` + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload := runStatusJSON(t, dbPath)
+	layers, _ := payload["layers"].(map[string]any)
+	epi, _ := layers["episodic"].(map[string]any)
+	if epi["harness_unsynced_turns"] != float64(4) || epi["aligned"] != false || epi["alignment_known"] != false {
+		t.Fatalf("multi-host status = %+v", epi)
+	}
+	if payload["total_pending_sync"].(float64) < 4 {
+		t.Fatalf("pending count omitted a host: %+v", payload)
+	}
+}
+
+func TestSyncStatusExcludedSubagentIsUnknown(t *testing.T) {
+	env := newEnv(t)
+	home := os.Getenv("HOME")
+	main := filepath.Join(home, ".claude", "projects", "demo", "main.jsonl")
+	if err := os.MkdirAll(filepath.Dir(main), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"user","message":{"role":"user","content":"main question"}}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"main answer"}}` + "\n"
+	if err := os.WriteFile(main, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(env.base, "subagent.db")
+	res := run(t, "sync", "reconcile", "--db", dbPath, "--harness", "claude-code", "--layer", "episodic", "--json")
+	if res.code != 0 {
+		t.Fatalf("reconcile exit=%d stdout=%s stderr=%s", res.code, res.stdout, res.stderr)
+	}
+	getLayer := func() map[string]any {
+		t.Helper()
+		payload := runStatusJSON(t, dbPath)
+		layers, _ := payload["layers"].(map[string]any)
+		layer, _ := layers["episodic"].(map[string]any)
+		return layer
+	}
+	if layer := getLayer(); layer["alignment_known"] != true || layer["aligned"] != true {
+		t.Fatalf("main session control = %+v", layer)
+	}
+	child := filepath.Join(home, ".claude", "projects", "demo", "main", "subagents", "agent-child.jsonl")
+	if err := os.MkdirAll(filepath.Dir(child), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if layer := getLayer(); layer["alignment_known"] != false || layer["aligned"] != false {
+		t.Fatalf("excluded subagent reported aligned: %+v", layer)
 	}
 }
 

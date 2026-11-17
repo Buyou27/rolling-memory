@@ -4,15 +4,19 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"regexp"
+	"reflect"
 	"runtime"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"gopkg.in/yaml.v3"
 )
 
 // The MCP surface has three writers: a JSON deep merge (zcode / claude-code /
@@ -44,18 +48,29 @@ func mcpEntry(options InstallOptions) ids.OrderedMap {
 }
 
 func tomlBlock(options InstallOptions) (string, error) {
+	return tomlBlockWithTimeout(options, int64(30))
+}
+
+func tomlBlockWithTimeout(options InstallOptions, timeout int64) (string, error) {
 	command, err := pyJSONString(options.ResolvedBinary())
 	if err != nil {
 		return "", err
 	}
+	name := options.Name
+	if strings.Contains(name, ".") {
+		name, err = pyJSONString(name)
+		if err != nil {
+			return "", err
+		}
+	}
 	lines := []string{
-		"[mcp_servers." + options.Name + "]",
+		"[mcp_servers." + name + "]",
 		"command = " + command,
 		`args = ["mcp"]`,
-		"startup_timeout_sec = 30",
+		fmt.Sprintf("startup_timeout_sec = %d", timeout),
 	}
 	if env := mcpEnv(options); len(env) > 0 {
-		lines = append(lines, "", "[mcp_servers."+options.Name+".env]")
+		lines = append(lines, "", "[mcp_servers."+name+".env]")
 		for _, pair := range env {
 			value, err := pyJSONString(pyString(pair.Value))
 			if err != nil {
@@ -98,7 +113,7 @@ func dshBlock(options InstallOptions) (string, error) {
 // name, or a launcher shim path for this platform.
 func isOurBinary(value string, options InstallOptions) bool {
 	resolved := options.ResolvedBinary()
-	return value == resolved || value == "rolling-memory" || value == "rmem" || hasShimSuffix(value)
+	return value == resolved || value == "rolling-memory" || value == "rmem" || value == DefaultShimPath(options.Home)
 }
 
 func hasShimSuffix(value string) bool {
@@ -116,19 +131,47 @@ func entryIsOurs(entry any, options InstallOptions) bool {
 		return false
 	}
 	argsValue, _ := objectGet(object, "args")
-	args, _ := asArray(argsValue)
-	hasMCP := false
-	for _, arg := range args {
-		if pyString(arg) == "mcp" {
-			hasMCP = true
-			break
-		}
-	}
-	if !hasMCP {
+	args, ok := asArray(argsValue)
+	if !ok || len(args) != 1 || args[0] != "mcp" {
 		return false
 	}
 	command, _ := objectGet(object, "command")
 	return isOurBinary(pyString(command), options)
+}
+
+func jsonEntryIsManaged(entry any, options InstallOptions) bool {
+	if !entryIsOurs(entry, options) {
+		return false
+	}
+	object, ok := asObject(entry)
+	if !ok {
+		return false
+	}
+	for _, pair := range object {
+		switch pair.Key {
+		case "command", "args":
+		case "type":
+			if pair.Value != "stdio" {
+				return false
+			}
+		case "env":
+			env, ok := asObject(pair.Value)
+			if !ok {
+				return false
+			}
+			for _, item := range env {
+				if (item.Key != "ROLLING_MEMORY_DB" && item.Key != "ROLLING_MEMORY_SCOPE") || item.Value == nil {
+					return false
+				}
+				if _, ok := item.Value.(string); !ok {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func entryCommand(entry any) string {
@@ -141,13 +184,15 @@ func entryCommand(entry any) string {
 }
 
 func hookIsOurs(command string, options InstallOptions) bool {
-	if !strings.Contains(command, " hook ") {
-		return false
+	for _, sub := range []string{"recall", "start", "stop"} {
+		suffix := " hook " + sub + " --json"
+		if !strings.HasSuffix(command, suffix) {
+			continue
+		}
+		binary := strings.TrimSuffix(command, suffix)
+		return binary == shlexQuote(options.ResolvedBinary()) || binary == "rolling-memory" || binary == "rmem"
 	}
-	return strings.Contains(command, options.ResolvedBinary()) ||
-		strings.Contains(command, "rolling_memory") ||
-		strings.Contains(command, "rolling-memory") ||
-		strings.HasPrefix(command, "rmem ")
+	return false
 }
 
 // regionIsOurs: ours only when a binary/launcher marker is present -- the name
@@ -164,10 +209,10 @@ func mcpTargetPath(harness Harness, options InstallOptions) (string, bool) {
 		return "", false
 	}
 	if harness.MCPKind == "dsh" {
-		if options.Project || harness.ProfilesDir == nil {
+		if options.Project || harness.ProfilesDir == nil || validateDSHProfile(options.withDefaults().DSHProfile) != nil {
 			return "", false
 		}
-		return filepath.Join(*harness.ProfilesDir, options.DSHProfile, "cordis.patch.yml"), true
+		return filepath.Join(*harness.ProfilesDir, options.withDefaults().DSHProfile, "cordis.patch.yml"), true
 	}
 	if options.Project {
 		if harness.MCPProjectPath == nil {
@@ -185,6 +230,25 @@ func mcpTargetPath(harness Harness, options InstallOptions) (string, bool) {
 // observed reading the dotted ~/.workbuddy/.mcp.json. Every writer here merges
 // into the existing table and removes only entries it recognises as its own, so
 // whatever the host already keeps in either file survives untouched.
+func dshPathError(harness Harness, path string) error {
+	if harness.MCPKind != "dsh" || harness.ProfilesDir == nil {
+		return nil
+	}
+	for _, candidate := range []string{filepath.Dir(path), path} {
+		info, err := os.Lstat(candidate)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing symlink %s", candidate)
+		}
+	}
+	return nil
+}
+
 func mcpTargetPaths(harness Harness, options InstallOptions) []string {
 	primary, ok := mcpTargetPath(harness, options)
 	if !ok {
@@ -212,6 +276,10 @@ func installMCP(harness Harness, options InstallOptions, report *Report) {
 		return
 	}
 	for _, path := range paths {
+		if err := dshPathError(harness, path); err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, err.Error())
+			continue
+		}
 		switch harness.MCPKind {
 		case "json":
 			installMCPJSON(harness, options, path, report)
@@ -232,6 +300,10 @@ func uninstallMCP(harness Harness, options InstallOptions, report *Report) {
 		return
 	}
 	for _, path := range paths {
+		if err := dshPathError(harness, path); err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, err.Error())
+			continue
+		}
 		if !fileExists(path) {
 			// A secondary target the user never had is not a missing piece of
 			// the installation; report on the primary one only.
@@ -260,10 +332,25 @@ func checkMCP(harness Harness, options InstallOptions, report *Report) {
 	plugin, hasPluginMCP := activeNativePlugin(harness, options)
 	hasPluginMCP = hasPluginMCP && plugin.HasMCP
 	for _, path := range paths {
+		if err := dshPathError(harness, path); err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, err.Error())
+			continue
+		}
 		if !fileExists(path) {
+			if harness.MCPKind == "dsh" && options.Name == DefaultName {
+				selected, err := dshBundleSelected(path)
+				if err != nil {
+					report.Add(harness.ID, "mcp", path, StatusConflict, "cannot determine selected DSH bundles: "+err.Error())
+					continue
+				}
+				if selected {
+					report.Add(harness.ID, "mcp", path, StatusSkipped, "DSH bundle selected; activation unverified")
+					continue
+				}
+			}
 			if hasPluginMCP {
 				if path == paths[0] {
-					report.Add(harness.ID, "mcp", path, StatusOK, "plugin "+plugin.ID)
+					report.Add(harness.ID, "mcp", path, StatusConflict, "plugin "+plugin.ID+" declares MCP; host activation unverified")
 				}
 				continue
 			}
@@ -283,36 +370,44 @@ func checkMCP(harness Harness, options InstallOptions, report *Report) {
 	}
 }
 
+func jsonPathIsObject(data ids.OrderedMap, keys []string) bool {
+	var value any = data
+	for _, key := range keys {
+		object, ok := asObject(value)
+		if !ok {
+			return false
+		}
+		value, ok = objectGet(object, key)
+		if !ok {
+			return true
+		}
+	}
+	_, ok := asObject(value)
+	return ok
+}
+
 func installMCPJSON(harness Harness, options InstallOptions, path string, report *Report) {
 	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasMCP && !options.Force {
-		if fileExists(path) {
-			if data, err := loadJSONFile(path); err == nil {
-				keys := append(append([]string{}, harness.MCPKeys...), options.Name)
-				if existing, found := jsonLookup(data, keys); found && existing != nil && entryIsOurs(existing, options) {
-					if options.DryRun {
-						report.Add(harness.ID, "mcp", path, StatusPlanned, "dedupe global MCP (provided by plugin "+plugin.ID+")")
-						return
-					}
-					updated, ok := jsonTableWith(data, harness.MCPKeys, false, func(current ids.OrderedMap) ids.OrderedMap {
-						return objectDelete(current, options.Name)
-					})
-					if ok {
-						if text, err := dumpJSON(updated); err == nil {
-							_, _ = writeText(path, text)
-						}
-					}
-					report.Add(harness.ID, "mcp", path, StatusRemoved, "deduped; provided by plugin "+plugin.ID)
-					return
-				}
-			}
+		data, err := loadJSONFile(path)
+		if err != nil {
+			report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
+			return
 		}
-		report.Add(harness.ID, "mcp", path, StatusUnchanged, "provided by plugin "+plugin.ID)
+		keys := append(append([]string{}, harness.MCPKeys...), options.Name)
+		if existing, found := jsonLookup(data, keys); found && existing != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "existing MCP entry retained; plugin "+plugin.ID+" is also active")
+			return
+		}
+		report.Add(harness.ID, "mcp", path, StatusConflict, "plugin "+plugin.ID+" declares an MCP entry; host activation is unverified")
 		return
 	}
-	entry := mcpEntry(options)
 	data, err := loadJSONFile(path)
 	if err != nil {
 		report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
+	if !jsonPathIsObject(data, harness.MCPKeys) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "MCP path contains a non-object value")
 		return
 	}
 	table, _, ok := jsonTable(data, harness.MCPKeys, true)
@@ -322,13 +417,30 @@ func installMCPJSON(harness Harness, options InstallOptions, path string, report
 	}
 	existing, found := objectGet(table, options.Name)
 	present := found && existing != nil
+	if present && jsonEntryIsManaged(existing, options) {
+		object, _ := asObject(existing)
+		if value, found := objectGet(object, "env"); found {
+			env, _ := asObject(value)
+			if options.DB == "" {
+				if db, found := objectGet(env, "ROLLING_MEMORY_DB"); found {
+					options.DB, _ = db.(string)
+				}
+			}
+			if options.Scope == "" {
+				if scope, found := objectGet(env, "ROLLING_MEMORY_SCOPE"); found {
+					options.Scope, _ = scope.(string)
+				}
+			}
+		}
+	}
+	entry := mcpEntry(options)
 	if present && jsonEqual(existing, entry) {
 		report.Add(harness.ID, "mcp", path, StatusUnchanged, "")
 		return
 	}
-	if present && !entryIsOurs(existing, options) && !options.Force {
+	if present && !jsonEntryIsManaged(existing, options) && !options.Force {
 		report.Add(harness.ID, "mcp", path, StatusConflict,
-			"'"+options.Name+"' exists and is not ours; use --force")
+			"'"+options.Name+"' has unverified ownership or user fields; not touching it")
 		return
 	}
 	if options.DryRun {
@@ -374,8 +486,8 @@ func uninstallMCPJSON(harness Harness, options InstallOptions, path string, repo
 		report.Add(harness.ID, "mcp", path, StatusSkipped, "entry not present")
 		return
 	}
-	if !entryIsOurs(existing, options) {
-		report.Add(harness.ID, "mcp", path, StatusConflict, "entry is not ours; not touching it")
+	if !jsonEntryIsManaged(existing, options) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "entry has unverified ownership or user fields; not touching it")
 		return
 	}
 	if options.DryRun {
@@ -415,7 +527,7 @@ func checkMCPJSON(harness Harness, options InstallOptions, path string, report *
 				"duplicate MCP: both "+filepath.Base(path)+" and plugin "+plugin.ID+" active (run `rolling-memory install "+harness.ID+"` to deduplicate)")
 			return
 		}
-		report.Add(harness.ID, "mcp", path, StatusOK, "plugin "+plugin.ID)
+		report.Add(harness.ID, "mcp", path, StatusConflict, "plugin "+plugin.ID+" declares MCP; host activation unverified")
 		return
 	}
 	if !found || entry == nil {
@@ -430,30 +542,143 @@ func checkMCPJSON(harness Harness, options InstallOptions, path string, report *
 	report.Add(harness.ID, "mcp", path, StatusConflict, "same-named entry is not ours")
 }
 
-var tomlHeaderRE = regexp.MustCompile(`^\[([^\]]+)\]\s*$`)
+type tomlSpan struct {
+	start   int
+	end     int
+	comment string
+}
 
-// tomlRegionBounds returns the bounds of the [table] block plus any [table.*]
-// subtables.
-func tomlRegionBounds(lines []string, table string) (int, int, bool) {
-	first := -1
-	for index, raw := range lines {
-		match := tomlHeaderRE.FindStringSubmatch(strings.TrimSpace(raw))
-		if match == nil {
+func tomlComments(node *unstable.Node, raw string, out *strings.Builder) {
+	for node != nil {
+		if node.Kind == unstable.Comment {
+			start := int(node.Raw.Offset)
+			end := start + int(node.Raw.Length)
+			out.WriteString(raw[start:end])
+			out.WriteByte('\n')
+		}
+		tomlComments(node.Child(), raw, out)
+		node = node.Next()
+	}
+}
+
+// tomlTableSpans identifies only complete table headers and their assignments.
+// Comments and all bytes outside those expressions remain untouched.
+func tomlTableSpans(raw string, target []string) ([]tomlSpan, error) {
+	var parser unstable.Parser
+	parser.KeepComments = true
+	parser.Reset([]byte(raw))
+	current := false
+	var spans []tomlSpan
+	for parser.NextExpression() {
+		node := parser.Expression()
+		if node.Kind != unstable.Table && node.Kind != unstable.ArrayTable && node.Kind != unstable.KeyValue {
 			continue
 		}
-		key := strings.TrimSpace(match[1])
-		if key == table || strings.HasPrefix(key, table+".") {
-			if first < 0 {
-				first = index
+		iter := node.Key()
+		var key []string
+		var keyStart, keyEnd int
+		for iter.Next() {
+			if len(key) == 0 {
+				keyStart = int(iter.Node().Raw.Offset)
 			}
-		} else if first >= 0 {
-			return first, index, true
+			keyEnd = int(iter.Node().Raw.Offset + iter.Node().Raw.Length)
+			key = append(key, string(iter.Node().Data))
+		}
+		if node.Kind == unstable.Table || node.Kind == unstable.ArrayTable {
+			current = len(key) >= len(target) && reflect.DeepEqual(key[:len(target)], target)
+		}
+		if !current {
+			continue
+		}
+		start := keyStart
+		end := keyEnd
+		if node.Kind == unstable.KeyValue {
+			start = int(node.Raw.Offset)
+			end = start + int(node.Raw.Length)
+		}
+		lineStart := strings.LastIndex(raw[:start], "\n") + 1
+		prefix := strings.TrimSpace(raw[lineStart:start])
+		if prefix == "" || ((node.Kind == unstable.Table || node.Kind == unstable.ArrayTable) && (prefix == "[" || prefix == "[[")) {
+			start = lineStart
+		} else {
+			return nil, fmt.Errorf("cannot safely locate TOML expression")
+		}
+		lineEnd := strings.IndexByte(raw[end:], '\n')
+		var comments strings.Builder
+		if node.Kind == unstable.KeyValue {
+			tomlComments(node.Value().Child(), raw, &comments)
+		}
+		if lineEnd >= 0 {
+			lineEnd += end
+		} else {
+			lineEnd = len(raw)
+		}
+		if index := strings.IndexByte(raw[end:lineEnd], '#'); index >= 0 {
+			comments.WriteString(raw[end+index : lineEnd])
+			if lineEnd < len(raw) {
+				comments.WriteByte('\n')
+			}
+		}
+		end = lineEnd
+		if end < len(raw) {
+			end++
+		}
+		spans = append(spans, tomlSpan{start: start, end: end, comment: comments.String()})
+	}
+	return spans, parser.Error()
+}
+
+func tomlWithoutSpans(raw string, spans []tomlSpan) string {
+	var out strings.Builder
+	last := 0
+	for _, span := range spans {
+		out.WriteString(raw[last:span.start])
+		out.WriteString(span.comment)
+		last = span.end
+	}
+	out.WriteString(raw[last:])
+	return out.String()
+}
+
+func tomlEntry(data map[string]any, harness Harness, name string) (any, bool) {
+	var value any = data
+	for _, key := range append(append([]string{}, harness.MCPKeys...), name) {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		value, ok = object[key]
+		if !ok {
+			return nil, false
 		}
 	}
-	if first < 0 {
-		return 0, 0, false
+	return value, true
+}
+
+func tomlOtherFieldsEqual(before, after map[string]any, harness Harness, name string) bool {
+	for _, data := range []map[string]any{before, after} {
+		value := data
+		parents := []map[string]any{data}
+		for _, key := range harness.MCPKeys {
+			child, ok := value[key].(map[string]any)
+			if !ok {
+				value = nil
+				break
+			}
+			value = child
+			parents = append(parents, child)
+		}
+		if value != nil {
+			delete(value, name)
+			for i := len(harness.MCPKeys) - 1; i >= 0; i-- {
+				if len(parents[i+1]) != 0 {
+					break
+				}
+				delete(parents[i], harness.MCPKeys[i])
+			}
+		}
 	}
-	return first, len(lines), true
+	return reflect.DeepEqual(before, after)
 }
 
 func tomlTableName(harness Harness, options InstallOptions) string {
@@ -479,43 +704,90 @@ func installMCPToml(harness Harness, options InstallOptions, path string, report
 		}
 		original = string(raw)
 	}
-	lines := pySplitLines(original)
+	before, err := parseTOML(original)
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
+	entry, present := tomlEntry(before, harness, options.Name)
+	if present && tomlEntryIsOurs(entry, options) {
+		object := entry.(map[string]any)
+		if env, ok := object["env"].(map[string]any); ok {
+			if options.DB == "" {
+				options.DB, _ = env["ROLLING_MEMORY_DB"].(string)
+			}
+			if options.Scope == "" {
+				options.Scope, _ = env["ROLLING_MEMORY_SCOPE"].(string)
+			}
+		}
+		if timeout, found := object["startup_timeout_sec"]; found {
+			value, ok := timeout.(int64)
+			if !ok {
+				report.Add(harness.ID, "mcp", path, StatusConflict, "startup_timeout_sec is not an integer; not touching it")
+				return
+			}
+			desired, err = tomlBlockWithTimeout(options, value)
+		} else {
+			desired, err = tomlBlock(options)
+		}
+		if err != nil {
+			report.Add(harness.ID, "mcp", path, StatusError, "cannot encode: "+err.Error())
+			return
+		}
+	}
+	spans, err := tomlTableSpans(original, append(append([]string{}, harness.MCPKeys...), options.Name))
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
 	status := StatusInstalled
-	var newLines []string
-	if start, end, ok := tomlRegionBounds(lines, table); ok {
-		current := strings.Join(lines[start:end], "\n")
-		if strings.TrimSpace(current) == strings.TrimSpace(desired) {
+	text := original
+	if present {
+		if !tomlEntryIsOurs(entry, options) {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "["+table+"] has unverified ownership or fields; not touching it")
+			return
+		}
+		if len(spans) == 0 {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "entry is not represented by standalone tables")
+			return
+		}
+		desiredData, _ := parseTOML(desired)
+		desiredEntry, _ := tomlEntry(desiredData, harness, options.Name)
+		if reflect.DeepEqual(entry, desiredEntry) {
 			report.Add(harness.ID, "mcp", path, StatusUnchanged, "")
 			return
 		}
-		if !regionIsOurs(current, options) && !options.Force {
-			report.Add(harness.ID, "mcp", path, StatusConflict,
-				"["+table+"] exists and is not ours; use --force")
-			return
-		}
-		if options.DryRun {
-			report.Add(harness.ID, "mcp", path, StatusPlanned, tomlPreview(desired))
-			return
-		}
-		newLines = append(append(append([]string{}, lines[:start]...), pySplitLines(desired)...), lines[end:]...)
+		remaining := tomlWithoutSpans(original, spans)
+		text = remaining[:spans[0].start] + desired + remaining[spans[0].start:]
 		status = StatusUpdated
 	} else {
-		if options.DryRun {
-			report.Add(harness.ID, "mcp", path, StatusPlanned, tomlPreview(desired))
-			return
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
 		}
-		newLines = append([]string{}, lines...)
-		for len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) == "" {
-			newLines = newLines[:len(newLines)-1]
+		if strings.TrimSpace(text) != "" {
+			text += "\n"
 		}
-		if len(newLines) > 0 {
-			newLines = append(newLines, "")
-		}
-		newLines = append(newLines, pySplitLines(desired)...)
+		text += desired
 	}
-	text := pyStripRight(strings.Join(newLines, "\n")) + "\n"
-	if err := validateTOML(text); err != nil {
+	after, err := parseTOML(text)
+	if err != nil {
 		report.Add(harness.ID, "mcp", path, StatusError, "refusing to write invalid TOML: "+err.Error())
+		return
+	}
+	desiredData, _ := parseTOML(desired)
+	desiredEntry, _ := tomlEntry(desiredData, harness, options.Name)
+	actualEntry, found := tomlEntry(after, harness, options.Name)
+	if !found || !reflect.DeepEqual(actualEntry, desiredEntry) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "entry has fields outside standalone tables")
+		return
+	}
+	before, _ = parseTOML(original)
+	if !tomlOtherFieldsEqual(before, after, harness, options.Name) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "refusing to change unrelated TOML fields")
+		return
+	}
+	if options.DryRun {
+		report.Add(harness.ID, "mcp", path, StatusPlanned, tomlPreview(desired))
 		return
 	}
 	if _, err := writeText(path, text); err != nil {
@@ -530,37 +802,52 @@ func tomlPreview(desired string) string {
 }
 
 func uninstallMCPToml(harness Harness, options InstallOptions, path string, report *Report) {
-	table := tomlTableName(harness, options)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		report.Add(harness.ID, "mcp", path, StatusError, "cannot read: "+err.Error())
 		return
 	}
-	lines := pySplitLines(string(raw))
-	start, end, ok := tomlRegionBounds(lines, table)
-	if !ok {
+	original := string(raw)
+	before, err := parseTOML(original)
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
+	entry, found := tomlEntry(before, harness, options.Name)
+	if !found {
 		report.Add(harness.ID, "mcp", path, StatusSkipped, "entry not present")
 		return
 	}
-	current := strings.Join(lines[start:end], "\n")
-	if !regionIsOurs(current, options) {
-		report.Add(harness.ID, "mcp", path, StatusConflict, "region is not ours; not touching it")
+	if !tomlEntryIsOurs(entry, options) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "entry is not ours; not touching it")
+		return
+	}
+	spans, err := tomlTableSpans(original, append(append([]string{}, harness.MCPKeys...), options.Name))
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
+		return
+	}
+	if len(spans) == 0 {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "entry is not represented by standalone tables")
+		return
+	}
+	text := tomlWithoutSpans(original, spans)
+	after, err := parseTOML(text)
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusError, "refusing to write invalid TOML: "+err.Error())
+		return
+	}
+	if _, found := tomlEntry(after, harness, options.Name); found {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "entry has fields outside standalone tables")
+		return
+	}
+	before, _ = parseTOML(original)
+	if !tomlOtherFieldsEqual(before, after, harness, options.Name) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "refusing to change unrelated TOML fields")
 		return
 	}
 	if options.DryRun {
 		report.Add(harness.ID, "mcp", path, StatusPlanned, "")
-		return
-	}
-	newLines := append(append([]string{}, lines[:start]...), lines[end:]...)
-	for len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) == "" {
-		newLines = newLines[:len(newLines)-1]
-	}
-	text := ""
-	if len(newLines) > 0 {
-		text = strings.Join(newLines, "\n") + "\n"
-	}
-	if err := validateTOML(text); err != nil {
-		report.Add(harness.ID, "mcp", path, StatusError, "refusing to write invalid TOML: "+err.Error())
 		return
 	}
 	if _, err := writeText(path, text); err != nil {
@@ -599,28 +886,195 @@ func checkMCPToml(harness Harness, options InstallOptions, path string, report *
 	report.Add(harness.ID, "mcp", path, StatusConflict, "same-named entry is not ours")
 }
 
-// tomlEntryIsOurs mirrors `{**entry, "args": entry.get("args") or ["mcp"]}`.
 func tomlEntryIsOurs(entry any, options InstallOptions) bool {
+	if !entryIsOurs(entry, options) {
+		return false
+	}
 	object, ok := entry.(map[string]any)
 	if !ok {
 		return false
 	}
-	args, ok := asArray(object["args"])
-	if !ok || len(args) == 0 {
-		args = []any{"mcp"}
-	}
-	copied := make(map[string]any, len(object)+1)
 	for key, value := range object {
-		copied[key] = value
+		switch key {
+		case "command", "args", "startup_timeout_sec":
+		case "env":
+			env, ok := value.(map[string]any)
+			if !ok {
+				return false
+			}
+			for name := range env {
+				if name != "ROLLING_MEMORY_DB" && name != "ROLLING_MEMORY_SCOPE" {
+					return false
+				}
+			}
+		default:
+			return false
+		}
 	}
-	copied["args"] = args
-	return entryIsOurs(copied, options)
+	return true
+}
+
+func dshMarkerRegion(text, begin, end string) (int, int, bool, bool) {
+	starts := strings.Count(text, begin)
+	ends := strings.Count(text, end)
+	if starts == 0 && ends == 0 {
+		return 0, 0, false, false
+	}
+	if starts != 1 || ends != 1 {
+		return 0, 0, false, true
+	}
+	start := strings.Index(text, begin)
+	finish := strings.Index(text, end)
+	if finish < start+len(begin) || (start > 0 && text[start-1] != '\n') ||
+		(finish > 0 && text[finish-1] != '\n') ||
+		(finish+len(end) < len(text) && text[finish+len(end)] != '\n' && text[finish+len(end)] != '\r') {
+		return 0, 0, false, true
+	}
+	return start, finish + len(end), true, false
+}
+
+func dshRegionIsOurs(region string, options InstallOptions) bool {
+	lines := pySplitLines(region)
+	if len(lines) != 11 || !strings.HasPrefix(lines[7], "        command: ") {
+		return false
+	}
+	var command string
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[7], "        command: ")), &command); err != nil || !isOurBinary(command, options) {
+		return false
+	}
+	copyOptions := options
+	copyOptions.Binary = command
+	expected, err := dshBlock(copyOptions)
+	return err == nil && strings.TrimSpace(region) == strings.TrimSpace(expected)
+}
+
+func dshBundleSelected(path string) (bool, error) {
+	manifestPath := filepath.Join(filepath.Dir(path), "package.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	manifest, err := loadJSONFile(manifestPath)
+	if err != nil {
+		return false, err
+	}
+	value, found := jsonLookup(manifest, []string{"dsh", "profile", "bundles"})
+	if !found {
+		if !jsonPathIsObject(manifest, []string{"dsh", "profile"}) {
+			return false, fmt.Errorf("invalid dsh profile manifest")
+		}
+		return false, nil
+	}
+	bundles, ok := asArray(value)
+	if !ok {
+		return false, fmt.Errorf("dsh.profile.bundles is not a list")
+	}
+	for _, bundle := range bundles {
+		name, ok := bundle.(string)
+		if !ok {
+			return false, fmt.Errorf("dsh.profile.bundles contains a non-string value")
+		}
+		if name == "@rocareer/dsh-rolling-memory" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func dshYAMLNode(text string) (*yaml.Node, error) {
+	decoder := yaml.NewDecoder(strings.NewReader(text))
+	var document yaml.Node
+	if err := decoder.Decode(&document); err != nil {
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple YAML documents are not supported")
+		}
+		return nil, err
+	}
+	if len(document.Content) != 1 {
+		return nil, fmt.Errorf("invalid YAML document")
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("DSH patch must be a sequence")
+	}
+	return root, nil
+}
+
+func dshSameServer(node *yaml.Node, name string) (bool, error) {
+	if node.Kind == yaml.AliasNode {
+		return false, fmt.Errorf("YAML aliases require manual review")
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content); i += 2 {
+			key, value := node.Content[i], node.Content[i+1]
+			if key.Kind != yaml.ScalarNode || key.Tag != "!!str" || key.Value == "<<" {
+				return false, fmt.Errorf("dynamic YAML key requires manual review")
+			}
+			if key.Value == "serverName" {
+				if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+					return false, fmt.Errorf("dynamic serverName requires manual review")
+				}
+				if value.Value == name {
+					return true, nil
+				}
+			}
+			found, err := dshSameServer(value, name)
+			if found || err != nil {
+				return found, err
+			}
+		}
+		return false, nil
+	}
+	for _, child := range node.Content {
+		found, err := dshSameServer(child, name)
+		if found || err != nil {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
+func dshEmptySequenceOffset(text string, node *yaml.Node) (int, bool) {
+	if node == nil || len(node.Content) != 0 || node.Style&yaml.FlowStyle == 0 {
+		return 0, false
+	}
+	lines := strings.Split(text, "\n")
+	if node.Line < 1 || node.Line > len(lines) {
+		return 0, false
+	}
+	offset := 0
+	for _, line := range lines[:node.Line-1] {
+		offset += len(line) + 1
+	}
+	line := lines[node.Line-1]
+	column := node.Column - 1
+	if column < 0 || column+2 > len(line) || line[column:column+2] != "[]" {
+		return 0, false
+	}
+	return offset + column, true
 }
 
 func installMCPDsh(harness Harness, options InstallOptions, path string, report *Report) {
 	if !fileExists(filepath.Dir(path)) {
 		report.Add(harness.ID, "mcp", path, StatusError, "dsh profile dir not found: "+filepath.Dir(path))
 		return
+	}
+	selected := false
+	if options.Name == DefaultName {
+		var err error
+		selected, err = dshBundleSelected(path)
+		if err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "cannot determine selected DSH bundles: "+err.Error())
+			return
+		}
 	}
 	detail := ""
 	if options.DB != "" || options.Scope != "" {
@@ -641,16 +1095,54 @@ func installMCPDsh(harness Harness, options InstallOptions, path string, report 
 		}
 		original = string(raw)
 	}
-	if strings.Contains(original, begin) && strings.Contains(original, end) {
-		regionStart := strings.Index(original, begin)
-		regionEnd := strings.Index(original, end) + len(end)
+	regionStart, regionEnd, found, malformed := dshMarkerRegion(original, begin, end)
+	if malformed {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "malformed marker block; not touching it")
+		return
+	}
+	if selected {
+		status := StatusSkipped
+		if found {
+			status = StatusConflict
+		}
+		report.Add(harness.ID, "mcp", path, status, "DSH profile selects @rocareer/dsh-rolling-memory; manual entry retained without changes (bundle activation unverified)")
+		return
+	}
+	root, err := dshYAMLNode(original)
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "cannot safely parse DSH patch: "+err.Error())
+		return
+	}
+	outside := original
+	if found {
+		outside = original[:regionStart] + original[regionEnd:]
+	}
+	if strings.TrimSpace(outside) != "" {
+		other, err := dshYAMLNode(outside)
+		if err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "cannot safely inspect DSH patch: "+err.Error())
+			return
+		}
+		if other != nil {
+			duplicate, err := dshSameServer(other, options.Name)
+			if err != nil || duplicate {
+				detail := "profile contains a same-named server; manual review required"
+				if err != nil {
+					detail = "cannot safely inspect DSH patch: " + err.Error()
+				}
+				report.Add(harness.ID, "mcp", path, StatusConflict, detail)
+				return
+			}
+		}
+	}
+	if found {
 		current := original[regionStart:regionEnd]
 		if strings.TrimSpace(current) == strings.TrimSpace(block) {
 			report.Add(harness.ID, "mcp", path, StatusUnchanged, detail)
 			return
 		}
-		if !regionIsOurs(current, options) && !options.Force {
-			report.Add(harness.ID, "mcp", path, StatusConflict, "marker block is not ours; use --force")
+		if !dshRegionIsOurs(current, options) {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "marker block is not ours; not touching it")
 			return
 		}
 		if options.DryRun {
@@ -661,6 +1153,10 @@ func installMCPDsh(harness Harness, options InstallOptions, path string, report 
 		if !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}
+		if _, err := dshYAMLNode(text); err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "refusing to write invalid DSH patch: "+err.Error())
+			return
+		}
 		if _, err := writeText(path, text); err != nil {
 			report.Add(harness.ID, "mcp", path, StatusError, "cannot write: "+err.Error())
 			return
@@ -668,11 +1164,15 @@ func installMCPDsh(harness Harness, options InstallOptions, path string, report 
 		report.Add(harness.ID, "mcp", path, StatusUpdated, detail)
 		return
 	}
-	if options.DryRun {
-		report.Add(harness.ID, "mcp", path, StatusPlanned, detail)
-		return
-	}
 	text := original
+	if root != nil && root.Style&yaml.FlowStyle != 0 {
+		offset, ok := dshEmptySequenceOffset(original, root)
+		if !ok {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "flow-style DSH patch requires manual review")
+			return
+		}
+		text = original[:offset] + original[offset+2:]
+	}
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -680,6 +1180,14 @@ func installMCPDsh(harness Harness, options InstallOptions, path string, report 
 		text += "\n"
 	}
 	text += block
+	if _, err := dshYAMLNode(text); err != nil {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "refusing to write invalid DSH patch: "+err.Error())
+		return
+	}
+	if options.DryRun {
+		report.Add(harness.ID, "mcp", path, StatusPlanned, detail)
+		return
+	}
 	if _, err := writeText(path, text); err != nil {
 		report.Add(harness.ID, "mcp", path, StatusError, "cannot write: "+err.Error())
 		return
@@ -695,23 +1203,43 @@ func uninstallMCPDsh(harness Harness, options InstallOptions, path string, repor
 		return
 	}
 	original := string(raw)
-	if !strings.Contains(original, begin) || !strings.Contains(original, end) {
+	if _, err := dshYAMLNode(original); err != nil {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "cannot safely parse DSH patch: "+err.Error())
+		return
+	}
+	regionStart, regionEnd, found, malformed := dshMarkerRegion(original, begin, end)
+	if malformed {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "malformed marker block; not touching it")
+		return
+	}
+	if !found {
 		report.Add(harness.ID, "mcp", path, StatusSkipped, "marker block not present")
+		return
+	}
+	if !dshRegionIsOurs(original[regionStart:regionEnd], options) {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "marker block is not ours; not touching it")
 		return
 	}
 	if options.DryRun {
 		report.Add(harness.ID, "mcp", path, StatusPlanned, "")
 		return
 	}
-	regionStart := strings.Index(original, begin)
-	regionEnd := strings.Index(original, end) + len(end)
-	text := strings.TrimRight(original[:regionStart], "\n")
-	tail := strings.TrimLeft(original[regionEnd:], "\n")
-	combined := ""
-	if tail != "" {
-		combined = text + "\n\n" + tail
-	} else if text != "" {
-		combined = text + "\n"
+	if strings.HasPrefix(original[regionEnd:], "\r\n") {
+		regionEnd += 2
+	} else if strings.HasPrefix(original[regionEnd:], "\n") {
+		regionEnd++
+	}
+	combined := original[:regionStart] + original[regionEnd:]
+	root, err := dshYAMLNode(combined)
+	if err != nil {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "refusing to write invalid DSH patch: "+err.Error())
+		return
+	}
+	if root == nil {
+		if combined != "" && !strings.HasSuffix(combined, "\n") {
+			combined += "\n"
+		}
+		combined += "[]\n"
 	}
 	if _, err := writeText(path, combined); err != nil {
 		report.Add(harness.ID, "mcp", path, StatusError, "cannot write: "+err.Error())
@@ -721,22 +1249,48 @@ func uninstallMCPDsh(harness Harness, options InstallOptions, path string, repor
 }
 
 func checkMCPDsh(harness Harness, options InstallOptions, path string, report *Report) {
+	selected := false
+	if options.Name == DefaultName {
+		var err error
+		selected, err = dshBundleSelected(path)
+		if err != nil {
+			report.Add(harness.ID, "mcp", path, StatusConflict, "cannot determine selected DSH bundles: "+err.Error())
+			return
+		}
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
 		return
 	}
 	text := string(raw)
+	if _, err := dshYAMLNode(text); err != nil {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "cannot safely parse DSH patch: "+err.Error())
+		return
+	}
 	begin, end := dshMarkers(options.Name)
-	if !strings.Contains(text, begin) || !strings.Contains(text, end) {
+	start, finish, found, malformed := dshMarkerRegion(text, begin, end)
+	if malformed {
+		report.Add(harness.ID, "mcp", path, StatusConflict, "marker block present but malformed")
+		return
+	}
+	if selected {
+		status := StatusSkipped
+		if found {
+			status = StatusConflict
+		}
+		report.Add(harness.ID, "mcp", path, status, "DSH bundle selected; activation unverified")
+		return
+	}
+	if !found {
 		report.Add(harness.ID, "mcp", path, StatusMissing, "no '"+options.Name+"' block")
 		return
 	}
-	if strings.Contains(text, "serverName: "+options.Name) {
+	if dshRegionIsOurs(text[start:finish], options) {
 		report.Add(harness.ID, "mcp", path, StatusOK, "")
 		return
 	}
-	report.Add(harness.ID, "mcp", path, StatusConflict, "marker block present but malformed")
+	report.Add(harness.ID, "mcp", path, StatusConflict, "marker block is not ours")
 }
 
 func parseTOML(raw string) (map[string]any, error) {

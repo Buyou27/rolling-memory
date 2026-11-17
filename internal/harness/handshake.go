@@ -19,11 +19,16 @@ import (
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
-// Handshake starts "<launcher> mcp" on a temporary database and verifies that
-// initialize and tools/list answer with exactly remember + recall.
+// Handshake probes the selected launcher on a temporary database without
+// falling back if it is missing. It does not verify a harness registration.
 func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 	options = options.normalized()
-	result := map[string]any{"ok": false}
+	command := []string{options.ResolvedBinary(), "mcp"}
+	result := map[string]any{
+		"ok":       false,
+		"evidence": "selected launcher only; host registrations are not executed",
+		"launcher": command[0],
+	}
 	request, err := handshakeRequest()
 	if err != nil {
 		result["error"] = "MCP handshake failed: " + err.Error()
@@ -43,8 +48,6 @@ func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 		"ROLLING_MEMORY_MODE=local",
 		"ROLLING_MEMORY_SCOPE="+handshakeScope(options),
 	)
-	command := append(launcherCommand(options), "mcp")
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	process := exec.CommandContext(ctx, command[0], command[1:]...)
@@ -90,13 +93,34 @@ func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 		return result
 	}
 
-	server := map[string]any{}
-	if payload, ok := initialize["result"].(map[string]any); ok {
-		if info, ok := payload["serverInfo"].(map[string]any); ok {
-			server = info
-		}
+	if runErr != nil {
+		result["error"] = "MCP launcher exited unsuccessfully: " + runErr.Error()
+		return result
 	}
-	names := make([]any, 0, 2)
+	if countResponses(responses, 1) != 1 || countResponses(responses, 2) != 1 {
+		result["error"] = "duplicate initialize/tools-list response"
+		return result
+	}
+	if err := handshakeResponseError("initialize", initialize); err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+	if err := handshakeResponseError("tools/list", tools); err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+	payload, ok := initialize["result"].(map[string]any)
+	if !ok {
+		result["error"] = "invalid initialize result"
+		return result
+	}
+	protocol, _ := payload["protocolVersion"].(string)
+	server, ok := payload["serverInfo"].(map[string]any)
+	if name, _ := server["name"].(string); !ok || name == "" || protocol == "" {
+		result["error"] = "invalid initialize result: missing protocolVersion or serverInfo.name"
+		return result
+	}
+	names := make([]any, 0, 1)
 	if payload, ok := tools["result"].(map[string]any); ok {
 		if list, ok := payload["tools"].([]any); ok {
 			for _, item := range list {
@@ -108,7 +132,7 @@ func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 			}
 		}
 	}
-	ok := toolNamesAreStandard(names)
+	ok = toolNamesAreStandard(names)
 	result["ok"] = ok
 	result["server"] = server
 	result["tools"] = names
@@ -116,6 +140,20 @@ func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 		result["error"] = "unexpected tool set: " + pyListRepr(names)
 	}
 	return result
+}
+
+func handshakeResponseError(method string, response map[string]any) error {
+	version, ok := response["jsonrpc"].(string)
+	if !ok || version != "2.0" {
+		return fmt.Errorf("invalid %s response: not JSON-RPC 2.0", method)
+	}
+	if value, exists := response["error"]; exists {
+		return fmt.Errorf("%s returned JSON-RPC error: %v", method, value)
+	}
+	if _, exists := response["result"]; !exists {
+		return fmt.Errorf("invalid %s response: missing result", method)
+	}
+	return nil
 }
 
 func handshakeScope(options InstallOptions) string {
@@ -174,6 +212,16 @@ func findResponse(responses []map[string]any, id float64) map[string]any {
 		}
 	}
 	return nil
+}
+
+func countResponses(responses []map[string]any, id float64) int {
+	count := 0
+	for _, payload := range responses {
+		if value, ok := payload["id"]; ok && idEquals(value, id) {
+			count++
+		}
+	}
+	return count
 }
 
 func idEquals(value any, want float64) bool {

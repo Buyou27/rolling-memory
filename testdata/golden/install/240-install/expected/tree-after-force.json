@@ -2,9 +2,6 @@
   "backups": [
     "<HOME>/.claude.json.rolling-memory.<TS>.bak",
     "<HOME>/.claude/CLAUDE.md.rolling-memory.<TS>.bak",
-    "<HOME>/.codex/config.toml.rolling-memory.<TS>.bak",
-    "<HOME>/.dsh/profiles/web/cordis.patch.yml.rolling-memory.<TS>.bak",
-    "<HOME>/.zcode/cli/config.json.rolling-memory.<TS>.bak",
     "<HOME>/.zcode/cli/config.json.rolling-memory.<TS>.bak"
   ],
   "files": [
@@ -69,10 +66,16 @@
       "path": "<HOME>/.codex/AGENTS.md"
     },
     {
-      "content": "model = \"gpt-5\"\n\n[mcp_servers.rolling-memory]\ncommand = \"<CASE>/bin/rolling-memory\"\nargs = [\"mcp\"]\nstartup_timeout_sec = 30\n",
+      "content": "model = \"gpt-5\"\n\n[mcp_servers.rolling-memory]\ncommand = \"/usr/local/bin/other-tool\"\nargs = [\"serve\"]\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.codex/config.toml"
+    },
+    {
+      "content": "{\n  \"hooks\": {\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<CASE>/bin/rolling-memory hook recall --json\",\n            \"timeout\": 15\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+      "executable": false,
+      "kind": "text",
+      "path": "<HOME>/.codex/hooks.json"
     },
     {
       "content": "dc6161984e208052e79b877cbce10001627747eb9813861bc8f393806d169f67\n",
@@ -87,19 +90,13 @@
       "path": "<HOME>/.codex/skills/rolling-memory/SKILL.md"
     },
     {
-      "content": "{\n  \"default_lang\": \"en\",\n  \"lang\": \"en\",\n  \"updated_at\": \"2026-10-27T12:00:00Z\"\n}\n",
-      "executable": false,
-      "kind": "text",
-      "path": "<HOME>/.config/rolling-memory/ui-lang.json"
-    },
-    {
       "content": "<!-- rolling-memory:begin -->\n## Rolling-Memory (rolling-memory)\nYour persistent memory is connected via MCP `rolling-memory` (tool `recall` · 回忆).\n- At task start, understand intent; call `recall` with a specific `cue` for unclear cross-session context, architectural boundaries or historical decisions, or unknown entrypoints before a blind search. Skip recall for self-contained tasks with known coordinates and no historical coupling; call `recall` when stuck or facing an error before troubleshooting.\n- `absent: true` means you have no prior memory of it -- it is not an error; never invent memory content.\nDetails: the `rolling-memory` skill.\n<!-- rolling-memory:end -->\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.dsh/AGENTS.md"
     },
     {
-      "content": "# dsh web profile patch\ninsert:\n  - id: other-client\n    name: '@deepseek-ai/dsh-mcp-client'\n\n# >>> rolling-memory (rolling-memory) >>>\n- insert:\n    - id: rolling-memory-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: rolling-memory\n        transport: stdio\n        command: \"<CASE>/bin/rolling-memory\"\n        args: ['mcp']\n        failOnStartupError: false\n# <<< rolling-memory (rolling-memory) <<<\n",
+      "content": "# dsh web profile patch\ninsert:\n  - id: other-client\n    name: '@deepseek-ai/dsh-mcp-client'\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.dsh/profiles/web/cordis.patch.yml"
@@ -123,7 +120,7 @@
       "path": "<HOME>/.zcode/AGENTS.md"
     },
     {
-      "content": "{\n  \"hooks\": {\n    \"enabled\": true,\n    \"events\": {\n      \"UserPromptSubmit\": [\n        {\n          \"hooks\": [\n            {\n              \"type\": \"command\",\n              \"command\": \"<CASE>/bin/rolling-memory hook recall --json\",\n              \"timeout\": 15,\n              \"enabled\": true,\n              \"statusMessage\": \"Rolling-Memory\"\n            }\n          ]\n        }\n      ]\n    }\n  },\n  \"mcp\": {\n    \"servers\": {\n      \"other-tool\": {\n        \"args\": [\n          \"serve\"\n        ],\n        \"command\": \"/usr/local/bin/other-tool\",\n        \"type\": \"stdio\"\n      },\n      \"rolling-memory\": {\n        \"type\": \"stdio\",\n        \"command\": \"<CASE>/bin/rolling-memory\",\n        \"args\": [\n          \"mcp\"\n        ]\n      }\n    }\n  }\n}\n",
+      "content": "{\n  \"hooks\": {\n    \"enabled\": false,\n    \"events\": {}\n  },\n  \"mcp\": {\n    \"servers\": {\n      \"other-tool\": {\n        \"args\": [\n          \"serve\"\n        ],\n        \"command\": \"/usr/local/bin/other-tool\",\n        \"type\": \"stdio\"\n      },\n      \"rolling-memory\": {\n        \"type\": \"stdio\",\n        \"command\": \"<CASE>/bin/rolling-memory\",\n        \"args\": [\n          \"mcp\"\n        ]\n      }\n    }\n  }\n}\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.zcode/cli/config.json"

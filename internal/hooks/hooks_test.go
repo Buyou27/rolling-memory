@@ -708,9 +708,65 @@ func TestCloseUploadsCurrentTurnToEpisodicLayer(t *testing.T) {
 	}
 }
 
-// TestCloseStripsThinkingAndToolEnvelopes pins the L2 pulse denoise contract: the
-// closed turn uploaded as `episodic` carries what the speakers said, never the
-// `[thinking]` / `[tool_use …]` / `[tool_result]` envelopes nor injected context.
+func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
+	env := newTestEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var pkt thinclient.BlindPulsePacket
+		if err := json.NewDecoder(request.Body).Decode(&pkt); err != nil {
+			http.Error(writer, "bad request", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer})
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
+	t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
+	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "mem_test_fake_key")
+	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
+	memory := openMemory(t)
+	tc, err := memory.ThinClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := episodicunit.DocID(memory.Config.Scope, "[user] 我喜欢猫。我的猫叫小白。")
+	tc.Vault.RecordDeletedUnits("episodic", userID)
+	payload := map[string]any{"session_id": "s1", "transcript_path": path}
+	receipt := uploadCurrentEpisodicTurn(memory, memory.Config, "s1", payload)
+	if receipt["uploaded"] != 1 {
+		t.Fatalf("deleted unit receipt = %+v", receipt)
+	}
+	if _, err := os.Stat(env.log); err == nil {
+		for _, line := range logLines(t, env.log) {
+			if line["vault_write_error"] != nil {
+				t.Fatalf("deleted unit logged as failure: %+v", line)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if _, err := memory.Store.DB().Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := importReplayEvent(memory, memory.Config, "close", payload, Options{})
+	if err != nil || out != "" {
+		t.Fatalf("hook output=%q err=%v", out, err)
+	}
+	found := false
+	for _, line := range logLines(t, env.log) {
+		if message, _ := line["vault_write_error"].(string); message != "" {
+			if strings.Contains(message, "mem_test_fake_key") {
+				t.Fatalf("diagnostic leaked credential: %q", message)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("vault failure did not produce a diagnostic")
+	}
+}
+
+// TestCloseStripsThinkingAndToolEnvelopes checks that only conversation survives.
 func TestCloseStripsThinkingAndToolEnvelopes(t *testing.T) {
 	env := newTestEnv(t)
 	var mu sync.Mutex
@@ -745,10 +801,13 @@ func TestCloseStripsThinkingAndToolEnvelopes(t *testing.T) {
 		`{"type":"user","sessionId":"s1","timestamp":"2026-10-20T10:00:00",` +
 			`"message":{"role":"user","content":[{"type":"text","text":"<system-reminder>injected banner</system-reminder>请把缓存按 docID 失效。"}]}}`,
 		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:10",` +
-			`"message":{"role":"assistant","content":[` +
+			`"message":{"role":"assistant","stop_reason":"tool_use","content":[` +
 			`{"type":"thinking","thinking":"internal monologue"},` +
-			`{"type":"text","text":"先确认缓存失效断言。\n[thinking] internal monologue A\n[tool_use Bash] {\"cmd\":\"go test ./...\"}\n[tool_result] ok  github.com/rocareer/rolling-memory/internal/ids\n\n结论：缓存按 docID 失效。"},` +
+			`{"type":"text","text":"工具过程旁白"},` +
 			`{"type":"tool_use","name":"Bash","input":{"cmd":"go test ./..."}}]}}`,
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:20",` +
+			`"message":{"role":"assistant","stop_reason":"end_turn","content":[` +
+			`{"type":"text","text":"先确认缓存失效断言。\n[thinking] internal monologue A\n[tool_use Bash] {\"cmd\":\"go test ./...\"}\n[tool_result] ok  github.com/rocareer/rolling-memory/internal/ids\n\n结论：缓存按 docID 失效。"}]}}`,
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -803,23 +862,362 @@ func TestCloseStripsThinkingAndToolEnvelopes(t *testing.T) {
 			t.Fatalf("episodic pulse lost speech %q: %q", speech, storedText.String())
 		}
 	}
-	for _, noise := range []string{"[thinking]", "[tool_use", "[tool_result]", "internal monologue", "system-reminder"} {
+	for _, noise := range []string{"工具过程旁白", "[thinking]", "[tool_use", "[tool_result]", "internal monologue", "system-reminder"} {
 		if strings.Contains(storedText.String(), noise) {
 			t.Fatalf("episodic pulse kept noise %q: %q", noise, storedText.String())
 		}
 	}
 }
 
-// TestCurrentTurnUnitsAreSegments pins the unit contract: the closed turn becomes
-// one unit per speech segment (never one blob), the user instruction survives even
-// next to a 100k-token work log, and an oversized segment is chunked at sentence
-// boundaries instead of being truncated.
+// TestCurrentTurnUnitsPreservesUnknownTime keeps unknown source times unset.
+func TestCurrentTurnUnitsPreservesUnknownTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "turn.jsonl")
+	content := `{"type":"user","message":{"role":"user","content":"unknown time"}}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"answer without timestamp"}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	units, _ := currentTurnUnits("mem:test", "s1", map[string]any{"transcript_path": path})
+	if len(units) != 2 || units[0].OccurredAt != 0 || units[1].OccurredAt != 0 {
+		t.Fatalf("unknown source time = %+v", units)
+	}
+	rows := payloadTurnRows(map[string]any{"last_assistant_message": "payload without timestamp"})
+	units, _ = unitsForSegments("mem:test", "", segmentsFromRows(rows), 0, true, len(rows))
+	if len(units) != 1 || units[0].OccurredAt != 0 {
+		t.Fatalf("unknown payload time = %+v", units)
+	}
+}
+
+func TestLocalCloseDefersIncompleteTurnUntilCompletion(t *testing.T) {
+	env := newTestEnv(t)
+	path := filepath.Join(env.base, "session.jsonl")
+	user := `{"type":"user","sessionId":"s1","timestamp":"2020-01-01T00:00:00Z","message":{"role":"user","content":"local user witness"}}` + "\n"
+	tool := `{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"private tool narration"},{"type":"tool_use","name":"shell"}]}}` + "\n"
+	final := `{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":"local final witness"}}` + "\n"
+	if err := os.WriteFile(path, []byte(user+tool), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q}`, path)
+	check := func(wantUser, wantFinal int) {
+		t.Helper()
+		memory := openMemory(t)
+		tc, err := memory.ThinClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := tc.Transport.(*thinclient.LocalVaultTransport); !ok {
+			t.Fatalf("local hook transport = %T", tc.Transport)
+		}
+		userID := episodicunit.DocID("mem:hooks", "[user] local user witness")
+		finalID := episodicunit.DocID("mem:hooks", "[assistant] local final witness")
+		var userCount, finalCount, toolCount, total int
+		err = memory.Store.DB().QueryRow(`SELECT
+			COALESCE(sum(doc_id = ? OR raw_text = 'local user witness'), 0),
+			COALESCE(sum(doc_id = ? OR raw_text = 'local final witness'), 0),
+			COALESCE(sum(raw_text = 'private tool narration'), 0), count(*)
+			FROM thin_vault_docs`, userID, finalID).Scan(&userCount, &finalCount, &toolCount, &total)
+		if err != nil || userCount != wantUser || finalCount != wantFinal || toolCount != 0 || total != wantUser+wantFinal {
+			t.Fatalf("vault user=%d final=%d tool=%d total=%d err=%v", userCount, finalCount, toolCount, total, err)
+		}
+		var traceCount int
+		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace`).Scan(&traceCount); err != nil || traceCount != 0 {
+			t.Fatalf("unexpected legacy traces=%d err=%v", traceCount, err)
+		}
+		for _, fixture := range []struct {
+			id, text string
+			when     int64
+			count    int
+		}{
+			{userID, "[user] local user witness", 1577836800, wantUser},
+			{finalID, "[assistant] local final witness", 1767225600, wantFinal},
+		} {
+			if fixture.count == 0 {
+				continue
+			}
+			var pointer, assistant, incarnation, locus string
+			var occurred int64
+			if err := memory.Store.DB().QueryRow(`SELECT raw_text, occurred_at, assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, fixture.id).Scan(&pointer, &occurred, &assistant, &incarnation, &locus); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := tc.Vault.LoadVerifiedEpisodicPointer(fixture.id, pointer)
+			if err != nil || resolved != fixture.text || occurred != fixture.when || assistant != "" || incarnation != "" || locus != "" {
+				t.Fatalf("source=%q time=%d resolved=%q identity=(%q,%q,%q) err=%v", pointer, occurred, resolved, assistant, incarnation, locus, err)
+			}
+		}
+	}
+	if code, out, errOut := runHookMain(t, []string{"close"}, payload); code != 0 || out != "" {
+		t.Fatalf("incomplete close: code=%d out=%q stderr=%q", code, out, errOut)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != user+tool {
+		t.Fatalf("source changed during incomplete close: err=%v", err)
+	}
+	check(0, 0)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(final); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if code, out, errOut := runHookMain(t, []string{"close"}, payload); code != 0 || out != "" {
+			t.Fatalf("completed close %d: code=%d out=%q stderr=%q", i, code, out, errOut)
+		}
+		check(1, 1)
+		lines := logLines(t, env.log)
+		wantInserted := float64(2)
+		if i > 0 {
+			wantInserted = 0
+		}
+		if got := lines[len(lines)-1]["imported"]; got != wantInserted {
+			t.Fatalf("repeat %d imported=%v want=%v", i, got, wantInserted)
+		}
+	}
+	memory := openMemory(t)
+	importPath := filepath.Join(env.base, "unrelated.txt")
+	if err := os.WriteFile(importPath, []byte("unrelated explicit import\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.ImportFile(importPath, nil, nil, "shared", false); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("explicit import duplicated hook content: count=%d err=%v", count, err)
+	}
+}
+
+func TestLocalCloseConcurrentDeletionDoesNotResurrect(t *testing.T) {
+	env := newTestEnv(t)
+	path := filepath.Join(env.base, "concurrent.jsonl")
+	body := `{"type":"user","message":{"role":"user","content":"concurrent deletion witness"}}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"concurrent answer witness"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memory := openMemory(t)
+	if _, err := memory.ThinClient(); err != nil {
+		t.Fatal(err)
+	}
+	id := episodicunit.DocID("mem:hooks", "[user] concurrent deletion witness")
+	payload := map[string]any{"session_id": "s1", "transcript_path": path}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var hookErr, deleteErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, hookErr = importReplayEvent(memory, memory.Config, "close", payload, Options{})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, deleteErr = memory.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id)
+		if deleteErr == nil {
+			_, deleteErr = memory.Store.DB().Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id)
+		}
+	}()
+	close(start)
+	wg.Wait()
+	if hookErr != nil || deleteErr != nil {
+		t.Fatalf("hook error=%v delete error=%v", hookErr, deleteErr)
+	}
+	if _, err := importReplayEvent(memory, memory.Config, "close", payload, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	var deleted, tombstone, retained int
+	if err := memory.Store.DB().QueryRow(`SELECT
+		(SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?),
+		(SELECT count(*) FROM thin_vault_deleted_units WHERE unit_id = ?),
+		(SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?)`, id, id,
+		episodicunit.DocID("mem:hooks", "[assistant] concurrent answer witness")).Scan(&deleted, &tombstone, &retained); err != nil || deleted != 0 || tombstone != 1 || retained != 1 {
+		t.Fatalf("deleted=%d tombstone=%d retained=%d err=%v", deleted, tombstone, retained, err)
+	}
+}
+
+func TestLocalCloseIgnoresUnverifiedPayload(t *testing.T) {
+	env := newTestEnv(t)
+	for _, payload := range []string{
+		`{"session_id":"s1","hook_event_name":"Stop","last_assistant_message":"unverified answer"}`,
+		`{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"unverified answer"}`,
+		`{"session_id":"s1","transcript_path":"absent.jsonl","last_assistant_message":"unverified answer"}`,
+	} {
+		if code, out, stderr := runHookMain(t, []string{"close"}, payload); code != 0 || out != "" {
+			t.Fatalf("close code=%d out=%q stderr=%s", code, out, stderr)
+		}
+	}
+	memory := openMemory(t)
+	if _, err := memory.ThinClient(); err != nil {
+		t.Fatal(err)
+	}
+	var traces, docs int
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT count(*) FROM trace), (SELECT count(*) FROM thin_vault_docs)`).Scan(&traces, &docs); err != nil || traces != 0 || docs != 0 {
+		t.Fatalf("unverified payload traces=%d docs=%d err=%v base=%s", traces, docs, err, env.base)
+	}
+}
+
+func TestLocalCloseLogsVaultFailure(t *testing.T) {
+	env := newTestEnv(t)
+	path := writeTranscript(t, filepath.Join(env.base, "session.jsonl"))
+	memory := openMemory(t)
+	if _, err := memory.ThinClient(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.Store.DB().Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{"session_id": "s1", "transcript_path": path}
+	out, err := importReplayEvent(memory, memory.Config, "close", payload, Options{})
+	if err != nil || out != "" {
+		t.Fatalf("hook protocol out=%q err=%v", out, err)
+	}
+	lines := logLines(t, env.log)
+	var found bool
+	for _, line := range lines {
+		if message, _ := line["vault_write_error"].(string); message != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("vault failure not diagnosed: %+v", lines)
+	}
+	var count int
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed vault write count=%d err=%v", count, err)
+	}
+}
+
+func TestLocalCloseHonorsDeletedUnitsAndMissingSource(t *testing.T) {
+	env := newTestEnv(t)
+	path := filepath.Join(env.base, "session.jsonl")
+	user := `[user] deleted witness`
+	final := `[assistant] retained witness`
+	body := `{"type":"user","message":{"role":"user","content":"deleted witness"}}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"retained witness"}}` + "\n"
+	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q,"last_assistant_message":"unverified fallback"}`, path)
+	memory := openMemory(t)
+	tc, err := memory.ThinClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedID := episodicunit.DocID("mem:hooks", user)
+	tc.Vault.RecordDeletedUnits("episodic", deletedID)
+	if code, _, stderr := runHookMain(t, []string{"close"}, payload); code != 0 {
+		t.Fatalf("missing source: code=%d stderr=%s", code, stderr)
+	}
+	lines := logLines(t, env.log)
+	foundSourceError := false
+	for _, line := range lines {
+		if message, _ := line["source_error"].(string); message != "" {
+			foundSourceError = true
+		}
+	}
+	if !foundSourceError {
+		t.Fatalf("missing source was not diagnosed: %+v", lines)
+	}
+	var count int
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("missing source docs=%d err=%v", count, err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if code, _, stderr := runHookMain(t, []string{"close"}, payload); code != 0 {
+			t.Fatalf("recovered source %d: code=%d stderr=%s", i, code, stderr)
+		}
+		var deletedCount, retainedCount int
+		err := memory.Store.DB().QueryRow(`SELECT COALESCE(sum(doc_id = ?),0), COALESCE(sum(doc_id = ?),0), count(*) FROM thin_vault_docs`,
+			deletedID, episodicunit.DocID("mem:hooks", final)).Scan(&deletedCount, &retainedCount, &count)
+		if err != nil || deletedCount != 0 || retainedCount != 1 || count != 1 {
+			t.Fatalf("recovered docs=%d deleted=%d retained=%d err=%v", count, deletedCount, retainedCount, err)
+		}
+	}
+}
+
+func TestCurrentTurnUnitsRequiresCompletionEvidence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	user := `{"type":"user","message":{"role":"user","content":"user evidence"}}` + "\n"
+	tool := `{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"tool narration"},{"type":"tool_use","name":"shell"}]}}` + "\n"
+	final := `{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"final answer"}}` + "\n"
+	cases := []struct {
+		name    string
+		content string
+		payload map[string]any
+		want    []string
+	}{
+		{"completed", user + tool + final, nil, []string{"[user] user evidence", "[assistant] final answer"}},
+		{"tool step without final", user + tool, nil, nil},
+		{"plain assistant without completion", user + `{"type":"assistant","message":{"role":"assistant","content":"not marked"}}` + "\n", nil, nil},
+		{"temporary assistant transcript", `{"message":{"role":"assistant","content":[{"type":"text","text":"partial preview"}]}}` + "\n", map[string]any{"hook_event_name": "Stop", "last_assistant_message": "partial preview"}, nil},
+		{"latest turn incomplete", user + final + `{"type":"user","message":{"role":"user","content":"next"}}` + "\n" + tool, nil, nil},
+		{"truncated completion", user + tool + `{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"`, nil, nil},
+		{"codex completed", `{"type":"event_msg","payload":{"type":"task_started","turn_id":"a"}}` + "\n" + `{"type":"response_item","payload":{"type":"message","role":"user","internal_chat_message_metadata_passthrough":{"turn_id":"a"},"content":[{"type":"input_text","text":"user evidence"}]}}` + "\n" + `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}}` + "\n" + `{"type":"event_msg","payload":{"type":"task_complete","turn_id":"a"}}` + "\n", nil, []string{"[user] user evidence", "[assistant] final answer"}},
+		{"codex aborted", `{"type":"event_msg","payload":{"type":"task_started","turn_id":"a"}}` + "\n" + `{"type":"response_item","payload":{"type":"message","role":"user","internal_chat_message_metadata_passthrough":{"turn_id":"a"},"content":[{"type":"input_text","text":"user evidence"}]}}` + "\n" + `{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"a"}}` + "\n", nil, nil},
+		{"codex mismatched completion", `{"type":"event_msg","payload":{"type":"task_started","turn_id":"a"}}` + "\n" + `{"type":"response_item","payload":{"type":"message","role":"user","internal_chat_message_metadata_passthrough":{"turn_id":"a"},"content":[{"type":"input_text","text":"user evidence"}]}}` + "\n" + `{"type":"event_msg","payload":{"type":"task_complete","turn_id":"other"}}` + "\n", nil, nil},
+		{"dsh completed", `{"type":"turn/start","data":{"turn":1}}` + "\n" + `{"type":"user/message","data":{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"user evidence"}]}}` + "\n" + `{"type":"assistant/message","data":{"message":{"role":"assistant","content":[{"type":"text","text":"final answer"}]}}}` + "\n" + `{"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}` + "\n", nil, []string{"[user] user evidence", "[assistant] final answer"}},
+		{"dsh aborted", `{"type":"turn/start","data":{"turn":1}}` + "\n" + `{"type":"user/message","data":{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"user evidence"}]}}` + "\n" + `{"type":"turn/end","data":{"turn":1,"reason":{"kind":"aborted"}}}` + "\n", nil, nil},
+		{"dsh untrusted source", `{"type":"turn/start","data":{"turn":1}}` + "\n" + `{"type":"user/message","data":{"role":"user","source":{"kind":"agent-instructions"},"content":[{"type":"text","text":"not user"}]}}` + "\n" + `{"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}` + "\n", nil, nil},
+		{"open turn with payload", user + tool, map[string]any{"hook_event_name": "Stop", "last_assistant_message": "fallback"}, nil},
+		{"malformed source with payload", "not a transcript\n", map[string]any{"hook_event_name": "Stop", "last_assistant_message": "fallback"}, nil},
+		{"invalid compressed source", "not a zstd frame", map[string]any{"hook_event_name": "Stop", "last_assistant_message": "fallback"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target := path
+			if tc.name == "invalid compressed source" {
+				target += ".zst"
+			}
+			if err := os.WriteFile(target, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			payload := map[string]any{"transcript_path": target}
+			for key, value := range tc.payload {
+				payload[key] = value
+			}
+			units, _ := currentTurnUnits("mem:test", "s1", payload)
+			if len(units) != len(tc.want) {
+				t.Fatalf("units=%+v want=%v", units, tc.want)
+			}
+			for i, text := range tc.want {
+				if units[i].Text != text || !units[i].Completed {
+					t.Fatalf("unit %d=%+v want=%q", i, units[i], text)
+				}
+			}
+		})
+	}
+	missingPayload := map[string]any{"transcript_path": filepath.Join(dir, "missing.jsonl"), "hook_event_name": "Stop", "last_assistant_message": "fallback"}
+	if units, _ := currentTurnUnits("mem:test", "s1", missingPayload); len(units) != 0 {
+		t.Fatalf("missing source fell back to payload: %+v", units)
+	}
+	for name, payload := range map[string]map[string]any{
+		"no signal":       {"last_assistant_message": "answer"},
+		"stop only":       {"hook_event_name": "Stop", "last_assistant_message": "answer"},
+		"active stop":     {"hook_event_name": "Stop", "stop_hook_active": true, "last_assistant_message": "answer"},
+		"different event": {"hook_event_name": "UserPromptSubmit", "last_assistant_message": "answer"},
+		"empty":           {"hook_event_name": "Stop", "last_assistant_message": ""},
+		"tool payload":    {"hook_event_name": "Stop", "tool_name": "shell", "last_assistant_message": "answer"},
+	} {
+		t.Run("payload/"+name, func(t *testing.T) {
+			if units, _ := currentTurnUnits("mem:test", "s1", payload); len(units) != 0 {
+				t.Fatalf("unverified payload imported: %+v", units)
+			}
+		})
+	}
+}
+
+// TestCurrentTurnUnitsAreSegments pins segment boundaries and chunked pointers.
 func TestCurrentTurnUnitsAreSegments(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "turn.jsonl")
 	workLog := strings.Repeat("正在定位失败断言并复跑全部包。", 2400)
 	content := strings.Join([]string{
 		`{"type":"user","sessionId":"s1","timestamp":"2026-10-20T10:00:00","message":{"role":"user","content":"继续执行你之前没有执行完的任务 中断的任务"}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:10","message":{"role":"assistant","content":[` +
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:10","message":{"role":"assistant","stop_reason":"end_turn","content":[` +
 			`{"type":"text","text":"先确认断言。"},` +
 			`{"type":"text","text":"` + workLog + `"}]}}`,
 		"",
@@ -997,7 +1395,7 @@ func writeTranscript(t *testing.T, path string) string {
 		`{"type":"user","sessionId":"s1","timestamp":"2026-10-20T10:00:00",` +
 			`"message":{"role":"user","content":[{"type":"text","text":"我喜欢猫。我的猫叫小白。"}]}}`,
 		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:10",` +
-			`"message":{"role":"assistant","content":[{"type":"text","text":"记住了。"}]}}`,
+			`"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"记住了。"}]}}`,
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -1072,10 +1470,8 @@ func TestImportTurnsMovesTheCursor(t *testing.T) {
 	}
 }
 
-// TestCloseImportsAndRecallHookStaysSilent: the close event replays imported
-// turns, while the recall event never runs automatic recall — even on a prompt
-// the imported transcript would answer, it only stays silent (retrieval is
-// agent-driven through the MCP tool).
+// TestCloseImportsAndRecallHookStaysSilent checks that completed turns enter the
+// local vault without legacy trace replay and that the recall hook remains silent.
 func TestCloseImportsAndRecallHookStaysSilent(t *testing.T) {
 	env := newTestEnv(t)
 	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
@@ -1089,18 +1485,29 @@ func TestCloseImportsAndRecallHookStaysSilent(t *testing.T) {
 	if line["imported"].(float64) != 2 || line["messages"].(float64) != 2 {
 		t.Fatalf("close import receipt = %#v", line)
 	}
-	if line["replayed"].(float64) != 2 {
+	if line["replayed"].(float64) != 0 {
 		t.Fatalf("close replay receipt = %#v", line)
 	}
 
 	memory := openMemory(t)
-	status, err := memory.Status("mem:hooks")
+	tc, err := memory.ThinClient()
 	if err != nil {
-		t.Fatalf("status: %v", err)
+		t.Fatal(err)
 	}
-	counts, _ := status["counts"].(map[string]int)
-	if counts["trace"] < 2 {
-		t.Fatalf("trace count = %#v", status["counts"])
+	for _, expected := range []string{"[user] 我喜欢猫。我的猫叫小白。", "[assistant] 记住了。"} {
+		id := episodicunit.DocID("mem:hooks", expected)
+		var pointer string
+		if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&pointer); err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := tc.Vault.LoadVerifiedEpisodicPointer(id, pointer)
+		if err != nil || resolved != expected {
+			t.Fatalf("resolved=%q want=%q err=%v", resolved, expected, err)
+		}
+	}
+	var traces int
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace`).Scan(&traces); err != nil || traces != 0 {
+		t.Fatalf("legacy trace count=%d err=%v", traces, err)
 	}
 
 	code, stdout, stderr = runHookMain(t, []string{"recall", "--json"},

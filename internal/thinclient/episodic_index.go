@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/episodic"
@@ -100,10 +101,93 @@ func (v *Vault) validEpisodicPayloadMAC(docID, refPointer string, codecKey, payl
 	return len(digest) == sha256.Size && len(mac) == sha256.Size && hmac.Equal(mac, v.episodicPayloadMAC(docID, refPointer, codecKey, payload, digest))
 }
 
-// ErrEpisodicPointerSourceConflict marks a pointer write refused because the stored
-// row belongs to a different turn stem: identical speech reaching the vault from a
-// second transcript is not an error (first pointer wins, lineage keeps both), while
-// the same turn's re-enumerated `#<k>` is re-pointed instead.
+func (v *Vault) episodicSourceMAC(docID, turnRef, refPointer string, digest []byte) []byte {
+	parts := make([][]byte, 0, 9)
+	parts = append(parts, []byte("episodic-source-v1\x00"))
+	for _, field := range [][]byte{[]byte(docID), []byte(turnRef), []byte(refPointer), digest} {
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(field)))
+		sizeCopy := size
+		parts = append(parts, sizeCopy[:], field)
+	}
+	return episodicunit.HMACSHA256(v.secretKey[:], parts...)
+}
+
+func (v *Vault) validEpisodicSourceMAC(docID, turnRef, refPointer string, digest, mac []byte) bool {
+	return pointerStem(refPointer) == turnRef && len(digest) == sha256.Size && len(mac) == sha256.Size &&
+		hmac.Equal(mac, v.episodicSourceMAC(docID, turnRef, refPointer, digest))
+}
+
+func (v *Vault) recordEpisodicSource(tx *sql.Tx, docID, turnRef, refPointer string, digest []byte, occurredAt int64) error {
+	if turnRef == "" || pointerStem(refPointer) != turnRef || len(digest) != sha256.Size {
+		return errors.New("thinclient: invalid episodic source identity")
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`INSERT INTO thin_vault_episodic_sources(turn_ref, doc_id, ref_pointer, content_digest, source_mac) VALUES (?, ?, ?, ?, ?) ON CONFLICT(turn_ref, doc_id, ref_pointer) DO NOTHING`, turnRef, docID, refPointer, digest, v.episodicSourceMAC(docID, turnRef, refPointer, digest))
+	if err != nil {
+		return err
+	}
+	var storedDigest, mac []byte
+	if err := tx.QueryRow(`SELECT content_digest, source_mac FROM thin_vault_episodic_sources WHERE turn_ref = ? AND doc_id = ? AND ref_pointer = ?`, turnRef, docID, refPointer).Scan(&storedDigest, &mac); err != nil {
+		return err
+	}
+	if !hmac.Equal(storedDigest, digest) || !v.validEpisodicSourceMAC(docID, turnRef, refPointer, storedDigest, mac) {
+		return fmt.Errorf("%w: episodic source integrity mismatch", ErrEpisodicIndexItem)
+	}
+	return nil
+}
+
+type episodicSource struct {
+	turnRef    string
+	refPointer string
+	digest     []byte
+	mac        []byte
+}
+
+func (v *Vault) episodicSources(docID, turnRef string) ([]episodicSource, error) {
+	query := `SELECT turn_ref, ref_pointer, content_digest, source_mac FROM thin_vault_episodic_sources WHERE doc_id = ?`
+	args := []any{docID}
+	if turnRef != "" {
+		query += ` AND turn_ref = ?`
+		args = append(args, turnRef)
+	}
+	query += ` ORDER BY turn_ref, ref_pointer`
+	rows, err := v.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sources []episodicSource
+	for rows.Next() {
+		var source episodicSource
+		if err := rows.Scan(&source.turnRef, &source.refPointer, &source.digest, &source.mac); err != nil {
+			return nil, err
+		}
+		if v.validEpisodicSourceMAC(docID, source.turnRef, source.refPointer, source.digest, source.mac) {
+			sources = append(sources, source)
+		}
+	}
+	return sources, rows.Err()
+}
+
+// ErrEpisodicUnitDeleted reports an episodic unit blocked by a deletion tombstone.
+var ErrEpisodicUnitDeleted = errors.New("thinclient: episodic unit was deleted")
+
+func checkEpisodicTombstone(tx *sql.Tx, docID string) error {
+	var deleted int
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = ? AND (layer = 'episodic' OR layer = ''))`, strings.TrimSpace(docID)).Scan(&deleted); err != nil {
+		return fmt.Errorf("thinclient: check episodic tombstone: %w", err)
+	}
+	if deleted != 0 {
+		return fmt.Errorf("%w: %s", ErrEpisodicUnitDeleted, docID)
+	}
+	return nil
+}
+
+// ErrEpisodicPointerSourceConflict marks a stored document whose source cannot be
+// reconciled with a verified episodic pointer.
 var ErrEpisodicPointerSourceConflict = errors.New("thinclient: episodic document already exists with different source")
 
 // resolveEpisodicTurnByDigest re-locates an indexed unit inside its own turn by
@@ -112,15 +196,28 @@ var ErrEpisodicPointerSourceConflict = errors.New("thinclient: episodic document
 // filter evolves (or the harness appends a step). The search re-runs the canonical
 // unit derivation (one unit per speech segment, sentence-boundary chunks under the
 // tokenz-r budget) over the pointer's turn, so only the identical text can match.
-func (v *Vault) resolveEpisodicTurnByDigest(refPointer string, digest []byte) (string, bool) {
+func (v *Vault) resolveEpisodicTurnByDigest(refPointer string, digest []byte) (string, string, bool) {
 	if len(digest) != sha256.Size {
-		return "", false
+		return "", "", false
 	}
 	segments, err := episodicPointerTurnSegments(refPointer)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
-	return v.episodicTurnDigestMatch(segments, digest)
+	stem := pointerStem(refPointer)
+	for _, segment := range segments {
+		chunks := episodicunit.Chunk(episodicunit.Text(segment.Role, segment.Text), episodicunit.TokenBudget)
+		for index, chunk := range chunks {
+			if !hmac.Equal(digest, v.episodicContentDigest(chunk)) {
+				continue
+			}
+			if len(chunks) == 1 {
+				return chunk, fmt.Sprintf("%s#%d", stem, segment.Index), true
+			}
+			return chunk, fmt.Sprintf("%s#%d.%d", stem, segment.Index, index), true
+		}
+	}
+	return "", "", false
 }
 
 // episodicTurnDigestMatch looks the recorded content digest up in the canonical unit
@@ -164,12 +261,25 @@ func (v *Vault) EpisodicPointerContentStatus(docID, refPointer string) EpisodicC
 		return EpisodicContentUnreadable
 	}
 	refPointer = strings.TrimSpace(refPointer)
-	var digest []byte
-	if err := v.db.QueryRow(`SELECT content_digest FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND length(content_digest) = 32 LIMIT 1`, docID, refPointer).Scan(&digest); err != nil || len(digest) != sha256.Size {
+	key, err := v.episodicCodecKey()
+	if err != nil {
+		return EpisodicContentUnreadable
+	}
+	var digest, payload, mac, storedKey []byte
+	if err := v.db.QueryRow(`SELECT content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, refPointer, key).Scan(&digest, &payload, &mac, &storedKey); err != nil || !v.validEpisodicPayloadMAC(docID, refPointer, storedKey, payload, digest, mac) {
 		return EpisodicContentUnreadable
 	}
 	if text, err := ResolveEpisodicPointerLive(refPointer); err == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
 		return EpisodicContentVerified
+	}
+	if sources, err := v.episodicSources(docID, ""); err != nil {
+		return EpisodicContentUnreadable
+	} else {
+		for _, source := range sources {
+			if source.turnRef != pointerStem(refPointer) && hmac.Equal(source.digest, digest) {
+				return EpisodicContentRelocatable
+			}
+		}
 	}
 	segments, err := episodicPointerTurnSegments(refPointer)
 	if err != nil {
@@ -241,9 +351,25 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 		// Legacy whole-turn pointer without `#<k>` has no segment authorization.
 		return EpisodicContentAbsent
 	}
-	var digest []byte
-	_ = v.db.QueryRow(`SELECT content_digest FROM thin_vault_episodic_index WHERE doc_id = ? AND length(content_digest) = 32 LIMIT 1`, docID).Scan(&digest)
-	wasIndexed := v.HasLocalEpisodicIndex(docID, rawText)
+	key, err := v.episodicCodecKey()
+	if err != nil {
+		return EpisodicContentUnreadable
+	}
+	var indexedRef string
+	var digest, payload, mac, storedKey []byte
+	err = v.db.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&indexedRef, &digest, &payload, &mac, &storedKey)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return EpisodicContentUnreadable
+	}
+	if err == nil && (indexedRef != rawText || !v.validEpisodicPayloadMAC(docID, indexedRef, storedKey, payload, digest, mac)) {
+		return EpisodicContentUnreadable
+	}
+	wasIndexed := err == nil
+	if wasIndexed {
+		if _, source, err := v.loadVerifiedEpisodicPointer(docID, rawText, true); err == nil && pointerStem(source) != stem {
+			return EpisodicContentRelocatable
+		}
+	}
 	if len(digest) == sha256.Size {
 		if text, err := ResolveEpisodicPointerLive(rawText); err == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
 			if heal && !wasIndexed {
@@ -258,6 +384,17 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 	segments, err := episodicPointerTurnSegments(rawText)
 	if err != nil {
 		if strings.Contains(err.Error(), "empty zcode turn") {
+			if wasIndexed {
+				sources, sourceErr := v.episodicSources(docID, "")
+				if sourceErr != nil {
+					return EpisodicContentUnreadable
+				}
+				for _, source := range sources {
+					if source.turnRef != stem && hmac.Equal(source.digest, digest) {
+						return EpisodicContentRelocatable
+					}
+				}
+			}
 			return EpisodicContentAbsent
 		}
 		return EpisodicContentUnreadable
@@ -282,7 +419,53 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 			return EpisodicContentRelocatable
 		}
 	}
+	if wasIndexed {
+		sources, sourceErr := v.episodicSources(docID, "")
+		if sourceErr != nil {
+			return EpisodicContentUnreadable
+		}
+		for _, source := range sources {
+			if source.turnRef == stem || !hmac.Equal(source.digest, digest) {
+				continue
+			}
+			return EpisodicContentRelocatable
+		}
+	}
 	return EpisodicContentAbsent
+}
+
+func (v *Vault) repointEpisodicIndexes(tx *sql.Tx, docID, oldRef, newRef string, digest []byte) error {
+	rows, err := tx.Query(`SELECT codec_key, payload, content_digest, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ?`, docID, oldRef)
+	if err != nil {
+		return err
+	}
+	type row struct{ key, payload, digest, mac []byte }
+	var indexes []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.key, &r.payload, &r.digest, &r.mac); err != nil {
+			rows.Close()
+			return err
+		}
+		if !v.validEpisodicPayloadMAC(docID, oldRef, r.key, r.payload, r.digest, r.mac) || !hmac.Equal(r.digest, digest) {
+			rows.Close()
+			return fmt.Errorf("%w: episodic codec generation integrity mismatch", ErrEpisodicIndexItem)
+		}
+		indexes = append(indexes, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, r := range indexes {
+		if _, err := tx.Exec(`UPDATE thin_vault_episodic_index SET ref_pointer = ?, payload_mac = ? WHERE doc_id = ? AND codec_key = ? AND ref_pointer = ?`, newRef, v.episodicPayloadMAC(docID, newRef, r.key, r.payload, r.digest), docID, r.key, oldRef); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // healEpisodicPointerUnit updates a verified episodic row's pointer to targetRef
@@ -304,6 +487,9 @@ func (v *Vault) healEpisodicPointerUnit(docID string, occurredAt int64, oldRaw, 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkEpisodicTombstone(tx, docID); err != nil {
+		return err
+	}
 	var curRaw string
 	if err := tx.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&curRaw); err != nil {
 		return err
@@ -311,25 +497,38 @@ func (v *Vault) healEpisodicPointerUnit(docID string, occurredAt int64, oldRaw, 
 	if curRaw != oldRaw && curRaw != targetRef {
 		return errors.New("thinclient: episodic pointer changed concurrently")
 	}
-	var existingDigest []byte
-	if err := tx.QueryRow(`SELECT content_digest FROM thin_vault_episodic_index WHERE doc_id = ? AND length(content_digest) = 32 LIMIT 1`, docID).Scan(&existingDigest); err == nil && len(existingDigest) == sha256.Size {
+	var existingRef string
+	var existingDigest, existingPayload, existingMAC, existingKey []byte
+	err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&existingRef, &existingDigest, &existingPayload, &existingMAC, &existingKey)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		if existingRef != curRaw || !v.validEpisodicPayloadMAC(docID, existingRef, existingKey, existingPayload, existingDigest, existingMAC) {
+			return errors.New("thinclient: existing episodic index integrity unavailable")
+		}
 		if !hmac.Equal(existingDigest, digest) {
 			return errors.New("thinclient: existing episodic content identity mismatch")
 		}
 	}
 	if curRaw != targetRef {
+		if err := v.repointEpisodicIndexes(tx, docID, curRaw, targetRef, digest); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`UPDATE thin_vault_docs SET raw_text = ? WHERE doc_id = ? AND raw_text = ?`, targetRef, docID, curRaw); err != nil {
 			return err
 		}
-	}
-	if _, err := tx.Exec(`DELETE FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key <> ?`, docID, key); err != nil {
-		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id, codec_key) DO UPDATE SET ref_pointer = excluded.ref_pointer, payload = excluded.payload, content_digest = excluded.content_digest, payload_mac = excluded.payload_mac`, docID, targetRef, key, payload, digest, mac); err != nil {
 		return err
 	}
 	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
-		_, _ = tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt)
+		if pointerStem(targetRef) != turnRef {
+			return errors.New("thinclient: episodic source turn mismatch")
+		}
+		if err := v.recordEpisodicSource(tx, docID, turnRef, targetRef, digest, occurredAt); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -356,7 +555,9 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ? AND raw_text = ? AND (layer = 'episodic' OR layer = '')`, docID, expectPointer)
+	// Any separately recorded source can change after classification. Keep the
+	// document when one exists, including malformed rows whose identity is unknown.
+	result, err := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ? AND raw_text = ? AND (layer = 'episodic' OR layer = '') AND NOT EXISTS (SELECT 1 FROM thin_vault_episodic_sources s WHERE s.doc_id = thin_vault_docs.doc_id AND s.turn_ref <> ?)`, docID, expectPointer, pointerStem(expectPointer))
 	if err != nil {
 		return false, err
 	}
@@ -368,6 +569,9 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 		return false, nil
 	}
 	if _, err = tx.Exec(`DELETE FROM thin_vault_episodic_lineage WHERE doc_id = ?`, docID); err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(`DELETE FROM thin_vault_episodic_sources WHERE doc_id = ?`, docID); err != nil {
 		return false, err
 	}
 	if v.hasFTS5 {
@@ -400,7 +604,8 @@ func episodicPointerTurnSegments(refPointer string) ([]episodic.Segment, error) 
 		if err != nil {
 			return nil, err
 		}
-		return episodic.ZCodeTurnSegments(zdb, parts[0], msgID)
+		segments, _, err := episodic.ZCodeTurnSegmentsUpTo(zdb, parts[0], msgID, int(^uint(0)>>1))
+		return segments, err
 	}
 	if strings.HasPrefix(trimmed, "@ref:jsonl:") {
 		rest := strings.TrimPrefix(trimmed, "@ref:jsonl:")
@@ -439,7 +644,7 @@ func verifyEpisodicPointerSource(refPointer, text string) error {
 		return fmt.Errorf("thinclient: resolve episodic pointer: %w", err)
 	}
 	if strings.TrimSpace(resolved) == "" || resolved != text {
-		return errors.New("thinclient: episodic pointer content mismatch")
+		return fmt.Errorf("%w: episodic pointer content mismatch", ErrEpisodicIndexItem)
 	}
 	return nil
 }
@@ -447,139 +652,91 @@ func verifyEpisodicPointerSource(refPointer, text string) error {
 // LoadVerifiedEpisodicPointer resolves an indexed pointer only if its source still
 // matches the content used for the index. Unindexed legacy pointers fail closed.
 func (v *Vault) LoadVerifiedEpisodicPointer(docID, refPointer string) (string, error) {
+	text, _, err := v.loadVerifiedEpisodicPointer(docID, refPointer, false)
+	return text, err
+}
+
+// LoadVerifiedEpisodicPointerSource also reports the pointer that supplied the
+// verified content, which may differ from refPointer when a primary source is gone.
+func (v *Vault) LoadVerifiedEpisodicPointerSource(docID, refPointer string) (string, string, error) {
+	return v.loadVerifiedEpisodicPointer(docID, refPointer, true)
+}
+
+func (v *Vault) loadVerifiedEpisodicPointer(docID, refPointer string, allowAlternate bool) (string, string, error) {
 	if v == nil || v.db == nil {
-		return "", errors.New("thinclient: nil Vault db")
+		return "", "", errors.New("thinclient: nil Vault db")
 	}
+	refPointer = strings.TrimSpace(refPointer)
 	tail := refPointer
 	if colon := strings.LastIndex(tail, ":"); colon >= 0 {
 		tail = tail[colon+1:]
 	}
 	_, _, _, hasSegment, _ := splitPointerSegment(tail)
 	if !hasSegment {
-		return "", errors.New("thinclient: whole-turn pointer has no independently authorized segment")
+		return "", "", errors.New("thinclient: whole-turn pointer has no independently authorized segment")
 	}
 	key, err := v.episodicCodecKey()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	trimmedRef := strings.TrimSpace(refPointer)
-	isZCodeRef := strings.HasPrefix(trimmedRef, "@ref:zcode:")
-	ptrCacheKey := ""
-	if isZCodeRef {
-		ptrCacheKey = "@zptr:" + docID + "\x00" + trimmedRef + "\x00" + string(key)
-	} else if strings.HasPrefix(trimmedRef, "@ref:jsonl:") {
-		rest := strings.TrimPrefix(trimmedRef, "@ref:jsonl:")
-		if lastColon := strings.LastIndex(rest, ":"); lastColon > 0 {
-			absPath := rest[:lastColon]
-			if st, statErr := os.Stat(absPath); statErr == nil && st.Size() >= 4096 {
-				ptrCacheKey = fmt.Sprintf("@jptr:%s\x00%s\x00%d\x00%d\x00%s", docID, trimmedRef, st.Size(), st.ModTime().UnixNano(), string(key))
-			}
-		}
-	}
-	var digest []byte
-	if v.slotCacheMu != nil && v.snapRef != nil {
-		v.slotCacheMu.RLock()
-		snap := v.snapRef.snap
-		if snap != nil && snap.episodicCodecKey == string(key) && len(snap.docs) >= 2048 {
-			if ptrCacheKey != "" && v.slotCache != nil {
-				if entry, ok := v.slotCache[ptrCacheKey]; ok {
-					if entry.docLen < 0 {
-						v.slotCacheMu.RUnlock()
-						return "", errors.New("thinclient: cached unavailable episodic pointer")
-					}
-					if _, inValidSnap := snap.validEpisodicIDs[docID]; inValidSnap && entry.rawText != "" {
-						txt := entry.rawText
-						v.slotCacheMu.RUnlock()
-						return txt, nil
-					}
-				}
-			}
-			if _, inValidSnap := snap.validEpisodicIDs[docID]; inValidSnap {
-				if dIdx, ok := snap.docIdxByID[docID]; ok && dIdx >= 0 && dIdx < len(snap.docs) {
-					d := snap.docs[dIdx]
-					if d.refPointer == refPointer && len(d.contentDigest) == sha256.Size {
-						digest = d.contentDigest
-					}
-				}
-			}
-		}
-		v.slotCacheMu.RUnlock()
-	}
-	if len(digest) != sha256.Size {
-		var payload, mac, storedKey []byte
-		// Multi-generation union read (current generation preferred): hydration
-		// of a pointer unit must survive an SDK or language-pack generation bump
-		// because the stored payload is self-describing and authenticated by the
-		// key it was written under.
-		err = v.db.QueryRow(`SELECT i.payload, i.content_digest, i.payload_mac, i.codec_key FROM thin_vault_docs d JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id AND i.ref_pointer = d.raw_text WHERE d.doc_id = ? AND d.raw_text = ? ORDER BY (i.codec_key = ?) DESC, i.rowid DESC LIMIT 1`, docID, refPointer, key).Scan(&payload, &digest, &mac, &storedKey)
-		if err != nil {
-			if ptrCacheKey != "" && v.slotCacheMu != nil && v.CorpusSize() >= 2048 {
-				v.slotCacheMu.Lock()
-				if v.slotCache == nil {
-					v.slotCache = make(map[string]vaultCachedDocSlots, 256)
-				}
-				v.slotCache[ptrCacheKey] = vaultCachedDocSlots{docLen: -1}
-				v.slotCacheMu.Unlock()
-			}
-			return "", fmt.Errorf("thinclient: episodic index identity unavailable for %s: %w", docID, err)
-		}
-		if !v.validEpisodicPayloadMAC(docID, refPointer, storedKey, payload, digest, mac) {
-			if ptrCacheKey != "" && v.slotCacheMu != nil && v.CorpusSize() >= 2048 {
-				v.slotCacheMu.Lock()
-				if v.slotCache == nil {
-					v.slotCache = make(map[string]vaultCachedDocSlots, 256)
-				}
-				v.slotCache[ptrCacheKey] = vaultCachedDocSlots{docLen: -1}
-				v.slotCacheMu.Unlock()
-			}
-			return "", fmt.Errorf("thinclient: episodic index integrity unavailable for %s", docID)
-		}
-	}
-	text, err := ResolveEpisodicPointerLive(refPointer)
-	if err != nil || strings.TrimSpace(text) == "" || !hmac.Equal(digest, v.episodicContentDigest(text)) {
-		// The stored `#<k>` is positional and shifts whenever the segmentation filter
-		// evolves (or the harness appends a step to the turn): re-locate the unit inside
-		// the same turn by content identity — the recorded digest is bound to the exact
-		// text — before failing closed.
-		if relocated, ok := v.resolveEpisodicTurnByDigest(refPointer, digest); ok {
-			text, err = relocated, nil
-		}
-	}
+	var primary string
+	var payload, digest, mac, storedKey []byte
+	err = v.db.QueryRow(`SELECT d.raw_text, i.payload, i.content_digest, i.payload_mac, i.codec_key FROM thin_vault_docs d JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id AND i.ref_pointer = d.raw_text WHERE d.doc_id = ? ORDER BY (i.codec_key = ?) DESC, i.rowid DESC LIMIT 1`, docID, key).Scan(&primary, &payload, &digest, &mac, &storedKey)
 	if err != nil {
-		// Only negative-cache permanent missing/invalid pointer errors; transient SQLite
-		// lock contention on the harness DB must not poison the slot cache.
-		errMsg := strings.ToLower(err.Error())
-		isTransientLock := strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "locked")
-		if !isTransientLock && ptrCacheKey != "" && v.slotCacheMu != nil && v.CorpusSize() >= 2048 {
-			v.slotCacheMu.Lock()
-			if v.slotCache == nil {
-				v.slotCache = make(map[string]vaultCachedDocSlots, 256)
+		return "", "", fmt.Errorf("thinclient: episodic index identity unavailable for %s: %w", docID, err)
+	}
+	if !v.validEpisodicPayloadMAC(docID, primary, storedKey, payload, digest, mac) {
+		return "", "", fmt.Errorf("thinclient: episodic index integrity unavailable for %s", docID)
+	}
+	var sources []episodicSource
+	if refPointer != primary {
+		sources, err = v.episodicSources(docID, "")
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if refPointer != primary {
+		authorized := false
+		for _, source := range sources {
+			if source.refPointer == refPointer && hmac.Equal(source.digest, digest) {
+				authorized = true
+				break
 			}
-			v.slotCache[ptrCacheKey] = vaultCachedDocSlots{docLen: -1}
-			v.slotCacheMu.Unlock()
 		}
-		return "", fmt.Errorf("thinclient: resolve episodic pointer for %s: %w", docID, err)
+		if !authorized {
+			return "", "", fmt.Errorf("thinclient: episodic source identity unavailable for %s", docID)
+		}
 	}
-	if strings.TrimSpace(text) == "" || !hmac.Equal(digest, v.episodicContentDigest(text)) {
-		if ptrCacheKey != "" && v.slotCacheMu != nil && v.CorpusSize() >= 2048 {
-			v.slotCacheMu.Lock()
-			if v.slotCache == nil {
-				v.slotCache = make(map[string]vaultCachedDocSlots, 256)
+	resolve := func(ref string) (string, string, bool) {
+		text, err := ResolveEpisodicPointerLive(ref)
+		if err == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
+			return text, ref, true
+		}
+		return v.resolveEpisodicTurnByDigest(ref, digest)
+	}
+	if text, source, ok := resolve(refPointer); ok {
+		if source != refPointer && !allowAlternate {
+			return "", "", fmt.Errorf("thinclient: episodic pointer moved for %s", docID)
+		}
+		return text, source, nil
+	}
+	if allowAlternate {
+		if sources == nil {
+			sources, err = v.episodicSources(docID, "")
+			if err != nil {
+				return "", "", err
 			}
-			v.slotCache[ptrCacheKey] = vaultCachedDocSlots{docLen: -1}
-			v.slotCacheMu.Unlock()
 		}
-		return "", fmt.Errorf("thinclient: episodic pointer content mismatch for %s", docID)
-	}
-	if ptrCacheKey != "" && v.slotCacheMu != nil {
-		v.slotCacheMu.Lock()
-		if v.slotCache == nil {
-			v.slotCache = make(map[string]vaultCachedDocSlots, 256)
+		for _, source := range sources {
+			if source.refPointer == refPointer || !hmac.Equal(source.digest, digest) {
+				continue
+			}
+			if text, actualRef, ok := resolve(source.refPointer); ok {
+				return text, actualRef, nil
+			}
 		}
-		v.slotCache[ptrCacheKey] = vaultCachedDocSlots{rawText: text}
-		v.slotCacheMu.Unlock()
 	}
-	return text, nil
+	return "", "", fmt.Errorf("thinclient: episodic pointer content unavailable for %s", docID)
 }
 
 // EpisodicTurnDocuments returns only stored identities explicitly linked to a turn.
@@ -596,9 +753,38 @@ func (v *Vault) EpisodicTurnDocuments(turnRef string) (map[string]string, error)
 		if err := rows.Scan(&id, &pointer); err != nil {
 			return nil, err
 		}
-		docs[id] = pointer
+		if pointerStem(pointer) == turnRef {
+			docs[id] = pointer
+		}
 	}
-	return docs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	sourceRows, err := v.db.Query(`SELECT doc_id, ref_pointer, content_digest, source_mac FROM thin_vault_episodic_sources WHERE turn_ref = ? ORDER BY doc_id, ref_pointer`, turnRef)
+	if err != nil {
+		return nil, err
+	}
+	defer sourceRows.Close()
+	for sourceRows.Next() {
+		var id, pointer string
+		var digest, mac []byte
+		if err := sourceRows.Scan(&id, &pointer, &digest, &mac); err != nil {
+			return nil, err
+		}
+		if v.validEpisodicSourceMAC(id, turnRef, pointer, digest, mac) {
+			previous, exists := docs[id]
+			_, segment, chunk, hasSegment, hasChunk := splitPointerSegment(pointer)
+			_, prevSegment, prevChunk, prevHasSegment, prevHasChunk := splitPointerSegment(previous)
+			if !exists || (hasSegment && (!prevHasSegment || segment < prevSegment ||
+				(segment == prevSegment && (!hasChunk || (prevHasChunk && chunk < prevChunk))))) {
+				docs[id] = pointer
+			}
+		}
+	}
+	return docs, sourceRows.Err()
 }
 
 // VerifiedTurnFirstSegment resolves the turn's first speech segment (`#0`), which by
@@ -642,7 +828,7 @@ func (v *Vault) VerifiedTurnFirstSegment(turnRef string) (string, bool) {
 	if bestID == "" {
 		return "", false
 	}
-	text, err := v.LoadVerifiedEpisodicPointer(bestID, bestPointer)
+	text, _, err := v.loadVerifiedEpisodicPointer(bestID, bestPointer, false)
 	if err != nil || strings.TrimSpace(text) == "" {
 		return "", false
 	}
@@ -658,12 +844,23 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 	}
 	refPointer = strings.TrimSpace(refPointer)
 	if !strings.HasPrefix(refPointer, "@ref:") || strings.TrimSpace(docID) == "" || strings.TrimSpace(livePlaintext) == "" {
-		return errors.New("thinclient: episodic index requires a document, pointer and plaintext")
+		return fmt.Errorf("%w: episodic index requires a document, pointer and plaintext", ErrEpisodicIndexItem)
+	}
+	turnRef = strings.TrimSpace(turnRef)
+	stem := pointerStem(refPointer)
+	if stem == "" || (turnRef != "" && turnRef != stem) {
+		return fmt.Errorf("%w: episodic source turn mismatch", ErrEpisodicIndexItem)
+	}
+	if turnRef == "" {
+		turnRef = stem
 	}
 	if pkt.UnitID != docID {
-		return errors.New("thinclient: episodic packet document mismatch")
+		return fmt.Errorf("%w: episodic packet document mismatch", ErrEpisodicIndexItem)
 	}
 	if err := verifyEpisodicPointerSource(refPointer, livePlaintext); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %w", ErrEpisodicIndexItem, err)
+		}
 		return err
 	}
 	expected, _ := v.PackBlindPacket(docID, livePlaintext, occurredAt)
@@ -676,7 +873,7 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 		return err
 	}
 	if !bytes.Equal(payload, canonical) {
-		return errors.New("thinclient: episodic packet key or encoder mismatch")
+		return fmt.Errorf("%w: episodic packet key or encoder mismatch", ErrEpisodicIndexItem)
 	}
 	codecKey, err := v.episodicCodecKey()
 	if err != nil {
@@ -691,6 +888,9 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkEpisodicTombstone(tx, docID); err != nil {
+		return err
+	}
 	digest := v.episodicContentDigest(livePlaintext)
 	var existingRaw string
 	err = tx.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&existingRaw)
@@ -699,40 +899,61 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 	}
 	var storedPointer string
 	var storedDigest, storedPayload, storedMAC []byte
-	repoint := false
+	repoint, alternate := false, false
 	if err == nil {
-		if existingRaw == refPointer {
-			err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, refPointer, codecKey).Scan(&storedPointer, &storedDigest, &storedPayload, &storedMAC)
-		} else {
-			// The docID is content-addressed (`episodicunit.DocID`), so a differing raw_text
-			// means the same speech re-enumerated under a new `#<k>` index (the sources are a
-			// stream: a segmentation change or an appended part shifts later indices). Accept
-			// only the same turn pointer stem and only when the recorded content identity
-			// matches, then re-point the row to the current index instead of refusing the
-			// turn forever with stale `#<k>`.
-			if stem := pointerStem(existingRaw); stem == "" || stem != pointerStem(refPointer) {
-				return ErrEpisodicPointerSourceConflict
-			}
-			err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, existingRaw, codecKey).Scan(&storedPointer, &storedDigest, &storedPayload, &storedMAC)
-			repoint = true
-		}
+		err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, existingRaw, codecKey).Scan(&storedPointer, &storedDigest, &storedPayload, &storedMAC)
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("thinclient: existing episodic document identity is unverified; ensure index first")
+			return fmt.Errorf("%w: existing episodic document identity is unverified; ensure index first", ErrEpisodicIndexItem)
 		}
 		if err != nil {
 			return err
 		}
 		if !v.validEpisodicPayloadMAC(docID, storedPointer, codecKey, storedPayload, storedDigest, storedMAC) {
-			return errors.New("thinclient: existing episodic index integrity unavailable; rebuild required")
+			return fmt.Errorf("%w: existing episodic index integrity unavailable; rebuild required", ErrEpisodicIndexItem)
 		}
 		if !hmac.Equal(storedDigest, digest) {
-			return errors.New("thinclient: existing episodic content identity mismatch")
+			return fmt.Errorf("%w: existing episodic content identity mismatch", ErrEpisodicIndexItem)
 		}
 		if !bytes.Equal(storedPayload, payload) {
-			return errors.New("thinclient: existing episodic packet mismatch")
+			return fmt.Errorf("%w: existing episodic packet mismatch", ErrEpisodicIndexItem)
+		}
+		if existingRaw != refPointer {
+			if pointerStem(existingRaw) == "" {
+				return fmt.Errorf("%w: %w", ErrEpisodicIndexItem, ErrEpisodicPointerSourceConflict)
+			}
+			if pointerStem(existingRaw) != stem {
+				alternate = true
+			} else {
+				oldText, oldErr := ResolveEpisodicPointerLive(existingRaw)
+				if oldErr == nil {
+					repoint = !hmac.Equal(digest, v.episodicContentDigest(oldText))
+				}
+			}
 		}
 	}
-	_, err = tx.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id) DO UPDATE SET occurred_at=excluded.occurred_at, inserted_at=CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END, address_uri=excluded.address_uri, coord64=excluded.coord64, waveform_bar=excluded.waveform_bar, doc_macro_wave=excluded.doc_macro_wave, kept_indices_json=excluded.kept_indices_json, assistant_id=excluded.assistant_id, incarnation_id=excluded.incarnation_id, locus=excluded.locus`, docID, occurredAt, occurredAt, refPointer, resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON), v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus)
+	if err == nil && existingRaw != refPointer && !repoint {
+		alternate = true
+	}
+	if alternate {
+		var changesBefore, changesAfter int64
+		if err := tx.QueryRow(`SELECT total_changes()`).Scan(&changesBefore); err != nil {
+			return err
+		}
+		if err := v.recordEpisodicSource(tx, docID, turnRef, refPointer, digest, occurredAt); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT total_changes()`).Scan(&changesAfter); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		if changesAfter != changesBefore {
+			v.InvalidateRuntimeCaches()
+		}
+		return nil
+	}
+	_, err = tx.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id) DO UPDATE SET occurred_at=CASE WHEN thin_vault_docs.occurred_at <= 0 AND excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END, inserted_at=CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END, address_uri=excluded.address_uri, coord64=excluded.coord64, waveform_bar=excluded.waveform_bar, doc_macro_wave=excluded.doc_macro_wave, kept_indices_json=excluded.kept_indices_json`, docID, occurredAt, time.Now().Unix(), refPointer, resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON), v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus)
 	if err != nil {
 		return err
 	}
@@ -743,10 +964,10 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 		// Same content, new enumeration index: move the stored pointer to the index the
 		// current filter names, and re-authenticate the index row against it (the MAC is
 		// bound to the ref pointer), so verification and hydration agree again.
-		if _, err = tx.Exec(`UPDATE thin_vault_docs SET raw_text = ? WHERE doc_id = ? AND raw_text = ?`, refPointer, docID, existingRaw); err != nil {
+		if err := v.repointEpisodicIndexes(tx, docID, existingRaw, refPointer, digest); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`UPDATE thin_vault_episodic_index SET ref_pointer = ?, payload_mac = ? WHERE doc_id = ? AND codec_key = ? AND ref_pointer = ?`, refPointer, v.episodicPayloadMAC(docID, refPointer, codecKey, payload, digest), docID, codecKey, existingRaw); err != nil {
+		if _, err = tx.Exec(`UPDATE thin_vault_docs SET raw_text = ? WHERE doc_id = ? AND raw_text = ?`, refPointer, docID, existingRaw); err != nil {
 			return err
 		}
 	}
@@ -755,10 +976,8 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 			return err
 		}
 	}
-	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
-		if _, err = tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
-			return err
-		}
+	if err = v.recordEpisodicSource(tx, docID, turnRef, refPointer, digest, occurredAt); err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
@@ -843,6 +1062,9 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkEpisodicTombstone(tx, docID); err != nil {
+		return false, err
+	}
 	var raw string
 	if err := tx.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -96,7 +96,7 @@ func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
 	}
 	transcriptLines := strings.Join([]string{
 		`{"type":"user","sessionId":"s1","timestamp":"2026-11-06T03:00:00","message":{"role":"user","content":[{"type":"text","text":"请检查三层记忆健康度并对齐同步。"}]}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-11-06T03:00:10","message":{"role":"assistant","content":[{"type":"text","text":"已完成 Episodic / Background / Noetic 对齐。"}]}}`,
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-11-06T03:00:10","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"已完成 Episodic / Background / Noetic 对齐。"}]}}`,
 		"",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(claudeSessionDir, "s1.jsonl"), []byte(transcriptLines), 0o644); err != nil {
@@ -254,7 +254,7 @@ func TestEpisodicRebuildDryRunThenApply(t *testing.T) {
 	}
 	lines := strings.Join([]string{
 		`{"type":"user","sessionId":"s1","timestamp":"2026-11-06T03:00:00","message":{"role":"user","content":"请检查缓存失效。"}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-11-06T03:00:10","message":{"role":"assistant","content":[` +
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-11-06T03:00:10","message":{"role":"assistant","stop_reason":"end_turn","content":[` +
 			`{"type":"text","text":"先确认断言。"},` +
 			`{"type":"text","text":"结论：缓存按 docID 失效。"}]}}`,
 		"",

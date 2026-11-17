@@ -7,7 +7,7 @@
     "instructions": "<HOME>/.zcode/AGENTS.md",
     "label": "ZCode",
     "mcp": "<HOME>/.zcode/cli/config.json",
-    "notes": "user config: mcp.servers + hooks.events (hooks.enabled must be true)",
+    "notes": "user config: mcp.servers + hooks.events (global hook switch is preserved)",
     "skill": "<HOME>/.zcode/skills"
   },
   {
@@ -24,12 +24,12 @@
   {
     "detect": "<HOME>/.codex",
     "detected": false,
-    "hooks": "-",
+    "hooks": "<HOME>/.codex/hooks.json",
     "id": "codex",
     "instructions": "<HOME>/.codex/AGENTS.md",
     "label": "Codex",
     "mcp": "<HOME>/.codex/config.toml",
-    "notes": "no hooks; skills live next to the built-in .system/ dir",
+    "notes": "hooks.json (optional, --with-hooks): first run needs in-Codex review/trust; skills live next to the built-in .system/ dir",
     "skill": "<HOME>/.codex/skills"
   },
   {
@@ -72,9 +72,9 @@
     "id": "windsurf",
     "instructions": "<HOME>/.codeium/windsurf/AGENTS.md",
     "label": "Windsurf",
-    "mcp": "<HOME>/.codeium/windsurf/mcp_config.json",
-    "notes": "user config ~/.codeium/windsurf/mcp_config.json",
-    "skill": "<HOME>/.codeium/windsurf/skills"
+    "mcp": "<HOME>/.config/devin/mcp_config.json",
+    "notes": "user config ~/.config/devin/mcp_config.json (legacy ~/.codeium/windsurf/mcp_config.json also written); user skills ~/.config/devin/skills; workspace skills .windsurf/skills",
+    "skill": "<HOME>/.config/devin/skills"
   },
   {
     "detect": "<HOME>/.cline",
@@ -83,8 +83,8 @@
     "id": "cline",
     "instructions": "-",
     "label": "Cline / Roo Code",
-    "mcp": "<HOME>/.cline/mcp_settings.json",
-    "notes": "MCP settings under ~/.cline/mcp_settings.json; project rules in .clinerules",
+    "mcp": "<HOME>/.cline/data/settings/cline_mcp_settings.json",
+    "notes": "MCP settings under ~/.cline/data/settings/cline_mcp_settings.json (legacy ~/.cline/mcp_settings.json also written); project rules are per-file under .clinerules/",
     "skill": "<HOME>/.cline/skills"
   },
   {

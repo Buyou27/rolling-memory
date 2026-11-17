@@ -4,15 +4,18 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
-// Check verifies the static registration (skill, MCP entry, hooks, instruction
-// block) and, when live, a real MCP handshake on a temporary database.
+// Check inspects registrations and, when live, probes the selected launcher on
+// a temporary database. The launcher probe is not a host registration probe.
 func Check(harnesses []Harness, options InstallOptions, live bool) *Report {
 	report := newReport("check", options)
 	if err := ValidateInstallOptions(report.Options); err != nil {
@@ -22,12 +25,16 @@ func Check(harnesses []Harness, options InstallOptions, live bool) *Report {
 	if live {
 		server := Handshake(report.Options, 30*time.Second)
 		report.Extra["server"] = server
+		launcher, _ := server["launcher"].(string)
 		if server["ok"] != true {
 			detail, _ := server["error"].(string)
-			report.Add("*", "server", report.Options.ResolvedBinary(), StatusError, detail)
+			report.Add("*", "server", launcher, StatusError, detail)
+		} else {
+			report.Add("*", "server", launcher, StatusSkipped, "selected launcher probe only; host registrations are not executed")
 		}
 	}
 	for _, harness := range harnesses {
+		start := len(report.Actions)
 		if !report.Options.MCPOnly {
 			checkSkill(harness, report.Options, report)
 		}
@@ -36,8 +43,181 @@ func Check(harnesses []Harness, options InstallOptions, live bool) *Report {
 			checkHooks(harness, report.Options, report)
 			checkInstructions(harness, report.Options, report)
 		}
+		plugin, hasPlugin := activeNativePlugin(harness, report.Options)
+		runtimeUnverified := false
+		for i := start; i < len(report.Actions); i++ {
+			action := &report.Actions[i]
+			if action.Component == "mcp" && action.Status == StatusOK &&
+				!(hasPlugin && action.Detail == "plugin "+plugin.ID) {
+				if err := validateMCPRegistration(harness, report.Options, action.Path); err != nil {
+					action.Status = StatusError
+					action.Detail = "invalid registration: " + err.Error()
+				} else {
+					runtimeUnverified = true
+					detail := action.Detail
+					action.Detail = "configured; runtime not verified"
+					if detail != "" {
+						action.Detail += " (" + detail + ")"
+					}
+				}
+			}
+			if hasPlugin && (action.Detail == "plugin "+plugin.ID ||
+				(action.Component == "hooks" && action.Detail == "1 event · plugin "+plugin.ID) ||
+				(action.Status == StatusConflict && strings.Contains(action.Detail, "plugin "+plugin.ID))) {
+				if action.Status == StatusOK {
+					action.Status = StatusSkipped
+				}
+				if action.Component == "mcp" {
+					runtimeUnverified = true
+				}
+				action.Detail += "; plugin " + plugin.ID + " declared, host loading and runtime not verified"
+			}
+		}
+		if live && runtimeUnverified {
+			report.Add(harness.ID, "mcp-runtime", "-", StatusSkipped, "host registration not executed; runtime unverified")
+		}
 	}
 	return report
+}
+
+// validateMCPRegistration checks the stored registration without executing it.
+// A successful validation says only that its static fields and launcher exist.
+func validateMCPRegistration(harness Harness, options InstallOptions, path string) error {
+	var entry any
+	switch harness.MCPKind {
+	case "json":
+		data, err := loadJSONFile(path)
+		if err != nil {
+			return err
+		}
+		keys := append(append([]string{}, harness.MCPKeys...), options.Name)
+		var found bool
+		entry, found = jsonLookup(data, keys)
+		if !found {
+			return fmt.Errorf("server entry not found")
+		}
+	case "toml":
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		data, err := parseTOML(string(raw))
+		if err != nil {
+			return err
+		}
+		if len(harness.MCPKeys) == 0 {
+			return fmt.Errorf("server table not found")
+		}
+		table, ok := data[harness.MCPKeys[0]].(map[string]any)
+		if !ok {
+			return fmt.Errorf("server table not found")
+		}
+		entry = table[options.Name]
+	case "dsh":
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		begin, end := dshMarkers(options.Name)
+		start, finish, found, malformed := dshMarkerRegion(text, begin, end)
+		if !found || malformed || !dshRegionIsOurs(text[start:finish], options) {
+			return fmt.Errorf("invalid profile registration")
+		}
+		lines := pySplitLines(text[start:finish])
+		var command string
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[7], "        command: ")), &command); err != nil {
+			return fmt.Errorf("invalid command: %w", err)
+		}
+		return validateMCPExecutable(command, options.Cwd)
+	default:
+		return fmt.Errorf("unsupported registration format")
+	}
+	object, ok := asObject(entry)
+	if !ok {
+		return fmt.Errorf("server entry is not an object")
+	}
+	commandValue, _ := objectGet(object, "command")
+	command, ok := commandValue.(string)
+	if !ok || strings.TrimSpace(command) == "" {
+		return fmt.Errorf("command is missing")
+	}
+	if value, found := objectGet(object, "type"); found {
+		text, ok := value.(string)
+		if !ok || text != "stdio" {
+			return fmt.Errorf("transport type is not stdio")
+		}
+	}
+	if value, found := objectGet(object, "transport"); found {
+		text, ok := value.(string)
+		if !ok || text != "stdio" {
+			return fmt.Errorf("transport is not stdio")
+		}
+	}
+	for _, key := range []string{"enabled", "disabled"} {
+		if value, found := objectGet(object, key); found {
+			flag, ok := value.(bool)
+			if !ok || (key == "enabled" && !flag) || (key == "disabled" && flag) {
+				return fmt.Errorf("server %s state is invalid or disabled", key)
+			}
+		}
+	}
+	argsValue, found := objectGet(object, "args")
+	args, ok := asArray(argsValue)
+	if !found || !ok || len(args) != 1 {
+		return fmt.Errorf("expected args [mcp]")
+	}
+	arg, ok := args[0].(string)
+	if !ok || arg != "mcp" {
+		return fmt.Errorf("expected args [mcp]")
+	}
+	if value, found := objectGet(object, "env"); found {
+		env, ok := asObject(value)
+		if !ok {
+			return fmt.Errorf("env is not an object")
+		}
+		for _, item := range env {
+			text, ok := item.Value.(string)
+			if !ok {
+				return fmt.Errorf("env %s is not a string", item.Key)
+			}
+			switch item.Key {
+			case "ROLLING_MEMORY_MODE":
+				if text != "local" {
+					return fmt.Errorf("env %s must be local", item.Key)
+				}
+			case "ROLLING_MEMORY_DB", "ROLLING_MEMORY_SCOPE":
+				if text == "" {
+					return fmt.Errorf("env %s is empty", item.Key)
+				}
+			}
+		}
+	}
+	return validateMCPExecutable(command, options.Cwd)
+}
+
+func validateMCPExecutable(command, cwd string) error {
+	path := command
+	if !filepath.IsAbs(path) && !strings.ContainsAny(path, `/\\`) {
+		resolved, err := exec.LookPath(path)
+		if err != nil {
+			return fmt.Errorf("command not found: %s", command)
+		}
+		path = resolved
+	} else if !filepath.IsAbs(path) {
+		if cwd == "" {
+			return fmt.Errorf("relative command has no working directory")
+		}
+		path = filepath.Join(cwd, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("command unavailable: %w", err)
+	}
+	if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
+		return fmt.Errorf("command is not an executable file: %s", command)
+	}
+	return nil
 }
 
 // SelectHarnesses resolves explicit ids (unknown ids are an error) or filters

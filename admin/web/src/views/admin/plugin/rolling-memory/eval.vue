@@ -91,8 +91,8 @@
                                 <div class="rm-intro-body">
                                     {{
                                         isEn
-                                            ? 'Primary benchmark: University of Cambridge ATM-Bench (11,034 multimodal items; Main-1013 R@10 82.56% / QS 65.54%, Hard-31 R@10 50.35% / Any-Hit@10 80.65% / QS 27.38%). Comparative reference: LoCoMo (ACL 2024, 5,882 dialogue turns).'
-                                            : '第一主基准采用剑桥大学 ATM-Bench（11,034 条多模态个人记忆；Main-1013 R@10 82.56% / QS 65.54%，Hard-31 R@10 50.35% / Any-Hit@10 80.65% / QS 27.38%）；长程对话基准 LoCoMo（ACL 2024，5,882 轮对话）作为对照参照。'
+                                            ? 'Primary benchmark: University of Cambridge ATM-Bench (11,034 multimodal items; Main-1013 R@10 82.85% / QS 70.13%, Hard-31 R@10 52.43% / Any-Hit@10 80.65% / QS 25.06%). Comparative reference: LoCoMo (ACL 2024, 5,882 dialogue turns).'
+                                            : '第一主基准采用剑桥大学 ATM-Bench（11,034 条多模态个人记忆；Main-1013 R@10 82.85% / QS 70.13%，Hard-31 R@10 52.43% / Any-Hit@10 80.65% / QS 25.06%）；长程对话基准 LoCoMo（ACL 2024，5,882 轮对话）作为对照参照。'
                                     }}
                                 </div>
                             </div>
@@ -2497,6 +2497,7 @@ interface EvalQuestionResultItem {
     local_fallback?: boolean
     retrieval_unit_ids?: string[]
     corpus_sha256?: string
+    metrics_available?: Record<string, boolean>
     meta?: RecallMeta
     recall?: StructuredRecallPayload
     // L0 工作台后端契约（admin/plugins/rolling-memory/eval.go:399-411，缺省键=旧后端，前端按同一判据兜底）：
@@ -4255,8 +4256,8 @@ const currentSplitBenchmarkRef = computed(() => {
     }
     if (query.suite === 'atm') {
         return query.tier === '1013'
-            ? (isEn.value ? 'Reference baseline: Official R@10 82.56% / R@50 89.97% / Hybrid QS 65.54% (vs MemPalace R@10 76.40% / QS 56.80%).' : '主榜参考基线：官方 R@10 82.56% / R@50 89.97% / 混合 QS 65.54%（外部最高 MemPalace R@10 76.40% / QS 56.80%）。')
-            : (isEn.value ? 'Reference baseline: Official R@10 50.35% / R@50 70.20% / Hybrid QS 27.38% (vs MemoryOS R@10 32.70% / QS 13.70%).' : 'Hard 参考基线：官方 R@10 50.35% / R@50 70.20% / 混合 QS 27.38%（外部最高 MemoryOS R@10 32.70% / QS 13.70%）。')
+            ? (isEn.value ? 'Reference baseline: Official R@10 82.85% / R@50 90.11% / Hybrid QS 70.13% (vs MemPalace R@10 76.40% / QS 56.80%).' : '主榜参考基线：官方 R@10 82.85% / R@50 90.11% / 混合 QS 70.13%（外部最高 MemPalace R@10 76.40% / QS 56.80%）。')
+            : (isEn.value ? 'Reference baseline: Official R@10 52.43% / R@50 70.62% / Hybrid QS 25.06% (vs MemoryOS R@10 32.70% / QS 13.70%).' : 'Hard 参考基线：官方 R@10 52.43% / R@50 70.62% / 混合 QS 25.06%（外部最高 MemoryOS R@10 32.70% / QS 13.70%）。')
     }
     return isEn.value ? 'Current baseline: 1313/1540 = 85.26% on the full 1,540 set (deepseek-v4.1-flash judge).' : '现行基线：1,540 全量判对 1313/1540 = 85.26%（deepseek-v4.1-flash 判官）。'
 })

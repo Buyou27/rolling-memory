@@ -276,13 +276,14 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := writeResults(filepath.Join(opts.OutDir, "results-"+arm+".jsonl"), results); err != nil {
+	artifact := arm + runWindowSuffix(opts)
+	if err := writeResults(filepath.Join(opts.OutDir, "results-"+artifact+".jsonl"), results); err != nil {
 		return nil, err
 	}
-	if err := writeJSON(filepath.Join(opts.OutDir, "summary-"+arm+".json"), summary); err != nil {
+	if err := writeJSON(filepath.Join(opts.OutDir, "summary-"+artifact+".json"), summary); err != nil {
 		return nil, err
 	}
-	if err := WriteMarkdown(summary, filepath.Join(opts.OutDir, "summary-"+arm+".md")); err != nil {
+	if err := WriteMarkdown(summary, filepath.Join(opts.OutDir, "summary-"+artifact+".md")); err != nil {
 		return nil, err
 	}
 	return summary, nil
@@ -624,6 +625,16 @@ func BuildArm(opts Options) string {
 		name += "-" + judge
 	}
 	return name
+}
+
+// runWindowSuffix marks partial runs (question-window shards and quick
+// samples) in artifact file names so a shard can never overwrite a full-run
+// artifact in the same out-dir; full runs keep their canonical names.
+func runWindowSuffix(opts Options) string {
+	if opts.Offset <= 0 && opts.Limit <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("-o%d-l%d", opts.Offset, opts.Limit)
 }
 
 func answererName(opts Options) string {

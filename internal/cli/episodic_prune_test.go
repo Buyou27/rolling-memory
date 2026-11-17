@@ -56,7 +56,8 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 			t.Fatalf("resolve %s: %q %v", units[index].ref, text, rErr)
 		}
 		units[index].text = text
-		if _, rErr := tc.RememberEpisodicByRef(context.Background(), units[index].id, units[index].ref, turnRef, text, 1); rErr != nil {
+		unitTurnRef := units[index].ref[:strings.LastIndex(units[index].ref, "#")]
+		if _, rErr := tc.RememberEpisodicByRef(context.Background(), units[index].id, units[index].ref, unitTurnRef, text, 1); rErr != nil {
 			t.Fatal(rErr)
 		}
 	}

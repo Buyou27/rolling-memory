@@ -20,10 +20,8 @@ type zcodePluginInfo struct {
 	HasHooks bool
 }
 
-// activeNativePlugin checks whether the harness (zcode, claude-code or
-// workbuddy) has an enabled native plugin (e.g. "rolling-memory@marketplace")
-// in user scope whose cache directory provides the skill, MCP server and/or
-// session hooks.
+// activeNativePlugin discovers enabled native plugin declarations. Has* fields
+// describe local files or registrations, not verified host runtime state.
 func activeNativePlugin(harness Harness, options InstallOptions) (zcodePluginInfo, bool) {
 	if options.Project {
 		return zcodePluginInfo{}, false
@@ -100,8 +98,7 @@ func activePluginFromConfig(configPath string, enabledPath []string, cacheRoot, 
 	return inspectPluginDir(pluginDir, manifestDir, pluginID, options)
 }
 
-// inspectPluginDir reports which components an enabled plugin directory
-// provides (skill / MCP server / session hooks).
+// inspectPluginDir reports declarations separately from verified replacements.
 func inspectPluginDir(pluginDir, manifestDir, pluginID string, options InstallOptions) (zcodePluginInfo, bool) {
 	manifest, err := loadJSONFile(filepath.Join(pluginDir, manifestDir, "plugin.json"))
 	if err != nil {
@@ -111,18 +108,16 @@ func inspectPluginDir(pluginDir, manifestDir, pluginID string, options InstallOp
 	hasSkill := fileExists(skillMD)
 	_, hasMCP := jsonLookup(manifest, []string{"mcpServers", options.Name})
 	if !hasMCP {
-		// CodeBuddy-family plugins may carry the MCP wiring in a sibling
-		// .mcp.json instead of the manifest; the host runtimes read both, so
-		// the dedup check must see both as well.
 		if data, err := loadJSONFile(filepath.Join(pluginDir, ".mcp.json")); err == nil {
 			_, hasMCP = jsonLookup(data, []string{"mcpServers", options.Name})
 		}
 	}
-	hooksPath := filepath.Join(pluginDir, "hooks", "hooks.json")
-	hasHooks := pluginHasHooks(hooksPath, pluginDir)
+	hasHooks := pluginHasHooks(filepath.Join(pluginDir, "hooks", "hooks.json"), pluginDir)
 	if !hasSkill && !hasMCP && !hasHooks {
 		return zcodePluginInfo{}, false
 	}
+	// Local files cannot establish that the host loaded the plugin. None of the
+	// declared surfaces is a verified replacement for an existing registration.
 	return zcodePluginInfo{
 		ID:       pluginID,
 		Dir:      pluginDir,
@@ -261,9 +256,8 @@ func activePluginFromMarketplaceDir(detect string, options InstallOptions) (zcod
 	return zcodePluginInfo{}, false
 }
 
-// pluginHasHooks reports only events with an actual command hook, in either
-// shipped form: the plain launcher call or its --json envelope variant. A
-// hooks.json that is empty cannot replace global hooks.
+// pluginHasHooks identifies the expected hook declaration. File and command
+// presence do not establish that the host loaded or can run it.
 func pluginHasHooks(path, pluginDir string) bool {
 	data, err := loadJSONFile(path)
 	if err != nil {
@@ -289,12 +283,28 @@ func pluginHasHooks(path, pluginDir string) bool {
 		foundCommand := false
 		for _, group := range groups {
 			for _, hook := range groupHooks(group) {
+				object, ok := asObject(hook)
+				if !ok {
+					continue
+				}
+				typeValue, _ := objectGet(object, "type")
+				if kind, ok := typeValue.(string); !ok || kind != "command" {
+					continue
+				}
+				if enabledValue, found := objectGet(object, "enabled"); found {
+					if enabled, ok := enabledValue.(bool); !ok || !enabled {
+						continue
+					}
+				}
 				command := strings.TrimSpace(hookCommandOf(hook))
 				for _, root := range []string{"${CLAUDE_PLUGIN_ROOT}", "${ZCODE_PLUGIN_ROOT}"} {
 					for _, launcher := range []string{"bin/rolling-memory-hook", "bin/rolling-memory-hook.cmd"} {
-						base := root + "/" + launcher + " " + event.Sub
-						if (command == base || command == base+" --json") && fileExists(filepath.Join(pluginDir, filepath.FromSlash(launcher))) {
-							foundCommand = true
+						path := root + "/" + launcher
+						for _, quoted := range []string{path, `"` + path + `"`} {
+							base := quoted + " " + event.Sub
+							if (command == base || command == base+" --json") && fileExists(filepath.Join(pluginDir, filepath.FromSlash(launcher))) {
+								foundCommand = true
+							}
 						}
 					}
 				}

@@ -8,7 +8,7 @@
 
 Rolling Memory's mechanical core is completely harness-agnostic. Coding agent harnesses differ in only four integration surfaces: **Skill Root**, **MCP Server Registration File**, **Lifecycle Hooks**, and **Instruction Files (`AGENTS.md` / `CLAUDE.md`)**.
 
-`rolling-memory install` consolidates these four surfaces across all major harnesses into a single registry — backing up existing files, applying idempotent updates, and verifying live MCP handshakes via `install --check`.
+`rolling-memory install` brings these surfaces into a single registry, with backups and idempotent updates. `install --check` inspects registrations and separately probes the selected launcher.
 
 ---
 
@@ -18,14 +18,14 @@ Rolling Memory's mechanical core is completely harness-agnostic. Coding agent ha
 |---|---|---|
 | **MCP-Only + Manual Config Copy-Paste** | Ships a stdio MCP server; users manually edit each client's JSON or TOML file | Users shoulder path differences, escaping rules, and cropped GUI `PATH` issues; no backups or conflict protection |
 | **Single-Harness Exclusive Plugin** | Hard-codes one IDE's extension API and proprietary lifecycle hooks | Memories and workflows are siloed within one tool and cannot be shared across different coding agents |
-| **Unified `install` Registry + Native Plugin Deduplication (Rolling Memory)** | Universal stdio MCP (single `recall` tool) + `install` multi-harness writers + native plugin deduplication + `install --check` live handshake verification | One command wires all harnesses on the machine over the same local SQLite graph, with built-in self-verification |
+| **`install` Registry and Native Plugins (Rolling Memory)** | Stdio MCP (single `recall` tool), multi-harness configuration, and a separate launcher probe | Configures detected harnesses; review conflicts and verify host loading in a session |
 
 ---
 
 ## 3. Layered Contract
 
 ```text
-Harness Agent + Skill        ← Semantic layer: follows SKILL.md & instructions to call recall (writes are captured by hooks)
+Harness Agent + Skill        ← Agent follows SKILL.md & instructions to call recall
         │  MCP tools/call
 rolling-memory install       ← Harness adapter: registry + conservative writers (JSON / TOML / YAML) + check
         │  writes launcher shim & registrations
@@ -36,27 +36,27 @@ SQLite (WAL + FTS5)          ← Storage layer: local plaintext vault
 
 - **Zero Harness Coupling in the Core (`api` / `mcp` / `cli` / `hooks`)**: Communicates strictly over standard process pipes (newline-delimited JSON-RPC 2.0 for MCP, argv/stdin for CLI, JSON stdin → JSON stdout for Hooks).
 - **Conservative Wiring in the Adapter (`internal/harness`)**: Writes launcher commands into harness configs, copies `SKILL.md`, and optionally attaches hooks and instruction blocks without touching memory semantics.
-- **Reminder-Only Hooks, Agent-Driven Retrieval**: The optional per-prompt hook (`--with-hooks`) never retrieves memory automatically — `recall` is always the agent's own call. The hook only keeps the local capture side fresh (conversation turns and mounted background folders) and, every few turns, reminds the agent that `recall` exists.
+- **Reminder Hooks and Agent-Driven Retrieval**: The optional per-prompt hook (`--with-hooks`) does not automatically retrieve memory. The agent decides when to call `recall`. Hooks and background scanning can import supported local sources; they do not guarantee that every conversation is captured.
 - **Turn-End Recall Review & Customizing `SKILL.md`**: At the very bottom of `SKILL.md` (`§5 Wrap-up Review`), a standalone optional section instructs the agent to append a brief wrap-up note whenever `recall` was called in that turn — reporting how many times `recall` was called, estimated round-trips saved with concrete basis, and whether the recalled memory actually helped. You can edit or delete that bottom section in `<skill_root>/rolling-memory/SKILL.md` directly (or pass `--skill-file <path>` to `rolling-memory install`) at any time.
 
 ---
 
 ## 4. Supported Harness Matrix
 
-### 4.1 Default Auto-Detected Harnesses (5 Targets)
+### 4.1 Harness Registration Locations
 
 | Harness | User Skill Root | MCP Registration Location | Lifecycle Hooks | Instruction Files (User / Project) |
 |---|---|---|---|---|
 | **ZCode** | `~/.zcode/skills/` | `~/.zcode/cli/config.json` → `mcp.servers` | ✅ `hooks.events` (`hooks.enabled=true`) | `~/.zcode/AGENTS.md` / `AGENTS.md` |
 | **Claude Code** | `~/.claude/skills/` | `~/.claude.json` → `mcpServers` (project `.mcp.json`) | ✅ `~/.claude/settings.json` → `hooks` | `~/.claude/CLAUDE.md` / `CLAUDE.md` |
-| **Codex** | `~/.codex/skills/` | `~/.codex/config.toml` → `[mcp_servers.<name>]` | — (Skill-driven) | `~/.codex/AGENTS.md` / `AGENTS.md` |
+| **Codex** | `~/.codex/skills/` | `~/.codex/config.toml` → `[mcp_servers.<name>]` | ✅ `~/.codex/hooks.json` (optional, `--with-hooks`; first run needs review/trust inside Codex) | `~/.codex/AGENTS.md` / `AGENTS.md` |
 | **DeepSeek Harness (`dsh`)** | `~/.dsh/skills/` (`$DSH_HOME`) | `~/.dsh/profiles/<profile>/cordis.patch.yml` → `dsh-mcp-client` | — (Skill-driven) | `~/.dsh/AGENTS.md` / `AGENTS.md` |
 | **CodeBuddy** | `~/.codebuddy/skills/` | `~/.codebuddy/mcp.json` → `mcpServers` | — (Skill-driven) | — / `CODEBUDDY.md` |
 
-### 4.2 Extended Harnesses (5 Targets) & Native Plugin Deduplication
+### 4.2 Other Harnesses & Native Plugins
 
-- **Extended Targets**: Explicitly pass the harness ID (`rolling-memory install <id>`) to wire **Cursor** (`cursor` → `~/.cursor/mcp.json`), **Windsurf** (`windsurf` → `~/.codeium/windsurf/mcp_config.json`), **Cline / Roo Code** (`cline` → `~/.cline/mcp_settings.json`), **WorkBuddy** (`workbuddy` → `~/.workbuddy/mcp.json`, the path WorkBuddy's own connector docs name; the dotted `~/.workbuddy/.mcp.json` is kept as a legacy carrier for host builds that read it; skill root `~/.workbuddy/skills`, no session hooks; installing the bundled plugin from the WorkBuddy plugin marketplace wires the skill and the MCP server together — no CLI step needed), and **Doubao** (`doubao` → dual skill roots `~/Doubao/skills` and `~/.agents/skills`, i.e. the client-reported `local_skill_paths`). The local skill collector scans both roots into the app's `# Skill Catalog` and syncs USER skills to the account for cross-device use. The MCP connector is projected by the Doubao manifest and local commands are constrained by `mcp_command_path_policy` (no arbitrary absolute paths or wrapper scripts), so `install` writes only the skills and truthfully reports `skipped`; the tool plane uses the address-style connector (`rolling-memory mcp --http`, see §4.4).
-- **Native Plugin Single-Path Deduplication**: When ZCode or Claude Code already has the self-contained native plugin enabled (`.zcode-plugin` / `.claude-plugin`), `install` automatically cleans up duplicate global config entries so only one instance runs.
+- **Other Targets**: The installer also detects **Cursor**, **Windsurf**, **Cline / Roo Code**, **WorkBuddy**, and **Doubao**. To select a specific target, pass its harness ID (`rolling-memory install <id>`). Check the installation output and your host's current settings location: host versions can use different paths. WorkBuddy's plugin includes a skill, an MCP registration, and a prompt hook, but requires a separately installed local CLI. If the host does not provide the plugin root, the MCP launcher uses that installed CLI; without it the server cannot start and does not download one automatically. Doubao's MCP connector requires manual setup (see §4.4).
+- **Native Plugins**: When an enabled plugin declares the same skill or MCP server, `install` preserves existing entries and reports a conflict where applicable instead of automatically removing them. Review the host configuration and plugin state before resolving duplicates; a plugin declaration does not confirm that the host loaded it.
 
 ### 4.3 Three Safe Config Writers
 
@@ -93,7 +93,7 @@ rolling-memory mcp --http                                    # default http://12
 rolling-memory mcp --http --addr 127.0.0.1:9000 --path /mcp  # custom port / path
 ```
 
-In the Doubao connector form choose **Streamable HTTP** and enter `http://127.0.0.1:8765/mcp` (if only SSE is offered, enter `http://127.0.0.1:8765/sse`). Save, open a new session, and the tool list should show `recall` — the memory plane exposes exactly one tool: conversation turns are captured by hooks automatically, while `recall` retrieves and crystallizes evidence into memory.
+In the Doubao connector form choose **Streamable HTTP** and enter `http://127.0.0.1:8765/mcp` (if only SSE is offered, enter `http://127.0.0.1:8765/sse`). Save, open a new session, and the tool list should show `recall`. Connecting the tool does not automatically import Doubao conversations; see the collection limits below.
 
 - The service binds loopback only (default `127.0.0.1`), caps request bodies at 8 MiB, and rejects cross-origin requests; keep it running, preferably under a system service manager.
 - The MCP line from `install doubao` still reports `skipped` — that is truthful: registration lives on the Doubao side (encrypted credential storage + manifest projection) and cannot be written from the CLI, so you paste the address in the app.
@@ -101,6 +101,12 @@ In the Doubao connector form choose **Streamable HTTP** and enter `http://127.0.
 **Troubleshooting**: If the skill does not appear, first confirm `SKILL.md` exists under both skill roots; then inspect the Doubao runtime log `~/Library/Application Support/Doubao/sdk_storage/log/saman_<date>.log` for `local_skill_paths` (client-reported roots), `scan_local_skills` (scan results and `item_count`), and `[MCP_SERVICE] get all tools … connector_count=` (MCP loading). If the address connector does not work, self-test the local service first: `curl -s http://127.0.0.1:8765/mcp -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`.
 
 **Uninstall**: `rolling-memory install doubao --uninstall` (removes only files written by this tool; the Doubao account copy must be removed in the app).
+
+### 4.5 Conversation Collection and Manual Import
+
+Installing an MCP server or skill is separate from collecting conversation history. The background scanner reads ZCode's local session database and selected transcript locations for ZCode, Claude Code, Codex, DSH, CodeBuddy, and WorkBuddy. It supports Codex `.jsonl.zst` archives and DSH compressed `.jsonl.zstd` sessions in the observed v4 format: user messages must have `source.kind: user`, and a turn is imported only when its matching `turn/start` and `turn/end` events establish successful completion (`reason.kind: completed`). Unknown formats and turns without confirmed successful completion are not imported; subagent coverage is not guaranteed. CodeBuddy and WorkBuddy's configured JSONL locations may not match a host's actual store. Cursor, Windsurf, Cline, and Doubao have no automatic conversation scanner. Hooks, where installed and supported, do not make these sources complete.
+
+For other sources, export or prepare a supported JSONL or text transcript and import it explicitly with `rolling-memory import /path/to/transcript`. File imports accept only `shared` or `public` audiences; restricted or unknown audiences are rejected because automatic scanning cannot enforce file-level access controls. Keep sensitive files outside scanned directories. Existing copies are not removed automatically. Review the result; import and background scanning do not guarantee complete or lossless capture. See [mcp.md](mcp.md) for the tool contract. Retrieval and storage run locally in `local_plain`; installing or updating software is a separate action that may require network access.
 
 ---
 
@@ -143,7 +149,7 @@ rolling-memory install --uninstall
 | **Tier 1: Skill Discovered** | `SKILL.md` exists under the harness skill root with valid frontmatter | `rolling-memory install --check` |
 | **Tier 2: MCP Registered** | Valid `rolling-memory` server entry exists in the harness configuration file | `rolling-memory install --check` |
 | **Tier 3: Live MCP Handshake** | Spawns the launcher, sends `initialize` and `tools/list`, and confirms the single `recall` tool | `install --check` (`server ok · rolling-memory ... · tools: recall`) |
-| **Tier 4: Session Behavior** | Agent calls `recall` on history-dependent prompts; hooks capture the turn for local memory | Ask a history question in a new session or inspect `~/.local/state/rolling-memory/rolling-memory.log` |
+| **Tier 4: Session Behavior** | Check whether the agent calls `recall` and whether the intended source was imported | Ask a history question in a new session and inspect the local records; source coverage is limited as described in §4.5 |
 
 ---
 
@@ -196,8 +202,8 @@ rolling-memory update --release-base https://mirror.example.com/rolling-memory/r
 rolling-memory update --check --json
 ```
 
-- **Fail-Closed SHA-256 Verification**: Every downloaded artifact (`rolling-memory-<os>-<arch>`, `rolling-admin-<os>-<arch>`, `web-dist.tar.gz`) is verified against the signed `SHA256SUMS` manifest before replacing any local file; any digest mismatch aborts the update without touching existing binaries.
-- **Zero-Downtime Daemon & Console Handover**: After atomically swapping the CLI binary, `update` signals the local background daemon (`engine.sock`) to step down cleanly so the next MCP or CLI call spawns the new binary immediately, and restarts the local web console if it was running.
+- **Fail-Closed SHA-256 Verification**: Downloaded artifacts are checked against the release channel's `SHA256SUMS` before replacing local files; a digest mismatch aborts the update.
+- **Local Daemon Safety**: A shared local daemon can be controlled only after its user, identity, and configuration are verified. An old or unverifiable daemon is not stopped automatically; requests that cannot verify it return an error. If a request fails after being sent, it is not automatically retried. The shared daemon assumes a trusted local user and does not protect against arbitrary code running as that same user.
 - **Vault Safety Guarantee**: Updating never modifies, truncates, or overwrites your local SQLite memory vault (`~/.local/share/rolling-memory/memory.db`); schema migrations are applied idempotently in place when the database is opened.
 - **Zero-Environment Design (No Git / Go / Node.js / Python Required)**:
   - Both `install.sh` and `install.ps1` fetch prebuilt static binaries verified against `SHA256SUMS` (supporting `curl` or `wget` on POSIX, native x64 and ARM64 on Windows, and automatic release-mirror fallback when the primary channel is unreachable).

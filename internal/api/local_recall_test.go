@@ -436,7 +436,7 @@ func TestLocalRecallMixedSourceUnifiedRankingWithLocusAnchor(t *testing.T) {
 	turnText := "[user] quartz mixed ranking weak turn witness"
 	packet, _ := client.Vault.PackBlindPacket("ep_turn_low", turnText, testNow)
 	client.SetIdentity("default", "", "Rolling-Memory")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_turn_low", testNow, ref, "Rolling-Memory", turnText, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_turn_low", testNow, ref, "@ref:jsonl:"+path+":0", turnText, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	standaloneText := "quartz mixed ranking strong standalone witness crystalline prism"

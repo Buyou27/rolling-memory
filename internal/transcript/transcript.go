@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,7 +27,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/rocareer/rolling-memory/internal/clock"
+	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/speech"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
@@ -69,20 +72,31 @@ func ReadMessages(path string, session *string, offset, maxLines int) ([]Message
 		defaultSession = *session
 	}
 
-	raw, err := os.ReadFile(target)
+	file, err := episodic.OpenJSONL(target)
 	if err != nil {
-		// Raise the same failure a missing/unreadable transcript already did
-		// above; stat succeeded but the read did not.
 		return nil, 0, 0, 0, 0, err
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(file, MaxTranscriptBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, 0, 0, 0, 0, readErr
+	}
+	if closeErr != nil {
+		return nil, 0, 0, 0, 0, closeErr
+	}
+	if len(raw) > MaxTranscriptBytes {
+		return nil, 0, 0, 0, 0, fmt.Errorf("transcript is larger than %d MB", MaxTranscriptBytes/(1024*1024))
 	}
 	lines := pyLines(pyDecodeUTF8(raw))
 	jsonl := looksLikeJSONL(target, lines)
+	if jsonl && len(raw) > 0 && raw[len(raw)-1] != '\n' && raw[len(raw)-1] != '\r' && !json.Valid([]byte(lines[len(lines)-1])) {
+		lines = lines[:len(lines)-1]
+	}
 
 	messages := []Message{}
 	nextOffset := offset
-	totalLines := 0
+	totalLines := len(lines)
 	for index, line := range lines {
-		totalLines = index + 1
 		if index < offset {
 			continue
 		}
@@ -222,7 +236,8 @@ func saveCursor(st *store.Store, path, session string, offset int, size int64, m
 }
 
 func looksLikeJSONL(path string, lines []string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
+	path = strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(path), ".zstd"), ".zst")
+	switch filepath.Ext(path) {
 	case ".jsonl", ".ndjson":
 		return true
 	case ".txt", ".text", ".md":
@@ -249,56 +264,17 @@ func parseJSONLLine(line string, index int, defaultSession string) *Message {
 	if obj == nil {
 		return nil
 	}
-	if truthy(obj["isMeta"]) || truthy(obj["isCompactSummary"]) {
+	roleText, parts, occurred := episodic.ParseJSONLSpeech(line)
+	if roleText == "" || len(parts) == 0 {
+		return nil
+	}
+	text := speech.StripConversationNoise(strings.Join(parts, "\n"))
+	if text == "" {
 		return nil
 	}
 	message, _ := obj["message"].(map[string]any)
 	if message == nil {
-		if payload, ok := obj["payload"].(map[string]any); ok && payload != nil {
-			if pType, _ := payload["type"].(string); pType == "message" || payload["role"] != nil {
-				message = payload
-			}
-		}
-	}
-	if message == nil {
 		message = map[string]any{}
-	}
-	var role any
-	if value := message["role"]; truthy(value) {
-		role = value
-	} else if value := obj["role"]; truthy(value) {
-		role = value
-	} else if value := obj["type"]; truthy(value) {
-		role = value
-	}
-	roleText, ok := role.(string)
-	if !ok {
-		return nil
-	}
-	roleText = strings.ToLower(roleText)
-	switch roleText {
-	case "human":
-		roleText = "user"
-	case "ai", "bot":
-		roleText = "assistant"
-	}
-	if roleText != "user" && roleText != "assistant" {
-		return nil
-	}
-	var content any
-	if value, ok := message["content"]; ok && value != nil {
-		content = value
-	} else {
-		content = obj["content"]
-	}
-	text := ids.StripInjected(contentText(content))
-	if text == "" || utf8.RuneCountInString(text) < 2 {
-		return nil
-	}
-	if strings.HasPrefix(text, "[tool]") || strings.HasPrefix(text, "<tool") ||
-		strings.HasPrefix(text, "<app-context>") || strings.HasPrefix(text, "# AGENTS.md instructions for ") ||
-		strings.HasPrefix(text, "<environment_context>") {
-		return nil
 	}
 	var sessionValue any
 	for _, candidate := range []any{obj["sessionId"], obj["session_id"], message["sessionId"]} {
@@ -311,14 +287,6 @@ func parseJSONLLine(line string, index int, defaultSession string) *Message {
 	if sessionValue != nil {
 		session = pyStr(sessionValue)
 	}
-	var timestamp any
-	for _, candidate := range []any{obj["timestamp"], obj["created_at"], obj["time"]} {
-		if truthy(candidate) {
-			timestamp = candidate
-			break
-		}
-	}
-	occurred := ids.ParseTime(timestamp, ids.ParseTimeOptions{Default: clock.Unix()})
 	return &Message{
 		Session:    session,
 		Turn:       int64(index + 1),
@@ -331,7 +299,7 @@ func parseJSONLLine(line string, index int, defaultSession string) *Message {
 
 func parseTextLine(line string, index int, defaultSession string) *Message {
 	text := ids.StripInjected(line)
-	if text == "" || utf8.RuneCountInString(text) < 2 {
+	if text == "" {
 		return nil
 	}
 	return &Message{
@@ -339,39 +307,9 @@ func parseTextLine(line string, index int, defaultSession string) *Message {
 		Turn:       int64(index + 1),
 		Author:     "user",
 		Text:       text,
-		OccurredAt: clock.Unix(),
+		OccurredAt: 0,
 		Kind:       "message",
 	}
-}
-
-func contentText(content any) string {
-	switch typed := content.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	case []any:
-		parts := []string{}
-		for _, block := range typed {
-			switch item := block.(type) {
-			case string:
-				parts = append(parts, item)
-			case map[string]any:
-				if t, _ := item["type"].(string); t == "text" || t == "input_text" || t == "output_text" {
-					if text, ok := item["text"].(string); ok {
-						parts = append(parts, text)
-					}
-				}
-			}
-		}
-		cleaned := []string{}
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				cleaned = append(cleaned, part)
-			}
-		}
-		return strings.Join(cleaned, "\n")
-	}
-	return ""
 }
 
 // pyDecodeUTF8 mirrors bytes.decode("utf-8", "replace"): one U+FFFD per

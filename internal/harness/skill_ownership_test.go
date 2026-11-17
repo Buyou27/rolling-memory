@@ -31,8 +31,8 @@ func TestSkillOwnershipProtectsUserFiles(t *testing.T) {
 	}
 	check := &Report{}
 	checkSkill(h, options, check)
-	if check.Actions[0].Status != StatusConflict {
-		t.Fatalf("check unowned skill: %#v", check.Actions)
+	if check.Actions[0].Status != StatusOK || check.Actions[0].Detail == "" {
+		t.Fatalf("check custom skill: %#v", check.Actions)
 	}
 	for _, force := range []bool{false, true} {
 		options.Force = force
@@ -96,7 +96,7 @@ func TestSkillOwnershipPluginDedupPreservesUnowned(t *testing.T) {
 	}
 	report = &Report{}
 	installSkill(h, options, report)
-	if report.Actions[0].Status != StatusRemoved || fileExists(target) || readFile(t, backup) != "user backup" {
+	if report.Actions[0].Status != StatusConflict || readFile(t, target) != text || readFile(t, backup) != "user backup" {
 		t.Fatalf("owned duplicate: %#v", report.Actions)
 	}
 }
@@ -127,12 +127,23 @@ func TestSkillOwnershipUpdateAndModifiedConflict(t *testing.T) {
 	if err != nil || len(backups) != 1 {
 		t.Fatalf("backup: %v, %v", backups, err)
 	}
-	if err := os.WriteFile(target, []byte("user modified"), 0o600); err != nil {
+	custom := readFile(t, target) + "user modified\n"
+	if err := os.WriteFile(target, []byte(custom), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	report = &Report{}
+	checkSkill(h, options, report)
+	if report.Actions[0].Status != StatusOK || report.Actions[0].Detail == "" {
+		t.Fatalf("check modified skill: %#v", report.Actions)
+	}
+	report = &Report{}
+	installSkill(h, options, report)
+	if report.Actions[0].Status != StatusConflict || readFile(t, target) != custom {
+		t.Fatalf("reinstall modified skill: %#v", report.Actions)
+	}
+	report = &Report{}
 	uninstallSkill(h, options, report)
-	if report.Actions[0].Status != StatusConflict || readFile(t, target) != "user modified" {
+	if report.Actions[0].Status != StatusConflict || readFile(t, target) != custom {
 		t.Fatalf("modified skill: %#v", report.Actions)
 	}
 	text, err := skillText(options)

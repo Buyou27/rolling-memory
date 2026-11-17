@@ -39,9 +39,9 @@ func ResolveDSHHome(home string) string {
 //   - zcode:        <home>/.zcode/projects/<project>/sessions/<session>.jsonl
 //   - claude-code:  <home>/.claude/projects/<project>/<session>.jsonl
 //     and <home>/.claude/projects/<project>/sessions/<session>.jsonl
-//   - codex:        <home>/.codex/sessions/<y>/<m>/<d>/<session>.jsonl,
-//     a flat <home>/.codex/sessions/<session>.jsonl, and archived_sessions
-//   - dsh:          <DSH_HOME>/sessions/--<cwd>--/<session-id>/session.v<N>.jsonl.zstd
+//   - codex:        <home>/.codex/sessions/<y>/<m>/<d>/<session>.jsonl[.zst],
+//     a flat <home>/.codex/sessions/<session>.jsonl[.zst], and archived_sessions
+//   - dsh:          <DSH_HOME>/sessions/--<cwd>--/<session-id>/session[.v<N>].jsonl.zstd
 //     The directory name carries the session id and the file name carries the
 //     DSH transcript format version, so both path levels vary.
 //   - codebuddy / workbuddy: <home>/.<host>/projects/<project>/<session>.jsonl
@@ -60,9 +60,15 @@ func TranscriptGlobs(home, harnessID string) []string {
 			filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"),
 			filepath.Join(home, ".codex", "sessions", "*.jsonl"),
 			filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"),
+			filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl.zst"),
+			filepath.Join(home, ".codex", "sessions", "*.jsonl.zst"),
+			filepath.Join(home, ".codex", "archived_sessions", "*.jsonl.zst"),
 		}
 	case "dsh":
-		return []string{filepath.Join(ResolveDSHHome(home), "sessions", "*", "*", "session.v*.jsonl.zstd")}
+		return []string{
+			filepath.Join(ResolveDSHHome(home), "sessions", "*", "*", "session.v*.jsonl.zstd"),
+			filepath.Join(ResolveDSHHome(home), "sessions", "*", "*", "session.jsonl.zstd"),
+		}
 	case "codebuddy":
 		return []string{
 			filepath.Join(home, ".codebuddy", "projects", "*", "*.jsonl"),
@@ -79,13 +85,14 @@ func TranscriptGlobs(home, harnessID string) []string {
 
 // TranscriptSessionID derives the host's own session identifier from one
 // transcript path. Hosts that name the file after the session use the file stem
-// (the ".zstd" compression suffix is not part of the id); DeepSeek Harness names
-// every transcript session.v<N>.jsonl.zstd and carries the session id in the
+// (compression suffixes are not part of the id); DeepSeek Harness names
+// its transcripts session[.v<N>].jsonl.zstd and carries the session id in the
 // enclosing directory.
 func TranscriptSessionID(harnessID, path string) string {
 	if harnessID == "dsh" {
 		return filepath.Base(filepath.Dir(path))
 	}
 	stem := strings.TrimSuffix(filepath.Base(path), ".zstd")
+	stem = strings.TrimSuffix(stem, ".zst")
 	return strings.TrimSuffix(stem, filepath.Ext(stem))
 }

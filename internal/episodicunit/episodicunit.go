@@ -49,7 +49,7 @@ type Unit struct {
 	ChunkIndex int
 	// Text is the rendered unit (`[role] speech`).
 	Text string
-	// OccurredAt is the unit timestamp in Unix seconds.
+	// OccurredAt is the source timestamp in Unix seconds (0 when unknown).
 	OccurredAt int64
 	// Completed reports whether the source turn can no longer grow.
 	Completed bool
@@ -171,8 +171,8 @@ func SegmentUnits(scope, pointerPrefix string, segment episodic.Segment, occurre
 	if occurredAt <= 0 {
 		occurredAt = segment.OccurredAt
 	}
-	if occurredAt <= 0 {
-		occurredAt = ids.UTCNow()
+	if occurredAt < 0 {
+		occurredAt = 0
 	}
 	units := make([]Unit, 0, len(chunks))
 	turnRef := strings.TrimSpace(pointerPrefix)

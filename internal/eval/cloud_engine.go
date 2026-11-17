@@ -948,7 +948,10 @@ func (e *CloudEngine) VerifyPrepared(ctx context.Context, documents []CloudDocum
 		return manifest, err
 	}
 	if manifest.Scope != e.Scope || manifest.Suite != e.Suite || manifest.CorpusSHA256 != digest || manifest.Documents != len(documents) {
-		return manifest, errors.New("cloud evaluation manifest does not match the requested corpus")
+		return manifest, &EvalVerifyError{
+			Code: EvalVerifyCodeManifestMismatch,
+			Msg:  "cloud evaluation manifest does not match the requested corpus",
+		}
 	}
 	if len(documents) == 0 {
 		return manifest, errors.New("cloud evaluation cannot reuse an empty corpus")
@@ -1218,6 +1221,41 @@ func (e *CloudEngine) PurgeScopeUnits(ctx context.Context, logf func(string, ...
 	return deleted, nil
 }
 
+// guardLocalPlainRebuildPurge 是本地明文模式的清库来源闸（rebuild / 新开世代清库前调用）：
+// store 里存在本次语料之外的文档、且没有任何评测来源封条（manifest / 断点续灌状态）时，
+// 这本评测自己的库就不成立（更可能是用户自建的 SDK 金库），fail-closed 拒绝清库——
+// 防「--eval-store 指向用户既有 store 被静默清空」。断点续灌（库内只有本语料文档）与
+// 有封条的正常评测库不受影响。
+func (e *CloudEngine) guardLocalPlainRebuildPurge(documents []CloudDocument) error {
+	if NormalizePulseMode(e.PulseMode) != PulseModeLocalPlain {
+		return nil
+	}
+	unitIDs := readLocalStoreUnitIDs(e.StorePath)
+	if len(unitIDs) == 0 {
+		return nil
+	}
+	if _, err := os.Stat(e.StorePath + ".manifest.json"); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(evalResumeStatePath(e.StorePath)); err == nil {
+		return nil
+	}
+	corpus := make(map[string]bool, len(documents))
+	for _, doc := range documents {
+		corpus[doc.ID] = true
+	}
+	foreign := 0
+	for _, id := range unitIDs {
+		if !corpus[id] {
+			foreign++
+		}
+	}
+	if foreign == 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing to purge local evaluation store %s: it holds %d document(s) outside this corpus and carries no evaluation provenance (no manifest, no resume state); point --eval-store at a new path or delete that file deliberately", e.StorePath, foreign)
+}
+
 // purgeScopeUnitsWithClient 是清库原语：按 /units 权威全集分批删除某个 scope 的全部 Unit。
 // 既服务「本世代重算」的清库，也服务对过期世代的回收（后者用另一个 scope 的客户端）。
 func purgeScopeUnitsWithClient(ctx context.Context, client *ramesdk.Client, scope string, logf func(string, ...any)) (int, error) {
@@ -1348,6 +1386,12 @@ func (e *CloudEngine) Ingest(ctx context.Context, documents []CloudDocument, reb
 		// 污染后续检索。清库前先撤销续灌封条：本地金库与云端的对应关系即刻失效，
 		// 避免中途失败后下一次 Prepare 误用已失效的本地集合跳过 ingest。
 		// 世代 scope 下这本就是新 scope（构造上为空）；此步是「复核并给回执」而不是猜测。
+		// 本地明文模式另有一道来源闸：store 里若存在本次语料之外的文档且没有任何评测来源
+		// 封条（manifest / 断点续灌状态），说明这不是本评测自己的库（可能是用户自建的 SDK
+		// 金库），fail-closed 拒绝清库（曾把 --eval-store 指向的用户 store 直接清空）。
+		if err := e.guardLocalPlainRebuildPurge(documents); err != nil {
+			return manifest, err
+		}
 		_ = os.Remove(evalResumeStatePath(e.StorePath))
 		purged, err := e.PurgeScopeUnits(ctx, logf)
 		if err != nil {
@@ -1431,7 +1475,14 @@ func (e *CloudEngine) localStoredUnitIDs() []string {
 	if e == nil || e.Store == nil {
 		return nil
 	}
-	raw, err := os.ReadFile(e.StorePath)
+	return readLocalStoreUnitIDs(e.StorePath)
+}
+
+// readLocalStoreUnitIDs lists the document IDs persisted in one local SDK store
+// file; a missing or unparsable file yields nil (callers treat that as "no
+// evidence", never as "empty corpus").
+func readLocalStoreUnitIDs(storePath string) []string {
+	raw, err := os.ReadFile(storePath)
 	if err != nil {
 		return nil
 	}
@@ -1702,7 +1753,9 @@ func (e *CloudEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 			}
 		}
 	}
-	_ = os.Remove(sqlitePath)
+	if err := os.Remove(sqlitePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("remove derived evaluation vault: %w", err)
+	}
 	_ = os.Remove(metaPath)
 	db, err := sql.Open("sqlite", evalVaultDSN(sqlitePath))
 	if err != nil {

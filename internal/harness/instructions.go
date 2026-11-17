@@ -12,7 +12,9 @@ import (
 
 // The instruction surface: a marker block appended to AGENTS.md / CLAUDE.md /
 // CODEBUDDY.md. Uninstall removes exactly the block, never the whole file; a
-// half marker is a conflict that a human must fix.
+// half marker, a repeated pair or a pair inside a code fence or <pre> example
+// is a conflict that a human must fix, and only a regular file is managed: a
+// symlinked target is never written through.
 
 func instructionBlock(options InstallOptions) string {
 	if norm, _ := NormalizeInstallLang(options.Lang); norm == "zh-CN" {
@@ -56,18 +58,182 @@ func instructionTargets(harness Harness, options InstallOptions) []string {
 	return nil
 }
 
-// markerRegion returns the block bounds and whether the markers are complete.
-// A half marker (one side only, or end before begin) is reported separately.
+// inspectInstructionTarget applies the skill/shim rule to the final path
+// component: when it exists it must be a regular file. Symlinks -- including
+// dangling ones -- directories and devices are conflicts, because writing
+// through or creating them would modify a file outside the target tree; parent
+// directory symlinks are ordinary path resolution.
+func inspectInstructionTarget(target string) (string, string) {
+	info, err := os.Lstat(target)
+	switch {
+	case err == nil && !info.Mode().IsRegular():
+		return StatusConflict, "target is not a regular file; not touching it"
+	case err != nil && !os.IsNotExist(err):
+		return StatusError, "cannot inspect: " + err.Error()
+	}
+	return "", ""
+}
+
+// markerRegion accepts one complete pair on standalone lines outside fenced
+// code blocks and HTML <pre> examples. Ambiguous, repeated, or incomplete
+// markers are reported as conflicts.
 func markerRegion(text string) (int, int, bool, bool) {
 	begin := strings.Index(text, InstructionBegin)
 	end := strings.Index(text, InstructionEnd)
 	if begin == -1 && end == -1 {
 		return 0, 0, false, false
 	}
-	if begin == -1 || end == -1 || end < begin {
+	if begin == -1 || end == -1 || end < begin ||
+		strings.Count(text, InstructionBegin) != 1 || strings.Count(text, InstructionEnd) != 1 {
 		return 0, 0, false, true
 	}
-	return begin, end + len(InstructionEnd), true, false
+	end += len(InstructionEnd)
+	if (begin > 0 && text[begin-1] != '\n') ||
+		(end < len(text) && text[end] != '\n' && !strings.HasPrefix(text[end:], "\r\n")) ||
+		instructionMarkerInRawBlock(text[:begin]) ||
+		instructionMarkerInRawBlock(text[:end]) {
+		return 0, 0, false, true
+	}
+	return begin, end, true, false
+}
+
+// instructionMarkerInRawBlock reports whether prefix ends inside a region a
+// renderer shows literally: an open fenced code block or an open HTML <pre>
+// element. Tags inside a fence are inert and fence lines inside <pre> are raw
+// text, so the two states are tracked independently.
+func instructionMarkerInRawBlock(prefix string) bool {
+	var fence byte
+	var width int
+	pre := false
+	for _, line := range strings.Split(prefix, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent > 3 {
+			continue
+		}
+		line = line[indent:]
+		if fence != 0 {
+			if instructionFenceCloses(line, fence, width) {
+				fence, width = 0, 0
+			}
+			continue
+		}
+		if pre {
+			pre = instructionPreState(line, pre)
+			continue
+		}
+		if length := instructionFenceRun(line); length >= 3 &&
+			!(line[0] == '`' && strings.ContainsRune(line[length:], '`')) {
+			fence, width = line[0], length
+			continue
+		}
+		pre = instructionPreState(line, pre)
+	}
+	return fence != 0 || pre
+}
+
+// instructionFenceRun returns the length of the run of backticks or tildes a
+// line starts with, and 0 for any other line.
+func instructionFenceRun(line string) int {
+	if line == "" || (line[0] != '`' && line[0] != '~') {
+		return 0
+	}
+	length := 0
+	for length < len(line) && line[length] == line[0] {
+		length++
+	}
+	return length
+}
+
+// instructionFenceCloses reports whether a line closes the fence opened with
+// the same run character and an equal or longer run (trailing blanks allowed).
+func instructionFenceCloses(line string, fence byte, width int) bool {
+	if line == "" || line[0] != fence {
+		return false
+	}
+	length := 0
+	for length < len(line) && line[length] == fence {
+		length++
+	}
+	return length >= width && strings.Trim(line[length:], " \t") == ""
+}
+
+// instructionPreState advances the HTML <pre> raw-text state across the tags
+// of one line in order, so <pre>...</pre> on a single line opens and closes.
+func instructionPreState(line string, pre bool) bool {
+	lower := strings.ToLower(line)
+	for index := 0; index < len(lower); {
+		open := strings.Index(lower[index:], "<pre")
+		closed := strings.Index(lower[index:], "</pre")
+		switch {
+		case open == -1 && closed == -1:
+			return pre
+		case closed == -1 || (open != -1 && open < closed):
+			at := index + open
+			if instructionTagBoundary(lower, at+len("<pre")) {
+				pre = true
+			}
+			index = at + len("<pre")
+		default:
+			at := index + closed
+			if instructionTagBoundary(lower, at+len("</pre")) {
+				pre = false
+			}
+			index = at + len("</pre")
+		}
+	}
+	return pre
+}
+
+// instructionTagBoundary reports a tag-name boundary: end of line or one of
+// the characters that may follow a tag name.
+func instructionTagBoundary(lower string, at int) bool {
+	if at == len(lower) {
+		return true
+	}
+	switch lower[at] {
+	case '>', '/', ' ', '\t':
+		return true
+	}
+	return false
+}
+
+// instructionBlockIsOurs compares complete generated blocks, including names
+// and line order. Only a uniform CRLF conversion is accepted in addition to LF.
+func instructionBlockIsOurs(block string, options InstallOptions) bool {
+	variants := make([]string, 0, 3)
+	for _, lang := range []string{"en", "zh-CN"} {
+		version := options
+		version.Lang = lang
+		variants = append(variants, instructionBlock(version))
+	}
+	variants = append(variants, legacyInstructionBlock(options))
+	for _, version := range variants {
+		version = strings.TrimSuffix(version, "\n")
+		if block == version || block == strings.ReplaceAll(version, "\n", "\r\n") {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyInstructionBlock is the instruction text generated before the
+// current English and Chinese templates were introduced.
+func legacyInstructionBlock(options InstallOptions) string {
+	lines := []string{
+		InstructionBegin,
+		fmt.Sprintf("## Rolling-Memory (%s)", options.SkillName),
+		fmt.Sprintf("This harness has the Rolling-Memory core installed (MCP server `%s`,"+
+			" tools `remember` / `recall`).", options.Name),
+		"- When a task depends on prior decisions, constraints or past mistakes, call `recall`" +
+			" with a specific cue before answering; call it before writing too, to avoid duplicates.",
+		"- Record durable facts (decisions, constraints, verified lessons) with `remember`;" +
+			" prefer the structured assertion form with a verbatim `anchor_text`.",
+		"- `absent: true` means \"not held locally\" -- it is not an error; never invent memory content.",
+		fmt.Sprintf("Details and receipt semantics: the `%s` skill.", options.SkillName),
+		InstructionEnd,
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func installInstructions(harness Harness, options InstallOptions, report *Report) {
@@ -78,6 +244,10 @@ func installInstructions(harness Harness, options InstallOptions, report *Report
 	}
 	block := instructionBlock(options)
 	for _, target := range targets {
+		if status, detail := inspectInstructionTarget(target); status != "" {
+			report.Add(harness.ID, "instructions", target, status, detail)
+			continue
+		}
 		original := ""
 		if fileExists(target) {
 			raw, err := os.ReadFile(target)
@@ -89,7 +259,7 @@ func installInstructions(harness Harness, options InstallOptions, report *Report
 		}
 		start, end, found, half := markerRegion(original)
 		if half {
-			report.Add(harness.ID, "instructions", target, StatusConflict, "half marker found; fix by hand")
+			report.Add(harness.ID, "instructions", target, StatusConflict, "ambiguous or incomplete marker; fix by hand")
 			continue
 		}
 		if !found {
@@ -98,13 +268,17 @@ func installInstructions(harness Harness, options InstallOptions, report *Report
 				continue
 			}
 			text := original
+			newline := "\n"
+			if strings.Contains(text, "\r\n") {
+				newline = "\r\n"
+			}
 			if text != "" && !strings.HasSuffix(text, "\n") {
-				text += "\n"
+				text += newline
 			}
 			if strings.TrimSpace(text) != "" {
-				text += "\n"
+				text += newline
 			}
-			if _, err := writeText(target, text+block); err != nil {
+			if _, err := writeText(target, text+strings.ReplaceAll(block, "\n", newline)); err != nil {
 				report.Add(harness.ID, "instructions", target, StatusError, "cannot write: "+err.Error())
 				continue
 			}
@@ -112,7 +286,15 @@ func installInstructions(harness Harness, options InstallOptions, report *Report
 			continue
 		}
 		current := original[start:end]
-		if strings.TrimSpace(current) == strings.TrimSpace(block) {
+		if !instructionBlockIsOurs(current, options) {
+			report.Add(harness.ID, "instructions", target, StatusConflict, "marker block was modified; not touching it")
+			continue
+		}
+		replacement := strings.TrimSuffix(block, "\n")
+		if strings.Contains(current, "\r\n") {
+			replacement = strings.ReplaceAll(replacement, "\n", "\r\n")
+		}
+		if current == replacement {
 			report.Add(harness.ID, "instructions", target, StatusUnchanged, "")
 			continue
 		}
@@ -120,7 +302,7 @@ func installInstructions(harness Harness, options InstallOptions, report *Report
 			report.Add(harness.ID, "instructions", target, StatusPlanned, "replace marker block")
 			continue
 		}
-		if _, err := writeText(target, original[:start]+strings.TrimRight(block, "\n")+original[end:]); err != nil {
+		if _, err := writeText(target, original[:start]+replacement+original[end:]); err != nil {
 			report.Add(harness.ID, "instructions", target, StatusError, "cannot write: "+err.Error())
 			continue
 		}
@@ -130,6 +312,10 @@ func installInstructions(harness Harness, options InstallOptions, report *Report
 
 func uninstallInstructions(harness Harness, options InstallOptions, report *Report) {
 	for _, target := range instructionTargets(harness, options) {
+		if status, detail := inspectInstructionTarget(target); status != "" {
+			report.Add(harness.ID, "instructions", target, status, detail)
+			continue
+		}
 		if !fileExists(target) {
 			report.Add(harness.ID, "instructions", target, StatusSkipped, "not present")
 			continue
@@ -141,22 +327,36 @@ func uninstallInstructions(harness Harness, options InstallOptions, report *Repo
 		}
 		original := string(raw)
 		start, end, found, half := markerRegion(original)
-		if !found && !half {
+		if half {
+			report.Add(harness.ID, "instructions", target, StatusConflict, "ambiguous or incomplete marker; fix by hand")
+			continue
+		}
+		if !found {
 			report.Add(harness.ID, "instructions", target, StatusSkipped, "no marker block")
 			continue
 		}
-		if half {
-			report.Add(harness.ID, "instructions", target, StatusConflict, "half marker found; fix by hand")
+		if !instructionBlockIsOurs(original[start:end], options) {
+			report.Add(harness.ID, "instructions", target, StatusConflict, "marker block was modified; not touching it")
 			continue
 		}
 		if options.DryRun {
 			report.Add(harness.ID, "instructions", target, StatusPlanned, "")
 			continue
 		}
-		text := strings.Trim(original[:start]+original[end:], "\n")
-		if text != "" {
-			text += "\n"
+		if start == 0 && (end == len(original) || original[end:] == "\n" || original[end:] == "\r\n") {
+			if err := os.Remove(target); err != nil {
+				report.Add(harness.ID, "instructions", target, StatusError, "cannot remove: "+err.Error())
+				continue
+			}
+			report.Add(harness.ID, "instructions", target, StatusRemoved, "")
+			continue
 		}
+		if strings.HasPrefix(original[end:], "\r\n") {
+			end += len("\r\n")
+		} else if strings.HasPrefix(original[end:], "\n") {
+			end++
+		}
+		text := original[:start] + original[end:]
 		if _, err := writeText(target, text); err != nil {
 			report.Add(harness.ID, "instructions", target, StatusError, "cannot write: "+err.Error())
 			continue
@@ -174,6 +374,10 @@ func checkInstructions(harness Harness, options InstallOptions, report *Report) 
 	// A check reports the instructions that are on disk, not whether
 	// --with-instructions was passed to this check run.
 	for _, target := range targets {
+		if status, detail := inspectInstructionTarget(target); status != "" {
+			report.Add(harness.ID, "instructions", target, status, detail)
+			continue
+		}
 		if !fileExists(target) {
 			report.Add(harness.ID, "instructions", target, StatusSkipped, "not wired")
 			continue
@@ -183,12 +387,15 @@ func checkInstructions(harness Harness, options InstallOptions, report *Report) 
 			report.Add(harness.ID, "instructions", target, StatusError, "cannot read: "+err.Error())
 			continue
 		}
-		_, _, found, half := markerRegion(string(raw))
+		text := string(raw)
+		start, end, found, half := markerRegion(text)
 		switch {
 		case half:
-			report.Add(harness.ID, "instructions", target, StatusConflict, "half marker found")
+			report.Add(harness.ID, "instructions", target, StatusConflict, "ambiguous or incomplete marker")
 		case !found:
 			report.Add(harness.ID, "instructions", target, StatusSkipped, "not wired (marker block not present)")
+		case !instructionBlockIsOurs(text[start:end], options):
+			report.Add(harness.ID, "instructions", target, StatusConflict, "marker block was modified; not touching it")
 		default:
 			report.Add(harness.ID, "instructions", target, StatusOK, "")
 		}

@@ -6,6 +6,8 @@ package memcore
 import (
 	"fmt"
 	"testing"
+
+	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 // TestSelectTopInformationTokensContract 选择器契约（纯函数）：
@@ -17,7 +19,7 @@ func TestSelectTopInformationTokensContract(t *testing.T) {
 	t.Run("noop_when_under_cap", func(t *testing.T) {
 		in := []string{"caroline", "sketchbook", "harbour"}
 		for _, k := range []int{0, -3, 3, 4, 64} {
-			out := SelectTopInformationTokens(in, k)
+			out := text.SelectTopInformationTokens(in, k)
 			if len(out) != len(in) || &out[0] != &in[0] {
 				t.Fatalf("k=%d 应原样返回入参（同底层数组），got=%v", k, out)
 			}
@@ -30,7 +32,7 @@ func TestSelectTopInformationTokensContract(t *testing.T) {
 		}
 		in = append(in, in[0], in[1]) // 重复词不得占两席
 		const k = 7
-		out := SelectTopInformationTokens(in, k)
+		out := text.SelectTopInformationTokens(in, k)
 		if len(out) != k {
 			t.Fatalf("应恰好取 k=%d 个，got=%d (%v)", k, len(out), out)
 		}
@@ -59,8 +61,8 @@ func TestSelectTopInformationTokensContract(t *testing.T) {
 	})
 	t.Run("deterministic_on_ties", func(t *testing.T) {
 		in := []string{"aa", "bb", "cc", "dd", "ee", "ff"}
-		a := SelectTopInformationTokens(in, 4)
-		b := SelectTopInformationTokens(in, 4)
+		a := text.SelectTopInformationTokens(in, 4)
+		b := text.SelectTopInformationTokens(in, 4)
 		if fmt.Sprint(a) != fmt.Sprint(b) {
 			t.Fatalf("平票应确定性：%v vs %v", a, b)
 		}
@@ -73,7 +75,7 @@ func TestSelectTopInformationTokensContract(t *testing.T) {
 				best, bestMass = tk, m
 			}
 		}
-		out := SelectTopInformationTokens(in, 1)
+		out := text.SelectTopInformationTokens(in, 1)
 		if len(out) != 1 || out[0] != best {
 			t.Fatalf("k=1 应选信息量最高者 %q，got=%v", best, out)
 		}
@@ -83,7 +85,7 @@ func TestSelectTopInformationTokensContract(t *testing.T) {
 // TestSelectTopInformationTokensDropsEmpty 空串不占槽位（调用方可能带 TrimSpace 后的残片）。
 func TestSelectTopInformationTokensDropsEmpty(t *testing.T) {
 	in := []string{"", "caroline", " ", "harbour", ""}
-	out := SelectTopInformationTokens(in, 2)
+	out := text.SelectTopInformationTokens(in, 2)
 	for _, tk := range out {
 		if tk == "" || tk == " " {
 			t.Fatalf("空串/空白不应进入选中集：%v", out)

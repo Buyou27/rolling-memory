@@ -72,3 +72,8 @@
 - [`svg/r07-grotesk-rainbow-yin.svg`](svg/r07-grotesk-rainbow-yin.svg) — ④ 彩虹阴
 
 十二枚母版的独立预览页见 [`rolling-memory-brand-r7-final.html`](rolling-memory-brand-r7-final.html)。
+
+### `Avatar`（2 枚）
+
+- [`svg/org-avatar-1024.png`](svg/org-avatar-1024.png) — 仓库头像（GitHub / Gitee）：1024×1024，采用 ④ 彩虹阴 处理并按 72% 内缩，圆形裁切后画记完整
+- [`svg/org-avatar-1024.svg`](svg/org-avatar-1024.svg) — 同款头像的可编辑源文件

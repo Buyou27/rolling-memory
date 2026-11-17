@@ -147,7 +147,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 			b0 := int(qa0.Bits)
 			b2 := int(qTerms[h2].Bits)
-			if b2 < b0 && float64(b0-b2)*math.E < meanBits {
+			// Compound-partner head/tail shape: the head must be wider than the tail
+			// (b0 > b2) with a small width gap versus the corpus mean (meanBits >
+			// (b0-b2)*e). Admissions are expressed in inclusion direction.
+			if b0 > b2 && meanBits > float64(b0-b2)*math.E {
 				if compoundPartner == nil {
 					compoundPartner = make(map[uint64]uint64, 2)
 				}
@@ -730,7 +733,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				}
 				unitEntries := st.docEntriesOf(u)
 				if len(unitEntries) > 0 {
-					candidates[u].upsertMatch(sc, group, matchedMass, 0, qTerm.Bits, unitEntries, false)
+					candidates[u].upsertMatch(sc, group, matchedMass, -1, qTerm.Bits, unitEntries, false)
 				}
 			}
 			continue
@@ -750,33 +753,35 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				if qTerms[ch].IsSlot2Companion(qTerms[group]) || !st.isPrimaryOf(ch) {
 					continue
 				}
-				if qTerms[group].Bits < qTerms[ch].Bits || float64(qTerms[group].Bits)*math.E < meanBits*2.0 {
-					continue
-				}
-				dfStem := idx.TermDF(ch)
-				if dfH > rareInflectedTermMaxDF && dfStem <= highDFThresh {
-					if !hasAnchor || shellScale[group] > 0 {
-						continue
+				// Stem-fold host dominance: fold stem mass only when the primary
+				// dominates the in-family companion (b >= b_companion) and the host is
+				// not over-narrow versus the corpus mean width (e*b >= 2*b_bar).
+				if qTerms[group].Bits >= qTerms[ch].Bits && float64(qTerms[group].Bits)*math.E >= meanBits*2.0 {
+					dfStem := idx.TermDF(ch)
+					if dfH > rareInflectedTermMaxDF && dfStem <= highDFThresh {
+						if !hasAnchor || shellScale[group] > 0 {
+							continue
+						}
+						hInCone := false
+						for _, p := range st.termPostings(h) {
+							if uAnchorGen[p.unit] == aGen || inAnchorConeSupport(p.unit) {
+								hInCone = true
+								break
+							}
+						}
+						if hInCone {
+							continue
+						}
 					}
-					hInCone := false
-					for _, p := range st.termPostings(h) {
-						if uAnchorGen[p.unit] == aGen || inAnchorConeSupport(p.unit) {
-							hInCone = true
+					if float64(dfStem) > math.E*float64(dfH) {
+						if stemMass, okS := idx.TermMass(ch); okS && stemMass > 0 && stemMass < baseline {
+							if dfStem > highDFThresh {
+								baseline = math.Sqrt(baseline * stemMass)
+							} else {
+								baseline = (1.0-invE)*baseline + invE*stemMass
+							}
 							break
 						}
-					}
-					if hInCone {
-						continue
-					}
-				}
-				if float64(dfStem) > math.E*float64(dfH) {
-					if stemMass, okS := idx.TermMass(ch); okS && stemMass > 0 && stemMass < baseline {
-						if dfStem > highDFThresh {
-							baseline = math.Sqrt(baseline * stemMass)
-						} else {
-							baseline = (1.0-invE)*baseline + invE*stemMass
-						}
-						break
 					}
 				}
 			}
@@ -967,10 +972,14 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		}
 		covLex := c.lex
 		if len(c.matches) == 1 && len(groupKeys) > 1 {
-			unitEntries := st.docEntriesOf(u)
-			repeats := math.Log(math.Max(1, float64(unitEntries[c.matches[0].entry].tf)))
-			if repeats > 1.0 {
-				repeats = 1.0
+			// Mass-only synthetic matches carry no local entry, hence no repetition discount.
+			var repeats float64
+			if c.matches[0].entry >= 0 {
+				unitEntries := st.docEntriesOf(u)
+				repeats = math.Log(math.Max(1, float64(unitEntries[c.matches[0].entry].tf)))
+				if repeats > 1.0 {
+					repeats = 1.0
+				}
 			}
 			if detachedFrag[c.matches[0].group] {
 				repeats *= invE
@@ -1208,7 +1217,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				var missingMass float64
 				seedEntries := st.docEntriesOf(seed)
 				for _, sm := range seedC.matches {
-					if detachedFrag[sm.group] || idx.TermDF(sm.group) > highDFThresh {
+					if detachedFrag[sm.group] || idx.TermDF(sm.group) > highDFThresh || sm.entry < 0 {
 						continue
 					}
 					sEntry := seedEntries[sm.entry]

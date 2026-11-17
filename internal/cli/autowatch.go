@@ -174,14 +174,8 @@ func RunAutoWatchTick(ctx context.Context, memory *api.Memory, settleBG, quiesce
 		}
 	}
 
-	// 2. L2 Episodic: reconcile whenever a harness transcript store actually changed
-	// since the last successful pass. A shared WAL is rewritten every second while
-	// any harness session is active, so "wait for 12s of silence" never fires in a
-	// live multi-session workspace; completion is instead decided per turn inside
-	// the scanner, which keeps a still-streaming tail out of the engine while every
-	// finished turn flows in. The pass is bounded so consecutive ticks never overlap:
-	// local pointer import is unbudgeted (pure SQLite write), only network pulses stop
-	// at the deadline.
+	// 2. L2 Episodic: scan bounded pages and reconcile changed transcripts.
+	// Both paths require explicit completion evidence before importing a turn.
 	home, _ := os.UserHomeDir()
 	if home != "" {
 		passCtx, cancelPass := context.WithTimeout(ctx, autoWatchReconcileBudget)

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -190,7 +191,7 @@ func TestJSONLEnumeration(t *testing.T) {
 	if len(turns) != 2 {
 		t.Fatalf("expected 2 turns, got %d (%+v)", len(turns), turns)
 	}
-	if got := turns[0].Segments; len(got) != 2 || got[0].Text != "第一句，用户的话。" || got[1].Text != "先取证。" {
+	if got := turns[0].Segments; len(got) != 1 || got[0].Text != "第一句，用户的话。" {
 		t.Fatalf("turn 0 segments = %+v", got)
 	}
 	if turns[1].Segments[1].Text != "已完成。" {
@@ -283,5 +284,89 @@ func TestJSONLMillisecondTimestampNormalized(t *testing.T) {
 	}
 	if turns[0].Segments[0].OccurredAt != 1794407222 || turns[0].Segments[1].OccurredAt != 1794407225 {
 		t.Fatalf("segment timestamps not normalized to seconds: %+v", turns[0].Segments)
+	}
+}
+
+func TestJSONLDSHProvenanceAndTools(t *testing.T) {
+	path := writeJSONL(t, []string{
+		`{"type":"session","version":4,"cwd":"/fixture"}`,
+		`{"type":"turn/start","data":{"turn":1}}`,
+		`{"type":"user/message","time":1794407222466,"data":{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"Question"}]}}`,
+		`{"type":"user/message","data":{"role":"user","source":{"kind":"agent-instructions"},"content":[{"type":"text","text":"Injected context"}]}}`,
+		`{"type":"user/message","data":{"role":"user","content":[{"type":"text","text":"Unknown provenance"}]}}`,
+		`{"type":"assistant/message","time":1794407223000,"data":{"message":{"role":"assistant","content":[{"type":"text","text":"Narration"},{"type":"tool-call","name":"shell","arguments":"secret"}]}}}`,
+		`{"type":"tool/result","data":{"message":{"role":"user","content":[{"type":"text","text":"Tool output"}]}}}`,
+		`{"type":"assistant/chunk","data":{"chunk":{"type":"text-delta","text":"duplicate"}}}`,
+		`{"type":"assistant/message","time":1794407225890,"data":{"message":{"role":"assistant","content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"Answer"}]}}}`,
+		`{"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}`,
+	})
+	turns, err := JSONLTurns(path)
+	if err != nil || len(turns) != 1 || len(turns[0].Segments) != 2 {
+		t.Fatalf("turns=%+v err=%v", turns, err)
+	}
+	if turns[0].Segments[0].Text != "Question" || turns[0].Segments[1].Text != "Answer" || turns[0].OccurredAt != 1794407225 {
+		t.Fatalf("turn = %+v", turns[0])
+	}
+	var visited []JSONLTurn
+	var closed []bool
+	if err := VisitJSONLTurns(context.Background(), path, func(turn JSONLTurn, complete bool) error {
+		visited = append(visited, turn)
+		closed = append(closed, complete)
+		return nil
+	}); err != nil || len(visited) != 1 || !closed[0] {
+		t.Fatalf("visited=%+v closed=%v err=%v", visited, closed, err)
+	}
+	resolved, err := JSONLTurnSegments(path, 0)
+	if err != nil || !reflect.DeepEqual(resolved, turns[0].Segments) || !reflect.DeepEqual(visited[0], turns[0]) {
+		t.Fatalf("resolved=%+v visited=%+v turns=%+v err=%v", resolved, visited, turns, err)
+	}
+}
+
+func TestFilteredToolNarrationChangesSegmentOrdinal(t *testing.T) {
+	path := writeJSONL(t, []string{
+		`{"type":"user","message":{"role":"user","content":"question"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"old narration"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"shell"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"final answer"}}`,
+	})
+	turns, err := JSONLTurns(path)
+	if err != nil || len(turns) != 1 || len(turns[0].Segments) != 2 || turns[0].Segments[1].Text != "final answer" {
+		t.Fatalf("turns=%+v err=%v", turns, err)
+	}
+	segments, err := JSONLTurnSegments(path, 0)
+	if err != nil || !reflect.DeepEqual(segments, turns[0].Segments) {
+		t.Fatalf("segments=%+v err=%v", segments, err)
+	}
+}
+
+func TestJSONLCompletionEvidence(t *testing.T) {
+	cases := []struct {
+		name   string
+		rows   []string
+		closed bool
+	}{
+		{"unmarked", nil, false},
+		{"claude completed", []string{`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"answer"}}`}, true},
+		{"codex completed", []string{`{"type":"event_msg","payload":{"type":"task_complete"}}`}, true},
+		{"codex failed", []string{`{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"failed"}}}`}, false},
+		{"dsh completed", []string{`{"type":"turn/end","data":{"reason":{"kind":"completed"}}}`}, true},
+		{"dsh aborted", []string{`{"type":"turn/end","data":{"reason":{"kind":"aborted"}}}`}, false},
+		{"tool after completion", []string{`{"type":"event_msg","payload":{"type":"task_complete"}}`, `{"type":"response_item","payload":{"type":"function_call"}}`}, false},
+		{"assistant after completion", []string{`{"type":"event_msg","payload":{"type":"task_complete"}}`, `{"role":"assistant","content":"still working"}`}, false},
+		{"reasoning after completion", []string{`{"type":"event_msg","payload":{"type":"task_complete"}}`, `{"type":"assistant/message","data":{"message":{"role":"assistant","content":[{"type":"reasoning","text":"working"}]}}}`}, false},
+		{"aborted after completion", []string{`{"type":"turn/end","data":{"reason":{"kind":"completed"}}}`, `{"type":"turn/end","data":{"reason":{"kind":"aborted"}}}`}, false},
+		{"codex failure after completion", []string{`{"type":"event_msg","payload":{"type":"task_complete"}}`, `{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"failed"}}}`}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeJSONL(t, append([]string{`{"role":"user","content":"question"}`}, tc.rows...))
+			var states []bool
+			if err := VisitJSONLTurns(context.Background(), path, func(_ JSONLTurn, complete bool) error {
+				states = append(states, complete)
+				return nil
+			}); err != nil || len(states) != 1 || states[0] != tc.closed {
+				t.Fatalf("states=%v want=%v err=%v", states, tc.closed, err)
+			}
+		})
 	}
 }

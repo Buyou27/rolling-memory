@@ -21,6 +21,8 @@
 | **[plugin-console.md](plugin-console.md)** | Web 管理控制台指南：本地管理面板、WebSocket 实时流、粗略 ROI 趋势估算模块、体验评价 Hook 开关、记忆图谱与评测实验室 | [docs/plugin-console.md](../plugin-console.md) |
 | **[benchmarks.md](benchmarks.md)** | 基准复现与独立核验指南：自备语料与 `SHA-256` pin、LoCoMo 与剑桥大学 ATM-Bench 本地复现命令、评测协议校验与原始 JSONL 复算 | [docs/benchmarks.md](../benchmarks.md) |
 | **[privacy.md](privacy.md)** | **隐私与本地数据说明**：哪些数据永不离开本机、本地金库纵深防御、一键自证命令，以及云端能力的申请制预览 | [docs/privacy.md](../privacy.md) |
+| **[essays/memory-retrieval-is-not-similarity-search.md](essays/memory-retrieval-is-not-similarity-search.md)** | 理念随笔：为什么相似度不该做记忆检索的主键——对称的相似度与不对称的问答、复读对相似度的膨胀、记忆问题的事件结构，以及把模型版本嵌进记忆格式的长期代价 | [docs/essays/memory-retrieval-is-not-similarity-search.md](../essays/memory-retrieval-is-not-similarity-search.md) |
+| **[essays/semantic-bridging-creates-no-new-information.md](essays/semantic-bridging-creates-no-new-information.md)** | 理念随笔：图谱、摘要与指代消解都在做同一件事——语义搭桥；桥不产生新信息，理解该发生在读取那一刻（数据处理不等式 · 预消化悖论） | [docs/essays/semantic-bridging-creates-no-new-information.md](../essays/semantic-bridging-creates-no-new-information.md) |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | 贡献指南、开发与测试命令、PR 检查清单 | [../../CONTRIBUTING.md](../../CONTRIBUTING.md) |
 | **[SECURITY.md](SECURITY.md)** | 安全策略、漏洞私下报告渠道与安全不变量 | [../../SECURITY.md](../../SECURITY.md) |
 | **[SUPPORT.md](SUPPORT.md)** | 获取帮助、响应预期与支持范围 | [../../SUPPORT.md](../../SUPPORT.md) |

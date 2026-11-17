@@ -85,8 +85,8 @@ func TestSyncStatusCountsDSHSessionsFromRealLayout(t *testing.T) {
 	if dsh["sessions_scan_supported"] != true {
 		t.Fatalf("dsh sessions_scan_supported = %v, want true", dsh["sessions_scan_supported"])
 	}
-	if dsh["turns_scan_supported"] != false {
-		t.Fatalf("dsh turns_scan_supported = %v, want false: zstd turn content is not read yet, so coupling the session count to it would hide a real number", dsh["turns_scan_supported"])
+	if dsh["turns_scan_supported"] != true {
+		t.Fatalf("dsh turns_scan_supported = %v, want true", dsh["turns_scan_supported"])
 	}
 	if got := dsh["local_turns_count"]; got != float64(0) {
 		t.Fatalf("dsh local_turns_count = %v, want 0 (not counted, labelled as such)", got)

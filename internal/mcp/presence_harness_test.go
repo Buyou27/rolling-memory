@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,5 +120,61 @@ func TestResolveMCPPresenceLiveEnvOutranksSavedCarrier(t *testing.T) {
 	}
 	if coords.Locus != "Rolling-Memory" {
 		t.Fatalf("locus must survive the restamp, got %q", coords.Locus)
+	}
+}
+
+// TestResolveMCPPresencePersistsLiveCoordinates pins the write-side migration:
+// a live resolution (the daemon's own repository cwd) refreshes the shared
+// active_workspace.json, while the L2 saved-state fallback never rewrites the
+// document — echoing file-derived coordinates would fake activity recency.
+func TestResolveMCPPresencePersistsLiveCoordinates(t *testing.T) {
+	clearPresenceEnv(t)
+	t.Setenv("ROLLING_MEMORY_WORKSPACE", "")
+	t.Setenv("HOME", t.TempDir()) // keep the ZCode in-flight probe away from real state
+	memory := newMemory(t)
+	stateDir := filepath.Dir(memory.Config.Log)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	repo := filepath.Join(t.TempDir(), "my-repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	t.Chdir(repo)
+	if coords := resolveMCPPresence(memory, map[string]any{}, true); coords == nil || coords.Locus != "my-repo" {
+		t.Fatalf("live cwd must resolve the repository locus, got %+v", coords)
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDir, "active_workspace.json"))
+	if err != nil {
+		t.Fatalf("live resolution must persist presence: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode persisted presence: %v", err)
+	}
+	if doc["locus"] != "my-repo" || doc["updated_at"] == nil {
+		t.Fatalf("persisted document mismatch: %v", doc)
+	}
+
+	// Outside any repository the L2 fallback reads the saved document and must
+	// leave its timestamp untouched.
+	t.Chdir(t.TempDir())
+	saved := `{"world":"actual","carrier":"harness:zcode","locus":"my-repo","updated_at":1}`
+	if err := os.WriteFile(filepath.Join(stateDir, "active_workspace.json"), []byte(saved), 0o600); err != nil {
+		t.Fatalf("seed saved presence: %v", err)
+	}
+	if coords := resolveMCPPresence(memory, map[string]any{}, true); coords == nil || coords.Locus != "my-repo" {
+		t.Fatalf("fallback must read the saved locus, got %+v", coords)
+	}
+	raw, err = os.ReadFile(filepath.Join(stateDir, "active_workspace.json"))
+	if err != nil {
+		t.Fatalf("re-read presence: %v", err)
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode fallback presence: %v", err)
+	}
+	if at, _ := doc["updated_at"].(float64); int64(at) != 1 {
+		t.Fatalf("saved-state fallback must not rewrite updated_at, got %v", doc["updated_at"])
 	}
 }

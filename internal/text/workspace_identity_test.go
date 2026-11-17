@@ -4,6 +4,7 @@
 package text
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,5 +138,62 @@ func TestDetectGitWorkspaceLocusSpatialContract(t *testing.T) {
 	plain := writeGitDirFixture(t, filepath.Join(t.TempDir(), "solo"), "")
 	if got, want := DetectGitWorkspaceLocus(plain), filepath.Base(filepath.Dir(plain))+"/solo"; got != want {
 		t.Errorf("locus(no-remote repo) = %q, want %q", got, want)
+	}
+}
+
+// TestSavePresenceFileRoundtripAndReplace pins the shared presence-state file
+// contract: one document, last writer wins, no leftover temp files, and empty
+// inputs are no-ops.
+func TestSavePresenceFileRoundtripAndReplace(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	coords := PresenceCoordinates{World: "actual", Carrier: "harness:zcode", Locus: "Rolling-Memory", Incarnation: "coding/zcode/main"}
+	if err := SavePresenceFile(stateDir, coords, "sess-1", 123); err != nil {
+		t.Fatalf("SavePresenceFile: %v", err)
+	}
+	read := func() map[string]any {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(stateDir, "active_workspace.json"))
+		if err != nil {
+			t.Fatalf("read presence: %v", err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("decode presence: %v", err)
+		}
+		return doc
+	}
+	doc := read()
+	if doc["locus"] != "Rolling-Memory" || doc["carrier"] != "harness:zcode" || doc["session_id"] != "sess-1" {
+		t.Fatalf("roundtrip mismatch: %v", doc)
+	}
+	if at, _ := doc["updated_at"].(float64); int64(at) != 123 {
+		t.Fatalf("updated_at = %v, want 123", doc["updated_at"])
+	}
+
+	// Last writer wins: the replace document drops the previous session.
+	coords.Locus = "my-repo"
+	if err := SavePresenceFile(stateDir, coords, "", 456); err != nil {
+		t.Fatalf("SavePresenceFile replace: %v", err)
+	}
+	doc = read()
+	if doc["locus"] != "my-repo" || doc["session_id"] != "" {
+		t.Fatalf("replace mismatch: %v", doc)
+	}
+	if at, _ := doc["updated_at"].(float64); int64(at) != 456 {
+		t.Fatalf("replace updated_at = %v, want 456", doc["updated_at"])
+	}
+
+	// Empty coordinates and an empty state dir write nothing.
+	if err := SavePresenceFile(stateDir, PresenceCoordinates{}, "s", 1); err != nil {
+		t.Fatalf("empty coords must be a no-op, got %v", err)
+	}
+	if err := SavePresenceFile("", coords, "s", 1); err != nil {
+		t.Fatalf("empty state dir must be a no-op, got %v", err)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(stateDir, "active_workspace.json.tmp.*")); len(leftovers) != 0 {
+		t.Fatalf("temp files left behind: %v", leftovers)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "active_workspace.json.lock")); !os.IsNotExist(err) {
+		t.Fatalf("lock file must be released, stat err = %v", err)
 	}
 }

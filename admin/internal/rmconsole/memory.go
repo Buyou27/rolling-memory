@@ -796,9 +796,13 @@ func queryMemoriesFromDB(dbPath string, req MemoriesQueryRequest) (MemoriesQuery
 				if home, hErr := os.UserHomeDir(); hErr == nil && home != "" && len(rows) > 0 {
 					batchRows := make([]map[string]any, len(rows))
 					for i, r := range rows {
-						batchRows[i] = map[string]any{"content": r["text"]}
+						batchRows[i] = map[string]any{"id": r["id"], "content": r["text"]}
 					}
-					warmHydrateZCodePointersBatch(home, batchRows)
+					warmHydrateZCodePointersBatch(home, dbPath, batchRows)
+					for i := range rows {
+						rows[i]["_hydrated_ref_text"] = batchRows[i]["_hydrated_ref_text"]
+						rows[i]["_hydrated_ref_checked"] = batchRows[i]["_hydrated_ref_checked"]
+					}
 				}
 				items := make([]MemoryItem, 0, len(rows))
 				for _, r := range rows {
@@ -855,9 +859,13 @@ func queryMemoriesFromDB(dbPath string, req MemoriesQueryRequest) (MemoriesQuery
 	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" && len(rows) > 0 {
 		batchRows := make([]map[string]any, len(rows))
 		for i, r := range rows {
-			batchRows[i] = map[string]any{"content": r["text"]}
+			batchRows[i] = map[string]any{"id": r["id"], "content": r["text"]}
 		}
-		warmHydrateZCodePointersBatch(home, batchRows)
+		warmHydrateZCodePointersBatch(home, dbPath, batchRows)
+		for i := range rows {
+			rows[i]["_hydrated_ref_text"] = batchRows[i]["_hydrated_ref_text"]
+			rows[i]["_hydrated_ref_checked"] = batchRows[i]["_hydrated_ref_checked"]
+		}
 	}
 	items := make([]MemoryItem, 0, len(rows))
 	for _, r := range rows {
@@ -912,13 +920,9 @@ func memoriesUnionSQL(dbPath string, req MemoriesQueryRequest) (string, []any) {
 			if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
 				if ptrRows, pErr := cachedVaultPointerDocRows(dbPath, layerListQuery{layer: layer, keyword: kw}); pErr == nil && len(ptrRows) > 0 {
 					cands := ptrRows
-					if len(cands) > 512 {
-						cands = pruneLargeVaultHydrationCandidates(dbPath, home, cands, kw, nil)
-					}
-					warmHydrateZCodePointersBatch(home, cands)
+					warmHydrateZCodePointersBatch(home, dbPath, cands)
 					for _, r := range cands {
-						raw := strings.TrimSpace(asString(r["content"]))
-						resolved, ok := hydratedEpisodicPointerLive(home, raw)
+						resolved, ok := hydratedPointerRowText(r)
 						if !ok || resolved == "" {
 							continue
 						}
@@ -1008,7 +1012,7 @@ func memoriesOrderSQL(sortBy, sortOrder string) string {
 // 诚实披露来源缺口，绝不让原始 `@ref:` 指针以正文身份漏上展示面）。
 const vaultRefGapMarker = "[来源缺口：指针身份未验证或内容不可用]"
 
-func hydrateVaultTextForDisplay(rawTxt string) string {
+func hydrateVaultTextForDisplay(dbPath, docID, rawTxt string) string {
 	trimmed := strings.TrimSpace(rawTxt)
 	if !strings.HasPrefix(trimmed, "@ref:") {
 		return rawTxt
@@ -1017,7 +1021,7 @@ func hydrateVaultTextForDisplay(rawTxt string) string {
 	if err != nil || home == "" {
 		return vaultRefGapMarker
 	}
-	if resolved, ok := hydratedEpisodicPointerLive(home, trimmed); ok && strings.TrimSpace(resolved) != "" {
+	if resolved, ok := hydratedEpisodicPointerLive(home, dbPath, docID, trimmed); ok && strings.TrimSpace(resolved) != "" {
 		return resolved
 	}
 	return vaultRefGapMarker
@@ -1026,14 +1030,14 @@ func hydrateVaultTextForDisplay(rawTxt string) string {
 // hydrateEpisodicDisplayText 为图谱等展示面解析本地金库行的可读正文：
 // 零拷贝 `@ref:` 指针行走规范水合（守护进程优先），非指针行沿用已蒸馏正文；
 // 无法水合的指针行回「来源缺口」占位，绝不把指针原样当正文。
-func hydrateEpisodicDisplayText(home, rawText, distilled string) (string, string) {
+func hydrateEpisodicDisplayText(home, dbPath, docID, rawText, distilled string) (string, string) {
 	txt := distilled
 	if txt == "" {
 		txt = rawText
 	}
 	span := rawText
 	if raw := strings.TrimSpace(rawText); strings.HasPrefix(raw, "@ref:") {
-		if hydrated, ok := hydratedEpisodicPointerLive(home, raw); ok && hydrated != "" {
+		if hydrated, ok := hydratedEpisodicPointerLive(home, dbPath, docID, raw); ok && hydrated != "" {
 			txt, span = hydrated, hydrated
 		} else {
 			txt, span = vaultRefGapMarker, vaultRefGapMarker
@@ -1056,7 +1060,15 @@ func memoryItemFromSQL(r map[string]any, scope string) MemoryItem {
 	}
 	ts := int64(asInt(r["occurred_at"]))
 	tText := formatUnixTime(ts, false)
-	title := strings.TrimSpace(hydrateVaultTextForDisplay(asString(r["text"])))
+	title := asString(r["text"])
+	if strings.HasPrefix(strings.TrimSpace(title), "@ref:") {
+		if text, ok := hydratedPointerRowText(r); ok {
+			title = text
+		} else {
+			title = vaultRefGapMarker
+		}
+	}
+	title = strings.TrimSpace(title)
 	addr := asString(r["address_uri"])
 
 	if src == "noetic" {
@@ -1152,7 +1164,7 @@ func queryMemoryDetailFromDB(dbPath, id string) (MemoryDetailResponse, error) {
 		docID := asString(r["doc_id"])
 		layer := normalizeAdminMemoryLayer(asString(r["layer"]))
 		addr := asString(r["address_uri"])
-		rawTxt := hydrateVaultTextForDisplay(asString(r["raw_text"]))
+		rawTxt := hydrateVaultTextForDisplay(dbPath, docID, asString(r["raw_text"]))
 		ts := int64(asInt(r["occurred_at"]))
 		cellKey := extractCellKeyFromURI(addr)
 		tText := formatUnixTime(ts, false)
@@ -1345,7 +1357,7 @@ func lookupAssertionSpacetimeMeta(dbPath string, ids []string) (snippets, incarn
 	}
 	for _, r := range rows {
 		id := asString(r["id"])
-		snippets[id] = clipRunes(hydrateVaultTextForDisplay(asString(r["text"])), 120)
+		snippets[id] = clipRunes(hydrateVaultTextForDisplay(dbPath, id, asString(r["text"])), 120)
 		loci[id] = asString(r["locus"])
 		carriers[id] = "open-memory-v1"
 	}
@@ -2164,7 +2176,7 @@ func collectDashboardData(home, reqScope string) DashboardResponse {
 			if entry.sig == sig || (entry.writeEpoch == writeEp && now.Sub(entry.at) < 10*time.Second) {
 				r := entry.resp
 				dashboardSnapMu.Unlock()
-				return r
+				return hydrateDashboardRecent(home, dbPath, r)
 			}
 			r := entry.resp
 			if !entry.refreshing {
@@ -2188,7 +2200,7 @@ func collectDashboardData(home, reqScope string) DashboardResponse {
 				}(home, scope, cacheKey)
 			}
 			dashboardSnapMu.Unlock()
-			return r
+			return hydrateDashboardRecent(home, dbPath, r)
 		}
 		dashboardSnapMu.Unlock()
 	}
@@ -2200,7 +2212,7 @@ func collectDashboardData(home, reqScope string) DashboardResponse {
 			if entry.sig == sig || (entry.writeEpoch == writeEp && time.Since(entry.at) < 10*time.Second) {
 				r := entry.resp
 				dashboardSnapMu.Unlock()
-				return r
+				return hydrateDashboardRecent(home, dbPath, r)
 			}
 		}
 		dashboardSnapMu.Unlock()
@@ -2215,6 +2227,25 @@ func collectDashboardData(home, reqScope string) DashboardResponse {
 			resp:       resp,
 		}
 		dashboardSnapMu.Unlock()
+	}
+	return hydrateDashboardRecent(home, dbPath, resp)
+}
+
+func hydrateDashboardRecent(home, dbPath string, resp DashboardResponse) DashboardResponse {
+	resp.RecentAssertions = append([]RecentAssertion(nil), resp.RecentAssertions...)
+	rows := make([]map[string]any, len(resp.RecentAssertions))
+	for i, item := range resp.RecentAssertions {
+		rows[i] = map[string]any{"id": item.ID, "content": item.Rendered}
+	}
+	warmHydrateZCodePointersBatch(home, dbPath, rows)
+	for i, row := range rows {
+		if strings.HasPrefix(strings.TrimSpace(asString(row["content"])), "@ref:") {
+			if text, ok := hydratedPointerRowText(row); ok {
+				resp.RecentAssertions[i].Rendered = text
+			} else {
+				resp.RecentAssertions[i].Rendered = vaultRefGapMarker
+			}
+		}
 	}
 	return resp
 }
@@ -2544,17 +2575,10 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 			SELECT * FROM (SELECT noetic_id AS id, 'Q: ' || query_text || ' | A: ' || answer_text AS txt, COALESCE(NULLIF(address_uri, ''), noetic_id) AS addr, occurred_at FROM thin_vault_noetic WHERE status = 'active' ORDER BY occurred_at DESC LIMIT 8)
 		) ORDER BY occurred_at DESC LIMIT 8;`
 		if rows, err := sqliteQueryJSON(dbPath, qRecent); err == nil {
-			if home != "" && len(rows) > 0 {
-				batchRows := make([]map[string]any, len(rows))
-				for i, r := range rows {
-					batchRows[i] = map[string]any{"content": r["txt"]}
-				}
-				warmHydrateZCodePointersBatch(home, batchRows)
-			}
 			for _, r := range rows {
 				resp.RecentAssertions = append(resp.RecentAssertions, RecentAssertion{
 					ID:         asString(r["id"]),
-					Rendered:   strings.TrimSpace(hydrateVaultTextForDisplay(asString(r["txt"]))),
+					Rendered:   asString(r["txt"]),
 					Confidence: 1.0,
 					Anchor:     asString(r["addr"]),
 					Status:     "active",
@@ -3803,6 +3827,11 @@ func graphWeightsKey(weights map[string]float64) string {
 func graphDomainFor(dbPath, scope string, weights map[string]float64) *graphDomain {
 	weightsKey := graphWeightsKey(weights)
 	fingerprint := graphVaultFingerprint(dbPath)
+	// Graph atoms and summaries contain source text, so pointer-bearing domains
+	// must be rebuilt after live verification instead of replaying a cached domain.
+	if vaultHasDocPointers(dbPath, "") {
+		return assembleGraphDomain(dbPath, scope, weights, weightsKey, fingerprint)
+	}
 	graphDomainMu.Lock()
 	cur := graphDomainCur
 	graphDomainMu.Unlock()
@@ -3973,8 +4002,28 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 	// 而不是存储的 `@ref:` 指针本身；早期实现在语料不可用回落到真实金库时会把指针原样
 	// 画进节点摘要。
 	graphHome, _ := os.UserHomeDir()
+	graphRows := make([]map[string]any, 0, len(localDocs))
+	for _, did := range localDocOrder {
+		dm := localDocs[did]
+		if strings.HasPrefix(strings.TrimSpace(dm.rawText), "@ref:") {
+			graphRows = append(graphRows, map[string]any{"id": dm.docID, "content": dm.rawText})
+		}
+	}
+	warmHydrateZCodePointersBatch(graphHome, dbPath, graphRows)
+	graphTexts := make(map[hydrateRef]string, len(graphRows))
+	for _, row := range graphRows {
+		if text, ok := hydratedPointerRowText(row); ok {
+			graphTexts[hydrateRef{DocID: strings.TrimSpace(asString(row["id"])), Ref: strings.TrimSpace(asString(row["content"]))}] = text
+		}
+	}
 	graphDisplayText := func(dm localDocMeta) (string, string) {
-		return hydrateEpisodicDisplayText(graphHome, dm.rawText, dm.distilled)
+		if ref := strings.TrimSpace(dm.rawText); strings.HasPrefix(ref, "@ref:") {
+			if text := graphTexts[hydrateRef{DocID: dm.docID, Ref: ref}]; text != "" {
+				return text, text
+			}
+			return vaultRefGapMarker, vaultRefGapMarker
+		}
+		return hydrateEpisodicDisplayText(graphHome, dbPath, dm.docID, dm.rawText, dm.distilled)
 	}
 
 	type localNoeticMeta struct {
@@ -6196,7 +6245,7 @@ func buildTerminalStreamLines(dbPath, logPath string, limit int) []TerminalStrea
 			}
 			id := asString(r["id"])
 			// 终端回显必须展示水合后的正文（守护进程优先），不得把存储的 `@ref:` 指针原样打印。
-			rendered := clipRunes(strings.TrimSpace(hydrateVaultTextForDisplay(asString(r["txt"]))), 72)
+			rendered := clipRunes(strings.TrimSpace(hydrateVaultTextForDisplay(dbPath, id, asString(r["txt"]))), 72)
 			lines = append(lines, TerminalStreamLine{
 				ID:       "unit-" + id,
 				TimeText: tText,

@@ -148,39 +148,13 @@ func installSkill(harness Harness, options InstallOptions, report *Report) {
 	}
 	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasSkill && !options.Force {
 		target := targets[0]
-		raw, err := os.ReadFile(target)
-		if errors.Is(err, os.ErrNotExist) {
-			if _, statErr := os.Lstat(target); statErr == nil {
-				report.Add(harness.ID, "skill", target, StatusConflict, "skill path is not an owned regular file")
-				return
-			}
-			report.Add(harness.ID, "skill", plugin.SkillMD, StatusUnchanged, "provided by plugin "+plugin.ID)
-			return
+		if _, err := os.Lstat(target); err == nil {
+			report.Add(harness.ID, "skill", target, StatusConflict, "plugin "+plugin.ID+" also declares this skill; existing file kept for manual review")
+		} else if errors.Is(err, os.ErrNotExist) {
+			report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" declares this skill; host loading is not verified")
+		} else {
+			report.Add(harness.ID, "skill", target, StatusError, "cannot inspect: "+err.Error())
 		}
-		if err != nil {
-			report.Add(harness.ID, "skill", target, StatusError, "cannot read: "+err.Error())
-			return
-		}
-		if !skillOwned(target, raw) {
-			report.Add(harness.ID, "skill", target, StatusConflict, "duplicate skill is not owned; not touching it")
-			return
-		}
-		if options.DryRun {
-			report.Add(harness.ID, "skill", target, StatusPlanned, "dedupe user skill (provided by plugin "+plugin.ID+")")
-			return
-		}
-		if err := os.Remove(target); err != nil {
-			report.Add(harness.ID, "skill", target, StatusError, "cannot remove: "+err.Error())
-			return
-		}
-		if err := os.Remove(filepath.Join(filepath.Dir(target), skillOwnerMarker)); err != nil {
-			report.Add(harness.ID, "skill", target, StatusError, "cannot remove ownership marker: "+err.Error())
-			return
-		}
-		if entries, err := os.ReadDir(filepath.Dir(target)); err == nil && len(entries) == 0 {
-			_ = os.Remove(filepath.Dir(target))
-		}
-		report.Add(harness.ID, "skill", target, StatusRemoved, "deduped; provided by plugin "+plugin.ID)
 		return
 	}
 	text, err := skillText(options)
@@ -316,7 +290,7 @@ func checkSkill(harness Harness, options InstallOptions, report *Report) {
 				"duplicate skill: both user skill and plugin "+plugin.ID+" present; unowned files require manual review")
 			return
 		}
-		report.Add(harness.ID, "skill", plugin.SkillMD, StatusOK, "plugin "+plugin.ID)
+		report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" declares this skill; host loading is not verified")
 		return
 	}
 	for _, target := range targets {
@@ -329,17 +303,17 @@ func checkSkill(harness Harness, options InstallOptions, report *Report) {
 			report.Add(harness.ID, "skill", target, StatusError, "cannot read: "+err.Error())
 			continue
 		}
-		if !skillOwned(target, raw) {
-			report.Add(harness.ID, "skill", target, StatusConflict, "skill is not owned or was modified")
-			continue
-		}
 		lines := pySplitLines(string(raw))
 		if len(lines) > 8 {
 			lines = lines[:8]
 		}
 		head := strings.Join(lines, "\n")
 		if strings.Contains(head, "name: "+options.SkillName) && strings.Contains(head, "description:") {
-			report.Add(harness.ID, "skill", target, StatusOK, "")
+			detail := ""
+			if !skillOwned(target, raw) {
+				detail = "custom or modified skill; installation and removal require manual review"
+			}
+			report.Add(harness.ID, "skill", target, StatusOK, detail)
 		} else {
 			report.Add(harness.ID, "skill", target, StatusConflict, "frontmatter missing name/description")
 		}

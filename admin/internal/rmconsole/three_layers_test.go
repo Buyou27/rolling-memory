@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -459,6 +460,162 @@ func TestEnvHealthHandlerDefaultsToActiveHarness(t *testing.T) {
 	}
 }
 
+func TestDeleteMemoryUnitsRollsBackWhenTombstoneFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "delete_rollback.db")
+	seedVault(t, dbPath,
+		`CREATE TABLE thin_vault_deleted_units(unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TRIGGER reject_tombstone BEFORE INSERT ON thin_vault_deleted_units WHEN NEW.unit_id = 'doc-b' BEGIN SELECT RAISE(ABORT, 'blocked tombstone'); END`,
+		`CREATE TABLE thin_vault_episodic_lineage(turn_ref TEXT, doc_id TEXT)`,
+		`CREATE TABLE thin_vault_episodic_index(doc_id TEXT, payload TEXT)`,
+		`CREATE TABLE thin_vault_episodic_sources(doc_id TEXT, ref_pointer TEXT)`,
+		`CREATE VIRTUAL TABLE thin_vault_docs_fts USING fts5(raw_text, doc_id UNINDEXED, content='', contentless_delete=1, tokenize = 'trigram')`,
+		`CREATE TABLE thin_vault_fts_map(rowid INTEGER PRIMARY KEY, doc_id TEXT NOT NULL UNIQUE)`,
+		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha body'), ('doc-b', 'episodic', 'beta body')`,
+		`INSERT INTO thin_vault_episodic_lineage VALUES ('turn-a', 'doc-a'), ('turn-b', 'doc-b')`,
+		`INSERT INTO thin_vault_episodic_index VALUES ('doc-a', 'index-a'), ('doc-b', 'index-b')`,
+		`INSERT INTO thin_vault_episodic_sources VALUES ('doc-a', 'ref-a'), ('doc-b', 'ref-b')`,
+		`INSERT INTO thin_vault_fts_map(rowid, doc_id) VALUES (1, 'doc-a'), (2, 'doc-b')`,
+		`INSERT INTO thin_vault_docs_fts(rowid, raw_text) VALUES (1, 'alpha body'), (2, 'beta body')`,
+		`INSERT INTO thin_vault_noetic(noetic_id, query_text, answer_text, cited_unit_ids_json) VALUES ('nt-a', 'q', 'a', '["doc-a"]')`,
+		`INSERT INTO thin_vault_noetic(noetic_id, status, query_text, answer_text) VALUES ('nt-stale', 'stale', 'q', 'a')`,
+	)
+	db, err := openVaultWriteOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	deleted, invalidated, purged, err := deleteMemoryUnits(db, []string{"doc-a", "doc-b"}, true)
+	if err == nil || !strings.Contains(err.Error(), "blocked tombstone") || deleted != 0 || invalidated != 0 || len(purged) != 0 {
+		t.Fatalf("delete result: deleted=%d invalidated=%d purged=%v err=%v", deleted, invalidated, purged, err)
+	}
+	for query, want := range map[string]int{
+		`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id IN ('doc-a', 'doc-b')`:              2,
+		`SELECT COUNT(*) FROM thin_vault_episodic_lineage`:                                     2,
+		`SELECT COUNT(*) FROM thin_vault_episodic_index`:                                       2,
+		`SELECT COUNT(*) FROM thin_vault_episodic_sources`:                                     2,
+		`SELECT COUNT(*) FROM thin_vault_fts_map`:                                              2,
+		`SELECT COUNT(*) FROM thin_vault_docs_fts WHERE thin_vault_docs_fts MATCH 'body'`:      2,
+		`SELECT COUNT(*) FROM thin_vault_deleted_units`:                                        0,
+		`SELECT COUNT(*) FROM thin_vault_noetic WHERE noetic_id='nt-a' AND status='active'`:    1,
+		`SELECT COUNT(*) FROM thin_vault_noetic WHERE noetic_id='nt-stale' AND status='stale'`: 1,
+	} {
+		var got int
+		if err := db.QueryRow(query).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s: got %d want %d err=%v", query, got, want, err)
+		}
+	}
+}
+
+func TestDeleteMemoryUnitsPurgesStaleAndSelectedTogether(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "delete_and_purge.db")
+	seedVault(t, dbPath,
+		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha')`,
+		`INSERT INTO thin_vault_noetic(noetic_id, status, query_text, answer_text, cited_unit_ids_json) VALUES ('nt-stale', 'stale', 'q', 'a', '[]'), ('nt-active', 'active', 'q', 'a', '["doc-a"]')`,
+	)
+	db, err := openVaultWriteOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	deleted, invalidated, ids, err := deleteMemoryUnits(db, []string{"doc-a"}, true)
+	if err != nil || deleted != 2 || invalidated != 1 || len(ids) != 2 {
+		t.Fatalf("delete=%d invalidated=%d ids=%v err=%v", deleted, invalidated, ids, err)
+	}
+	var remaining, stale int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_noetic WHERE noetic_id='nt-stale'`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_noetic WHERE noetic_id='nt-active' AND status='stale'`).Scan(&stale); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 || stale != 1 {
+		t.Fatalf("old stale=%d invalidated=%d", remaining, stale)
+	}
+}
+
+func TestDeleteMemoryUnitsRollsBackWhenIndexCleanupFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "delete_index_rollback.db")
+	seedVault(t, dbPath,
+		`CREATE TABLE thin_vault_deleted_units(unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE thin_vault_fts_map(rowid INTEGER PRIMARY KEY, doc_id TEXT NOT NULL UNIQUE)`,
+		`CREATE TRIGGER reject_index_delete BEFORE DELETE ON thin_vault_fts_map BEGIN SELECT RAISE(ABORT, 'blocked index'); END`,
+		`CREATE VIRTUAL TABLE thin_vault_docs_fts USING fts5(raw_text, doc_id UNINDEXED, content='', contentless_delete=1, tokenize = 'trigram')`,
+		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha body')`,
+		`INSERT INTO thin_vault_fts_map(rowid, doc_id) VALUES (1, 'doc-a')`,
+		`INSERT INTO thin_vault_docs_fts(rowid, raw_text) VALUES (1, 'alpha body')`,
+	)
+	db, err := openVaultWriteOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, _, _, err := deleteMemoryUnitsByPKs(db, []string{"doc-a"}); err == nil || !strings.Contains(err.Error(), "blocked index") {
+		t.Fatalf("index failure = %v", err)
+	}
+	for query, want := range map[string]int{
+		`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id='doc-a'`:                       1,
+		`SELECT COUNT(*) FROM thin_vault_deleted_units`:                                   0,
+		`SELECT COUNT(*) FROM thin_vault_fts_map`:                                         1,
+		`SELECT COUNT(*) FROM thin_vault_docs_fts WHERE thin_vault_docs_fts MATCH 'body'`: 1,
+	} {
+		var got int
+		if err := db.QueryRow(query).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s: got %d want %d err=%v", query, got, want, err)
+		}
+	}
+}
+
+func TestDeleteMemoryUnitsSerializesConcurrentWriter(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "delete_concurrent.db")
+	seedVault(t, dbPath,
+		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'original')`,
+		`CREATE TABLE thin_vault_deleted_units(unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`,
+	)
+	deleting, err := openVaultWriteOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deleting.Close()
+	writer, err := openVaultWriteOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	finished := make(chan error, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		_, _, _, err := deleteMemoryUnitsByPKs(deleting, []string{"doc-a"})
+		finished <- err
+	}()
+	go func() {
+		<-start
+		_, err := writer.Exec(`INSERT OR IGNORE INTO thin_vault_docs(doc_id, layer, raw_text) SELECT 'doc-a', 'episodic', 'resurrected' WHERE NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id='doc-a')`)
+		finished <- err
+	}()
+	close(start)
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent operation did not finish")
+		}
+	}
+	var docs, tombstones int
+	if err := writer.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id='doc-a'`).Scan(&docs); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.QueryRow(`SELECT COUNT(*) FROM thin_vault_deleted_units WHERE unit_id='doc-a'`).Scan(&tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if docs != 0 || tombstones != 1 {
+		t.Fatalf("docs=%d tombstones=%d", docs, tombstones)
+	}
+}
+
 func TestLayersDeleteCleansContentlessFTSLineageTombstonesAndActiveCitationLinks(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_MODE", "local")
 	dbPath := filepath.Join(t.TempDir(), "delete_consistency.db")
@@ -468,6 +625,10 @@ func TestLayersDeleteCleansContentlessFTSLineageTombstonesAndActiveCitationLinks
 		`CREATE VIRTUAL TABLE IF NOT EXISTS thin_vault_docs_fts USING fts5(raw_text, doc_id UNINDEXED, content='', contentless_delete=1, tokenize = 'trigram')`,
 		`CREATE TABLE IF NOT EXISTS thin_vault_fts_map (rowid INTEGER PRIMARY KEY AUTOINCREMENT, doc_id TEXT NOT NULL UNIQUE)`,
 		`CREATE TABLE IF NOT EXISTS thin_vault_episodic_lineage (turn_ref TEXT NOT NULL, doc_id TEXT NOT NULL, occurred_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (turn_ref, doc_id))`,
+		`CREATE TABLE thin_vault_episodic_index(doc_id TEXT, payload TEXT)`,
+		`CREATE TABLE thin_vault_episodic_sources(doc_id TEXT, ref_pointer TEXT)`,
+		`INSERT INTO thin_vault_episodic_index VALUES ('ep_del_1', 'index')`,
+		`INSERT INTO thin_vault_episodic_sources VALUES ('ep_del_1', 'ref')`,
 		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('ep_del_1', 'episodic', 1762380000, 'deleted episodic text', 'C6:L1:E001#00')`,
 		`INSERT INTO thin_vault_fts_map(rowid, doc_id) VALUES (101, 'ep_del_1'), (102, 'bg:del#0')`,
 		`INSERT INTO thin_vault_docs_fts(rowid, raw_text) VALUES (101, 'deleted episodic text'), (102, 'deleted bg chunk text')`,
@@ -502,12 +663,14 @@ func TestLayersDeleteCleansContentlessFTSLineageTombstonesAndActiveCitationLinks
 	}
 	defer db.Close()
 
-	var ftsMapCnt, ftsCnt, lineageCnt, tombCnt int
+	var ftsMapCnt, ftsCnt, lineageCnt, tombCnt, indexCnt, sourceCnt int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_fts_map WHERE doc_id IN ('ep_del_1', 'bg:del#0')`).Scan(&ftsMapCnt)
 	_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs_fts WHERE thin_vault_docs_fts MATCH 'deleted'`).Scan(&ftsCnt)
 	_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_lineage WHERE doc_id = 'ep_del_1'`).Scan(&lineageCnt)
 	_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_deleted_units WHERE unit_id IN ('ep_del_1', 'bg:del#0')`).Scan(&tombCnt)
-	if ftsMapCnt != 0 || ftsCnt != 0 || lineageCnt != 0 || tombCnt != 2 {
-		t.Fatalf("expected ftsMap=0 fts=0 lineage=0 tombstones=2, got ftsMap=%d fts=%d lineage=%d tombstones=%d", ftsMapCnt, ftsCnt, lineageCnt, tombCnt)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = 'ep_del_1'`).Scan(&indexCnt)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_sources WHERE doc_id = 'ep_del_1'`).Scan(&sourceCnt)
+	if ftsMapCnt != 0 || ftsCnt != 0 || lineageCnt != 0 || indexCnt != 0 || sourceCnt != 0 || tombCnt != 2 {
+		t.Fatalf("expected index/lineage cleared and 2 tombstones, got ftsMap=%d fts=%d lineage=%d index=%d sources=%d tombstones=%d", ftsMapCnt, ftsCnt, lineageCnt, indexCnt, sourceCnt, tombCnt)
 	}
 }

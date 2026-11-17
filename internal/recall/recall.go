@@ -2116,17 +2116,30 @@ func renderRecall(result *Result, maxChars int) string {
 	}
 
 	body := strings.Join(lines, "\n")
+	// The requested cap governs the whole delivery (envelope included): the
+	// earlier 200-rune floor made `caps.chars=300` deliver 357 runes. The
+	// truncation marker is reserved inside the budget as well, so a truncated
+	// block never overshoots the cap it was asked for.
 	budget := maxChars - utf8.RuneCountInString(opening) - utf8.RuneCountInString(closing) - 2
-	if budget < 200 {
-		budget = 200
+	if budget < 0 {
+		budget = 0
 	}
 	if utf8.RuneCountInString(body) > budget {
-		trimmed := prefixRunes(body, budget)
+		const marker = "\n…（已截断）"
+		cut := budget - utf8.RuneCountInString(marker)
+		if cut < 0 {
+			cut = 0
+		}
+		trimmed := prefixRunes(body, cut)
 		// Cut on a line boundary so the block never ends inside a speaker line.
 		if boundary := strings.LastIndex(trimmed, "\n"); boundary > 0 {
 			trimmed = trimmed[:boundary]
 		}
-		body = strings.TrimRightFunc(trimmed, unicode.IsSpace) + "\n…（已截断）"
+		if trimmed = strings.TrimRightFunc(trimmed, unicode.IsSpace); trimmed == "" {
+			body = strings.TrimPrefix(marker, "\n")
+		} else {
+			body = trimmed + marker
+		}
 		if truncated, ok := result.Meta["truncated"].(map[string]any); ok {
 			truncated["chars"] = true
 		}

@@ -9,9 +9,10 @@ Organization (https://github.com/rocareer/rolling-memory)
 
 Scope notes (informational; they do not modify the license text below):
 
-  1. SDK exception: the client SDK libraries under the `sdk/` directory
-     (Go, Python, Node.js, Java) are licensed separately under the
-     Apache License, Version 2.0 — see `sdk/LICENSE`.
+  1. SDK: the client SDK under the `sdk/` directory is part of this
+     repository and is licensed under the same PolyForm Noncommercial
+     License 1.0.0 — see `sdk/LICENSE` for the SDK copy of the license
+     text.
   2. Release scope: this repository ships the local plaintext mode
      (`local_plain`) only. Cloud memory services and proprietary
      enterprise extensions are closed-source technologies offered

@@ -203,7 +203,7 @@ func cachedVaultPointerDocRows(dbPath string, q layerListQuery) ([]map[string]an
 	pointerDocsCacheMu.Lock()
 	cached, ok := pointerDocsCache[dbPath]
 	if ok && cached.sig == sig {
-		allRows := cached.rows
+		allRows := clonePointerRows(cached.rows)
 		pointerDocsCacheMu.Unlock()
 		return filterCachedPointerRows(allRows, q), nil
 	}
@@ -235,7 +235,19 @@ func cachedVaultPointerDocRows(dbPath string, q layerListQuery) ([]map[string]an
 	pointerDocsCacheMu.Lock()
 	pointerDocsCache[dbPath] = pointerDocsCacheEntry{sig: sig, rows: allRows}
 	pointerDocsCacheMu.Unlock()
-	return filterCachedPointerRows(allRows, q), nil
+	return filterCachedPointerRows(clonePointerRows(allRows), q), nil
+}
+
+func clonePointerRows(rows []map[string]any) []map[string]any {
+	out := make([]map[string]any, len(rows))
+	for i, row := range rows {
+		copyRow := make(map[string]any, len(row))
+		for key, value := range row {
+			copyRow[key] = value
+		}
+		out[i] = copyRow
+	}
+	return out
 }
 
 func filterCachedPointerRows(allRows []map[string]any, q layerListQuery) []map[string]any {
@@ -264,7 +276,7 @@ func filterCachedPointerRows(allRows []map[string]any, q layerListQuery) []map[s
 }
 
 // queryLayerRowsWithHydratedRefs 在存在 @ref: 零拷贝指针且带关键词/正文 wheres/正文排序时，
-// 先在 SQL 侧过滤 L1/L3 与非指针行，再结合内存缓存的 @ref: 指针候选水合会话正文，执行与 SQL 完全同构的过滤、排序与分页。
+// 先在 SQL 侧过滤 L1/L3 与非指针行，再批量认证 @ref: 指针候选，执行过滤、排序与分页。
 func queryLayerRowsWithHydratedRefs(dbPath string, q layerListQuery, home string) ([]ThreeLayerRow, int, error) {
 	ptrRows, err := cachedVaultPointerDocRows(dbPath, q)
 	if err != nil {
@@ -310,13 +322,10 @@ func queryLayerRowsWithHydratedRefs(dbPath string, q layerListQuery, home string
 	}
 	kw := strings.ToLower(strings.TrimSpace(q.keyword))
 	candPtrs := ptrRows
-	if len(candPtrs)+len(plainRows) > 512 {
-		candPtrs = pruneLargeVaultHydrationCandidates(dbPath, home, candPtrs, kw, q.wheres)
-	}
 	rows := make([]map[string]any, 0, len(plainRows)+len(candPtrs))
 	rows = append(rows, plainRows...)
 	rows = append(rows, candPtrs...)
-	warmHydrateZCodePointersBatch(home, rows)
+	warmHydrateZCodePointersBatch(home, dbPath, rows)
 	warmHydrateLocalDocumentsBatch(home, rows)
 
 	// 快速分页路径：当排序字段不依赖水合正文且无 wheres 时，非 @ref: 行在 SQL 侧已精确过滤，
@@ -331,7 +340,7 @@ func queryLayerRowsWithHydratedRefs(dbPath string, q layerListQuery, home string
 				continue
 			}
 			if kw != "" {
-				resolved, ok := hydratedEpisodicPointerLive(home, raw)
+				resolved, ok := hydratedPointerRowText(r)
 				if !ok {
 					resolved = ""
 				}
@@ -424,9 +433,7 @@ func pruneLargeVaultHydrationCandidates(dbPath, home string, rows []map[string]a
 	for _, r := range rows {
 		raw := strings.TrimSpace(asString(r["content"]))
 		if strings.HasPrefix(raw, "@ref:") {
-			if _, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, raw)); !ok {
-				uncachedRefs++
-			}
+			uncachedRefs++
 		}
 	}
 
@@ -530,22 +537,6 @@ func pruneLargeVaultHydrationCandidates(dbPath, home string, rows []map[string]a
 		}
 		id := strings.TrimSpace(asString(r["id"]))
 		addr := strings.TrimSpace(asString(r["address_uri"]))
-		if cachedText, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, raw)); ok {
-			if kw != "" && len(wheres) == 0 {
-				effText := cachedText
-				if effText == "" {
-					effText = raw
-				}
-				if strings.Contains(strings.ToLower(id), kw) ||
-					strings.Contains(strings.ToLower(addr), kw) ||
-					strings.Contains(strings.ToLower(effText), kw) {
-					out = append(out, r)
-				}
-				continue
-			}
-			out = append(out, r)
-			continue
-		}
 		if uncachedKeep >= maxUncachedHydrateCap {
 			continue
 		}
@@ -934,7 +925,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 			fastPageSQL := "SELECT layer, src, id, status, title, content, answer_text, address_uri, rel_path, anchor, abs_path, occurred_at, cited_json FROM (" +
 				strings.Join(branches, " UNION ALL ") + ")" + layerOrderSQL(q.sort, q.order) + " LIMIT ? OFFSET ?"
 			if rows, fErr := sqliteQueryJSONArgs(dbPath, fastPageSQL, q.limit, q.offset); fErr == nil {
-				warmHydrateZCodePointersBatch(home, rows)
+				warmHydrateZCodePointersBatch(home, dbPath, rows)
 				warmHydrateLocalDocumentsBatch(home, rows)
 				items := make([]ThreeLayerRow, 0, len(rows))
 				for _, r := range rows {
@@ -955,7 +946,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 			" FROM (" + union + ") AS u WHERE " + whereSQL + layerOrderSQL(q.sort, q.order) + " LIMIT ?"
 		probeArgs := append(append(append([]any{}, unionArgs...), whereArgs...), q.limit+1)
 		if probeRows, pErr := sqliteQueryJSONArgs(dbPath, probeSQL, probeArgs...); pErr == nil && len(probeRows) <= q.limit {
-			warmHydrateZCodePointersBatch(home, probeRows)
+			warmHydrateZCodePointersBatch(home, dbPath, probeRows)
 			warmHydrateLocalDocumentsBatch(home, probeRows)
 			items := make([]ThreeLayerRow, 0, len(probeRows))
 			for _, r := range probeRows {
@@ -985,7 +976,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 	if err != nil {
 		return nil, 0, err
 	}
-	warmHydrateZCodePointersBatch(home, rows)
+	warmHydrateZCodePointersBatch(home, dbPath, rows)
 	warmHydrateLocalDocumentsBatch(home, rows)
 	items := make([]ThreeLayerRow, 0, len(rows))
 	for _, r := range rows {
@@ -1325,10 +1316,11 @@ func layerRowFromSQL(r map[string]any, home string) ThreeLayerRow {
 		// 无法水合回「来源缺口」占位，绝不把指针原样当正文上屏。
 		rawTxt := asString(r["content"])
 		if strings.HasPrefix(strings.TrimSpace(rawTxt), "@ref:") {
-			if resolved, ok := hydratedEpisodicPointerLive(home, rawTxt); ok && resolved != "" {
+			if resolved, ok := hydratedPointerRowText(r); ok {
 				rawTxt = resolved
 			} else {
 				rawTxt = vaultRefGapMarker
+				row.BodyUnavailable = true
 			}
 		}
 		row.Title = clipRunes(rawTxt, 64)

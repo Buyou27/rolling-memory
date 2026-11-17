@@ -88,6 +88,19 @@ func desktopExecQuote(value string) string {
 	return `"` + replacer.Replace(value) + `"`
 }
 
+// shortcutIsOurs reports whether a desktop launcher carries the exact signature
+// this tool writes. A user file that merely mentions the product name (notes,
+// custom scripts) is not ours and must never be overwritten or removed.
+func shortcutIsOurs(current, goos string) bool {
+	switch goos {
+	case "darwin":
+		return strings.Contains(current, "# "+DesktopShortcutName+" — opens the local web console")
+	default:
+		return strings.Contains(current, "\nName="+DesktopShortcutName+"\n") &&
+			strings.Contains(current, "\nComment=Open the local Rolling-Memory web console\n")
+	}
+}
+
 // installDesktopShortcut writes the platform launcher when the caller asked for
 // it (--desktop-shortcut). Existing launchers of ours are refreshed; foreign
 // files are never touched.
@@ -116,7 +129,7 @@ func installDesktopShortcut(options InstallOptions, report *Report) {
 			report.Add("*", "shortcut", spec.Path, StatusUnchanged, "")
 			return
 		}
-		if !strings.Contains(string(current), DesktopShortcutName) {
+		if !shortcutIsOurs(string(current), runtime.GOOS) {
 			report.Add("*", "shortcut", spec.Path, StatusConflict, "desktop entry is not ours; not touching it")
 			return
 		}
@@ -204,7 +217,7 @@ func uninstallDesktopShortcut(options InstallOptions, report *Report) {
 		report.Add("*", "shortcut", spec.Path, StatusSkipped, "not present")
 		return
 	}
-	if !strings.Contains(string(current), DesktopShortcutName) {
+	if !shortcutIsOurs(string(current), runtime.GOOS) {
 		report.Add("*", "shortcut", spec.Path, StatusConflict, "desktop entry is not ours; not touching it")
 		return
 	}

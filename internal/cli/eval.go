@@ -71,6 +71,12 @@ func (a *application) runEval() int {
 		}
 		return 0
 	}
+	// 分阶段子命令（import / ingest / run / grade）尚无独立实现：整条管线只有
+	// 一次性的 Run。此前任意阶段名都会静默执行完整评测（含 LLM 计费与 scope
+	// 重灌），与帮助文本承诺的「只执行声明的工作」不符——如实拒绝，指向全量入口。
+	if sub := a.args.Subcommand(); sub != "" && sub != "all" {
+		return a.fail(fmt.Errorf("`eval %s` is not a standalone stage yet; run `rolling-memory eval` for the full pipeline (import → ingest → run → grade), or `eval jobs` / `eval status` for the out-dir ledger", sub))
+	}
 	suite := firstNonEmptyString(a.args.String("suite"), eval.SuiteLoCoMo)
 	// `--fetch atm` 取数并本地重建后继续本次评测；`--fetch-only` 只取数不跑评测。
 	if fetchTarget := strings.TrimSpace(a.args.String("fetch")); fetchTarget != "" {

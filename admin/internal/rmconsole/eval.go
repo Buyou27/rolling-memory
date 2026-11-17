@@ -58,6 +58,11 @@ const (
 	EvalPulseModePulsePlain  = "pulse_plain"
 	EvalPulseModeLocalPlain  = "local_plain"
 
+	// evalVerifyCodeManifestMismatch 与引擎 rmem eval 的稳定错误码契约同名：
+	// verify-prepare 判定 manifest 与当前语料确定性失配（语料正文口径已更新等），
+	// prepare 据此进入 repair + 断点续灌自愈，而不是 fail-closed 把用户的准备动作卡死。
+	evalVerifyCodeManifestMismatch = "manifest_corpus_mismatch"
+
 	// 官方 local-qa-judge (locomo-frozen-2026-10-11) 冻结协议原文与三枚 SHA1 钉
 	FrozenProtocolID   = "locomo-frozen-2026-10-11"
 	FrozenAnswerSystem = "You are a conversation memory assistant."
@@ -2110,6 +2115,37 @@ func cacheEvalReadiness(readiness EvalReadiness) {
 	evalReadinessCacheMu.Unlock()
 }
 
+// evalVerifyFailure 保留 rmem CLI 侧的结构化验证失效：message 是信封里的语义明细
+// （而不是裸 "exit status 1"），code 是稳定错误码，供 prepare 分类是否进入自愈重灌。
+type evalVerifyFailure struct {
+	code    string
+	message string
+	err     error
+}
+
+func (e *evalVerifyFailure) Error() string { return e.message }
+
+func (e *evalVerifyFailure) Unwrap() error { return e.err }
+
+// parseEvalCLIVerifyFailure 解开 rmem 的 JSON 失败信封 {ok:false, error, error_code}；
+// 非 JSON 输出（进程被杀、stderr 独有）退化为 exec 错误 + 原始输出明细，绝不丢诊断信息。
+func parseEvalCLIVerifyFailure(out []byte, execErr error) *evalVerifyFailure {
+	failure := &evalVerifyFailure{err: execErr}
+	var envelope map[string]any
+	if json.Unmarshal(bytes.TrimSpace(out), &envelope) == nil {
+		failure.code = strings.TrimSpace(asString(envelope["error_code"]))
+		failure.message = strings.TrimSpace(asString(envelope["error"]))
+	}
+	if failure.message == "" {
+		if detail := strings.TrimSpace(string(out)); detail != "" {
+			failure.message = execErr.Error() + ": " + detail
+		} else {
+			failure.message = execErr.Error()
+		}
+	}
+	return failure
+}
+
 func probeCloudEvalStore(ctx context.Context, bin, storePath, suite, query string, atmUnits map[string]atmEvalUnit) (EvalReadiness, error) {
 	_ = query
 	_ = atmUnits
@@ -2132,9 +2168,11 @@ func probeCloudEvalStore(ctx context.Context, bin, storePath, suite, query strin
 	readiness.ProbeChecked = true
 	readiness.CheckedAt = time.Now().Format(time.RFC3339)
 	if err != nil {
-		readiness.Error = err.Error()
+		// 裸 "exit status 1" 无诊断价值：解开 CLI 的 JSON 失败信封，保留语义明细与稳定错误码。
+		failure := parseEvalCLIVerifyFailure(out, err)
+		readiness.Error = failure.Error()
 		cacheEvalReadiness(readiness)
-		return readiness, err
+		return readiness, failure
 	}
 	var verification map[string]any
 	if err := json.Unmarshal(out, &verification); err != nil {
@@ -2305,7 +2343,13 @@ func prepareCloudEvalStore(ctx context.Context, bin, home, suite, tier, storePat
 			return readiness, nil
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return readiness, fmt.Errorf("云端评测 prepare 失败，未触发重灌: %w", err)
+			// 确定性语料失配（manifest 摘要/scope/条数与当前语料不符）：复用已不可能，
+			// CLI 的 Prepare 走 repair + 断点续灌自愈重灌，继续本动作而非卡死。
+			// 其余失效（网络/健康检查/需 --rebuild 的契约变更）保持 fail-closed 不重灌。
+			var verifyErr *evalVerifyFailure
+			if !errors.As(err, &verifyErr) || verifyErr.code != evalVerifyCodeManifestMismatch {
+				return readiness, fmt.Errorf("云端评测 prepare 失败，未触发重灌: %w", err)
+			}
 		}
 	}
 
@@ -2686,15 +2730,13 @@ func loadRunDetailItems(home, dataDir, runID string) []EvalQuestionResultItem {
 	} else if len(items) > 0 {
 		return items
 	}
-	// 注：`atm-baseline-rm-hard-wave-cell` 与 `atm-baseline-rm-full1013-wave-cell` 为 v0.0.1 本地明文（local_plain）
-	// 实测基线，优先映射至测评任务台账中同源落盘的 `atm-run-20261111-161745`（Hard-31）与 `atm-run-20261111-161746`（Main-1013），
-	// 严禁回退到旧 g20 归档 JSONL（避免表头写 80.65%/27.38% 而明细表却是旧 74.19%/27.17% 的张冠李戴）。
+	// Sealed ATM local_plain baseline rows fall back to matching persisted task items when present.
 	switch strings.TrimSpace(runID) {
-	case "atm-baseline-rm-hard-wave-cell":
+	case "atm-baseline-rm-hard-local-plain":
 		if items, err := loadEvalTaskItems("atm-run-20261111-161745"); err == nil && len(items) > 0 {
 			return items
 		}
-	case "atm-baseline-rm-full1013-wave-cell":
+	case "atm-baseline-rm-full1013-local-plain":
 		if items, err := loadEvalTaskItems("atm-run-20261111-161746"); err == nil && len(items) > 0 {
 			return items
 		}
@@ -3768,6 +3810,8 @@ func appendJobLog(line string) {
 // recomputeLiveAggregates 复算面板聚合指标（与 CLI summary 同尺）：
 //   - f1 / qs_score 均按「逐行四位取整后再求均值」——CLI 从 results-*.jsonl 复算时读的
 //     是行内已 PyRound 的值（internal/eval/aggregate.go::Aggregate / atmSummaryExtras）；
+//   - ATM-Bench 的分类分取每题官方分均值（list_recall 连续 Jaccard / number EM /
+//     open_end 判官），与 CLI by_category 同尺；二值 verdict 只供五桶归因；
 //   - judge_unparsed 与 judge_error 分列（CLI summary 的 judge_unparsed / judge_error 同名同义），
 //     二者均剔除出 judge_scored 分母。
 func recomputeLiveAggregates(items []EvalQuestionResultItem, suite string) (evRate, aicRate, f1Avg, jdgRate float64, jdgCorrect, jdgScored, jdgWrong, jdgUnparsed, jdgError int, catEv, catJdg CategoryScores) {
@@ -3783,6 +3827,8 @@ func recomputeLiveAggregates(items []EvalQuestionResultItem, suite string) (evRa
 	catEvHits := map[string]int{}
 	catJdgScored := map[string]int{}
 	catJdgHits := map[string]int{}
+	catQSSum := map[string]float64{}
+	catQSCnt := map[string]int{}
 
 	for _, it := range items {
 		cat := it.Category
@@ -3798,6 +3844,8 @@ func recomputeLiveAggregates(items []EvalQuestionResultItem, suite string) (evRa
 		if it.QSScored {
 			qsCnt++
 			qsSum += roundFloat(it.QSScore, 4)
+			catQSSum[cat] += roundFloat(it.QSScore, 4)
+			catQSCnt[cat]++
 		}
 		switch it.JudgeVerdict {
 		case "correct":
@@ -3821,11 +3869,6 @@ func recomputeLiveAggregates(items []EvalQuestionResultItem, suite string) (evRa
 	if jdgScored > 0 {
 		jdgRate = roundFloat(float64(jdgCorrect)/float64(jdgScored), 4)
 	}
-	// ATM-Bench 官方口径的 judge_rate 是混合 QS 均值（list_recall 连续 Jaccard），
-	// 与 CLI internal/eval/atmbench.go 的 summary.judge_rate 对齐；二值计数仅用于五桶归因。
-	if normalizeSuite(suite) == SuiteATM && qsCnt > 0 {
-		jdgRate = roundFloat(qsSum/float64(qsCnt), 4)
-	}
 	calcCat := func(hitMap, totMap map[string]int, k string) float64 {
 		tot := totMap[k]
 		if tot <= 0 {
@@ -3844,6 +3887,25 @@ func recomputeLiveAggregates(items []EvalQuestionResultItem, suite string) (evRa
 		Cat2: calcCat(catJdgHits, catJdgScored, "2"),
 		Cat3: calcCat(catJdgHits, catJdgScored, "3"),
 		Cat4: calcCat(catJdgHits, catJdgScored, "4"),
+	}
+	// ATM-Bench 官方分型口径：judge_rate 与分类分都取每题官方分（list_recall 连续
+	// Jaccard / number EM / open_end 判官）逐行四位取整后的均值，与 CLI
+	// internal/eval/atmbench.go 的 summary.judge_rate / by_category 对齐；
+	// 二值 verdict（含 list_recall 的 0.5 阈值）只服务五桶归因，不得当分数展示。
+	if normalizeSuite(suite) == SuiteATM && qsCnt > 0 {
+		jdgRate = roundFloat(qsSum/float64(qsCnt), 4)
+		calcOfficial := func(k string) float64 {
+			if catQSCnt[k] <= 0 {
+				return 0
+			}
+			return roundFloat(catQSSum[k]/float64(catQSCnt[k]), 4)
+		}
+		catJdg = CategoryScores{
+			Cat1: calcOfficial("1"),
+			Cat2: calcOfficial("2"),
+			Cat3: calcOfficial("3"),
+			Cat4: calcOfficial("4"),
+		}
 	}
 	return
 }
@@ -4817,14 +4879,6 @@ const (
 	// （评测页图表 ATM-Hard 金标上限线，替代旧硬编码 54.8%）；③ atmLeaderboard.vue 的 kpi4Sub {qs} 占位。
 	// 禁在任何消费面另写裸数字（读数出处见 Oracle 行 Note：Σmin(10,gold)/gold/31 = 96.47% 结构性 R@10 上限）。
 	ATMOracleHardQSScore = 46.69
-
-	// ATMPrimaryBandCeilingNote / ATMPrimaryBandCeilingNoteEn 保留历史常量名供前端兼容，
-	// 现行语义统一为公共 SDK 的 Unit 交付与 /units 完整性证据，不再引用旧 band/chain 算子。
-	ATMPrimaryBandCeilingNote   = "现行 ATM 评测统一使用公共 SDK 的 /open/memory/v1 Unit 交付，不再使用旧 band/chain 图交付帽；每题以云端 Unit ID 和 raw_hits 证据复算 R@10/R@25/R@50。"
-	ATMPrimaryBandCeilingNoteEn = "Current ATM evaluation uses public-SDK /open/memory/v1 unit delivery rather than legacy band/chain graph caps; every question is independently scored from cloud Unit IDs and raw_hits."
-
-	ATMModeTierLadderNote   = "历史 ATM 读数（迁移前本地 g20 local-pro 臂，缺现行 SDK transport/scope/digest 证据，仅归档）：Hard-31 R@10 42.51% · R@25 53.56% · R@50 64.77% · Hit@10 74.19% (23/31) · QS 27.17%；Main-1013 R@10 77.80% · R@25 85.04% · R@50 88.92% · Hit@10 81.24% (823/1013) · QS 56.18%。旧台账的 41.65/21.79、77.32/80.65 无法由现存产物复算，已按产物更正。这些读数不参与现行 SDK 排名；新读数必须同构建、同语料、同题集、同判官并从原始 JSONL 复算。"
-	ATMModeTierLadderNoteEn = "Historical ATM readings (pre-migration local g20 local-pro arm; no current SDK transport/scope/digest evidence; archived only): Hard-31 R@10 42.51% / R@25 53.56% / R@50 64.77% / Hit@10 74.19% (23/31) / QS 27.17%; Main-1013 R@10 77.80% / R@25 85.04% / R@50 88.92% / Hit@10 81.24% (823/1013) / QS 56.18%. The old 41.65/21.79 and 77.32/80.65 were not reproducible and are corrected from artifacts. They are excluded from current SDK rankings; new readings require identical build, corpus, questions, judge, and raw-JSONL recomputation."
 )
 
 // ATMBenchEntry 剑桥大学 ATM-Bench 排行榜单行（含 Tab 1 主榜与 Tab 2 ATM-Bench-Hard 榜）。
@@ -5356,6 +5410,37 @@ func atmDeliveryWindow(armMode string, rawLimit int) int {
 	return atmAnswerDeliveryK
 }
 
+// countATMGoldHits counts the official gold-set-mean R@k hits for one question:
+// a gold Unit that appears several times in the delivery sequence is counted
+// once, at its first rank, so the numerator can never exceed the gold-set
+// cardinality (a duplicated gold list used to push R@10 to 2.0 on the Oracle
+// arm). retRank keeps each Unit's first delivery rank for the match detail rows.
+func countATMGoldHits(gtSet map[string]bool, retIDs []string) (hits10, hits20, hits50 int, retRank map[string]int) {
+	retRank = map[string]int{}
+	seen := make(map[string]bool, len(retIDs))
+	for i, id := range retIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		retRank[id] = i + 1
+		if !gtSet[id] {
+			continue
+		}
+		// R@10 是排序名次诊断，与交付窗口无关（Oracle 臂交付全量也照算 Top-10）。
+		if i < 10 {
+			hits10++
+		}
+		if i < 20 {
+			hits20++
+		}
+		if i < 50 {
+			hits50++
+		}
+	}
+	return hits10, hits20, hits50, retRank
+}
+
 // executeSingleATMQuestionEval 对单道 ATM-Bench 题执行严格云端召回或本地金标 Oracle，并进行官方混合 QS 判分。
 func executeSingleATMQuestionEval(ctx context.Context, bin, storePath string, q EvalQuestionItem, index int, armMode string, rawLimit int, useAgents bool, aiCfg AIModelConfig, atmUnits map[string]atmEvalUnit) (EvalQuestionResultItem, map[string]any, error) {
 	normalizedArm, err := normalizeEvalArm(armMode)
@@ -5477,26 +5562,11 @@ func executeSingleATMQuestionEval(ctx context.Context, bin, storePath string, q 
 	for _, eid := range q.EvidenceTexts {
 		gtSet[eid] = true
 	}
-	hits10, hits20, hits50 := 0, 0, 0
+	hits10, hits20, hits50, retRank := countATMGoldHits(gtSet, retIDs)
 	matches := make([]EvidenceMatchItem, 0, len(q.EvidenceTexts))
-	retRank := map[string]int{}
-	for i, id := range retIDs {
-		retRank[id] = i + 1
-		if gtSet[id] {
-			// R@10 是排序名次诊断，与交付窗口无关（Oracle 臂交付全量也照算 Top-10）。
-			if i < 10 {
-				hits10++
-			}
-			if i < 20 {
-				hits20++
-			}
-			if i < 50 {
-				hits50++
-			}
-		}
-	}
 	// 官方 gold-set-mean 口径（逐题）：分母取去重金标集合，R@k = |set(GT)∩set(Top-k)| / |set(GT)|；
-	// retIDs 本身唯一，故 hitsK 即集合交基数。Any/All-Hit@10 为同窗口二值判定。
+	// 同一 Unit 在序列里重复出现只按其首次名次计一次，重复 ID 不得把分子抬过集合交的基数
+	// （Oracle 臂曾因重复金标算得 R@10=2.0）。Any/All-Hit@10 为同窗口二值判定。
 	resItem.MetricsAvailable = copyEvalMetricAvailability(nil)
 	for _, key := range []string{"avg_recall_ms", "p95_recall_ms", "avg_delivered_items", "avg_delivered_tokens", "total_delivered_tokens"} {
 		resItem.MetricsAvailable[key] = true
@@ -5530,10 +5600,15 @@ func executeSingleATMQuestionEval(ctx context.Context, bin, storePath string, q 
 		// 交付口径：EvidenceHit / AnswerInContext / BestEvidenceRecall 一律按实际送入
 		// 答题器的 deliveryK 条证据计算；GoldTokenRecall 的检索深度诊断对齐官方 R@20 窗口
 		// （旧 R@25 为非官方窗口，已回收——官方评测窗口只有 10/20/50）。
-		resItem.BestEvidenceRecall = roundFloat(float64(hits10)/float64(len(q.EvidenceTexts)), 4)
-		resItem.BestHeadEvidenceRecall = roundFloat(float64(hits10)/float64(len(q.EvidenceTexts)), 4)
+		// 分母与分子同口径（去重金标集合）：重复金标不得把召回率算成 50% 或 200%。
+		goldTotal := len(gtSet)
+		if goldTotal == 0 {
+			goldTotal = len(q.EvidenceTexts)
+		}
+		resItem.BestEvidenceRecall = roundFloat(float64(hits10)/float64(goldTotal), 4)
+		resItem.BestHeadEvidenceRecall = roundFloat(float64(hits10)/float64(goldTotal), 4)
 		resItem.HeadEvidenceHit = hits10 > 0
-		resItem.GoldTokenRecall = roundFloat(float64(hits20)/float64(len(q.EvidenceTexts)), 4)
+		resItem.GoldTokenRecall = roundFloat(float64(hits20)/float64(goldTotal), 4)
 		resItem.EvidenceHit = hits10 > 0
 		resItem.AnswerInContext = hits10 > 0
 	}
@@ -5627,40 +5702,33 @@ func buildATMReproCLICommand(tier, armMode, storePath string, rawLimit int, useA
 	return strings.Join(args, " ")
 }
 
-// loadATMResultsJSONL 回放历史台账的逐题 X-Ray。
-// 注：`atm-baseline-rm-main100-*` 是历史产物的只读回放入口（官方档位只有 Main-1013 与 Hard-31），
-// 不复跑、不可再新增；新评测一律使用 hard / 1013 两档。
+// loadATMResultsJSONL loads persisted per-question X-Ray items for sealed ATM local_plain baselines.
 func loadATMResultsJSONL(home, runID string) []EvalQuestionResultItem {
-	var jsonlPath string
-	evalBase := filepath.Join(home, ".local", "state", "rolling-memory", "eval")
+	var candidates []string
+	outDir := filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out")
 	switch strings.TrimSpace(runID) {
-	case "atm-baseline-rm-hard-x":
-		jsonlPath = filepath.Join(evalBase, "out-atm-rankfalse-v6-hard-e2e", "results-atm-hard-raw-llm.jsonl")
-	case "atm-baseline-rm-main100-x":
-		jsonlPath = filepath.Join(evalBase, "out-atm-rankfalse-v6-100-e2e", "results-atm-100-raw-llm.jsonl")
-	case "atm-baseline-rm-full1013-x":
-		jsonlPath = filepath.Join(evalBase, "out-atm-rankfalse-v6-1013-e2e", "results-atm-1013-raw-llm.jsonl")
-	case "atm-baseline-rm-hard-max":
-		jsonlPath = filepath.Join(evalBase, "out-sync1104-qs-max-hard", "results-atm-hard-raw-llm.jsonl")
-	case "atm-baseline-rm-hard-pro":
-		jsonlPath = filepath.Join(evalBase, "out-sync1104-qs-pro-hard", "results-atm-hard-raw-llm.jsonl")
-	case "atm-baseline-rm-main100-max":
-		jsonlPath = filepath.Join(evalBase, "out-sync1104-qs-max-100", "results-atm-100-raw-llm.jsonl")
-	case "atm-baseline-rm-main100-pro":
-		jsonlPath = filepath.Join(evalBase, "out-sync1104-qs-pro-100", "results-atm-100-raw-llm.jsonl")
-	case "atm-baseline-rm-full1013-pro":
-		jsonlPath = filepath.Join(evalBase, "out-sync1104-pro-1013", "results-atm-1013-raw-none.jsonl")
-	case "atm-baseline-rm-hard-zero", "atm-baseline-rm-hard-e2e":
-		jsonlPath = filepath.Join(evalBase, "out-atm-hard-zero", "results-atm-hard-raw-none.jsonl")
-	case "atm-baseline-rm-main100-0llm":
-		jsonlPath = filepath.Join(evalBase, "out-atm-100-zero", "results-atm-100-raw-none.jsonl")
-	case "atm-baseline-rm-full1013-zero":
-		jsonlPath = filepath.Join(evalBase, "out-atm-1013-zero", "results-atm-1013-raw-none.jsonl")
+	case "atm-baseline-rm-hard-local-plain":
+		candidates = []string{
+			filepath.Join(outDir, "results-atm-hard-sdk-local-plain-llm.jsonl"),
+			filepath.Join(outDir, "results-atm-hard-sdk-local-plain-none.jsonl"),
+		}
+	case "atm-baseline-rm-full1013-local-plain":
+		candidates = []string{
+			filepath.Join(outDir, "results-atm-1013-sdk-local-plain-llm.jsonl"),
+			filepath.Join(outDir, "results-atm-1013-sdk-local-plain-none.jsonl"),
+		}
 	default:
 		return nil
 	}
-	raw, err := os.ReadFile(jsonlPath)
-	if err != nil {
+	var raw []byte
+	var err error
+	for _, p := range candidates {
+		raw, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil || len(raw) == 0 {
 		return nil
 	}
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")

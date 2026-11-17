@@ -22,7 +22,7 @@ package hooks
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,6 +34,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/thinclient"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
@@ -66,18 +67,14 @@ func uploadCurrentEpisodicTurn(memory *api.Memory, cfg *config.Config, session s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), episodicUploadTimeout)
 	defer cancel()
-	var deletedEpi map[string]bool
-	if tc.Vault != nil {
-		deletedEpi = tc.Vault.DeletedUnitSet("episodic")
-	}
 	uploaded := 0
 	tokens := 0
 	firstUnit := ""
 	for _, unit := range units {
-		if deletedEpi[unit.DocID] {
-			continue
-		}
 		if _, err := tc.RememberEpisodicByRef(ctx, unit.DocID, unit.RefPointer, unit.TurnRef, unit.Text, unit.OccurredAt); err != nil {
+			if !errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+				logHook(cfg, "episodic_upload", map[string]any{"vault_write_error": ids.Redact(err.Error())})
+			}
 			continue
 		}
 		if uploaded == 0 {
@@ -97,12 +94,14 @@ func uploadCurrentEpisodicTurn(memory *api.Memory, cfg *config.Config, session s
 	return out
 }
 
-// currentTurnUnits resolves the just-ended turn as segment units:
-//  1. `payload["transcript_path"]` JSONL → the newest closed turn (zero-copy
-//     `@ref:jsonl:<path>:<turn>#<k>` pointers);
-//  2. ZCode CLI SQLite session tail (zero-copy `@ref:zcode:<session>:<msg>#<k>`);
-//  3. payload fallback (`last_assistant_message` + prompt) with local text only.
+// currentTurnUnits resolves the newest JSONL turn only when its transcript carries
+// explicit completion evidence. The resulting segments use zero-copy pointers.
 func currentTurnUnits(scope, session string, payload map[string]any) ([]episodicunit.Unit, int) {
+	units, count, _ := currentTurnUnitsChecked(scope, session, payload)
+	return units, count
+}
+
+func currentTurnUnitsChecked(scope, session string, payload map[string]any) ([]episodicunit.Unit, int, error) {
 	if payload != nil {
 		if rawPath := firstTruthy(payload["transcript_path"], payload["transcriptPath"]); rawPath != nil {
 			path := expandUser(pyStr(rawPath))
@@ -113,27 +112,24 @@ func currentTurnUnits(scope, session string, payload map[string]any) ([]episodic
 					path = pyJoin(wd, path)
 				}
 			}
-			if turns, err := episodic.JSONLTurns(path); err == nil && len(turns) > 0 {
-				turn := turns[len(turns)-1]
-				prefix := "@ref:jsonl:" + path + ":" + strconv.Itoa(turn.Index)
-				return unitsForSegments(scope, prefix, turn.Segments, turn.OccurredAt, true, len(turn.Segments))
+			var turn episodic.JSONLTurn
+			complete := false
+			err := episodic.VisitJSONLTurns(context.Background(), path, func(next episodic.JSONLTurn, done bool) error {
+				turn, complete = next, done
+				return nil
+			})
+			if err != nil {
+				return nil, 0, err
 			}
-		}
-		if rows := payloadTurnRows(payload); len(rows) > 0 {
-			segments := segmentsFromRows(rows)
-			// No transcript path and no readable session store: the payload is the only
-			// copy of this turn, so its segments are kept as local plaintext.
-			return unitsForSegments(scope, "", segments, ids.UTCNow(), true, len(segments))
-		}
-	}
-	if session != "" && session != "default" {
-		if turns, err := zcodeSessionTurns(session); err == nil && len(turns) > 0 {
-			turn := turns[len(turns)-1]
-			prefix := "@ref:zcode:" + session + ":" + turn.UserMsgID
-			return unitsForSegments(scope, prefix, turn.Segments, turn.OccurredAt, true, len(turn.Segments))
+			if !complete || len(turn.Segments) == 0 {
+				return nil, 0, nil
+			}
+			prefix := "@ref:jsonl:" + path + ":" + strconv.Itoa(turn.Index)
+			units, count := unitsForSegments(scope, prefix, turn.Segments, 0, true, len(turn.Segments))
+			return units, count, nil
 		}
 	}
-	return nil, 0
+	return nil, 0, nil
 }
 
 // payloadTurnRows rebuilds the turn from the hook payload when no transcript is
@@ -186,24 +182,6 @@ func unitsForSegments(scope, pointerPrefix string, segments []episodic.Segment, 
 		}
 	}
 	return units, readCnt
-}
-
-// zcodeSessionTurns enumerates the closed turns of one ZCode CLI session.
-func zcodeSessionTurns(session string) ([]episodic.Turn, error) {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return nil, err
-	}
-	zdbPath := filepath.Join(home, ".zcode", "cli", "db", "db.sqlite")
-	if _, err := os.Stat(zdbPath); err != nil {
-		return nil, err
-	}
-	zdb, err := sql.Open("sqlite", ids.SQLiteFileURI(zdbPath)+"?mode=ro&_pragma=busy_timeout(1500)")
-	if err != nil {
-		return nil, err
-	}
-	defer zdb.Close()
-	return episodic.ZCodeSessionTurns(zdb, session)
 }
 
 const (

@@ -62,7 +62,9 @@ func (c *rmCandidate) hasGroup(g uint64) bool {
 }
 
 func (c *rmCandidate) upsertMatch(sc *rmQueryScratch, group uint64, mass float64, entry int32, newBits uint16, unitEntries []rmDocEntry, tieBreakBits bool) {
-	isExactGroup := tieBreakBits && unitEntries[entry].id == group
+	// entry < 0 marks a mass-only match without local term evidence (synthetic
+	// day-dispatch beacons): no unitEntries dereference, no match positions.
+	isExactGroup := tieBreakBits && entry >= 0 && unitEntries[entry].id == group
 	for i := range c.matches {
 		if c.matches[i].group == group {
 			if isExactGroup {
@@ -75,27 +77,42 @@ func (c *rmCandidate) upsertMatch(sc *rmQueryScratch, group uint64, mass float64
 					c.matches[i].compMass = mass
 				}
 			}
-			oldBits := unitEntries[c.matches[i].entry].bits
-			if len(c.matches[i].positions) == 0 {
-				if sc != nil {
-					// Reserve a 4-slot segment so follow-up repeats can append in
-					// place, matching the make([]int32, 2, 4) profile without a
-					// per-match allocation.
-					base := len(sc.matchPosPool)
-					sc.matchPosPool = append(sc.matchPosPool, c.matches[i].entry, entry, 0, 0)
-					c.matches[i].positions = sc.matchPosPool[base : base+2 : base+4]
+			var oldBits uint16
+			if c.matches[i].entry >= 0 {
+				oldBits = unitEntries[c.matches[i].entry].bits
+			}
+			if entry >= 0 {
+				if len(c.matches[i].positions) == 0 {
+					if c.matches[i].entry >= 0 {
+						if sc != nil {
+							// Reserve a 4-slot segment so follow-up repeats can append in
+							// place, matching the make([]int32, 2, 4) profile without a
+							// per-match allocation.
+							base := len(sc.matchPosPool)
+							sc.matchPosPool = append(sc.matchPosPool, c.matches[i].entry, entry, 0, 0)
+							c.matches[i].positions = sc.matchPosPool[base : base+2 : base+4]
+						} else {
+							pos := make([]int32, 2, 4)
+							pos[0] = c.matches[i].entry
+							pos[1] = entry
+							c.matches[i].positions = pos
+						}
+					} else if sc != nil {
+						base := len(sc.matchPosPool)
+						sc.matchPosPool = append(sc.matchPosPool, entry, 0, 0, 0)
+						c.matches[i].positions = sc.matchPosPool[base : base+1 : base+1]
+					} else {
+						c.matches[i].positions = []int32{entry}
+					}
 				} else {
-					pos := make([]int32, 2, 4)
-					pos[0] = c.matches[i].entry
-					pos[1] = entry
-					c.matches[i].positions = pos
+					c.matches[i].positions = append(c.matches[i].positions, entry)
 				}
-			} else {
-				c.matches[i].positions = append(c.matches[i].positions, entry)
 			}
 			if mass > c.matches[i].mass || (tieBreakBits && mass == c.matches[i].mass && newBits > oldBits) {
 				c.matches[i].mass = mass
-				c.matches[i].entry = entry
+				if entry >= 0 {
+					c.matches[i].entry = entry
+				}
 			}
 			return
 		}
@@ -450,53 +467,55 @@ type rmQueryScratch struct {
 	// concurrent shallow engines independent maps, so shared CSR stays read-only.
 	dayCos map[uint64]float64
 	// Per-query arena for query terms and TermPositions to avoid map/slice allocations.
-	qTerms            map[uint64]Term
-	posMap            map[uint64][]TermPosition
-	posPool           []TermPosition
-	queryHashes       []uint64
-	hashGroup         map[uint64]uint64
-	detachedFrag      map[uint64]bool
-	detachedSlot2     map[uint64]bool
-	famMinDF          map[uint64]int
-	properSlots       map[TermPosition]int
-	primaryAtPos      map[TermPosition]uint64
-	groupRigid        map[uint64]bool
-	groupProper       map[uint64]bool
-	hasBroadComp      map[uint64]bool
-	kappaOcc          map[uint64]float64
-	anchorKappa       map[uint64]float64
-	isAnchorGroup     map[uint64]bool
-	anchorTimes       []int64
-	anchorUnitList    []int32
-	shellScale        map[uint64]float64
-	groups            map[uint64]float64
-	slotPrim          map[TermPosition]uint64
-	slotPure          map[TermPosition]bool
-	groupKeys         []uint64
-	activeEpisodes    []int32
-	latticeGKeys      []uint64
-	latticeDeltaCache map[uint64]float64
-	latticeGroupDF    map[uint64]int
-	latticeGroupW     map[uint64]float64
-	latticeHashes     []uint64
-	latticeQGroupMid  map[uint64]uint64
-	latticeGroupDFMid map[uint64]int
-	latticeGroupWMid  map[uint64]float64
-	latticeMidHashes  []uint64
-	selectCoverage    map[uint64]int
-	selectCompCov     map[uint64]float64
-	selectProfCache   map[int32]unitGroupProfile
-	endorseActiveSet  map[int32]bool
-	endorseQSet       map[uint64]struct{}
-	endorseEventUnits []scoredEventUnit
-	queryOccs         []rmOccurrence
-	queryDyads        []rmDyad
-	matchPosPool      []int32
-	explainAnchorPool []uint32
-	unitStrengthPool  []rmUnitStrength
+	qTerms                 map[uint64]Term
+	posMap                 map[uint64][]TermPosition
+	posPool                []TermPosition
+	queryHashes            []uint64
+	hashGroup              map[uint64]uint64
+	detachedFrag           map[uint64]bool
+	detachedSlot2          map[uint64]bool
+	famMinDF               map[uint64]int
+	properSlots            map[TermPosition]int
+	primaryAtPos           map[TermPosition]uint64
+	groupRigid             map[uint64]bool
+	groupProper            map[uint64]bool
+	hasBroadComp           map[uint64]bool
+	kappaOcc               map[uint64]float64
+	anchorKappa            map[uint64]float64
+	isAnchorGroup          map[uint64]bool
+	anchorTimes            []int64
+	anchorUnitList         []int32
+	shellScale             map[uint64]float64
+	groups                 map[uint64]float64
+	slotPrim               map[TermPosition]uint64
+	slotPure               map[TermPosition]bool
+	groupKeys              []uint64
+	activeEpisodes         []int32
+	latticeGKeys           []uint64
+	latticeDeltaCache      map[uint64]float64
+	latticeGroupDF         map[uint64]int
+	latticeGroupW          map[uint64]float64
+	latticeHashes          []uint64
+	latticeQGroupMid       map[uint64]uint64
+	latticeGroupDFMid      map[uint64]int
+	latticeGroupWMid       map[uint64]float64
+	latticeMidHashes       []uint64
+	selectCoverage         map[uint64]int
+	selectCompCov          map[uint64]float64
+	selectProfCache        map[int32]unitGroupProfile
+	endorseActiveSet       map[int32]bool
+	endorseQSet            map[uint64]struct{}
+	endorseEventUnits      []scoredEventUnit
+	queryOccs              []rmOccurrence
+	queryDyads             []rmDyad
+	matchPosPool           []int32
+	explainAnchorPool      []uint32
+	explainAnchorExactPool []TermPosition
+	unitStrengthPool       []rmUnitStrength
 	// Memory pool for buildUnitGroupProfileWithPos (per-query arena).
-	profileItemPool []unitGroupItem
-	profilePosPool  []uint32
+	profileItemPool     []unitGroupItem
+	profilePosPool      []uint32
+	profilePosExactPool []TermPosition
 }
 
 func (e *Engine) ensureQueryScratch(n, clusterN int) *rmQueryScratch {
@@ -555,9 +574,17 @@ func (sc *rmQueryScratch) nextAnchorGen() uint32 {
 	return sc.anchorGen
 }
 
-func (sc *rmQueryScratch) resetDirtyUnits(n int) uint32 {
+func (sc *rmQueryScratch) resetProfilePools() {
+	if sc == nil {
+		return
+	}
 	sc.profileItemPool = sc.profileItemPool[:0]
 	sc.profilePosPool = sc.profilePosPool[:0]
+	sc.profilePosExactPool = sc.profilePosExactPool[:0]
+}
+
+func (sc *rmQueryScratch) resetDirtyUnits(n int) uint32 {
+	sc.resetProfilePools()
 	sc.matchPosPool = sc.matchPosPool[:0]
 	if len(sc.dirtyUnits) > 0 {
 		for _, u := range sc.dirtyUnits {
@@ -1933,6 +1960,27 @@ func (st *rmClusterState) entryPositionsExactOf(e rmDocEntry) []TermPosition {
 		}
 		return out[i].Slot < out[j].Slot
 	})
+	return out
+}
+
+// entryPositionsExactInto 是 entryPositionsExactOf 的池化变体：把精确 (句, 槽) 坐标
+// 追加进 out（追加段升序）并返回增长后的池；仅在 hasWidePos 语料上调用。
+func (st *rmClusterState) entryPositionsExactInto(e rmDocEntry, out []TermPosition) []TermPosition {
+	base := len(out)
+	raw := st.posPool[e.posOff : e.posOff+e.posLen]
+	if len(raw) == 0 {
+		return out
+	}
+	for i, p := range raw {
+		if wp, ok := st.widePos[e.posOff+uint32(i)]; ok {
+			out = append(out, wp)
+			continue
+		}
+		out = append(out, TermPosition{Sentence: int(p >> 16), Slot: int(p & 0xFFFF)})
+	}
+	if len(out)-base > 1 {
+		sort.Sort(termPositionSort(out[base:]))
+	}
 	return out
 }
 

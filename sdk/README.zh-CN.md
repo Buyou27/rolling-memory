@@ -104,4 +104,4 @@
 
 ## 5. 许可
 
-Apache License 2.0 —— 见本目录 [LICENSE](LICENSE)。仓库根另行采用 PolyForm Noncommercial License 1.0.0（见 [../LICENSE](../LICENSE)）；第三方署名见 [../NOTICE](../NOTICE)。
+PolyForm Noncommercial License 1.0.0 —— 见本目录 [LICENSE](LICENSE)。SDK 可自由用于任何非商业用途（使用、修改与分享）；任何商业使用或商业分发（含商业内嵌、托管服务与商业转售）均须另行签署书面商业许可。第三方署名见仓库 `NOTICE` 文件。

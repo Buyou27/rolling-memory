@@ -143,7 +143,7 @@ func BuildHarnesses(home, dshHome string) []Harness {
 			HooksExtras:         map[string]any{"enabled": true, "statusMessage": "Rolling-Memory"},
 			InstructionsUser:    stringPtr(filepath.Join(home, ".zcode", "AGENTS.md")),
 			InstructionsProject: "AGENTS.md",
-			Notes:               "user config: mcp.servers + hooks.events (hooks.enabled must be true)",
+			Notes:               "user config: mcp.servers + hooks.events (global hook switch is preserved)",
 		},
 		{
 			ID:                  "claude-code",
@@ -170,9 +170,12 @@ func BuildHarnesses(home, dshHome string) []Harness {
 			MCPKind:             "toml",
 			MCPPath:             filepath.Join(home, ".codex", "config.toml"),
 			MCPKeys:             []string{"mcp_servers"},
+			HooksKind:           "claude",
+			HooksPath:           stringPtr(filepath.Join(home, ".codex", "hooks.json")),
+			HooksKeys:           []string{"hooks"},
 			InstructionsUser:    stringPtr(filepath.Join(home, ".codex", "AGENTS.md")),
 			InstructionsProject: "AGENTS.md",
-			Notes:               "no hooks; skills live next to the built-in .system/ dir",
+			Notes:               "hooks.json (optional, --with-hooks): first run needs in-Codex review/trust; skills live next to the built-in .system/ dir",
 		},
 		{
 			ID:                  "dsh",
@@ -213,6 +216,18 @@ func harnessIndex(harnesses []Harness) map[string]Harness {
 // BuildExtendedHarnesses returns additional open-source coding agent harnesses
 // (Cursor, Windsurf, Cline) that can be explicitly targeted by ID without
 // altering the frozen 5-harness default registry.
+//
+// windsurfDetectPath prefers the current Windsurf (Devin Desktop) state
+// directory and keeps the legacy ~/.codeium/windsurf marker for older builds,
+// so detection follows whichever install is actually present.
+func windsurfDetectPath(home string) string {
+	devin := filepath.Join(home, ".config", "devin")
+	if fileExists(devin) {
+		return devin
+	}
+	return filepath.Join(home, ".codeium", "windsurf")
+}
+
 func BuildExtendedHarnesses(home string) []Harness {
 	if home == "" {
 		if resolved, err := os.UserHomeDir(); err == nil {
@@ -237,15 +252,16 @@ func BuildExtendedHarnesses(home string) []Harness {
 		{
 			ID:                  "windsurf",
 			Label:               "Windsurf",
-			Detect:              filepath.Join(home, ".codeium", "windsurf"),
-			SkillUser:           stringPtr(filepath.Join(home, ".codeium", "windsurf", "skills")),
+			Detect:              windsurfDetectPath(home),
+			SkillUser:           stringPtr(filepath.Join(home, ".config", "devin", "skills")),
 			SkillProject:        ".windsurf/skills",
 			MCPKind:             "json",
-			MCPPath:             filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"),
+			MCPPath:             filepath.Join(home, ".config", "devin", "mcp_config.json"),
+			MCPLegacyPath:       filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"),
 			MCPKeys:             []string{"mcpServers"},
 			InstructionsUser:    stringPtr(filepath.Join(home, ".codeium", "windsurf", "AGENTS.md")),
 			InstructionsProject: "AGENTS.md",
-			Notes:               "user config ~/.codeium/windsurf/mcp_config.json",
+			Notes:               "user config ~/.config/devin/mcp_config.json (legacy ~/.codeium/windsurf/mcp_config.json also written); user skills ~/.config/devin/skills; workspace skills .windsurf/skills",
 		},
 		{
 			ID:                  "cline",
@@ -254,10 +270,11 @@ func BuildExtendedHarnesses(home string) []Harness {
 			SkillUser:           stringPtr(filepath.Join(home, ".cline", "skills")),
 			SkillProject:        ".cline/skills",
 			MCPKind:             "json",
-			MCPPath:             filepath.Join(home, ".cline", "mcp_settings.json"),
+			MCPPath:             filepath.Join(home, ".cline", "data", "settings", "cline_mcp_settings.json"),
+			MCPLegacyPath:       filepath.Join(home, ".cline", "mcp_settings.json"),
 			MCPKeys:             []string{"mcpServers"},
-			InstructionsProject: ".clinerules",
-			Notes:               "MCP settings under ~/.cline/mcp_settings.json; project rules in .clinerules",
+			InstructionsProject: ".clinerules/rolling-memory.md",
+			Notes:               "MCP settings under ~/.cline/data/settings/cline_mcp_settings.json (legacy ~/.cline/mcp_settings.json also written); project rules are per-file under .clinerules/",
 		},
 		{
 			ID:            "workbuddy",
@@ -643,7 +660,18 @@ func ValidateInstallOptions(options InstallOptions) error {
 	if err := validateName(options.Name, "server name"); err != nil {
 		return err
 	}
-	return validateName(options.SkillName, "skill name")
+	if err := validateName(options.SkillName, "skill name"); err != nil {
+		return err
+	}
+	return validateDSHProfile(options.DSHProfile)
+}
+
+func validateDSHProfile(profile string) error {
+	if profile == "" || profile == "." || profile == ".." || filepath.IsAbs(profile) ||
+		strings.ContainsAny(profile, `/\:`) {
+		return fmt.Errorf("invalid dsh profile %s: expected a single directory name", pyRepr(profile))
+	}
+	return nil
 }
 
 func validateName(value, what string) error {

@@ -252,20 +252,21 @@ func scanHookLog(path string, now time.Time, loc *time.Location) *hookLogStat {
 
 func hookEventItemFrom(m map[string]any, ts int64, ms int) HookEventItem {
 	item := HookEventItem{
-		Timestamp: ts,
-		TimeText:  time.Unix(ts, 0).Format("15:04:05"),
-		Event:     asString(m["event"]),
-		Injected:  asInt(m["injected"]),
-		Bands:     asInt(m["bands"]),
-		Raw:       asInt(m["raw"]),
-		ElapsedMS: ms,
-		Chars:     asInt(m["chars"]),
-		Dedup:     asInt(m["dedup"]),
-		Absent:    asInt(m["absent"]),
-		Nudge:     asInt(m["nudge"]),
-		Imported:  asInt(m["imported"]),
-		Replayed:  asInt(m["replayed"]),
-		Written:   asInt(m["written"]),
+		Timestamp:   ts,
+		TimeText:    time.Unix(ts, 0).Format("15:04:05"),
+		Event:       asString(m["event"]),
+		Injected:    asInt(m["injected"]),
+		Bands:       asInt(m["bands"]),
+		Raw:         asInt(m["raw"]),
+		ElapsedMS:   ms,
+		Chars:       asInt(m["chars"]),
+		Dedup:       asInt(m["dedup"]),
+		Absent:      asInt(m["absent"]),
+		Nudge:       asInt(m["nudge"]),
+		Imported:    asInt(m["imported"]),
+		Replayed:    asInt(m["replayed"]),
+		Written:     asInt(m["written"]),
+		SourceError: strings.TrimSpace(asString(m["source_error"])) != "",
 	}
 	item.Outcome = classifyHookOutcome(item)
 	return item

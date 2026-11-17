@@ -36,8 +36,8 @@ func TestBuildHarnessesDSHHomeMatchesResolvedHome(t *testing.T) {
 		if h.Detect != custom {
 			t.Fatalf("dsh detect = %q, want %q", h.Detect, custom)
 		}
-		if got := TranscriptGlobs(home, "dsh"); len(got) != 1 || !filepath.HasPrefix(got[0], custom) {
-			t.Fatalf("dsh transcript globs = %v, want one pattern under %q", got, custom)
+		if got := TranscriptGlobs(home, "dsh"); len(got) != 2 || !filepath.HasPrefix(got[0], custom) || !filepath.HasPrefix(got[1], custom) {
+			t.Fatalf("dsh transcript globs = %v, want both patterns under %q", got, custom)
 		}
 		return
 	}
@@ -57,6 +57,7 @@ func TestTranscriptGlobsDSHMatchesRealLayout(t *testing.T) {
 		filepath.Join(dshSessions, "--Users-alice-Workspace--", "session-7e44024f-e910-4705-8d47-fdd31f7815e1", "session.v4.jsonl.zstd"),
 		filepath.Join(dshSessions, "--Users-alice-Workspace--", "0ab8902b-726b-431f-ab01-30c524e9794e", "session.v4.jsonl.zstd"),
 		filepath.Join(dshSessions, "--private-tmp-hq-work--", "session-18c611a6-5368-4596-a7b7-ab66485f48a4", "session.v5.jsonl.zstd"),
+		filepath.Join(dshSessions, "--private-tmp-hq-work--", "unversioned", "session.jsonl.zstd"),
 	}
 	for _, path := range want {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -113,6 +114,9 @@ func TestTranscriptGlobsOtherHostsUnchanged(t *testing.T) {
 			filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"),
 			filepath.Join(home, ".codex", "sessions", "*.jsonl"),
 			filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"),
+			filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl.zst"),
+			filepath.Join(home, ".codex", "sessions", "*.jsonl.zst"),
+			filepath.Join(home, ".codex", "archived_sessions", "*.jsonl.zst"),
 		},
 		"codebuddy": {filepath.Join(home, ".codebuddy", "projects", "*", "*.jsonl"), filepath.Join(home, ".codebuddy", "projects", "*", "sessions", "*.jsonl")},
 		"workbuddy": {filepath.Join(home, ".workbuddy", "projects", "*", "*.jsonl"), filepath.Join(home, ".workbuddy", "projects", "*", "sessions", "*.jsonl")},
@@ -145,5 +149,9 @@ func TestTranscriptSessionIDUsesHostIdentity(t *testing.T) {
 	compressed := filepath.Join("/tmp", ".claude", "projects", "demo", "abc-123.jsonl.zstd")
 	if got, want := TranscriptSessionID("claude-code", compressed), "abc-123"; got != want {
 		t.Fatalf("compressed session id = %q, want %q", got, want)
+	}
+	codex := filepath.Join("/tmp", ".codex", "sessions", "2026", "11", "18", "rollout-123.jsonl.zst")
+	if got, want := TranscriptSessionID("codex", codex), "rollout-123"; got != want {
+		t.Fatalf("codex compressed session id = %q, want %q", got, want)
 	}
 }

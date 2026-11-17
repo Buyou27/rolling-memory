@@ -728,9 +728,14 @@ func (e *BlindEncoder) packSentenceWords(sent string, words []string) []BlindTok
 			}
 			if nextIdx < len(words) {
 				nextW := words[nextIdx]
-				pureSpaceGap := true
+				// Only an explicitly verified all-whitespace gap qualifies: when either
+				// position is unknown (overlapping tokens or consumed leading
+				// substrings make the Index lookups miss), fail closed instead of
+				// injecting the biword across an unexamined span.
+				pureSpaceGap := false
 				if wStart >= 0 {
 					if relNext := strings.Index(sent[sentScanPos:], nextW); relNext >= 0 {
+						pureSpaceGap = true
 						for _, gr := range sent[sentScanPos : sentScanPos+relNext] {
 							if !unicode.IsSpace(gr) {
 								pureSpaceGap = false

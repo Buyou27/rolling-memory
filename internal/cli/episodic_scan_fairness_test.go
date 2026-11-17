@@ -29,13 +29,13 @@ func TestEpisodicWatchDrainsUnchangedJSONLBacklog(t *testing.T) {
 	var transcript strings.Builder
 	for i := 0; i < 40; i++ {
 		fmt.Fprintf(&transcript, "{\"type\":\"user\",\"timestamp\":\"2026-01-06T03:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"turn %d\"}}\n", i)
-		fmt.Fprintf(&transcript, "{\"type\":\"assistant\",\"timestamp\":\"2026-01-06T03:00:10Z\",\"message\":{\"role\":\"assistant\",\"content\":\"response %d\"}}\n", i)
+		fmt.Fprintf(&transcript, "{\"type\":\"assistant\",\"timestamp\":\"2026-01-06T03:00:10Z\",\"message\":{\"role\":\"assistant\",\"stop_reason\":\"end_turn\",\"content\":\"response %d\"}}\n", i)
 	}
 	if err := os.WriteFile(filepath.Join(sessionDir, "long.jsonl"), []byte(transcript.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	older := filepath.Join(sessionDir, "older.jsonl")
-	if err := os.WriteFile(older, []byte("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"older session sentinel\"}}\n"), 0o644); err != nil {
+	if err := os.WriteFile(older, []byte("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"older session sentinel\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	oldTime := time.Now().Add(-time.Hour)

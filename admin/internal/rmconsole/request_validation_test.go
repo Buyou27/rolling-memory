@@ -68,7 +68,7 @@ func responseMessage(payload map[string]any) string {
 func TestEvalExportRequiresExactID(t *testing.T) {
 	for _, body := range []string{
 		`{"suite":"atm","run_id":""}`,
-		`{"suite":"unknown","run_id":"atm-baseline-rm-hard-wave-cell"}`,
+		`{"suite":"unknown","run_id":"atm-baseline-rm-hard-local-plain"}`,
 	} {
 		payload := runPluginHandler(t, evalExportHandler, body)
 		if code, _ := payload["code"].(float64); code == 0 {

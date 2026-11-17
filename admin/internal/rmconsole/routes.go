@@ -249,21 +249,22 @@ type Switches struct {
 
 // HookEventItem Hook 实时流水行（来自 ~/.local/state/rolling-memory/rolling-memory.log）。
 type HookEventItem struct {
-	Timestamp int64  `json:"ts"`
-	TimeText  string `json:"time_text"`
-	Event     string `json:"event"`
-	Injected  int    `json:"injected"`
-	Bands     int    `json:"bands"`
-	Raw       int    `json:"raw"`
-	ElapsedMS int    `json:"ms"`
-	Chars     int    `json:"chars"`
-	Dedup     int    `json:"dedup"`
-	Absent    int    `json:"absent"`
-	Nudge     int    `json:"nudge"`
-	Imported  int    `json:"imported"`
-	Replayed  int    `json:"replayed"`
-	Written   int    `json:"written"`
-	Outcome   string `json:"outcome"`
+	Timestamp   int64  `json:"ts"`
+	TimeText    string `json:"time_text"`
+	Event       string `json:"event"`
+	Injected    int    `json:"injected"`
+	Bands       int    `json:"bands"`
+	Raw         int    `json:"raw"`
+	ElapsedMS   int    `json:"ms"`
+	Chars       int    `json:"chars"`
+	Dedup       int    `json:"dedup"`
+	Absent      int    `json:"absent"`
+	Nudge       int    `json:"nudge"`
+	Imported    int    `json:"imported"`
+	Replayed    int    `json:"replayed"`
+	Written     int    `json:"written"`
+	SourceError bool   `json:"source_error,omitempty"`
+	Outcome     string `json:"outcome"`
 }
 
 // RecentAssertion 最近写入的记忆单元摘要。
@@ -592,14 +593,24 @@ func collectStatus(home, hostVer, hostAPIVer string) StatusResponse {
 		if home != "" {
 			batchRows := make([]map[string]any, len(tvRows))
 			for i, r := range tvRows {
-				batchRows[i] = map[string]any{"content": r["txt"]}
+				batchRows[i] = map[string]any{"id": r["id"], "content": r["txt"]}
 			}
-			warmHydrateZCodePointersBatch(home, batchRows)
+			warmHydrateZCodePointersBatch(home, resp.DBPath, batchRows)
+			for i := range tvRows {
+				tvRows[i]["_hydrated_ref_text"] = batchRows[i]["_hydrated_ref_text"]
+			}
 		}
 		for _, r := range tvRows {
+			rendered := asString(r["txt"])
+			if strings.HasPrefix(strings.TrimSpace(rendered), "@ref:") {
+				rendered = asString(r["_hydrated_ref_text"])
+				if rendered == "" {
+					rendered = vaultRefGapMarker
+				}
+			}
 			resp.RecentAssertions = append(resp.RecentAssertions, RecentAssertion{
 				ID:         asString(r["id"]),
-				Rendered:   strings.TrimSpace(hydrateVaultTextForDisplay(asString(r["txt"]))),
+				Rendered:   strings.TrimSpace(rendered),
 				Confidence: 1.0,
 				Anchor:     asString(r["addr"]),
 				Status:     "active",
@@ -849,20 +860,21 @@ func parseHookEvents(logPath string, max int) ([]HookEventItem, int) {
 			lastMS = ms
 		}
 		item := HookEventItem{
-			Timestamp: ts,
-			TimeText:  time.Unix(ts, 0).Format("15:04:05"),
-			Event:     ev,
-			Injected:  asInt(m["injected"]),
-			Bands:     asInt(m["bands"]),
-			Raw:       asInt(m["raw"]),
-			ElapsedMS: ms,
-			Chars:     asInt(m["chars"]),
-			Dedup:     asInt(m["dedup"]),
-			Absent:    asInt(m["absent"]),
-			Nudge:     asInt(m["nudge"]),
-			Imported:  asInt(m["imported"]),
-			Replayed:  asInt(m["replayed"]),
-			Written:   asInt(m["written"]),
+			Timestamp:   ts,
+			TimeText:    time.Unix(ts, 0).Format("15:04:05"),
+			Event:       ev,
+			Injected:    asInt(m["injected"]),
+			Bands:       asInt(m["bands"]),
+			Raw:         asInt(m["raw"]),
+			ElapsedMS:   ms,
+			Chars:       asInt(m["chars"]),
+			Dedup:       asInt(m["dedup"]),
+			Absent:      asInt(m["absent"]),
+			Nudge:       asInt(m["nudge"]),
+			Imported:    asInt(m["imported"]),
+			Replayed:    asInt(m["replayed"]),
+			Written:     asInt(m["written"]),
+			SourceError: strings.TrimSpace(asString(m["source_error"])) != "",
 		}
 		item.Outcome = classifyHookOutcome(item)
 		events = append(events, item)
@@ -887,11 +899,17 @@ func classifyHookOutcome(item HookEventItem) string {
 		}
 		return "silent"
 	case "close", "start":
+		if item.SourceError {
+			return "error"
+		}
 		if item.Written > 0 {
 			return "written"
 		}
-		if item.Imported > 0 {
+		if item.Replayed > 0 {
 			return "replayed"
+		}
+		if item.Imported > 0 {
+			return "imported"
 		}
 		return "idle"
 	default:

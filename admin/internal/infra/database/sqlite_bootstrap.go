@@ -3,6 +3,7 @@ package database
 import (
 	"strings"
 
+	"github.com/ai-go-hub/ai-go-admin/internal/version"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -241,11 +242,13 @@ func bootstrapSQLite(db *gorm.DB) error {
 		}
 	}
 
+	// 版本号取自嵌入的 VERSION（唯一事实源），随构建对齐，避免每版手工改字面量。
+	displayVersion := "v" + version.Get().Version
 	seeds := []string{
 		`INSERT OR IGNORE INTO "configs" ("id", "name", "group", "title", "tip", "type", "value", "dict", "rule", "input_extend", "allow_del", "weigh") VALUES
 			(1, 'config_group', 'basic', '配置分组', NULL, 'array', '[{"key":"basic","value":"基础配置"},{"key":"mail","value":"邮件配置"},{"key":"ai","value":"AI 配置"},{"key":"quick_entrance","value":"快捷配置入口"}]', NULL, 'required', NULL, 0, -1),
 				(2, 'name', 'basic', '站点名称', NULL, 'string', 'Rolling-Memory', NULL, 'required', NULL, 0, 99),
-				(5, 'version', 'basic', '系统版本号', NULL, 'string', 'v0.0.1', NULL, 'required', NULL, 0, 96)`,
+				(5, 'version', 'basic', '系统版本号', NULL, 'string', '` + displayVersion + `', NULL, 'required', NULL, 0, 96)`,
 		`INSERT OR IGNORE INTO "admin_groups" ("id", "pid", "name", "rules", "status", "updated_at", "created_at") VALUES
 			(1, NULL, '超级管理组', '*', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		`INSERT OR IGNORE INTO "admins" ("id", "username", "nickname", "avatar", "email", "mobile", "login_failure", "last_login_at", "last_login_ip", "password", "bio", "status", "updated_at", "created_at", "deleted_at") VALUES
@@ -348,7 +351,7 @@ func bootstrapSQLite(db *gorm.DB) error {
 		(125, 101, 'node', '云端账号连接与套餐（申请制预览）', 'plugin/rolling-memory/cloud/account', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 		(127, 105, 'node', 'Open Memory Arena横评', 'plugin/rolling-memory/eval/arena', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
 	_ = db.Exec(`UPDATE "configs" SET "value" = 'Rolling-Memory' WHERE "name" = 'name'`).Error
-	_ = db.Exec(`UPDATE "configs" SET "value" = 'v0.0.1' WHERE "name" = 'version'`).Error
+	_ = db.Exec(`UPDATE "configs" SET "value" = '` + displayVersion + `' WHERE "name" = 'version'`).Error
 	_ = db.Exec(`DELETE FROM "admin_plugins" WHERE "name" = 'rolling-memory'`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "plugin" = '' WHERE "plugin" = 'rolling-memory'`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "title" = '记忆浏览' WHERE "id" = 100 AND "name" = 'plugin/rolling-memory' AND "type" = 'dir' AND "title" = '记忆管理'`).Error

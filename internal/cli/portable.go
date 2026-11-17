@@ -197,7 +197,7 @@ func writePortableHelperScripts(root string) error {
 		"case \"$arch_name\" in x86_64|amd64) arch_name=\"amd64\" ;; arm64|aarch64) arch_name=\"arm64\" ;; esac",
 		"BIN=\"$ROOT/bin/rolling-memory-${os_name}-${arch_name}\"",
 		"if [ ! -x \"$BIN\" ]; then BIN=\"$ROOT/bin/rolling-memory\"; fi",
-		"exec \"$BIN\" install --with-hooks \"$@\"",
+		"exec \"$BIN\" install \"$@\"",
 		"",
 	}, "\n")
 	ejectSh := strings.Join([]string{
@@ -221,10 +221,10 @@ func writePortableHelperScripts(root string) error {
 		"if \"%ROOT:~-1%\"==\"\\\" set \"ROOT=%ROOT:~0,-1%\"",
 		"set \"ROLLING_MEMORY_PORTABLE=%ROOT%\"",
 		"if exist \"%ROOT%\\bin\\rolling-memory-windows-amd64.exe\" (",
-		"  \"%ROOT%\\bin\\rolling-memory-windows-amd64.exe\" install --with-hooks %*",
+		"  \"%ROOT%\\bin\\rolling-memory-windows-amd64.exe\" install %*",
 		"  exit /b %ERRORLEVEL%",
 		")",
-		"\"%ROOT%\\bin\\rolling-memory.exe\" install --with-hooks %*",
+		"\"%ROOT%\\bin\\rolling-memory.exe\" install %*",
 		"",
 	}, "\r\n")
 	ejectCmd := strings.Join([]string{

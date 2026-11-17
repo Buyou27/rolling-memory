@@ -85,7 +85,20 @@ func decodeJSONValue(decoder *json.Decoder) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			object = append(object, ids.JSONPair{Key: key, Value: value})
+			// A duplicate key overwrites the earlier value in place, matching
+			// the dict semantics every host JSON parser implements (last wins);
+			// keeping the first position preserves the file's key order.
+			replaced := false
+			for index := range object {
+				if object[index].Key == key {
+					object[index].Value = value
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				object = append(object, ids.JSONPair{Key: key, Value: value})
+			}
 		}
 		if _, err := decoder.Token(); err != nil { // consume '}'
 			return nil, err

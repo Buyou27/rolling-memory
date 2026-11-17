@@ -11,6 +11,7 @@ All notable user-facing changes to **Rolling Memory** are documented in this fil
 - Simplified the local product assembly onto the engine-native canonical companion path: structured-date ISO beacons and the merged closed-set companion tables (SI/IEC units, ISO 4217 currencies, ISO 3166 geography, statistical notation) now load directly from the SDK, replacing the redundant standalone language-pack layer with the same default max-capability indexing behavior.
 - Preserved high-resolution email sub-unit line spans by keeping subject metadata out of the document body while retaining the subject-plus-summary header block.
 - Added repository community-health files — a Contributor Covenant 2.1 Code of Conduct (English and Simplified Chinese), an accessibility statement, and a pull-request template — so the public repository covers the full GitHub community-standards checklist.
+- Aligned the client SDK with the project license: the SDK under `sdk/` now carries the same **PolyForm Noncommercial 1.0.0** terms as the rest of the repository (superseding the earlier Apache-2.0 SDK terms); commercial use still requires a separate written commercial license.
 
 ## v0.0.1 — 2026-11-16
 

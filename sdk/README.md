@@ -104,5 +104,5 @@ Harmonic tables operate **100% on the client side** as a pure blind-tag overlay:
 
 ## 5. License
 
-Apache License 2.0 — see [LICENSE](LICENSE) in this directory. The repository root is separately licensed under the PolyForm Noncommercial License 1.0.0 (see [../LICENSE](../LICENSE)); third-party attributions are in [../NOTICE](../NOTICE).
+PolyForm Noncommercial License 1.0.0 — see [LICENSE](LICENSE) in this directory. The SDK is free to use, modify, and share for any noncommercial purpose; any commercial use or commercial distribution (including commercial embedding, managed hosting, and commercial resale) requires a separate written commercial license. Third-party attributions are listed in the repository `NOTICE` file.
 

@@ -21,16 +21,18 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/speech"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 )
 
 type episodicScanSource struct {
-	HarnessID string
-	Kind      string
-	Path      string
-	SessionID string
-	Locus     string
-	RawDir    string
+	HarnessID  string
+	Kind       string
+	Path       string
+	SessionID  string
+	Locus      string
+	LocusKnown bool
+	RawDir     string
 }
 
 type episodicSourceCursor struct {
@@ -39,6 +41,9 @@ type episodicSourceCursor struct {
 	Stamp        string `json:"stamp"`
 	LastDocID    string `json:"last_doc_id,omitempty"`
 	Grew         bool   `json:"grew,omitempty"`
+	RetrySources bool   `json:"retry_sources,omitempty"`
+	ItemErrors   int    `json:"item_errors,omitempty"`
+	RetryCycle   bool   `json:"retry_cycle,omitempty"`
 	TurnRef      string `json:"turn_ref,omitempty"`
 	TurnStartIdx int    `json:"turn_start_idx,omitempty"`
 }
@@ -104,10 +109,10 @@ func discoverEpisodicScanSources(ctx context.Context, home, harnessID string) ([
 				return nil, err
 			}
 			hasDirCol := true
-			rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(directory, '') FROM session WHERE COALESCE(parent_id, '') = '' AND task_type != 'subagent_child' ORDER BY id`)
+			rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(directory, '') FROM session WHERE COALESCE(parent_id, '') = '' AND COALESCE(task_type, '') != 'subagent_child' ORDER BY id`)
 			if err != nil {
 				hasDirCol = false
-				rows, err = db.QueryContext(ctx, `SELECT id FROM session WHERE COALESCE(parent_id, '') = '' AND task_type != 'subagent_child' ORDER BY id`)
+				rows, err = db.QueryContext(ctx, `SELECT id FROM session WHERE COALESCE(parent_id, '') = '' AND COALESCE(task_type, '') != 'subagent_child' ORDER BY id`)
 			}
 			if err != nil {
 				_ = db.Close()
@@ -153,7 +158,7 @@ func discoverEpisodicScanSources(ctx context.Context, home, harnessID string) ([
 // found at all, so callers can tell "outside any repository" apart from "no
 // readable cwd" (unknown — keep the stored locus).
 func resolveJSONLTranscriptLocus(path string) (string, bool) {
-	file, err := os.Open(strings.TrimSpace(path))
+	file, err := episodic.OpenJSONL(strings.TrimSpace(path))
 	if err != nil {
 		return "", false
 	}
@@ -172,6 +177,9 @@ func resolveJSONLTranscriptLocus(path string) (string, bool) {
 					}
 				}
 				if cwd = strings.TrimSpace(cwd); cwd != "" {
+					if !filepath.IsAbs(cwd) {
+						return "", false
+					}
 					return api.ResolveWorkspaceLocus(cwd), true
 				}
 			}
@@ -200,7 +208,10 @@ func episodicScanSourceStamp(source episodicScanSource) (string, error) {
 	return stamp, nil
 }
 
-var errEpisodicScanPageStop = errors.New("episodic scan page stop")
+var (
+	errEpisodicScanPageStop = errors.New("episodic scan page stop")
+	errEpisodicSourceItem   = errors.New("episodic source item unavailable")
+)
 
 func streamEpisodicScanSource(ctx context.Context, source episodicScanSource, scope string, visit func(int, candidateEpisodicTurn) error) (int, error) {
 	return streamEpisodicScanSourceFrom(ctx, source, scope, "", 0, func(i int, _ int, turn candidateEpisodicTurn) error {
@@ -209,13 +220,14 @@ func streamEpisodicScanSource(ctx context.Context, source episodicScanSource, sc
 }
 
 func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource, scope, startTurnRef string, startTurnIdx int, visit func(unitIdx int, turnStartIdx int, turn candidateEpisodicTurn) error) (int, error) {
-	if source.Locus == "" {
+	if !source.LocusKnown {
 		switch source.Kind {
 		case "jsonl":
-			source.Locus, _ = resolveJSONLTranscriptLocus(source.Path)
+			source.Locus, source.LocusKnown = resolveJSONLTranscriptLocus(source.Path)
 		case "zcode":
-			if source.RawDir != "" {
+			if filepath.IsAbs(source.RawDir) {
 				source.Locus = api.ResolveWorkspaceLocus(source.RawDir)
+				source.LocusKnown = true
 			}
 		}
 	}
@@ -225,15 +237,23 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			occurredAt := segment.OccurredAt
+			if occurredAt > 1e11 {
+				occurredAt /= 1000
+			}
+			if occurredAt < 0 {
+				occurredAt = 0
+			}
 			turn := candidateEpisodicTurn{
 				HarnessID:  source.HarnessID,
 				SessionID:  source.SessionID,
 				Locus:      source.Locus,
+				LocusKnown: source.LocusKnown,
 				DocID:      unit.DocID,
 				RefPointer: unit.RefPointer,
 				TurnRef:    prefix,
 				Text:       unit.Text,
-				OccurredAt: unit.OccurredAt,
+				OccurredAt: occurredAt,
 				Completed:  unit.Completed,
 			}
 			curIdx := idx
@@ -246,21 +266,12 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 	}
 	switch source.Kind {
 	case "jsonl":
-		info, err := os.Stat(source.Path)
-		if err != nil {
-			return 0, err
-		}
 		source.SessionID = harness.TranscriptSessionID(source.HarnessID, source.Path)
-		err = episodic.VisitJSONLTurns(ctx, source.Path, func(turn episodic.JSONLTurn, closed bool) error {
-			when := turn.OccurredAt
-			if when <= 0 {
-				when = info.ModTime().Unix()
-			}
-			completed := closed || ids.UTCNow()-when >= episodicTailGraceSec
+		err := episodic.VisitJSONLTurns(ctx, source.Path, func(turn episodic.JSONLTurn, closed bool) error {
 			prefix := fmt.Sprintf("@ref:jsonl:%s:%d", source.Path, turn.Index)
 			turnStart := idx
 			for _, segment := range turn.Segments {
-				if err := emitUnits(prefix, turnStart, segment, turn.OccurredAt, completed); err != nil {
+				if err := emitUnits(prefix, turnStart, segment, turn.OccurredAt, closed); err != nil {
 					return err
 				}
 			}
@@ -273,22 +284,32 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 			return 0, err
 		}
 		defer db.Close()
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback()
 		startUserMsgID := ""
 		expectedPrefix := "@ref:zcode:" + source.SessionID + ":"
 		if startTurnIdx > 0 && strings.HasPrefix(startTurnRef, expectedPrefix) {
 			candidateMsgID := strings.TrimPrefix(startTurnRef, expectedPrefix)
 			var seq sql.NullInt64
-			if db.QueryRowContext(ctx, `SELECT sequence FROM message WHERE session_id = ? AND id = ?`, source.SessionID, candidateMsgID).Scan(&seq) == nil && seq.Valid {
+			if err := tx.QueryRowContext(ctx, `SELECT sequence FROM message WHERE session_id = ? AND id = ?`, source.SessionID, candidateMsgID).Scan(&seq); err == nil && seq.Valid {
 				startUserMsgID = candidateMsgID
 				idx = startTurnIdx
+			} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return 0, err
 			}
 		}
-		err = episodic.VisitZCodeTurnsFrom(ctx, db, source.SessionID, startUserMsgID, func(turn episodic.Turn, closed bool) error {
+		err = episodic.VisitZCodeTurnsFrom(ctx, tx, source.SessionID, startUserMsgID, func(turn episodic.Turn, _ bool) error {
 			ts := turn.OccurredAt
 			if ts > 1e11 {
 				ts /= 1000
 			}
-			completed := closed || ids.UTCNow()-ts >= episodicTailGraceSec
+			completed, err := zcodeTurnCompleted(ctx, tx, source.SessionID, turn.UserMsgID)
+			if err != nil {
+				return err
+			}
 			prefix := fmt.Sprintf("@ref:zcode:%s:%s", source.SessionID, turn.UserMsgID)
 			turnStart := idx
 			for _, segment := range turn.Segments {
@@ -302,6 +323,73 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 	default:
 		return 0, fmt.Errorf("unknown episodic source %q", source.Kind)
 	}
+}
+
+// zcodeTurnCompleted checks the final message before the next user message that
+// the shared turn reader would accept as speech. Hidden and tool-result messages
+// do not form turn boundaries.
+func zcodeTurnCompleted(ctx context.Context, db episodic.ZCodeQueryer, sessionID, userMsgID string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT m.id, COALESCE(json_extract(m.data, '$.role'), ''),
+		       COALESCE(json_extract(m.data, '$.time.completed'), 0),
+		       COALESCE(json_extract(m.data, '$.finish'), '')
+		FROM message m
+		WHERE m.session_id = ? AND m.sequence > (SELECT sequence FROM message WHERE session_id = ? AND id = ?)
+		ORDER BY m.sequence ASC`, sessionID, sessionID, userMsgID)
+	if err != nil {
+		return false, err
+	}
+	type message struct {
+		id, role, finish string
+		completion       int64
+	}
+	defer rows.Close()
+	var last message
+	for rows.Next() {
+		var m message
+		if err := rows.Scan(&m.id, &m.role, &m.completion, &m.finish); err != nil {
+			return false, err
+		}
+		role := strings.ToLower(strings.TrimSpace(m.role))
+		if role == "user" || role == "human" {
+			var texts string
+			err := db.QueryRowContext(ctx, `SELECT COALESCE(json_group_array(json_extract(p.data, '$.text')), '[]') FROM part p WHERE p.message_id = ? AND `+episodic.ZCodeTextPartFilter, m.id).Scan(&texts)
+			if err != nil {
+				return false, err
+			}
+			var parts []string
+			if err := json.Unmarshal([]byte(texts), &parts); err != nil {
+				return false, err
+			}
+			boundary := false
+			for _, text := range parts {
+				if speech.StripConversationNoise(text) != "" {
+					boundary = true
+					break
+				}
+			}
+			if boundary {
+				break
+			}
+			continue
+		}
+		last = m
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	role := strings.ToLower(strings.TrimSpace(last.role))
+	if (role != "assistant" && role != "ai" && role != "bot" && role != "agent") || last.completion <= 0 || last.finish != "stop" {
+		return false, nil
+	}
+	var hasTool int
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM part WHERE message_id = ? AND json_extract(data, '$.type') = 'tool')`, last.id).Scan(&hasTool); err != nil {
+		return false, err
+	}
+	return hasTool == 0, nil
 }
 
 // runEpisodicSourceScanTick keeps the history scan independent of the foreground
@@ -347,59 +435,15 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *api.Memory, home str
 		sources = append(sources, found...)
 	}
 	next, more, scanErr := visitEpisodicSources(ctx, sources, scope, cursor, reconcileDefaultLimit, func(turn candidateEpisodicTurn) error {
-		if episodicunit.DocID(scope, turn.Text) != turn.DocID {
-			return fmt.Errorf("episodic source scan %s: content identity mismatch", turn.DocID)
-		}
-		if !turn.Completed || deletedEpi[turn.DocID] {
-			return nil
-		}
-		// Identity is stamped for every turn — including an empty locus — so each
-		// row carries its own source's workspace and never inherits a previous
-		// source's identity when the source sits outside any repository.
-		tc.Vault.SetIdentity(thinclient.VaultIdentity{
-			AssistantID:   turn.HarnessID,
-			IncarnationID: turn.SessionID,
-			Locus:         turn.Locus,
-		})
-		var stored, curLocus string
-		err := db.QueryRowContext(ctx, `SELECT raw_text, COALESCE(locus, '') FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&stored, &curLocus)
-		if err == nil {
-			if turn.Locus != "" && curLocus == "" {
-				_, _ = db.ExecContext(ctx, `UPDATE thin_vault_docs SET locus = ? WHERE doc_id = ?`, turn.Locus, turn.DocID)
-			}
-			if stored != turn.RefPointer {
-				// The same speech re-enumerated under a new `#<k>` (the filter itself is
-				// allowed to evolve): re-point the stored row. The save path verifies the
-				// turn pointer stem and content identity and refuses anything else.
-				packet, _ := tc.Vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-				if sErr := tc.Vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); sErr != nil {
-					// Identical speech reaching the vault from a second transcript: the first
-					// pointer wins and the lineage row below keeps this provenance.
-					if !errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
-						return sErr
-					}
-				}
-			} else if !tc.Vault.HasLocalEpisodicIndex(turn.DocID, turn.RefPointer) {
-				if _, err = tc.Vault.EnsureLocalEpisodicIndex(scope, turn.DocID, turn.RefPointer, turn.Text); err != nil {
-					return err
-				}
-			}
-			if turn.TurnRef != "" {
-				var hasLin int
-				_ = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thin_vault_episodic_lineage WHERE turn_ref = ? AND doc_id = ?)`, turn.TurnRef, turn.DocID).Scan(&hasLin)
-				if hasLin == 0 {
-					_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turn.TurnRef, turn.DocID, turn.OccurredAt)
-				}
-			}
-			return err
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		packet, _ := tc.Vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-		return tc.Vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{})
+		return saveEpisodicSourceTurn(ctx, db, tc.Vault, scope, deletedEpi, turn)
 	})
-	if scanErr == nil && !more {
+	if discoveryErr != nil {
+		next.RetrySources = true
+		if !more {
+			next = episodicSourceCursor{RetrySources: true, RetryCycle: true, ItemErrors: next.ItemErrors}
+		}
+	}
+	if discoveryErr == nil && scanErr == nil && !more {
 		next = episodicSourceCursor{}
 	}
 	nextRaw, err := json.Marshal(next)
@@ -409,7 +453,106 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *api.Memory, home str
 	if err := saveEpisodicCheckpoint(db, key, raw, exists, nextRaw); err != nil {
 		return errors.Join(discoveryErr, scanErr, fmt.Errorf("episodic source scan checkpoint: %w", err))
 	}
+	if next.ItemErrors > 0 {
+		if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`, "episodic_source_scan_item_errors:"+scope, next.ItemErrors); err != nil {
+			return errors.Join(discoveryErr, scanErr, err)
+		}
+	} else if discoveryErr == nil && scanErr == nil && !more {
+		if _, err := db.ExecContext(ctx, `DELETE FROM thin_vault_meta WHERE k = ? AND EXISTS (SELECT 1 FROM thin_vault_meta WHERE k = ? AND CAST(v AS BLOB) = ?)`, "episodic_source_scan_item_errors:"+scope, key, nextRaw); err != nil {
+			return err
+		}
+	}
 	return errors.Join(discoveryErr, scanErr)
+}
+
+func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn) error {
+	if episodicunit.DocID(scope, turn.Text) != turn.DocID {
+		return fmt.Errorf("episodic source scan %s: content identity mismatch", turn.DocID)
+	}
+	if !turn.Completed || deletedEpi[turn.DocID] {
+		return nil
+	}
+	vault := base.CloneWithSharedSlotCache()
+	vault.SetIdentity(thinclient.VaultIdentity{
+		AssistantID:   turn.HarnessID,
+		IncarnationID: turn.SessionID,
+		Locus:         turn.Locus,
+	})
+	var stored string
+	err := db.QueryRowContext(ctx, `SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&stored)
+	if err == nil {
+		if stored != turn.RefPointer {
+			// Authenticate the existing pointer before adding another occurrence.
+			// An unavailable legacy source must not block unrelated transcripts.
+			if strings.HasPrefix(stored, "@ref:") && !vault.HasLocalEpisodicIndex(turn.DocID, stored) {
+				if _, err := vault.EnsureLocalEpisodicIndex(scope, turn.DocID, stored, turn.Text); err != nil {
+					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+						return nil
+					}
+					if errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+						return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
+					}
+					return err
+				}
+			}
+			packet, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
+			if sErr := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); sErr != nil {
+				if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
+					return nil
+				}
+				if errors.Is(sErr, thinclient.ErrEpisodicIndexItem) || errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
+					return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, sErr)
+				}
+				return sErr
+			}
+		} else {
+			if !vault.HasLocalEpisodicIndex(turn.DocID, turn.RefPointer) {
+				if _, err = vault.EnsureLocalEpisodicIndex(scope, turn.DocID, turn.RefPointer, turn.Text); err != nil {
+					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+						return nil
+					}
+					if errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+						return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
+					}
+					return err
+				}
+			}
+			var sourceRecorded int
+			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thin_vault_episodic_sources s JOIN thin_vault_episodic_lineage l ON l.turn_ref = s.turn_ref AND l.doc_id = s.doc_id WHERE s.turn_ref = ? AND s.doc_id = ? AND s.ref_pointer = ?)`, turn.TurnRef, turn.DocID, turn.RefPointer).Scan(&sourceRecorded); err != nil {
+				return err
+			}
+			if sourceRecorded == 0 {
+				packet, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
+				if err := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); err != nil {
+					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+						return nil
+					}
+					if errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+						return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
+					}
+					return err
+				}
+			}
+			if _, err = db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	packet, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
+	if err := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); err != nil {
+		if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+			return nil
+		}
+		if errors.Is(err, thinclient.ErrEpisodicIndexItem) || errors.Is(err, thinclient.ErrEpisodicPointerSourceConflict) {
+			return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
+		}
+		return err
+	}
+	return nil
 }
 
 // visitEpisodicSources advances only after each successful visit. Changes during
@@ -422,10 +565,17 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].key() < ordered[j].key() })
 	visited := 0
 	var sourceErr error
-	hadSourceErr := false
+	hadSourceErr := cursor.RetrySources
+	itemErrors := cursor.ItemErrors
+	itemErrorReported := false
+	if cursor.Source == "" && cursor.RetryCycle {
+		hadSourceErr = false
+		itemErrors = 0
+	}
 
 	for srcIdx, source := range ordered {
 		if err := ctx.Err(); err != nil {
+			cursor.RetrySources = true
 			return cursor, true, errors.Join(sourceErr, err)
 		}
 		key := source.key()
@@ -454,6 +604,7 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 				})
 				if sErr != nil && !errors.Is(sErr, errEpisodicScanPageStop) {
 					if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+						cursor.RetrySources = true
 						return cursor, true, errors.Join(sourceErr, sErr)
 					}
 					sourceErr = errors.Join(sourceErr, sErr)
@@ -496,8 +647,16 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 				return errEpisodicScanPageStop
 			}
 			if err := visit(turn); err != nil {
-				visitCallErr = err
-				return errEpisodicScanPageStop
+				if !errors.Is(err, errEpisodicSourceItem) {
+					visitCallErr = err
+					return errEpisodicScanPageStop
+				}
+				if !itemErrorReported {
+					sourceErr = errors.Join(sourceErr, err)
+					itemErrorReported = true
+				}
+				hadSourceErr = true
+				itemErrors++
 			}
 			lastDocID = turn.DocID
 			lastTurnRef = turn.TurnRef
@@ -509,6 +668,8 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 				Stamp:        stamp,
 				LastDocID:    lastDocID,
 				Grew:         grew,
+				RetrySources: hadSourceErr,
+				ItemErrors:   itemErrors,
 				TurnRef:      lastTurnRef,
 				TurnStartIdx: lastTurnStartIdx,
 			}
@@ -516,14 +677,17 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 			return nil
 		})
 		if visitCallErr != nil {
+			cursor.RetrySources = true
 			return cursor, true, errors.Join(sourceErr, visitCallErr)
 		}
 		if sErr != nil && !errors.Is(sErr, errEpisodicScanPageStop) {
 			if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+				cursor.RetrySources = true
 				return cursor, true, errors.Join(sourceErr, sErr)
 			}
 			sourceErr = errors.Join(sourceErr, sErr)
 			hadSourceErr = true
+			cursor.RetrySources = true
 			continue
 		}
 		after, err := episodicScanSourceStamp(source)
@@ -533,9 +697,11 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 			continue
 		}
 		if after != stamp && source.Kind != "zcode" {
+			cursor.RetrySources = true
 			return cursor, true, errors.Join(sourceErr, fmt.Errorf("episodic source changed during scan: %s", source.Path))
 		}
 		if stoppedForLimit {
+			cursor.RetrySources = hadSourceErr
 			return cursor, true, sourceErr
 		}
 		cursor = episodicSourceCursor{
@@ -544,12 +710,14 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 			Stamp:        stamp,
 			LastDocID:    lastDocID,
 			Grew:         grew,
+			RetrySources: hadSourceErr,
+			ItemErrors:   itemErrors,
 			TurnRef:      lastTurnRef,
 			TurnStartIdx: lastTurnStartIdx,
 		}
 	}
 	if hadSourceErr {
-		return episodicSourceCursor{}, true, sourceErr
+		return episodicSourceCursor{RetrySources: true, RetryCycle: true, ItemErrors: itemErrors}, true, sourceErr
 	}
 	return cursor, false, nil
 }

@@ -18,7 +18,6 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
-	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
@@ -26,18 +25,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 )
 
-const (
-	reconcileDefaultLimit = 50
-	// episodicTailGraceSec is the fallback completion window for the trailing
-	// assistant message of a harness session when the harness has not stamped an
-	// explicit completion time. Zero elapsed → only explicit stamps count (a long
-	// generation could be indexed mid-stream); unbounded elapsed → a still-running
-	// generation is frozen into a pulse. Two minutes exceeds every observed single
-	// assistant-message generation on this host, and a turn that finishes later is
-	// still re-imported under the same DocID on the next pass, so the worst case is
-	// one superseded pulse rather than a permanently truncated memory.
-	episodicTailGraceSec = 120
-)
+const reconcileDefaultLimit = 50
 
 // HarnessEnvItem describes one coding harness environment on this machine.
 type HarnessEnvItem struct {
@@ -91,25 +79,27 @@ type LayerAlignmentStat struct {
 	StaleCount           int    `json:"stale_count,omitempty"`
 	TotalPendingSync     int    `json:"total_pending_sync"`
 	AlignmentPct         int    `json:"alignment_pct"`
+	AlignmentKnown       bool   `json:"alignment_known"`
 	Aligned              bool   `json:"aligned"`
 }
 
 // EpisodicIndexStatus reports local index coverage and live scan/backfill progress without reading source transcripts.
 type EpisodicIndexStatus struct {
-	Compatible     int     `json:"compatible"`
-	Incompatible   int     `json:"incompatible"`
-	Missing        int     `json:"missing"`
-	Corrupt        int     `json:"corrupt"`
-	NeedsRebuild   int     `json:"needs_rebuild"`
-	Orphaned       int     `json:"orphaned"`
-	TotalDocs      int     `json:"total_docs"`
-	CoveragePct    float64 `json:"coverage_pct"`
-	Paused         bool    `json:"paused"`
-	Running        bool    `json:"running"`
-	BackfillCursor string  `json:"backfill_cursor,omitempty"`
-	ScanSource     string  `json:"scan_source,omitempty"`
-	ScanIndex      int     `json:"scan_index,omitempty"`
-	Error          string  `json:"error,omitempty"`
+	Compatible       int     `json:"compatible"`
+	Incompatible     int     `json:"incompatible"`
+	Missing          int     `json:"missing"`
+	Corrupt          int     `json:"corrupt"`
+	NeedsRebuild     int     `json:"needs_rebuild"`
+	Orphaned         int     `json:"orphaned"`
+	TotalDocs        int     `json:"total_docs"`
+	CoveragePct      float64 `json:"coverage_pct"`
+	Paused           bool    `json:"paused"`
+	Running          bool    `json:"running"`
+	BackfillCursor   string  `json:"backfill_cursor,omitempty"`
+	ScanSource       string  `json:"scan_source,omitempty"`
+	ScanIndex        int     `json:"scan_index,omitempty"`
+	SourceItemErrors int     `json:"source_item_errors,omitempty"`
+	Error            string  `json:"error,omitempty"`
 }
 
 // EnvHealthAndSyncStatus is the unified payload for `rolling-memory sync status --json`
@@ -167,6 +157,7 @@ type candidateEpisodicTurn struct {
 	HarnessID  string
 	SessionID  string
 	Locus      string
+	LocusKnown bool
 	DocID      string
 	RefPointer string
 	// TurnRef is the provenance of the unit (`@ref:zcode:...` / `@ref:jsonl:...`,
@@ -175,11 +166,7 @@ type candidateEpisodicTurn struct {
 	TurnRef    string
 	Text       string
 	OccurredAt int64
-	// Completed reports whether the assistant side of this turn can no longer grow:
-	// a turn closed by the next user message is always final, while a session tail is
-	// only final once the harness stamps its completion time (or the tail grace
-	// window has elapsed). Only completed turns may be pulsed to the engine, because
-	// a pulse is computed from the text snapshot taken at ingest time.
+	// Completed requires an explicit successful completion event.
 	Completed bool
 }
 
@@ -547,45 +534,57 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 	endWiringStage(map[string]any{"active": activeID})
 
 	totalHarnessUnsynced := 0
+	harnessAlignmentKnown := withTurnCounts
 	endScanStage := stageStart(progressStageScan, map[string]any{"harnesses": len(defs)})
 
 	for _, d := range defs {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		_, statErr := os.Stat(d.Detect)
 		detected := statErr == nil
+		if statErr != nil && !os.IsNotExist(statErr) {
+			harnessAlignmentKnown = false
+		}
 		w := wiredMap[d.ID]
 		sessionsCnt, turns, lastTS := 0, []candidateEpisodicTurn(nil), int64(0)
 		syncedCnt, unsyncedCnt, localTurnsCnt := 0, 0, 0
 		if withTurnCounts {
-			cacheHit := false
-			if cached, ok := loadHarnessCountCache(healthDB, d.ID, home, len(localEpisodic)+len(deletedEpisodic)); ok {
-				cacheHit = true
-				sessionsCnt, syncedCnt, unsyncedCnt, lastTS = cached.Sessions, cached.Synced, cached.Unsynced, cached.LastActiveAt
-				localTurnsCnt = cached.LocalTurns
-			} else {
-				sessionsCnt, turns, lastTS = scanHarnessTurns(home, d.ID, scope, 2000)
-				for _, t := range turns {
-					if localEpisodic[t.DocID] || deletedEpisodic[t.DocID] {
-						syncedCnt++
-					} else {
-						unsyncedCnt++
-					}
-				}
-				localTurnsCnt = len(turns)
-				storeHarnessCountCache(healthDB, d.ID, home, len(localEpisodic)+len(deletedEpisodic), sessionsCnt, syncedCnt, unsyncedCnt, localTurnsCnt, lastTS)
+			var complete bool
+			sessionsCnt, turns, lastTS, complete = scanHarnessTurnsWithCoverageContext(ctx, home, d.ID, scope, 2000)
+			if !complete {
+				harnessAlignmentKnown = false
 			}
+			for _, turn := range turns {
+				if localEpisodic[turn.DocID] || deletedEpisodic[turn.DocID] {
+					syncedCnt++
+				} else {
+					unsyncedCnt++
+				}
+			}
+			localTurnsCnt = len(turns)
 			emitStatusProgress(progressStageScan, "step", map[string]any{
-				"harness": d.ID, "phase": "done", "cached": cacheHit,
+				"harness": d.ID, "phase": "done", "cached": false,
 				"local_turns": localTurnsCnt, "synced": syncedCnt, "unsynced": unsyncedCnt,
 			})
+		}
+		totalHarnessUnsynced += unsyncedCnt
+		if (detected || d.ID == activeID) && !harnessTurnsScannable(d.ID) {
+			harnessAlignmentKnown = false
 		}
 		lastTxt := "-"
 		if lastTS > 0 {
 			lastTxt = time.Unix(lastTS, 0).Format("2006-01-02 15:04:05")
 		}
+		// INSTALLED lights on real footprint evidence: a state directory survives
+		// an uninstall and can be created by our own wiring, so bare directory
+		// existence is not proof the host is still here. Session activity, the
+		// host's own app/launcher, or the active pick qualify.
+		installed := detected && (sessionsCnt > 0 || lastTS > 0 || d.ID == activeID || harness.AppPresent(d.ID, home))
 		out.Harnesses = append(out.Harnesses, HarnessEnvItem{
 			ID:                    d.ID,
 			Label:                 d.Label,
-			Detected:              detected,
+			Detected:              installed,
 			SkillWired:            w["skill"],
 			MCPWired:              w["mcp"],
 			HooksWired:            w["hooks"],
@@ -616,7 +615,6 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 		out.Harnesses[i].Active = true
 		cp := out.Harnesses[i]
 		activeItem = &cp
-		totalHarnessUnsynced = cp.UnsyncedTurnsCount
 	}
 	endScanStage(map[string]any{"unsynced": totalHarnessUnsynced})
 
@@ -666,11 +664,25 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 			}
 		}
 		if healthDB != nil {
+			if err := healthDB.QueryRow(`SELECT CAST(v AS INTEGER) FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_item_errors:"+scope).Scan(&status.SourceItemErrors); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				status.Error = err.Error()
+			}
 			_ = healthDB.QueryRow(`SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = ?`, "episodic_index_backfill_cursor:"+scope).Scan(&status.BackfillCursor)
 			var scanRaw []byte
-			if healthDB.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_cursor:"+scope).Scan(&scanRaw) == nil && len(scanRaw) > 0 {
+			scanErr := healthDB.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_cursor:"+scope).Scan(&scanRaw)
+			if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+				status.Error = scanErr.Error()
+			} else if scanErr == nil && len(scanRaw) > 0 {
 				var cur episodicSourceCursor
-				if json.Unmarshal(scanRaw, &cur) == nil && cur.Source != "" {
+				if err := json.Unmarshal(scanRaw, &cur); err != nil {
+					status.Error = err.Error()
+				} else {
+					if cur.RetrySources {
+						harnessAlignmentKnown = false
+					}
+					if cur.ItemErrors > status.SourceItemErrors {
+						status.SourceItemErrors = cur.ItemErrors
+					}
 					parts := strings.Split(cur.Source, "\x00")
 					if len(parts) >= 3 && parts[2] != "" {
 						status.ScanSource = parts[0] + ":" + filepath.Base(parts[2])
@@ -740,6 +752,10 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 
 	// 4. Compute per-layer alignment stats
 	epiStat := computeLayerDiff("episodic", localEpisodic, remoteEpisodic, out.CloudOnline, localMode, totalHarnessUnsynced, 0)
+	if !harnessAlignmentKnown || (out.EpisodicIndex != nil && (out.EpisodicIndex.SourceItemErrors > 0 || out.EpisodicIndex.Missing > 0 || out.EpisodicIndex.Corrupt > 0 || out.EpisodicIndex.NeedsRebuild > 0 || out.EpisodicIndex.Error != "")) {
+		epiStat.AlignmentKnown = false
+		epiStat.Aligned = false
+	}
 	bgStat := computeLayerDiff("background", localBackground, remoteBackground, out.CloudOnline, localMode, 0, dirtyFilesCount)
 	bgStat.MountedDirsCount = mountedDirsCount
 	bgStat.TrackedFilesCount = trackedFilesCount
@@ -802,21 +818,21 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 		if hScore == 15 {
 			hStatus = "healthy"
 		}
-		hDetailZH = fmt.Sprintf("%s · Skill:%v · MCP:%v · Hooks:%v",
+		hDetailZH = fmt.Sprintf("%s · 静态配置 Skill:%v · MCP:%v · Hooks:%v（未验证宿主运行）",
 			activeItem.Label, activeItem.SkillWired, activeItem.MCPWired, activeItem.HooksWired)
-		hDetailEN = fmt.Sprintf("%s · Skill:%v · MCP:%v · Hooks:%v",
+		hDetailEN = fmt.Sprintf("%s · Configured Skill:%v · MCP:%v · Hooks:%v (host runtime not verified)",
 			activeItem.Label, activeItem.SkillWired, activeItem.MCPWired, activeItem.HooksWired)
 	}
 	totalScore += hScore
 	out.HealthChecks = append(out.HealthChecks, HealthCheckSubItem{
-		Key: "harness_wiring", LabelZH: "宿主环境与钩子挂载", LabelEN: "Harness & Hooks Wiring",
+		Key: "harness_wiring", LabelZH: "宿主与钩子静态配置", LabelEN: "Harness & Hooks Configuration",
 		Status: hStatus, Score: hScore, MaxScore: 15, DetailZH: hDetailZH, DetailEN: hDetailEN,
 	})
 
 	// (3) L2 Episodic Alignment (25 pts)
 	eScore := (epiStat.AlignmentPct * 25) / 100
 	eStatus := "healthy"
-	if epiStat.TotalPendingSync > 0 {
+	if epiStat.TotalPendingSync > 0 || !epiStat.AlignmentKnown {
 		if eScore > 20 {
 			eScore = 20
 		}
@@ -831,6 +847,10 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 			epiStat.LocalVaultCount, epiStat.HarnessUnsyncedTurns)
 		eDetailEN = fmt.Sprintf("Local %d · Unsynced turns %d (remote disabled in local mode)",
 			epiStat.LocalVaultCount, epiStat.HarnessUnsyncedTurns)
+	}
+	if !epiStat.AlignmentKnown {
+		eDetailZH += " · 部分宿主或历史范围未确认"
+		eDetailEN += " · Some hosts or history are not verified"
 	}
 	totalScore += eScore
 	out.HealthChecks = append(out.HealthChecks, HealthCheckSubItem{
@@ -949,6 +969,7 @@ func computeLayerDiff(layer string, localSet, remoteSet map[string]bool, cloudOn
 		HarnessUnsyncedTurns: extraHarnessUnsynced,
 		TotalPendingSync:     pending,
 		AlignmentPct:         pct,
+		AlignmentKnown:       localMode || cloudOnline,
 		Aligned:              aligned,
 	}
 }
@@ -1102,7 +1123,7 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 		var harnessIDs []string
 		if harnessFilter == "all" {
 			for _, h := range preStatus.Harnesses {
-				if h.Detected {
+				if harnessTurnsScannable(h.ID) {
 					harnessIDs = append(harnessIDs, h.ID)
 				}
 			}
@@ -1127,10 +1148,22 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 		var pendingPush []candidateEpisodicTurn
 		changedSources := map[string]bool{}
 		for _, hid := range harnessIDs {
-			_, turns, _ := scanHarnessTurns(home, hid, scope, scanCap)
+			_, turns, _, complete := scanHarnessTurnsWithCoverageContext(ctx, home, hid, scope, scanCap)
+			if !complete {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: incomplete or unreadable episodic source coverage", hid))
+			}
+			if err := ctx.Err(); err != nil {
+				return rep, err
+			}
 			rep.EpisodicIndexScanned += len(turns)
 			sort.SliceStable(turns, func(i, j int) bool { return turns[i].OccurredAt > turns[j].OccurredAt })
 			for _, turn := range turns {
+				if err := ctx.Err(); err != nil {
+					return rep, err
+				}
+				if !turn.Completed {
+					continue
+				}
 				if episodicunit.DocID(scope, turn.Text) != turn.DocID {
 					rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: content identity mismatch", turn.DocID))
 					continue
@@ -1138,6 +1171,8 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 				if deletedEpi[turn.DocID] {
 					continue
 				}
+				vault := tc.Vault.CloneWithSharedSlotCache()
+				vault.SetIdentity(thinclient.VaultIdentity{AssistantID: turn.HarnessID, IncarnationID: turn.SessionID, Locus: turn.Locus})
 				for _, id := range pointerDocs[turn.RefPointer] {
 					if id != turn.DocID && !changedSources[id] {
 						changedSources[id] = true
@@ -1164,23 +1199,46 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 							// counting as a genuine source mismatch.
 							healed := false
 							if strings.TrimSpace(turn.Text) != "" {
-								pkt, _ := tc.Vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-								if sErr := tc.Vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, pkt, thinclient.CloudIngestResponse{}); sErr == nil {
-									storedRaw[turn.DocID] = turn.RefPointer
-									delete(unverified, turn.DocID)
+								pkt, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
+								if sErr := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, pkt, thinclient.CloudIngestResponse{}); sErr == nil {
+									var current string
+									if err := db.QueryRowContext(ctx, `SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&current); err != nil {
+										return rep, err
+									}
+									storedRaw[turn.DocID] = current
+									if current == turn.RefPointer {
+										delete(unverified, turn.DocID)
+									}
 									healed = true
+								} else if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
+									deletedEpi[turn.DocID] = true
+									continue
+								} else if !errors.Is(sErr, thinclient.ErrEpisodicIndexItem) && !errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
+									return rep, sErr
 								}
 							}
 							if !healed {
 								rep.EpisodicIndexPointerMismatch++
 							}
 						} else if strings.TrimSpace(turn.Text) != "" {
-							delete(unverified, turn.DocID)
-							created, err := tc.Vault.EnsureLocalEpisodicIndex(scope, turn.DocID, turn.RefPointer, turn.Text)
+							created, err := vault.EnsureLocalEpisodicIndex(scope, turn.DocID, turn.RefPointer, turn.Text)
 							if err != nil {
+								if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+									deletedEpi[turn.DocID] = true
+									continue
+								}
+								if !errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+									return rep, err
+								}
 								rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
-							} else if created {
-								rep.EpisodicIndexesBackfilled++
+							} else {
+								delete(unverified, turn.DocID)
+								if created {
+									rep.EpisodicIndexesBackfilled++
+								}
+								if _, err := db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+									return rep, err
+								}
 							}
 						}
 					}
@@ -1189,17 +1247,22 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 					}
 					continue
 				}
-				if strings.TrimSpace(turn.Text) == "" {
+				if strings.TrimSpace(turn.Text) == "" || turn.RefPointer == "" {
 					continue
 				}
-				if turn.RefPointer != "" {
-					pkt, _ := tc.Vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-					if err := tc.Vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, pkt, thinclient.CloudIngestResponse{}); err != nil {
-						rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic import %s: %v", turn.DocID, err))
+				pkt, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
+				if err := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, pkt, thinclient.CloudIngestResponse{}); err != nil {
+					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+						deletedEpi[turn.DocID] = true
 						continue
 					}
-					storedRaw[turn.DocID] = turn.RefPointer
+					if !errors.Is(err, thinclient.ErrEpisodicIndexItem) && !errors.Is(err, thinclient.ErrEpisodicPointerSourceConflict) {
+						return rep, err
+					}
+					rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic import %s: %v", turn.DocID, err))
+					continue
 				}
+				storedRaw[turn.DocID] = turn.RefPointer
 				rep.EpisodicImportedFromHar++
 				localEpi[turn.DocID] = true
 				if !localMode {
@@ -1609,388 +1672,136 @@ func harnessSessionsScannable(harnessID string) bool {
 // must label that as "not counted" rather than "no history".
 func harnessTurnsScannable(harnessID string) bool {
 	switch harnessID {
-	case "zcode", "claude-code", "codex", "codebuddy", "workbuddy":
+	case "zcode", "claude-code", "codex", "dsh", "codebuddy", "workbuddy":
 		return true
+	}
+	return false
+}
+
+func harnessHasExcludedSubagentSources(ctx context.Context, home, harnessID string) bool {
+	if harnessID == "claude-code" {
+		for _, pattern := range []string{
+			filepath.Join(home, ".claude", "projects", "*", "*", "subagents", "*.jsonl"),
+			filepath.Join(home, ".claude", "projects", "*", "sessions", "*", "subagents", "*.jsonl"),
+		} {
+			matches, err := filepath.Glob(pattern)
+			if err != nil || len(matches) > 0 {
+				return true
+			}
+		}
+	}
+	if harnessID == "zcode" {
+		path := filepath.Join(home, ".zcode", "cli", "db", "db.sqlite")
+		if _, err := os.Stat(path); err != nil {
+			return !os.IsNotExist(err)
+		}
+		db, err := sql.Open("sqlite", ids.SQLiteFileURI(path)+"?mode=ro&_pragma=busy_timeout(1500)")
+		if err != nil {
+			return true
+		}
+		defer db.Close()
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session WHERE COALESCE(parent_id, '') != '' OR COALESCE(task_type, '') = 'subagent_child'`).Scan(&count); err != nil {
+			return true
+		}
+		return count > 0
 	}
 	return false
 }
 
 // scanHarnessTurns discovers local conversation sessions and extracts User+Assistant
 // turn pairs for a given harness (`zcode`, `claude-code`, `codex`, `dsh`, `codebuddy`, `workbuddy`).
-func scanHarnessTurns(home, harnessID, scope string, maxTurns int) (sessionsCount int, turns []candidateEpisodicTurn, lastActiveAt int64) {
+func scanHarnessTurns(home, harnessID, scope string, maxTurns int) (int, []candidateEpisodicTurn, int64) {
+	sessions, turns, lastActiveAt, _ := scanHarnessTurnsWithCoverage(home, harnessID, scope, maxTurns)
+	return sessions, turns, lastActiveAt
+}
+
+func scanHarnessTurnsWithCoverage(home, harnessID, scope string, maxTurns int) (int, []candidateEpisodicTurn, int64, bool) {
+	return scanHarnessTurnsWithCoverageContext(context.Background(), home, harnessID, scope, maxTurns)
+}
+
+func scanHarnessTurnsWithCoverageContext(ctx context.Context, home, harnessID, scope string, maxTurns int) (sessionsCount int, turns []candidateEpisodicTurn, lastActiveAt int64, complete bool) {
+	complete = true
 	if maxTurns <= 0 {
 		maxTurns = 100
 	}
-	if harnessID == "zcode" {
-		sCnt, zTurns, lastTS := scanZCodeSQLiteTurns(home, scope, maxTurns)
-		sessionsCount += sCnt
-		turns = append(turns, zTurns...)
-		if lastTS > lastActiveAt {
-			lastActiveAt = lastTS
-		}
-	}
-	// Transcript roots live in the harness adapter (the same authority the
-	// installer writes to), so a host's session layout has exactly one owner.
-	patterns := harness.TranscriptGlobs(home, harnessID)
-	if len(patterns) == 0 {
-		return sessionsCount, turns, lastActiveAt
-	}
-	remaining := maxTurns - len(turns)
 	if !harnessTurnsScannable(harnessID) {
-		// Session count and last-activity time are path-level facts; turn content
-		// is not readable for this host yet, so the scan stops before opening the
-		// transcripts and the panel labels the zero as "not counted".
-		remaining = 0
-	}
-	jCnt, jTurns, jTS := scanJSONLPatternTurns(patterns, harnessID, scope, remaining)
-	sessionsCount += jCnt
-	turns = append(turns, jTurns...)
-	if jTS > lastActiveAt {
-		lastActiveAt = jTS
-	}
-	return sessionsCount, turns, lastActiveAt
-}
-
-// scanZCodeSQLiteTurns reads interactive user/assistant turns from `~/.zcode/cli/db/db.sqlite`.
-func scanZCodeSQLiteTurns(home, scope string, maxTurns int) (sessionsCount int, turns []candidateEpisodicTurn, lastActiveAt int64) {
-	zdbPath := filepath.Join(home, ".zcode", "cli", "db", "db.sqlite")
-	info, err := os.Stat(zdbPath)
-	if err != nil || info.IsDir() {
-		return 0, nil, 0
-	}
-	zdb, err := sql.Open("sqlite", ids.SQLiteFileURI(zdbPath)+"?mode=ro&_pragma=busy_timeout(1500)")
-	if err != nil {
-		return 0, nil, 0
-	}
-	defer zdb.Close()
-
-	_ = zdb.QueryRow(`
-		SELECT COUNT(*), COALESCE(MAX(time_updated), 0)
-		FROM session
-		WHERE COALESCE(parent_id, '') = '' AND task_type = 'interactive'
-	`).Scan(&sessionsCount, &lastActiveAt)
-	if lastActiveAt > 1e11 {
-		lastActiveAt /= 1000
-	}
-
-	sRows, err := zdb.Query(`
-		SELECT id
-		FROM session
-		WHERE COALESCE(parent_id, '') = '' AND task_type != 'subagent_child'
-		ORDER BY time_updated DESC
-	`)
-	if err != nil {
-		return sessionsCount, nil, lastActiveAt
-	}
-	var sessionIDs []string
-	for sRows.Next() {
-		var sid string
-		if sRows.Scan(&sid) == nil && strings.TrimSpace(sid) != "" {
-			sessionIDs = append(sessionIDs, strings.TrimSpace(sid))
-		}
-	}
-	sRows.Close()
-
-	seenDoc := map[string]bool{}
-	// Walk sessions newest-first, message by message, and stop as soon as the turn
-	// cap fills. A joined scan materialises the whole window before the first row is
-	// drained — measured 56k parts / ~177 MB of JSON for one 64-session window, and
-	// a single old session (6.8k messages / 24k parts) cost 22.5s of cold reads for
-	// only 211 turns of budget — so the scan is structured to read payloads lazily:
-	// the message ids of a session come from a covering index (no payload reads),
-	// and each message's text parts are fetched by an indexed per-message query
-	// ordered by p.sequence, which streams rows so an exhausted budget stops the
-	// read instead of paying for the rest of the session. Earlier joined chunks also
-	// ordered rows by session id — arbitrary relative to recency — so the cap could
-	// be filled from stale sessions; this walk keeps the selection strictly
-	// newest-first, matching how the reconcile importer and the rebuild pass consume
-	// turns. A sparse-history store simply walks further sessions; a session or
-	// message without matching rows costs one covered indexed lookup.
-
-	var curSession string
-	var curUserMid string
-	var curSegments []episodic.Segment
-	var curTS int64
-	var curCompleted int64
-	normalizeTS := func(ts int64) int64 {
-		if ts > 1e11 {
-			return ts / 1000
-		}
-		return ts
-	}
-	var sessTurns []candidateEpisodicTurn
-	flushTurn := func(completed bool) {
-		if curUserMid == "" || len(curSegments) == 0 {
-			curSegments = nil
-			return
-		}
-		pointerPrefix := fmt.Sprintf("@ref:zcode:%s:%s", curSession, curUserMid)
-		for _, segment := range curSegments {
-			for _, unit := range episodicunit.SegmentUnits(scope, pointerPrefix, segment, normalizeTS(curTS), completed) {
-				if seenDoc[unit.DocID] {
+		seen := map[string]bool{}
+		for _, pattern := range harness.TranscriptGlobs(home, harnessID) {
+			matches, _ := filepath.Glob(pattern)
+			for _, path := range matches {
+				info, err := os.Stat(path)
+				if err != nil || info.IsDir() || seen[path] {
 					continue
 				}
-				seenDoc[unit.DocID] = true
-				sessTurns = append(sessTurns, candidateEpisodicTurn{
-					HarnessID:  "zcode",
-					SessionID:  curSession,
-					DocID:      unit.DocID,
-					RefPointer: unit.RefPointer,
-					TurnRef:    pointerPrefix,
-					Text:       unit.Text,
-					OccurredAt: unit.OccurredAt,
-					Completed:  unit.Completed,
-				})
+				seen[path] = true
+				sessionsCount++
+				if info.ModTime().Unix() > lastActiveAt {
+					lastActiveAt = info.ModTime().Unix()
+				}
 			}
 		}
-		curSegments = nil
+		return sessionsCount, nil, lastActiveAt, sessionsCount == 0
 	}
-	tailComplete := func() bool {
-		// Session tail: final only when the harness stamped completion, or when the
-		// last assistant message is old enough that it can no longer be streaming.
-		tailAge := ids.UTCNow() - normalizeTS(curTS)
-		return curCompleted > 0 || tailAge >= episodicTailGraceSec
+	sources, err := discoverEpisodicScanSources(ctx, home, harnessID)
+	if err != nil {
+		complete = false
 	}
-	appendSessionTurns := func() {
-		if curSession != "" {
-			flushTurn(tailComplete())
-			curSession = ""
-		}
-		if len(sessTurns) == 0 {
-			return
-		}
-		need := maxTurns - len(turns)
-		if need > 0 {
-			if len(sessTurns) > need {
-				// Retain the newest trailing turns of a long session so recent speech
-				// is never starved behind the session's oldest opening turns.
-				sessTurns = sessTurns[len(sessTurns)-need:]
-			}
-			turns = append(turns, sessTurns...)
-		}
-		sessTurns = sessTurns[:0]
+	if harnessHasExcludedSubagentSources(ctx, home, harnessID) {
+		complete = false
 	}
-	// consumeRow folds one text part into the turn assembly. It reports false when
-	// the turn cap is full at a session boundary and the scan should stop; when the
-	// cap fills mid-session the caller stops iterating and the pending turn is
-	// flushed once after the walk.
-	consumeRow := func(sid, mid string, role, txt sql.NullString, ts, completed int64) bool {
-		if sid != curSession {
-			if curSession != "" {
-				appendSessionTurns()
-			}
-			if len(turns) >= maxTurns {
-				// Older sessions can only be skipped, never appended: stop here.
-				curSession = ""
-				return false
-			}
-			curSession = sid
-			curTS, curUserMid, curCompleted = 0, "", 0
-			curSegments = nil
-		}
-		cleaned := strings.TrimSpace(ids.StripInjected(txt.String))
-		if cleaned == "" {
-			return true
-		}
-		r := strings.ToLower(strings.TrimSpace(role.String))
-		if r == "user" && mid != curUserMid {
-			// A turn superseded by the next user message can no longer grow.
-			flushTurn(true)
-			curUserMid = mid
-			curTS = ts
-			curCompleted = 0
-		}
-		if curUserMid == "" {
-			return true
-		}
-		if r != "user" && r != "assistant" {
-			return true
-		}
-		curSegments = append(curSegments, episodic.Segment{
-			Role: r, Text: cleaned, OccurredAt: normalizeTS(ts), Index: len(curSegments),
-		})
-		if ts > 0 {
-			curTS = ts
-		}
-		if completed > 0 {
-			curCompleted = completed
-		} else {
-			curCompleted = 0
-		}
-		return true
-	}
-	emitStatusProgress(progressStageScan, "step", map[string]any{
-		"harness": "zcode", "phase": "walk", "sessions_total": len(sessionIDs),
-		"turns": len(turns), "turns_cap": maxTurns,
+	sessionsCount = len(sources)
+	sort.SliceStable(sources, func(i, j int) bool {
+		left, _ := os.Stat(sources[i].Path)
+		right, _ := os.Stat(sources[j].Path)
+		return left != nil && (right == nil || left.ModTime().After(right.ModTime()))
 	})
-	type zcodePartRow struct {
-		role      sql.NullString
-		txt       sql.NullString
-		ts        int64
-		completed int64
-		pseq      int64
-		prowid    int64
-	}
-	for idx, sid := range sessionIDs {
-		if len(turns) >= maxTurns {
-			break
+	for _, source := range sources {
+		if ctx.Err() != nil {
+			return sessionsCount, turns, lastActiveAt, false
 		}
-		jRows, jErr := zdb.Query(`
-			SELECT m.id,
-			       json_extract(m.data, '$.role') AS role,
-			       json_extract(p.data, '$.text') AS txt,
-			       COALESCE(m.time_created, 0),
-			       COALESCE(json_extract(m.data, '$.time.completed'), 0) AS completed_ts,
-			       COALESCE(p.sequence, 0) AS pseq,
-			       p.rowid AS prowid
-			FROM message m
-			JOIN part p ON p.message_id = m.id
-				WHERE m.session_id = ?
-				  AND `+episodic.ZCodeTextPartFilter+`
-				ORDER BY m.sequence ASC
-		`, sid)
-		if jRows == nil || jErr != nil {
+		if info, err := os.Stat(source.Path); err == nil && info.ModTime().Unix() > lastActiveAt {
+			lastActiveAt = info.ModTime().Unix()
+		}
+		if len(turns) >= maxTurns {
+			complete = false
 			continue
 		}
-		capped := false
-		curMid := ""
-		var curParts []zcodePartRow
-		flushMsgParts := func() bool {
-			if curMid == "" || len(curParts) == 0 {
-				curParts = curParts[:0]
-				return true
+		var sourceTurns []candidateEpisodicTurn
+		next := 0
+		wrapped := false
+		before, stampErr := episodicScanSourceStamp(source)
+		_, scanErr := streamEpisodicScanSource(ctx, source, scope, func(_ int, turn candidateEpisodicTurn) error {
+			if !turn.Completed {
+				complete = false
 			}
-			if len(curParts) > 1 {
-				sort.SliceStable(curParts, func(i, j int) bool {
-					if curParts[i].pseq != curParts[j].pseq {
-						return curParts[i].pseq < curParts[j].pseq
-					}
-					return curParts[i].prowid < curParts[j].prowid
-				})
+			if len(sourceTurns) < maxTurns {
+				sourceTurns = append(sourceTurns, turn)
+			} else {
+				sourceTurns[next] = turn
+				next = (next + 1) % maxTurns
+				wrapped = true
+				complete = false
 			}
-			for _, pt := range curParts {
-				if !consumeRow(sid, curMid, pt.role, pt.txt, pt.ts, pt.completed) {
-					curParts = curParts[:0]
-					return false
-				}
-			}
-			curParts = curParts[:0]
-			return true
-		}
-		for jRows.Next() {
-			var mid string
-			var pt zcodePartRow
-			if jRows.Scan(&mid, &pt.role, &pt.txt, &pt.ts, &pt.completed, &pt.pseq, &pt.prowid) != nil || strings.TrimSpace(mid) == "" {
-				continue
-			}
-			if mid != curMid {
-				if !flushMsgParts() {
-					capped = true
-					break
-				}
-				curMid = mid
-			}
-			curParts = append(curParts, pt)
-		}
-		if !capped {
-			if !flushMsgParts() {
-				capped = true
-			}
-		}
-		jRows.Close()
-		appendSessionTurns()
-		emitStatusProgress(progressStageScan, "step", map[string]any{
-			"harness": "zcode", "phase": "walk", "sessions_done": idx + 1, "sessions_total": len(sessionIDs),
-			"turns": len(turns), "turns_cap": maxTurns,
+			return nil
 		})
-		if capped || len(turns) >= maxTurns {
-			break
+		if wrapped {
+			ordered := make([]candidateEpisodicTurn, 0, len(sourceTurns))
+			ordered = append(ordered, sourceTurns[next:]...)
+			ordered = append(ordered, sourceTurns[:next]...)
+			sourceTurns = ordered
 		}
-	}
-	appendSessionTurns()
-	return sessionsCount, turns, lastActiveAt
-}
-
-// scanJSONLPatternTurns scans JSONL transcript files for Claude Code, Codex, dsh, etc.
-func scanJSONLPatternTurns(patterns []string, harnessID, scope string, maxTurns int) (sessionsCount int, turns []candidateEpisodicTurn, lastActiveAt int64) {
-	type fileEntry struct {
-		path  string
-		mtime int64
-	}
-	seenFiles := map[string]bool{}
-	var files []fileEntry
-	for _, pat := range patterns {
-		matches, _ := filepath.Glob(pat)
-		for _, m := range matches {
-			if seenFiles[m] {
-				continue
-			}
-			info, err := os.Stat(m)
-			if err != nil || info.IsDir() {
-				continue
-			}
-			seenFiles[m] = true
-			mt := info.ModTime().Unix()
-			if mt > lastActiveAt {
-				lastActiveAt = mt
-			}
-			files = append(files, fileEntry{path: m, mtime: mt})
+		after, afterErr := episodicScanSourceStamp(source)
+		if stampErr != nil || scanErr != nil || afterErr != nil || before != after {
+			complete = false
 		}
-	}
-	sessionsCount = len(files)
-	if maxTurns <= 0 {
-		return sessionsCount, nil, lastActiveAt
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].mtime > files[j].mtime })
-	if len(files) > 100 {
-		files = files[:100]
-	}
-
-	seenDoc := map[string]bool{}
-	var fileTurns []candidateEpisodicTurn
-	for _, f := range files {
-		if len(turns) >= maxTurns {
-			break
+		if remaining := maxTurns - len(turns); len(sourceTurns) > remaining {
+			complete = false
+			sourceTurns = sourceTurns[len(sourceTurns)-remaining:]
 		}
-		sess := harness.TranscriptSessionID(harnessID, f.path)
-		transcriptTurns, err := episodic.JSONLTurns(f.path)
-		if err != nil || len(transcriptTurns) == 0 {
-			continue
-		}
-		fileTurns = fileTurns[:0]
-		for _, turn := range transcriptTurns {
-			tailAge := turn.OccurredAt
-			if tailAge <= 0 {
-				tailAge = f.mtime
-			}
-			completed := turn.Index < len(transcriptTurns)-1 || ids.UTCNow()-tailAge >= episodicTailGraceSec
-			pointerPrefix := fmt.Sprintf("@ref:jsonl:%s:%d", f.path, turn.Index)
-			for _, segment := range turn.Segments {
-				for _, unit := range episodicunit.SegmentUnits(scope, pointerPrefix, segment, turn.OccurredAt, completed) {
-					if seenDoc[unit.DocID] {
-						continue
-					}
-					seenDoc[unit.DocID] = true
-					fileTurns = append(fileTurns, candidateEpisodicTurn{
-						HarnessID:  harnessID,
-						SessionID:  sess,
-						DocID:      unit.DocID,
-						RefPointer: unit.RefPointer,
-						TurnRef:    pointerPrefix,
-						Text:       unit.Text,
-						OccurredAt: unit.OccurredAt,
-						Completed:  unit.Completed,
-					})
-				}
-			}
-		}
-		need := maxTurns - len(turns)
-		if len(fileTurns) > need {
-			fileTurns = fileTurns[len(fileTurns)-need:]
-		}
-		turns = append(turns, fileTurns...)
+		turns = append(turns, sourceTurns...)
 	}
-	return sessionsCount, turns, lastActiveAt
+	return sessionsCount, turns, lastActiveAt, complete
 }
 
 // countDirtyBackgroundFiles checks whether any mounted background file on disk has changed mtime/size

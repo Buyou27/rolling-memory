@@ -77,7 +77,7 @@ done
 
 ## 许可与签署
 
-本项目第一方代码对使用者按 [PolyForm Noncommercial License 1.0.0](../../LICENSE) 授权（SDK 按 Apache License 2.0 `sdk/LICENSE`），同时项目另行销售商业许可。为了在不设 CLA 表单的前提下支撑这种双授权模式，**入站贡献按 Apache License 2.0 接收**：提交贡献即表示你同意以 Apache-2.0 提供该贡献，维护者因此可将其纳入项目的非商业与商业许可条款再分发。每次提交请使用 `git commit -s`
+本项目第一方代码（含 `sdk/` 下客户端 SDK，见 `sdk/LICENSE`）对使用者按 [PolyForm Noncommercial License 1.0.0](../../LICENSE) 授权，同时项目另行销售商业许可。为了在不设 CLA 表单的前提下支撑这种双授权模式，**入站贡献按 Apache License 2.0 接收**：提交贡献即表示你同意以 Apache-2.0 提供该贡献，维护者因此可将其纳入项目的非商业与商业许可条款再分发。每次提交请使用 `git commit -s`
 签署（Developer Certificate of Origin 1.1）；无需单独的 CLA。请保留 [NOTICE](../../NOTICE) 中的第三方署名。
 
 ## 安全

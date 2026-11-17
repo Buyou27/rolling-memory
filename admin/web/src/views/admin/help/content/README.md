@@ -2,7 +2,7 @@
 
 **[English](README.md) · [简体中文](docs/zh-CN/README.zh-CN.md) · [Official Website](https://rolling-memory.rocareer.com/) · [Documentation Hub](docs/README.md) · [Token Math & Falsification](docs/token-economics.md) · [FAQ](docs/faq.md) · [Benchmarks](docs/benchmarks.md) · [Declaration & Disclaimer](DECLARATION.md)**
 
-**Rolling Memory** is a source-available, local-first memory tool for AI coding agents — Claude Code, Codex, Cursor, Windsurf, Cline, ZCode, and more — built on the **Rolling Autonoetic Memory Engine**. Conversations and mounted files are recorded **verbatim** in a SQLite vault on your machine and served to every wired harness through one MCP tool: `recall`. **No cloud, no vectors, no background LLM calls**; free for every noncommercial use.
+**Rolling Memory** is a source-available, local-first memory tool for AI coding agents — Claude Code, Codex, Cursor, Windsurf, Cline, ZCode, and more — built on the **Rolling Autonoetic Memory Engine**. It indexes supported conversation sources and mounted files locally for connected agents to query through one MCP tool: `recall`. See the [integration guide](docs/harness.md#45-conversation-collection-and-manual-import) for collection limits and manual import. **No cloud, no vectors, no background LLM calls**; free for every noncommercial use.
 
 ![Rolling Memory Live Console — local vault telemetry, MCP recall ledger and memory asset growth](docs/assets/live-console.webp)
 
@@ -16,7 +16,7 @@ Our goal is simple: **making AI memory accessible and affordable for everyone.**
 
 In everyday use, that comes down to four practical things: **genuinely free, real-time with no waiting, private with no third party in the middle, and portable enough to carry on a USB drive** —
 - **Genuinely free (zero hidden bills)**: No background LLM extraction fees, no online vector embedding API bills, and no cloud hosting or account subscription costs — no sign-up and no credit card;
-- **Real-time (no waiting for indexing or LLM extraction)**: There is no background queue waiting on an LLM to extract facts or a batch job to compute embeddings. Conversations and mounted files are indexed in local SQLite in milliseconds and are searchable right away;
+- **Local retrieval**: No background LLM extraction or embedding service is required; indexed conversations and mounted files can be queried on demand;
 - **Safe and private (no third party in the middle)**: Everything compiles to a single zero-dependency Go binary (`CGO_ENABLED=0`) and lives in one SQLite file on your machine, with zero network requests in the memory layer — **other than you and the agent actively working for you, no third-party memory service, embedding provider, or external server ever sees your code, file paths, or conversations.** One precise boundary: if your coding agent uses a remote LLM API, the passages `recall` returns travel to that model provider as part of your prompt (see [docs/privacy.md](docs/privacy.md) §1);
 - **Evaluation hooks, evaluation cards, and a rough ROI module enabled by default (easy to disable anytime)**: In local mode, experience-evaluation hooks and evaluation cards are enabled by default so you get an immediate feel for whether a memory hit actually helped, alongside a built-in (admittedly rough) ROI estimation panel in the web console. If you find hooks distracting, you can disable or remove them at any time:
   ```bash
@@ -35,7 +35,7 @@ In everyday use, that comes down to four practical things: **genuinely free, rea
 
 ## 1. What does it actually do for you in daily work? (Every saved turn counts)
 
-What it does under the hood is straightforward: it saves your past conversations and mounted local documents **verbatim in a local SQLite database**, indexes them with local lexical and statistical signals, and gives your agent a single MCP tool — `recall` — to look up past records and their source coordinates.
+It indexes supported conversation sources and mounted local documents using local lexical and statistical signals, and gives your agent one MCP tool — `recall` — to look up available records and their source coordinates.
 
 What is the practical benefit? **Helping your harness agent cut down on blind search round-trips.**
 
@@ -76,7 +76,7 @@ The system divides the work into three simple steps. The first two run locally v
 | **2. Index & retrieve** | Local indexes inside the same SQLite file | Combines SQLite FTS5 trigram search and BM25 with three non-vector information-theoretic mechanisms: **(a) adaptive self-information & burst-clone folding** (rarity weights adapt directly to your live vault's distribution without relying on frozen external vocabularies, while near-duplicate logs pasted repeatedly on the same day are folded logarithmically so they never dilute rare terms); **(b) deterministic cross-form alignment** (bridging natural-language dates like `"May 12, 2025"` with ISO `"2025-05-12"`, morphological variants, compound identifiers, and inline number-unit pairs like `"500ms"` or `"16GiB"`); and **(c) dimensionless multi-cue coherence resonance** (amplifying candidate passages where multiple rare cues from the query co-occur within a tight temporal window). Indexes can be rebuilt from the raw records at any time. |
 | **3. Read & judge** | Your host agent or you | The agent calls the single MCP tool `recall`, receives the matching source passages and provenance pointers, and reads them in the context of your current question. |
 
-In daily use, the agent never needs to call a manual "write memory" tool: a background watcher records completed conversation turns during quiet windows, and whenever `recall` hits useful passages, the system records the link between that query and the cited unit IDs locally so related future lookups can find them faster.
+In daily use, the agent does not need to call a manual "write memory" tool: a background watcher can import completed turns from supported sources, while other sources may require manual import. When `recall` hits useful passages, the system records the link between the query and cited units locally.
 
 ---
 
@@ -223,23 +223,23 @@ Each run uses an isolated evaluation scope so it never touches your personal mem
 
 ## 10. Common question: Every harness vendor already has its own memory feature — why use this too?
 
-Tools like Claude Code, Cursor, Windsurf, and ZCode already ship built-in memory features (`CLAUDE.md` / `AGENTS.md`, Auto-Memory `MEMORY.md` notes, Rules, etc.). **We use those built-in features ourselves every day — they and Rolling Memory are not competing "either/or" choices; they complement each other like a sticky note on your desk versus a full-history black-box recorder**:
+Instruction files and host memory features can complement Rolling Memory: concise notes provide guidance, while imported sources provide material for local retrieval.
 
 1. **Built-in auto-notes cost turns to write and only capture a tiny fraction of what happened**:
-   Host auto-memory typically relies on the agent deciding mid-task that something is worth remembering and calling a file-write tool to jot down a short note. That has two catches: first, **every time the agent stops to write a note, that tool call itself costs an extra `100k–400k` round-trip**; second, **everything the agent didn't think to write down at the time** (an error stack from three days ago, a flag or file path mentioned in passing) is gone once the session closes. Rolling Memory quietly indexes completed conversation turns in local SQLite at zero token cost and zero prompt footprint at rest — when your curated notes don't have a detail, `recall` can pull the original passage from your full history.
+   Host auto-memory can depend on an agent writing a note, so details left out of that note may not be retained. Rolling Memory can index supported conversation sources locally for `recall` to retrieve; automatic collection does not cover all history, and other sources may require [manual import](docs/harness.md#45-conversation-collection-and-manual-import).
 2. **Always-on instruction files bloat the prompt if you dump everything into them**:
-   `AGENTS.md` and `MEMORY.md` indexes are injected into every turn in full, which is great for a few dozen core project rules. Piling months of debugging post-mortems into them burns tokens on every turn and dilutes attention. Keeping long-tail history in an on-demand SQLite index costs `0` prompt tokens until `recall` is actually called.
+   `AGENTS.md` and `MEMORY.md` can hold concise project rules. Hosts differ in when and how they load these files, and large files may consume more context. Imported history can instead be queried on demand with `recall`.
 3. **One shared local memory across all your harnesses (no tool lock-in)**:
-   Most developers switch between Claude Code, Cursor, Codex, ZCode, or Cline. Each vendor's built-in memory is an **isolated silo** — a bug you solved in Claude Code is invisible when you open Cursor or Codex. `rolling-memory install` wires **10 harnesses to the same local SQLite database**, so a fix recorded in one tool is immediately searchable from any other.
+   Connected tools can query the same local SQLite vault, including records imported from supported sources. Connecting a tool does not itself import that tool's conversation history.
 4. **Unedited verbatim transcripts as a ground-truth fallback when summaries go wrong**:
-   Built-in auto-memories are model-written summaries; if the model misunderstood the context when writing the note, that mistaken summary stays in your notes. Rolling Memory never rewrites facts — it keeps the verbatim transcript and timestamps, acting as a local "flight recorder" you and your agent can check whenever a summary looks suspicious.
+   Model-written summaries can contain mistakes. For imported records, `recall` can return source passages and provenance for you and your agent to check.
 
 ---
 
 ## 11. License, contributing, and acknowledgments
 
 - **Contributing**: Issues, suggestions, and pull requests are very welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md). This project uses a "human-defined invariants & acceptance criteria + AI-assisted implementation" workflow; the full disclaimer is in [DECLARATION.md](DECLARATION.md).
-- **License**: Released under the **[PolyForm Noncommercial License 1.0.0](LICENSE)** (SPDX: `PolyForm-Noncommercial-1.0.0`). Full source code is free to use, modify, and share **for any noncommercial purpose**; **commercial use and commercial distribution (including SaaS hosting and commercial embedding) require a separate written commercial license**. The client SDK under `sdk/` is separately licensed under **Apache-2.0** (`sdk/LICENSE`). Third-party attributions are in [NOTICE](NOTICE).
+- **License**: Released under the **[PolyForm Noncommercial License 1.0.0](LICENSE)** (SPDX: `PolyForm-Noncommercial-1.0.0`). Full source code — including the client SDK under `sdk/` ([license copy](sdk/LICENSE)) — is free to use, modify, and share **for any noncommercial purpose**; **commercial use and commercial distribution (including SaaS hosting and commercial embedding) require a separate written commercial license**. Third-party attributions are in [NOTICE](NOTICE).
 - **Acknowledgments**: The web administration console is a derivative of **[AI GO ADMIN](https://github.com/ai-go-hub/ai-go-admin)** (Apache-2.0; Go + Gin + Vue 3 admin framework — mirrors: [Gitee](https://gitee.com/ai-go-hub/ai-go-admin) · [AtomGit](https://atomgit.com/ai-go-hub/ai-go-admin)), whose UI lineage traces back to **[BuildAdmin](https://gitee.com/wonderful-code/buildadmin)** (Apache-2.0, © 妙码生花). The plugin catalog page is ported from BuildAdmin `v2.3.9`. Per-file attribution and modification notes are registered in [NOTICE](NOTICE) §2.
 
 Copyright © 2026 Rocareer & Rolling-Memory Organization (Albert `<albert@rocareer.com>`). All rights reserved.

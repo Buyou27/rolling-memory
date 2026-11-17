@@ -1639,6 +1639,13 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 		// Stage 1: the walk only scans and stages. It keeps the O(1) stat fast path (unchanged
 		// files never leave this phase) and records every other file for the upload pool; no
 		// network or file read happens inside the callback.
+		// A file reached through a symlink must stay inside the mount: a link pointing outside
+		// would silently expand the mount to unrelated files (and from there into recall), so
+		// the boundary is the canonical mount root.
+		rootResolved := m.RootPath
+		if resolved, rErr := filepath.EvalSymlinks(m.RootPath); rErr == nil {
+			rootResolved = filepath.Clean(resolved)
+		}
 		ignoreRules := loadBackgroundIgnoreRules(m.RootPath)
 		uploads := make([]backgroundSyncUpload, 0, 16)
 		walkErr := filepath.WalkDir(m.RootPath, func(path string, d fs.DirEntry, walkErr error) error {
@@ -1671,14 +1678,26 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 			}
 
 			absFile := filepath.Clean(path)
+			outsideRoot := false
 			if resolved, err := filepath.EvalSymlinks(absFile); err == nil {
-				absFile = filepath.Clean(resolved)
+				resolvedClean := filepath.Clean(resolved)
+				outsideRoot = resolvedClean != rootResolved &&
+					!strings.HasPrefix(resolvedClean, rootResolved+string(filepath.Separator))
+				absFile = resolvedClean
 			}
 			if seenAbsPaths[absFile] {
 				// Already visited via a more specific nested mount.
 				return nil
 			}
 			if !IsSupportedBackgroundFile(absFile) || !MatchesBackgroundDirExtensions(absFile, m.IncludeExts) {
+				return nil
+			}
+			if outsideRoot {
+				report.SkippedFiles = append(report.SkippedFiles, BackgroundSkippedFile{
+					AbsPath: path,
+					RelPath: walkRelSlash,
+					Reason:  "symlink target is outside the mount root",
+				})
 				return nil
 			}
 			info, err := os.Stat(absFile)

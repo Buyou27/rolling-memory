@@ -1,6 +1,13 @@
 {
   "actions": [
     {
+      "component": "server",
+      "detail": "selected launcher probe only; host registrations are not executed",
+      "harness": "*",
+      "path": "<CASE>/bin/rolling-memory",
+      "status": "skipped"
+    },
+    {
       "component": "skill",
       "detail": "",
       "harness": "zcode",
@@ -9,24 +16,31 @@
     },
     {
       "component": "mcp",
-      "detail": "<CASE>/bin/rolling-memory",
+      "detail": "configured; runtime not verified (<CASE>/bin/rolling-memory)",
       "harness": "zcode",
       "path": "<HOME>/.zcode/cli/config.json",
       "status": "ok"
     },
     {
       "component": "hooks",
-      "detail": "1 event",
+      "detail": "hooks are disabled or the enable switch is invalid",
       "harness": "zcode",
       "path": "<HOME>/.zcode/cli/config.json",
-      "status": "ok"
+      "status": "conflict"
     },
     {
       "component": "instructions",
-      "detail": "half marker found",
+      "detail": "ambiguous or incomplete marker",
       "harness": "zcode",
       "path": "<HOME>/.zcode/AGENTS.md",
       "status": "conflict"
+    },
+    {
+      "component": "mcp-runtime",
+      "detail": "host registration not executed; runtime unverified",
+      "harness": "zcode",
+      "path": "-",
+      "status": "skipped"
     },
     {
       "component": "skill",
@@ -37,7 +51,7 @@
     },
     {
       "component": "mcp",
-      "detail": "<CASE>/bin/rolling-memory",
+      "detail": "configured; runtime not verified (<CASE>/bin/rolling-memory)",
       "harness": "claude-code",
       "path": "<HOME>/.claude.json",
       "status": "ok"
@@ -57,6 +71,13 @@
       "status": "ok"
     },
     {
+      "component": "mcp-runtime",
+      "detail": "host registration not executed; runtime unverified",
+      "harness": "claude-code",
+      "path": "-",
+      "status": "skipped"
+    },
+    {
       "component": "skill",
       "detail": "",
       "harness": "codex",
@@ -65,17 +86,17 @@
     },
     {
       "component": "mcp",
-      "detail": "<CASE>/bin/rolling-memory",
+      "detail": "same-named entry is not ours",
       "harness": "codex",
       "path": "<CFG>",
-      "status": "ok"
+      "status": "conflict"
     },
     {
       "component": "hooks",
-      "detail": "not supported",
+      "detail": "1 event",
       "harness": "codex",
-      "path": "-",
-      "status": "skipped"
+      "path": "<HOME>/.codex/hooks.json",
+      "status": "ok"
     },
     {
       "component": "instructions",
@@ -93,14 +114,14 @@
     },
     {
       "component": "mcp",
-      "detail": "",
+      "detail": "cannot safely parse DSH patch: DSH patch must be a sequence",
       "harness": "dsh",
       "path": "<HOME>/.dsh/profiles/web/cordis.patch.yml",
-      "status": "ok"
+      "status": "conflict"
     },
     {
       "component": "hooks",
-      "detail": "not supported",
+      "detail": "not supported for this scope",
       "harness": "dsh",
       "path": "-",
       "status": "skipped"
@@ -121,14 +142,14 @@
     },
     {
       "component": "mcp",
-      "detail": "<CASE>/bin/rolling-memory",
+      "detail": "configured; runtime not verified (<CASE>/bin/rolling-memory)",
       "harness": "codebuddy",
       "path": "<HOME>/.codebuddy/mcp.json",
       "status": "ok"
     },
     {
       "component": "hooks",
-      "detail": "not supported",
+      "detail": "not supported for this scope",
       "harness": "codebuddy",
       "path": "-",
       "status": "skipped"
@@ -136,6 +157,13 @@
     {
       "component": "instructions",
       "detail": "no instruction target for this scope",
+      "harness": "codebuddy",
+      "path": "-",
+      "status": "skipped"
+    },
+    {
+      "component": "mcp-runtime",
+      "detail": "host registration not executed; runtime unverified",
       "harness": "codebuddy",
       "path": "-",
       "status": "skipped"
@@ -147,6 +175,8 @@
   "name": "rolling-memory",
   "ok": false,
   "server": {
+    "evidence": "selected launcher only; host registrations are not executed",
+    "launcher": "<CASE>/bin/rolling-memory",
     "ok": true,
     "server": {
       "name": "rolling-memory",

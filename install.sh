@@ -78,7 +78,9 @@ if [ -n "${SCRIPT_ROOT}" ] && [ -f "${SCRIPT_ROOT}/cmd/rolling-memory/main.go" ]
 fi
 
 # try_download_prebuilt fetches SHA256SUMS and the platform binary from a given
-# release base URL. Returns 0 on verified install, 2 on SHA256 mismatch (fatal),
+# release base URL. Returns 0 on verified install, 3 on a SHA256 mismatch (an
+# unverifiable download: fatal on every channel), 2 when the channel cannot
+# offer a verifiable artifact for this platform (no entry, or no hash tool),
 # or 1 when the channel is unreachable.
 try_download_prebuilt() {
   local base_url="$1" asset="$2" tmp="${TARGET_BIN}.tmp.$$"
@@ -102,10 +104,15 @@ try_download_prebuilt() {
   local got=""
   got="$(rm_sha256 "${tmp}" || true)"
   rm -f "${tmp}.sums"
-  if [ -z "${got}" ] || [ "${want}" != "${got}" ]; then
+  if [ -z "${got}" ]; then
     rm -f "${tmp}"
-    echo "install.sh: SHA256 mismatch for ${asset} (want ${want}, got ${got:-<no hash tool>})" >&2
+    prebuilt_err="cannot verify ${asset}: no sha256 tool (install coreutils or openssl)"
     return 2
+  fi
+  if [ "${want}" != "${got}" ]; then
+    rm -f "${tmp}"
+    prebuilt_err="SHA256 mismatch for ${asset} (want ${want}, got ${got})"
+    return 3
   fi
   chmod 0755 "${tmp}"
   mv -f "${tmp}" "${TARGET_BIN}"
@@ -114,8 +121,10 @@ try_download_prebuilt() {
 
 # Prebuilt assets are attached to each tagged release under exactly these names;
 # the default base is the official release channel (falling back to the release
-# mirror and then a source build when not reachable). An explicitly configured
-# base stays strict: a missing SHA256SUMS or hash mismatch there is always fatal.
+# mirror and then a source build when it cannot offer a verifiable artifact).
+# An explicitly configured base stays strict: a missing SHA256SUMS or missing
+# entry there is always fatal. A SHA256 mismatch is never treated as a channel
+# problem: no unverified binary may be installed, so it aborts on every channel.
 if [ "${built}" -eq 0 ] && [ -n "${release_base}" ]; then
   if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     prebuilt_err="neither curl nor wget is installed"
@@ -130,6 +139,9 @@ if [ "${built}" -eq 0 ] && [ -n "${release_base}" ]; then
     try_download_prebuilt "${release_base}" "${asset}" || rc=$?
     if [ "${rc}" -eq 0 ]; then
       built=1
+    elif [ "${rc}" -eq 3 ]; then
+      echo "install.sh: ${prebuilt_err}; refusing the prebuilt channel (retry later, or build from a checkout of ${REPO_URL})" >&2
+      exit 1
     elif [ "${rc}" -eq 2 ]; then
       if [ "${release_base_explicit}" -eq 1 ]; then
         echo "install.sh: ${prebuilt_err}; refusing an unverifiable binary" >&2
@@ -148,6 +160,9 @@ if [ "${built}" -eq 0 ] && [ -n "${release_base}" ]; then
         try_download_prebuilt "${release_mirror}" "${asset}" || rc_mirror=$?
         if [ "${rc_mirror}" -eq 0 ]; then
           built=1
+        elif [ "${rc_mirror}" -eq 3 ]; then
+          echo "install.sh: ${prebuilt_err}; refusing the mirror channel" >&2
+          exit 1
         else
           # A mirror rejection is never swallowed: report it (and keep the
           # mirror's own reason for the message below).
@@ -251,9 +266,11 @@ esac
 "${TARGET_BIN}" init --write-config >/dev/null 2>&1 || true
 
 install_err="$(mktemp "${TMPDIR:-/tmp}/rm-install-err.XXXXXX")"
+# Default wiring is skill + MCP (+ instructions); hooks are an explicit
+# --with-hooks opt-in and are never wired by the default install path.
 if [ "$#" -eq 0 ]; then
   set +e
-  "${TARGET_BIN}" install --with-hooks 2>"${install_err}"
+  "${TARGET_BIN}" install 2>"${install_err}"
   install_rc=$?
   set -e
 else
@@ -270,7 +287,7 @@ elif grep -q "no harness detected" "${install_err}" 2>/dev/null; then
   cat "${install_err}" >&2
   rm -f "${install_err}"
   echo "[rolling-memory] CLI binary and local vault are installed and ready (no host harness detected under ${HOME} yet)."
-  echo "[rolling-memory] Wire a harness anytime with: rolling-memory install --with-hooks [<harness-id>]"
+  echo "[rolling-memory] Wire a harness anytime with: rolling-memory install [<harness-id>]"
 else
   cat "${install_err}" >&2
   rm -f "${install_err}"

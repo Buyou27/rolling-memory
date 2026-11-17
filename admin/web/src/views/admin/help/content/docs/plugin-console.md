@@ -2,13 +2,13 @@
 
 **[English](plugin-console.md) · [简体中文](zh-CN/plugin-console.md)**
 
-Rolling Memory ships with a full pure-Go SQLite Web Administration Console (`rolling-memory panel`) as the unified visual console for the entire system, integrating real-time engine telemetry, the dedicated Memory Console, the ROI & Cognitive Efficacy Monitor, interactive force-directed memory graph visualization, memory governance, frozen benchmark evaluation, plugin lifecycle management, and the open-source documentation hub into a single workspace.
+Rolling Memory ships with a full pure-Go SQLite Web Administration Console (`rolling-memory panel`) as the unified visual console for the entire system, integrating real-time engine telemetry, the dedicated Memory Console, the ROI & Cognitive Efficacy Monitor, interactive force-directed memory graph visualization, memory governance, frozen benchmark evaluation, plugin lifecycle management, and the documentation hub into a single workspace.
 
 ![Rolling Memory Live Console — local vault telemetry, MCP recall ledger and memory asset growth](assets/live-console.webp)
 
 *The Live Console at a glance (local mode): on-device vault telemetry, the MCP `recall` ledger, and 3-layer memory asset growth.*
 
-> **Building & running from source (`admin/`)**: the Web Administration Console source (`admin/`) is fully open source and ships in this repository (see `admin/README.md` in the repository root for the full module guide). We do not ship prebuilt console binaries — build and launch it locally from source:
+> **Building & running from source (`admin/`)**: the Web Administration Console source (`admin/`) is available in this repository; see [LICENSE](../LICENSE) and [NOTICE](../NOTICE) for license and attribution details, and `admin/README.md` for the module guide. We do not ship prebuilt console binaries — build and launch it locally from source:
 >
 > 1. **Build the web frontend** (outputs to `admin/web/dist/`):
 >    ```bash
@@ -32,7 +32,9 @@ Rolling Memory ships with a full pure-Go SQLite Web Administration Console (`rol
 >    cd admin/web && npm run dev
 >    ```
 >
-> **Local only by default**: the console listens on `127.0.0.1` and only accepts requests addressed to this computer (`localhost` / `127.0.0.1`), because it can read and modify all of your local memory and its out-of-the-box account is publicly documented. To reach it from another device, set the `SERVER_HOST` environment variable (or `server.host` in `~/.local/share/rolling-memory/admin/config/config.yaml`) to `0.0.0.0` or a specific network address — and change the default password first.
+>    **Frontend supply — both modes are supported:** `npm run dev` starts a Vite dev server with hot module replacement (frontend edits apply instantly; no build step needed), while `npm run build` produces static assets under `admin/web/dist/` that `rolling-memory panel --serve-web ./dist --web-port 8008` can host without a Node runtime. Installed copies without a source tree serve the built `web-dist/` assets, refreshed from the release channel by `rolling-memory panel --update`.
+>
+> **Local only by default**: the console listens on `127.0.0.1` and only accepts requests addressed to this computer (`localhost` / `127.0.0.1`), because it can read and modify all of your local memory. The out-of-the-box account is **`rolling` / `rolling`** — publicly documented, and the login page offers one-click fill when you open it locally. You can change the password anytime after signing in under **`Routine` → `Profile`**; the new password is kept in your local console database and survives upgrades. To reach the console from another device, set the `SERVER_HOST` environment variable (or `server.host` in `~/.local/share/rolling-memory/admin/config/config.yaml`) to `0.0.0.0` or a specific network address — and change the default password first.
 
 ---
 
@@ -45,7 +47,7 @@ The left navigation bar of the Web Administration Console is organized into seve
 | 1 | **Dashboard** (`dashboard`) | `Live Console` · `Memory Console` (`/#/admin/dashboard/artifacts`) · `ROI Monitor` · `Memory Graph` | Zero-poll WebSocket real-time engine KPIs & 5 ECharts telemetry panels, dedicated Memory Console (100% Vector-Free & LLM-Free local memory engine connectivity, local plaintext vault telemetry, and runtime switches), the Memory ROI & Cognitive Efficacy Monitor (1h / 24h / 7d / 30d / All-Time windows tracking L3 Noetic crystallization & citation links, cross-session memory reuse multiplier, `tokenz-r` distillation compression & delivery budget, zero-copy pointer ratio, per-workspace heat matrix, and Top Cited Units), and an interactive memory graph powered by a Web Worker force-directed layout with collision detection (zero-poll WebSocket live auto-refresh; currently a **preview feature** — see §2.6) |
 | 2 | **Memory Management** (`plugin/rolling-memory`) | `Recall Debugger` · `Memory Overview` · `L1 Docs & Code` · `L2 Sessions` · `L3 Recall Trail` | The **Recall Debugger** runs the exact `recall` path your Agent uses: an optional workspace anchor (that project's evidence ranks first, nothing is dropped), one-click replay of recent Agent recalls, and read-only by default (nothing is written to L3). The three layer pages browse mounted-folder chunks, Harness session records, and the Agent recall trail with multi-dimensional filters, source-span provenance, and deletion; any L3 row can be replayed in the debugger |
 | 3 | **Evaluation** (`plugin/rolling-memory/eval-dir`) | `Evaluation Lab` · `Cambridge ATM-Bench Leaderboard` · `LoCoMo-Backboard Leaderboard` | Cambridge ATM-Bench (`--suite atm`, `hard / 1013` primary benchmark) and LoCoMo (`200 / 1540` comparative reference) evaluation runs; two dedicated leaderboard pages display the University of Cambridge ATM-Bench multimodal personal-memory board (official `Recall@10` definition, Main-1013 / Hard-31 tabs) and the cryptographically pinned `locomo-backboard` comparative board |
-| 4 | **Help Center** (`help`) | `Help & Docs` · `Open-Source Repo & Declarations` | Dedicated documentation hub directly bound to the bilingual `docs/zh-CN/` and `docs/` manuals, root `DECLARATION.md` honesty statement, and `LICENSE` |
+| 4 | **Help Center** (`help`) | `Help & Docs` · `Repository & Declarations` | Dedicated documentation hub directly bound to the bilingual `docs/zh-CN/` and `docs/` manuals, root `DECLARATION.md` honesty statement, and `LICENSE` |
 | 5 | **Permissions** (`auth`) | `Role Groups` · `Administrators` · `Menu Rules` · `Admin Logs` | RBAC permission tree, menu routing rules, and administrator operation audit logs |
 | 6 | **Routine** (`routine`) | `System Config` · `Profile` | Site parameters and administrator profile settings |
 | 7 | **Plugins** (`plugin-center`) | `Plugin Management` · `Plugin Sources` · `Plugin Catalog` | Host plugin lifecycle management (install/enable/disable/uninstall), `local`/`http`/`git` repository sources, and manifest synchronization |

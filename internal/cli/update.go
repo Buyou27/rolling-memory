@@ -165,8 +165,7 @@ func (a *application) runUpdate() int {
 			return a.fail(fmt.Errorf("update %s: %w", cliAsset, err))
 		}
 		ensureBinaryLinks(targetBin, linkPaths)
-		mcp.ShutdownUnixDaemon("")
-		daemonRefreshed = true
+		daemonRefreshed = mcp.ShutdownUnixDaemon("") == nil
 		updatedComponents = append(updatedComponents, cliAsset)
 	}
 
@@ -215,7 +214,9 @@ func (a *application) runUpdate() int {
 
 	harnessRefreshed := false
 	if cliNeedsUpdate && !noInstall {
-		cmd := exec.Command(targetBin, "install", "--with-hooks")
+		// Refresh skill + MCP wiring only: hooks are an explicit --with-hooks
+		// opt-in, and an existing hook wiring is left untouched by plain install.
+		cmd := exec.Command(targetBin, "install")
 		if err := cmd.Run(); err == nil {
 			harnessRefreshed = true
 		}
@@ -251,7 +252,7 @@ func (a *application) runUpdate() int {
 		a.printf("updated · version %s (%s)\n", verLabel, strings.Join(updatedComponents, ", "))
 		a.printf("  binary: %s (%s)\n", targetBin, shortSHA(wantCLISHA))
 		if harnessRefreshed {
-			a.printf("  harness integrations refreshed (`install --with-hooks`)\n")
+			a.printf("  harness integrations refreshed (`install`; hooks unchanged)\n")
 		}
 		if consoleRestarted {
 			a.printf("  web console restarted (backend :9006 + web frontend :8008)\n")

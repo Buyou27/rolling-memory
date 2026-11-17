@@ -6,6 +6,7 @@ package harness
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
@@ -49,6 +51,75 @@ func setupZCodePluginCache(t *testing.T, fx *fixture, version string) string {
 	return pluginDir
 }
 
+func TestPluginSameNameDoesNotProveUsableMCP(t *testing.T) {
+	fx := newFixture(t)
+	options := fx.options()
+	options.Name = DefaultName
+	options.SkillName = DefaultName
+	zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFailures(t, Install(zcode, options))
+	pluginDir := setupZCodePluginCache(t, fx, "0.7.4")
+	if _, err := writeText(filepath.Join(pluginDir, ".zcode-plugin", "plugin.json"), `{"name":"rolling-memory","mcpServers":{"rolling-memory":{"type":"stdio","command":"/missing/rolling-memory","args":["mcp"]}}}`); err != nil {
+		t.Fatal(err)
+	}
+	data, err := loadJSONFile(fx.zcodeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = jsonTableWith(data, []string{"plugins", "enabledPlugins"}, true, func(current ids.OrderedMap) ids.OrderedMap {
+		return objectSet(current, "rolling-memory@marketplace", true)
+	})
+	config, err := dumpJSON(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeText(fx.zcodeConfig(), config); err != nil {
+		t.Fatal(err)
+	}
+	plugin, found := activeNativePlugin(zcode[0], options)
+	if !found || !plugin.HasMCP {
+		t.Fatalf("plugin declaration and verification = %#v, found=%v", plugin, found)
+	}
+	Install(zcode, options)
+	data, err = loadJSONFile(fx.zcodeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := jsonLookup(data, []string{"mcp", "servers", options.Name}); !found {
+		t.Fatal("unverified plugin removed the existing MCP registration")
+	}
+}
+
+func TestPluginDeclarationWithoutRuntimeEvidence(t *testing.T) {
+	fx := newFixture(t)
+	options := fx.options()
+	options.Name = DefaultName
+	options.SkillName = DefaultName
+	zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupZCodePluginCache(t, fx, "0.7.4")
+	if _, err := writeText(fx.zcodeConfig(), `{"plugins":{"enabledPlugins":{"rolling-memory@marketplace":true}}}`); err != nil {
+		t.Fatal(err)
+	}
+	plugin, found := activeNativePlugin(zcode[0], options)
+	if !found || !plugin.HasSkill || !plugin.HasMCP || !plugin.HasHooks {
+		t.Fatalf("plugin evidence = %#v, found=%v", plugin, found)
+	}
+	if installed := InstalledHarnesses(zcode, options); len(installed) != 1 {
+		t.Fatalf("enabled plugin declaration not discovered: %#v", installed)
+	}
+	for _, action := range Check(zcode, options, false).Actions {
+		if (action.Component == "skill" || action.Component == "mcp" || action.Component == "hooks") && action.Status == StatusOK {
+			t.Fatalf("unverified plugin reported healthy: %#v", action)
+		}
+	}
+}
+
 func TestPluginHooksRequireCommand(t *testing.T) {
 	tests := []struct {
 		name string
@@ -58,9 +129,14 @@ func TestPluginHooksRequireCommand(t *testing.T) {
 		{"empty", `{"hooks":{}}`, false},
 		{"empty event", `{"hooks":{"UserPromptSubmit":[]}}`, false},
 		{"unrelated command", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"other"}]}]}}`, false},
+		{"disabled command", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","enabled":false,"command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall"}]}]}}`, false},
+		{"wrong type", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"prompt","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall"}]}]}}`, false},
 		{"unrelated suffix", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall-extra"}]}]}}`, false},
 		{"valid", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall"}]}]}}`, true},
 		{"valid json envelope", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall --json"}]}]}}`, true},
+		{"quoted path", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"\"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook\" recall --json"}]}]}}`, true},
+		{"quoted whole command", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"\"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall --json\""}]}]}}`, false},
+		{"quoted path with shell suffix", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"\"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook\" recall --json; other"}]}]}}`, false},
 		{"json suffix on unrelated sub", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook start --json"}]}]}}`, false},
 	}
 	for _, tt := range tests {
@@ -87,7 +163,7 @@ func TestPluginHooksRequireCommand(t *testing.T) {
 	}
 }
 
-func TestZCodePluginDeduplicatesGlobalInstallAndCheckRecognizesSinglePath(t *testing.T) {
+func TestZCodePluginPreservesExistingInstallUntilVerified(t *testing.T) {
 	fx := newFixture(t)
 	options := fx.options()
 	options.Name = DefaultName
@@ -129,28 +205,55 @@ func TestZCodePluginDeduplicatesGlobalInstallAndCheckRecognizesSinglePath(t *tes
 		}
 	}
 
-	// 4. Running Install now automatically deduplicates global skill, MCP and hooks.
-	dedupReport := Install(zcodeOnly, options)
-	assertNoFailures(t, dedupReport)
-	removedCount := 0
-	for _, action := range dedupReport.Actions {
-		if action.Harness == "zcode" && action.Status == StatusRemoved && strings.Contains(action.Detail, "deduped; provided by plugin rolling-memory@marketplace") {
-			removedCount++
-		}
+	install := Install(zcodeOnly, options)
+	assertPluginSurfacesPreserved(t, install, zcodeOnly[0], options, "skill", "mcp", "hooks")
+	check := Check(zcodeOnly, options, false)
+	if len(check.Failures()) == 0 {
+		t.Fatalf("unverified duplicate surfaces require review: %#v", check.Actions)
 	}
-	if removedCount != 3 {
-		t.Fatalf("expected 3 removed duplicate surfaces, got %d: %#v", removedCount, dedupReport.Actions)
-	}
+}
 
-	// 5. Re-running Check now passes cleanly (0 failures) and attributes skill/mcp/hooks to the plugin.
-	checkClean := Check(zcodeOnly, options, false)
-	assertNoFailures(t, checkClean)
-	for _, action := range checkClean.Actions {
-		if action.Component == "instructions" {
-			continue
+func assertPluginSurfacesPreserved(t *testing.T, report *Report, h Harness, options InstallOptions, components ...string) {
+	t.Helper()
+	for _, component := range components {
+		found := false
+		for _, action := range report.Actions {
+			if action.Harness == h.ID && action.Component == component {
+				if action.Status == StatusRemoved {
+					t.Fatalf("unverified plugin removed %s: %#v", component, action)
+				}
+				if action.Status == StatusConflict {
+					found = true
+				}
+			}
 		}
-		if action.Status != StatusOK || !strings.Contains(action.Detail, "plugin rolling-memory@marketplace") {
-			t.Fatalf("expected OK via plugin for %s, got %#v", action.Component, action)
+		if !found {
+			t.Fatalf("expected %s conflict for unverified plugin: %#v", component, report.Actions)
+		}
+	}
+	for _, component := range components {
+		switch component {
+		case "skill":
+			for _, path := range skillTargets(h, options) {
+				if !fileExists(path) {
+					t.Fatalf("existing skill removed: %s", path)
+				}
+			}
+		case "mcp":
+			for _, path := range mcpTargetPaths(h, options) {
+				data, err := loadJSONFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				keys := append(append([]string{}, h.MCPKeys...), options.Name)
+				if _, found := jsonLookup(data, keys); !found {
+					t.Fatalf("existing MCP entry removed: %s", path)
+				}
+			}
+		case "hooks":
+			if !zcodeHasGlobalHooks(h, options) {
+				t.Fatal("existing hook removed")
+			}
 		}
 	}
 }
@@ -189,7 +292,7 @@ func TestEmptyPluginHooksKeepGlobalHook(t *testing.T) {
 	assertNoFailures(t, Check(zcodeOnly, options, false))
 }
 
-func TestClaudePluginDeduplicatesGlobalInstallAndCheck(t *testing.T) {
+func TestClaudePluginPreservesExistingInstallUntilVerified(t *testing.T) {
 	fx := newFixture(t)
 	options := fx.options()
 	options.Name = DefaultName
@@ -245,10 +348,8 @@ func TestClaudePluginDeduplicatesGlobalInstallAndCheck(t *testing.T) {
 		t.Fatalf("writeText settings.json: %v", err)
 	}
 
-	dedupReport := Install(claudeOnly, options)
-	assertNoFailures(t, dedupReport)
-	checkClean := Check(claudeOnly, options, false)
-	assertNoFailures(t, checkClean)
+	install := Install(claudeOnly, options)
+	assertPluginSurfacesPreserved(t, install, claudeOnly[0], options, "skill", "mcp", "hooks")
 }
 
 func TestExtendedHarnessesCursorWindsurfCline(t *testing.T) {
@@ -448,11 +549,8 @@ func TestWorkBuddyNeverClobbersHostEntries(t *testing.T) {
 	}
 }
 
-// TestWorkBuddyPluginDeduplicatesGlobalInstall mirrors the ZCode/Claude dedup
-// contract for WorkBuddy: once the native plugin is enabled (settings.json +
-// plugins/cache manifest + .mcp.json + skills), a CLI install must fold the
-// user-scope skill and MCP entry into the plugin's single path.
-func TestWorkBuddyPluginDeduplicatesGlobalInstall(t *testing.T) {
+// WorkBuddy plugin declarations do not prove an existing registration is replaceable.
+func TestWorkBuddyPluginPreservesExistingInstall(t *testing.T) {
 	fx := newFixture(t)
 	options := fx.options()
 	options.Name = DefaultName
@@ -482,24 +580,12 @@ func TestWorkBuddyPluginDeduplicatesGlobalInstall(t *testing.T) {
 		t.Fatalf("writeText settings.json: %v", err)
 	}
 
-	dedupReport := Install(workbuddy, options)
-	assertNoFailures(t, dedupReport)
-	removed := map[string]bool{}
-	for _, action := range dedupReport.Actions {
-		if action.Harness == "workbuddy" && action.Status == StatusRemoved && strings.Contains(action.Detail, "deduped; provided by plugin rolling-memory@marketplace") {
-			removed[action.Component] = true
-		}
-	}
-	if !removed["skill"] || !removed["mcp"] {
-		t.Fatalf("workbuddy dedup must fold skill and mcp into the plugin, got %#v", dedupReport.Actions)
-	}
-	assertNoFailures(t, Check(workbuddy, options, false))
+	install := Install(workbuddy, options)
+	assertPluginSurfacesPreserved(t, install, workbuddy[0], options, "skill", "mcp")
 }
 
-// TestWorkBuddyPluginDedupFromMarketplaceDir covers the directory-marketplace
-// shape: no plugins/cache copy exists, the plugin is enabled in settings.json
-// and the bundle lives inside plugins/marketplaces/<name>/.
-func TestWorkBuddyPluginDedupFromMarketplaceDir(t *testing.T) {
+// The same preservation rule applies to directory-marketplace plugins.
+func TestWorkBuddyMarketplacePluginPreservesExistingInstall(t *testing.T) {
 	fx := newFixture(t)
 	options := fx.options()
 	options.Name = DefaultName
@@ -537,22 +623,12 @@ func TestWorkBuddyPluginDedupFromMarketplaceDir(t *testing.T) {
 		t.Fatalf("writeText settings.json: %v", err)
 	}
 
-	dedupReport := Install(workbuddy, options)
-	assertNoFailures(t, dedupReport)
-	removed := map[string]bool{}
-	for _, action := range dedupReport.Actions {
-		if action.Harness == "workbuddy" && action.Status == StatusRemoved && strings.Contains(action.Detail, "deduped; provided by plugin rolling-memory@rolling-memory-plugins") {
-			removed[action.Component] = true
-		}
-	}
-	if !removed["skill"] || !removed["mcp"] {
-		t.Fatalf("marketplace-dir dedup must fold skill and mcp into the plugin, got %#v", dedupReport.Actions)
-	}
+	install := Install(workbuddy, options)
+	assertPluginSurfacesPreserved(t, install, workbuddy[0], options, "skill", "mcp")
 }
 
-// TestRepositoryPluginBundleHooksContract pins the shipped bundle: the repo's
-// hooks/hooks.json must satisfy pluginHasHooks, so the native plugin provides
-// the prompt hook on every host (and CLI-wired hooks are deduplicated).
+// TestRepositoryPluginBundleHooksContract checks the shipped hook declaration;
+// it does not assert that a host loaded or ran the hook.
 func TestRepositoryPluginBundleHooksContract(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	hookPath := filepath.Join(repoRoot, "hooks", "hooks.json")
@@ -617,71 +693,41 @@ func TestRepositoryPluginBundleMCPContract(t *testing.T) {
 	}
 }
 
-// TestNodeLauncherFollowsRedirectsAndVerifiesSHA256 exercises
-// bin/rolling-memory-mcp.js against a local HTTP server that returns 302
-// redirects (matching GitHub Releases -> objects.githubusercontent.com) for
-// both SHA256SUMS and the platform binary asset.
-func TestNodeLauncherFollowsRedirectsAndVerifiesSHA256(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
+func TestNodeLauncherMissingBinaryDoesNotDownload(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
 		t.Skip("node not installed")
 	}
-	repoRoot := filepath.Join("..", "..")
-	launcher, err := filepath.Abs(filepath.Join(repoRoot, "bin", "rolling-memory-mcp.js"))
+	launcher, err := filepath.Abs(filepath.Join("..", "..", "bin", "rolling-memory-mcp.js"))
 	if err != nil {
-		t.Fatalf("abs launcher: %v", err)
+		t.Fatal(err)
 	}
-
-	var dummyPayload []byte
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell payload test runs on unix platforms")
-	} else {
-		dummyPayload = []byte("#!/bin/sh\nprintf 'REDIRECT_BOOTSTRAP_OK:%s\\n' \"$1\"\nexit 0\n")
-	}
-	sum := sha256.Sum256(dummyPayload)
-	sumHex := hex.EncodeToString(sum[:])
-
-	goos := runtime.GOOS
-	if goos != "darwin" && goos != "freebsd" {
-		goos = "linux"
-	}
-	assetName := fmt.Sprintf("rolling-memory-%s-%s", goos, runtime.GOARCH)
-	sumsContent := fmt.Sprintf("%s  %s\n", sumHex, assetName)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/releases/latest/download/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/releases/download/v0.0.1/SHA256SUMS", http.StatusFound)
-	})
-	mux.HandleFunc("/releases/download/v0.0.1/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/cdn/SHA256SUMS", http.StatusTemporaryRedirect)
-	})
-	mux.HandleFunc("/cdn/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(sumsContent))
-	})
-	mux.HandleFunc("/releases/latest/download/"+assetName, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/cdn/"+assetName, http.StatusFound)
-	})
-	mux.HandleFunc("/cdn/"+assetName, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(dummyPayload)
-	})
-	srv := httptest.NewServer(mux)
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
 	defer srv.Close()
-
-	tmpHome := t.TempDir()
-	cmd := exec.Command("node", launcher)
+	home := t.TempDir()
+	cmd := exec.Command(node, launcher)
 	cmd.Env = []string{
-		"HOME=" + tmpHome,
-		"XDG_DATA_HOME=" + filepath.Join(tmpHome, "xdg"),
-		"PATH=/usr/bin:/bin",
-		"ROLLING_MEMORY_RELEASE_BASE=" + srv.URL + "/releases/latest/download",
+		"HOME=" + home,
+		"USERPROFILE=" + home,
+		"XDG_DATA_HOME=" + filepath.Join(home, "xdg"),
+		"LOCALAPPDATA=" + filepath.Join(home, "appdata"),
+		"PATH=" + os.Getenv("PATH"),
+		"ROLLING_MEMORY_RELEASE_BASE=" + srv.URL,
 	}
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("node launcher failed: %v\noutput:\n%s", err, string(out))
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 127 {
+		t.Fatalf("expected exit 127, got %v: %s", err, out)
 	}
-	if !strings.Contains(string(out), "REDIRECT_BOOTSTRAP_OK:mcp") {
-		t.Fatalf("expected REDIRECT_BOOTSTRAP_OK:mcp in output, got:\n%s", string(out))
+	if !strings.Contains(string(out), "no usable local Rolling-Memory binary found") {
+		t.Fatalf("missing diagnostic: %s", out)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("launcher made %d release requests", got)
 	}
 }
 

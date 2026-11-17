@@ -3,7 +3,7 @@
     Rolling-Memory 记忆系统 · 「剑桥大学 ATM-Bench 官方主榜单」工作台（views/admin/plugin/rolling-memory/atmLeaderboard.vue）。
     设计原则（第一性原理 · 面向普通用户与剑桥 ATM-Bench 官方维护者）：
       1) 首屏零噪音：顶栏直接给出基准身份、11,034 条 SGM 多模态语料规模、atmbench-official-v1 密码学钉校验状态与复现入口；
-      2) 四维硬核指标卡（BuildAdmin 标准左边框指示卡）：主榜 Main-1013 读数、高难榜 Hard-31 读数、15.17s 建库与检索延迟、官方协议与理论上限；
+      2) 四维硬核指标卡（BuildAdmin 标准左边框指示卡）：主榜 Main-1013 读数、高难榜 Hard-31 读数、4.65s 建库与检索延迟、官方协议与理论上限；
       3) 连贯分析流：Main-1013 与 Hard-31 分集切换 + 一键复现命令条 + 左天梯排行 / 右五维深度解剖双栏联动 + 剑桥官方全字段标准表格；
       4) 底部审计抽屉：将本机封印基线台账、官方判分器 SHA-256 指纹与冻结 Prompt 原文收纳为可切换的审计选项卡，兼顾清爽阅读与逐字节核验。
 -->
@@ -108,11 +108,11 @@
                             </template>
                             <div class="rm-help-body">
                                 <p v-if="isEn">
-                                    Official 1,013-question full set on standard 2B SGM inputs: Official Recall@10 = 82.56% (gold-set-mean), R@50 =
-                                    89.97%, Hybrid QS = 65.54% (vs top external MemPalace R@10 76.40% / QS 56.80%).
+                                    Official 1,013-question full set on standard 2B SGM inputs: Official Recall@10 = 82.85% (gold-set-mean), R@50 =
+                                    90.11%, Hybrid QS = 70.13% (vs top external MemPalace R@10 76.40% / QS 56.80%).
                                 </p>
                                 <p v-else>
-                                    官方 1,013 题全量（标准 2B SGM 输入）：官方 Recall@10 = 82.56%（金标交均）、R@50 = 89.97%、混合 QS = 65.54%（对比外部最高 MemPalace R@10 76.40% / QS 56.80%）。
+                                    官方 1,013 题全量（标准 2B SGM 输入）：官方 Recall@10 = 82.85%（金标交均）、R@50 = 90.11%、混合 QS = 70.13%（对比外部最高 MemPalace R@10 76.40% / QS 56.80%）。
                                 </p>
                             </div>
                         </el-popover>
@@ -148,11 +148,11 @@
                             </template>
                             <div class="rm-help-body">
                                 <p v-if="isEn">
-                                    Official 31-question Hard subset (cross-year multi-hop &amp; abstention): Official Recall@10 = 50.35%, R@50 =
-                                    70.20%, Hybrid QS = 27.38% (vs top external MemoryOS R@10 32.70% / QS 13.70%).
+                                    Official 31-question Hard subset (cross-year multi-hop &amp; abstention): Official Recall@10 = 52.43%, R@50 =
+                                    70.62%, Hybrid QS = 25.06% (vs top external MemoryOS R@10 32.70% / QS 13.70%).
                                 </p>
                                 <p v-else>
-                                    官方 31 道高难子集（跨年多跳计数与拒答题）：官方 Recall@10 = 50.35%、R@50 = 70.20%、混合 QS = 27.38%（对比外部最高 MemoryOS R@10 32.70% / QS 13.70%）。
+                                    官方 31 道高难子集（跨年多跳计数与拒答题）：官方 Recall@10 = 52.43%、R@50 = 70.62%、混合 QS = 25.06%（对比外部最高 MemoryOS R@10 32.70% / QS 13.70%）。
                                 </p>
                             </div>
                         </el-popover>
@@ -1128,14 +1128,14 @@ const hardOracle = computed(() => (board.value.hard_entries || []).find((row) =>
 const perfHardBaseline = computed(() => atmBaselines.value.find((r) => String(r.arm || '').includes('sdk-local-plain') && r.tier === 'hard') || null)
 const perfMainBaseline = computed(() => atmBaselines.value.find((r) => String(r.arm || '').includes('sdk-local-plain') && r.tier === '1013') || null)
 const ingestMS = computed(() => Number(perfHardBaseline.value?.ingest_ms || 0))
-const ingestText = computed(() => (ingestMS.value > 0 ? `${(ingestMS.value / 1000).toFixed(2)}s` : '15.17s'))
-const ingestHrText = computed(() => (ingestMS.value > 0 ? `${(ingestMS.value / 3600000).toFixed(4)} hr` : '0.0042 hr'))
-const perDocMsText = computed(() => (ingestMS.value > 0 ? `${(ingestMS.value / 11034).toFixed(2)}ms/doc` : '1.37ms/doc'))
+const ingestText = computed(() => (ingestMS.value > 0 ? `${(ingestMS.value / 1000).toFixed(2)}s` : '4.65s'))
+const ingestHrText = computed(() => (ingestMS.value > 0 ? `${(ingestMS.value / 3600000).toFixed(4)} hr` : '0.0013 hr'))
+const perDocMsText = computed(() => (ingestMS.value > 0 ? `${(ingestMS.value / 11034).toFixed(2)}ms/doc` : '0.42ms/doc'))
 const recallPerfText = computed(() => {
     const hard = Number(perfHardBaseline.value?.avg_recall_ms || 0)
     const main = Number(perfMainBaseline.value?.avg_recall_ms || 0)
-    const hardText = hard > 0 ? `${hard.toFixed(1)}ms` : '38.4ms'
-    const mainText = main > 0 ? `${main.toFixed(1)}ms` : '43.2ms'
+    const hardText = hard > 0 ? `${hard.toFixed(1)}ms` : '107.9ms'
+    const mainText = main > 0 ? `${main.toFixed(1)}ms` : '68.6ms'
     return isEn.value
         ? `Retrieval mean: ${hardText} (Hard) / ${mainText} (Main) · 6,742 emails + 3,759 photos + 533 videos`
         : `单题检索均值 ${hardText} (Hard) / ${mainText} (Main) · 6,742 邮件 + 3,759 照片 + 533 视频`

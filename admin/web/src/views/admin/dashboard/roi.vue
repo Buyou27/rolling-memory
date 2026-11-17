@@ -1172,11 +1172,14 @@ const activeWindow = computed<RoiFactWindow>(
     () => displayWindows.value.find((item) => item.key === monitorWindow.value) || displayWindows.value[displayWindows.value.length - 1]
 )
 
-const windowAuditedRecalls = computed(() => (activeWindow.value?.audited_recalls ?? 0) > 0 ? activeWindow.value!.audited_recalls! : (vault.value?.audited_recalls ?? 0))
-const windowAdoptedRecalls = computed(() => (activeWindow.value?.audited_recalls ?? 0) > 0 ? (activeWindow.value!.adopted_recalls ?? 0) : (vault.value?.adopted_recalls ?? 0))
-const windowAdoptedTools = computed(() => (activeWindow.value?.audited_recalls ?? 0) > 0 ? (activeWindow.value!.adopted_tool_count ?? 0) : (vault.value?.adopted_tool_count ?? 0))
-const windowAdoptedContexts = computed(() => (activeWindow.value?.audited_recalls ?? 0) > 0 ? (activeWindow.value!.adopted_context_count ?? 0) : (vault.value?.adopted_context_count ?? 0))
-const windowAdoptionRatePct = computed(() => (activeWindow.value?.audited_recalls ?? 0) > 0 ? (activeWindow.value!.adoption_rate_pct ?? 0) : (vault.value?.adoption_rate_pct ?? 0))
+// 采纳审计口径严格跟随所选时间窗：窗口内没有已审计召回时如实为 0（模板会回落到
+// 「全量累计」展示），绝不把全历史读数放进当前窗口的采纳率位置（曾把 9/10、90%
+// 显示成「近 1 小时」的读数）。
+const windowAuditedRecalls = computed(() => activeWindow.value?.audited_recalls ?? 0)
+const windowAdoptedRecalls = computed(() => activeWindow.value?.adopted_recalls ?? 0)
+const windowAdoptedTools = computed(() => activeWindow.value?.adopted_tool_count ?? 0)
+const windowAdoptedContexts = computed(() => activeWindow.value?.adopted_context_count ?? 0)
+const windowAdoptionRatePct = computed(() => activeWindow.value?.adoption_rate_pct ?? 0)
 
 const maxDailyScale = computed(() => {
     let maxVal = 10

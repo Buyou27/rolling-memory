@@ -23,14 +23,14 @@
     },
     {
       "component": "hooks",
-      "detail": "UserPromptSubmit",
+      "detail": "hooks are disabled or the enable switch is invalid",
       "harness": "zcode",
       "path": "<HOME>/.zcode/cli/config.json",
-      "status": "installed"
+      "status": "conflict"
     },
     {
       "component": "instructions",
-      "detail": "half marker found; fix by hand",
+      "detail": "ambiguous or incomplete marker; fix by hand",
       "harness": "zcode",
       "path": "<HOME>/.zcode/AGENTS.md",
       "status": "conflict"
@@ -72,17 +72,17 @@
     },
     {
       "component": "mcp",
-      "detail": "[mcp_servers.rolling-memory] exists and is not ours; use --force",
+      "detail": "[mcp_servers.rolling-memory] has unverified ownership or fields; not touching it",
       "harness": "codex",
       "path": "<CFG>",
       "status": "conflict"
     },
     {
       "component": "hooks",
-      "detail": "no hook surface; agent-driven remember/recall only",
+      "detail": "UserPromptSubmit",
       "harness": "codex",
-      "path": "-",
-      "status": "skipped"
+      "path": "<HOME>/.codex/hooks.json",
+      "status": "installed"
     },
     {
       "component": "instructions",
@@ -100,10 +100,10 @@
     },
     {
       "component": "mcp",
-      "detail": "",
+      "detail": "cannot safely parse DSH patch: DSH patch must be a sequence",
       "harness": "dsh",
       "path": "<HOME>/.dsh/profiles/web/cordis.patch.yml",
-      "status": "installed"
+      "status": "conflict"
     },
     {
       "component": "hooks",

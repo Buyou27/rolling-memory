@@ -344,6 +344,33 @@ func TestImportHistoricalJSONExport(t *testing.T) {
 	}`)
 
 	imported := run(t, "import", exportPath, "--json")
+	message, _ := jsonObject(t, imported.stdout)["error"].(string)
+	if imported.code != 1 || !strings.Contains(message, "restricted or unknown trace audience") {
+		t.Fatalf("missing audience import = %d %q %q", imported.code, imported.stdout, imported.stderr)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(env.base, "memory.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var traces, events int
+	if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM event)`).Scan(&traces, &events); err != nil || traces != 0 || events != 0 {
+		t.Fatalf("rejected export wrote traces=%d events=%d err=%v", traces, events, err)
+	}
+
+	exportPath = writeFile(t, exportPath, `{
+		"format":"rolling-memory-export", "version":1, "scope":"mem:test",
+		"traces":[
+			{"hash":"historical-1", "scope":"mem:test", "audience":"shared", "text":"first", "occurred_at":1, "recorded_at":1},
+			{"hash":"historical-2", "scope":"mem:test", "audience":"public", "text":"second", "occurred_at":2, "recorded_at":2}
+		],
+		"events":[
+			{"id":1, "scope":"mem:test", "op":"trace.add", "created_at":1},
+			{"id":2, "scope":"mem:test", "op":"trace.add", "created_at":2}
+		],
+		"nodes":[], "aliases":[], "assertions":[], "mentions":[], "meta_edges":[]
+	}`)
+	imported = run(t, "import", exportPath, "--json")
 	if imported.code != 0 {
 		t.Fatalf("import exit %d: %s%s", imported.code, imported.stdout, imported.stderr)
 	}
@@ -352,7 +379,10 @@ func TestImportHistoricalJSONExport(t *testing.T) {
 	if inserted["events"] != float64(2) || inserted["traces"] != float64(2) {
 		t.Fatalf("inserted = %#v（want events/traces = 2）", payload["inserted"])
 	}
-	// 本地无云引擎：recall 不为 absent 的前提是云端命中，此处只锁形态。
+	var shared, public int
+	if err := db.QueryRow(`SELECT COUNT(*) FILTER (WHERE audience = 'shared'), COUNT(*) FILTER (WHERE audience = 'public') FROM trace`).Scan(&shared, &public); err != nil || shared != 1 || public != 1 {
+		t.Fatalf("imported audiences shared=%d public=%d err=%v", shared, public, err)
+	}
 	recalled := run(t, "recall", "--q", "老张 猫", "--no-raw", "--json")
 	if recalled.code != 0 {
 		t.Fatalf("recall exit %d: %s", recalled.code, recalled.stderr)

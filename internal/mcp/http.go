@@ -333,11 +333,16 @@ func decodeBody(request *http.Request) (any, error) {
 
 // dispatch runs one decoded message and returns the response payload, or nil
 // when the message carried no id (a notification).
-func (s *HTTPServer) dispatch(message any) any {
+func (s *HTTPServer) dispatch(message any, requestMemory *api.Memory) any {
+	memory := s.Memory
+	if requestMemory != nil {
+		memory = requestMemory
+	}
+	liveDaemon := s.Memory == nil
 	if batch, ok := message.([]any); ok {
 		responses := make([]any, 0, len(batch))
 		for _, item := range batch {
-			if response := handle(item, s.Memory, s.lazy(), s.debugWriter()); response != nil {
+			if response := handleWithMemoryMode(item, memory, s.lazy(), s.debugWriter(), liveDaemon); response != nil {
 				responses = append(responses, response)
 			}
 		}
@@ -346,7 +351,7 @@ func (s *HTTPServer) dispatch(message any) any {
 		}
 		return responses
 	}
-	return handle(message, s.Memory, s.lazy(), s.debugWriter())
+	return handleWithMemoryMode(message, memory, s.lazy(), s.debugWriter(), liveDaemon)
 }
 
 // initialized reports whether a message is the initialize request, whose result
@@ -410,7 +415,8 @@ func (s *HTTPServer) handleStreamablePost(writer http.ResponseWriter, request *h
 	if sessionID == "" && !initialized(message) {
 		// Stateless clients skip initialize; accept them instead of rejecting the
 		// request, but do not mint a session for them.
-		response := s.dispatch(message)
+		requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*api.Memory)
+		response := s.dispatch(message, requestMemory)
 		if response == nil {
 			writer.WriteHeader(http.StatusAccepted)
 			return
@@ -422,7 +428,8 @@ func (s *HTTPServer) handleStreamablePost(writer http.ResponseWriter, request *h
 		_, id := s.newSession()
 		writer.Header().Set(HTTPSessionHeader, id)
 	}
-	response := s.dispatch(message)
+	requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*api.Memory)
+	response := s.dispatch(message, requestMemory)
 	if response == nil {
 		writer.WriteHeader(http.StatusAccepted)
 		return
@@ -530,7 +537,8 @@ func (s *HTTPServer) handleSSEMessage(writer http.ResponseWriter, request *http.
 		http.Error(writer, "parse error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	response := s.dispatch(message)
+	requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*api.Memory)
+	response := s.dispatch(message, requestMemory)
 	if response == nil {
 		writer.WriteHeader(http.StatusAccepted)
 		return

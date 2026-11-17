@@ -66,7 +66,9 @@ type Engine struct {
 	mmapUnmap    func() error
 }
 
-// Close 释放引擎挂载的任何底层 mmap 磁盘段资源，并在卸载映射前将 Index 上的字符串元数据安全克隆到 Go 堆。
+// Close 释放引擎挂载的任何底层 mmap 磁盘段资源，并在卸载映射前将 Index 上仍指向映射区的
+// 元数据与词表视图安全克隆到 Go 堆、停用映射倒排迭代闭包，确保 munmap 之后任何读取都不会
+// 触碰已解除的地址空间。
 func (e *Engine) Close() error {
 	if e == nil || e.mmapUnmap == nil {
 		return nil
@@ -80,7 +82,17 @@ func (e *Engine) Close() error {
 				e.Index.UnitMeta[u].Layer = string([]byte(e.Index.UnitMeta[u].Layer))
 			}
 		}
+		// TermKeys / rawTermDF/Mass/Bits/Flags are zero-copy views into the mapped
+		// segment; clone them so post-Close reads stay on the Go heap.
+		e.Index.TermKeys = append([]uint64(nil), e.Index.TermKeys...)
+		e.Index.rawTermDF = append([]int32(nil), e.Index.rawTermDF...)
+		e.Index.rawTermMass = append([]float64(nil), e.Index.rawTermMass...)
+		e.Index.rawTermBits = append([]uint16(nil), e.Index.rawTermBits...)
+		e.Index.rawTermFlags = append([]uint8(nil), e.Index.rawTermFlags...)
 		e.Index.csrFallbackExport = nil
+		// The posting iterator closes over the mmap-backed posting pool; disable it so
+		// post-Close iteration degrades to empty instead of reading unmapped memory.
+		e.Index.csrPostingUnits = nil
 	}
 	e.clusterState = nil
 	fn := e.mmapUnmap
@@ -779,10 +791,12 @@ func (e *Engine) proximityIncrement(unit int32, masses map[uint64]float64) float
 		return 0
 	}
 	type matchedEntryPos struct {
-		id      uint64
-		idxMass float64
-		pos     []uint32
+		id       uint64
+		idxMass  float64
+		pos      []uint32
+		posExact []TermPosition
 	}
+	wide := st.hasWidePos()
 	entries := st.docEntriesOf(unit)
 	matched := make([]matchedEntryPos, 0, len(entries))
 	for _, ent := range entries {
@@ -790,11 +804,15 @@ func (e *Engine) proximityIncrement(unit int32, masses map[uint64]float64) float
 			continue
 		}
 		m, _ := idx.TermMass(ent.id)
-		matched = append(matched, matchedEntryPos{
+		item := matchedEntryPos{
 			id:      ent.id,
 			idxMass: m,
 			pos:     st.entryPositionsOf(ent),
-		})
+		}
+		if wide {
+			item.posExact = st.entryPositionsExactOf(ent)
+		}
+		matched = append(matched, item)
 	}
 	if len(matched) < 2 {
 		return 0
@@ -819,7 +837,12 @@ func (e *Engine) proximityIncrement(unit int32, masses map[uint64]float64) float
 			if leftMass+rightMass <= 0 {
 				continue
 			}
-			closest := closestPackedSlot(left.pos, right.pos)
+			var closest int
+			if wide {
+				closest = closestExactSlot(left.posExact, right.posExact)
+			} else {
+				closest = closestPackedSlot(left.pos, right.pos)
+			}
 			if closest < 0 {
 				continue
 			}

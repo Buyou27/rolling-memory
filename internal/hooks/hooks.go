@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -120,17 +119,40 @@ func importReplayEvent(
 		}
 		return "", nil
 	}
-	imported, err := importTurns(memory, payload)
-	if err != nil {
-		return "", err
+	imported := map[string]any{"messages": 0, "inserted": 0}
+	units, _, sourceErr := currentTurnUnitsChecked(cfg.Scope, session, payload)
+	if sourceErr != nil {
+		logHook(cfg, event, map[string]any{"source_error": ids.Redact(sourceErr.Error())})
 	}
-	// 本地模式金库镜像（fail-open · 会话有界）：payload-only 轮次（宿主只递
-	// prompt/last_assistant_message、无转写文件）在 trace 里是唯一副本，转写扫描器
-	// 永远看不到它；不在这里按会话镜像进金库，这轮话就对 recall 永久不可见。
-	if asIntDefault(imported["inserted"], 0) > 0 {
-		if mirrorErr := memory.MirrorSessionTracesToVault(session); mirrorErr != nil {
-			logHook(cfg, event, map[string]any{"vault_mirror_error": ids.Redact(mirrorErr.Error())})
+	if len(units) > 0 {
+		tc, err := memory.ThinClient()
+		if err != nil {
+			logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
+			return "", nil
 		}
+		vault := tc.Vault.CloneWithSharedSlotCache()
+		vault.SetIdentity(thinclient.VaultIdentity{})
+		inserted := 0
+		for _, unit := range units {
+			var exists int
+			if err := memory.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, unit.DocID).Scan(&exists); err != nil {
+				logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
+				return "", nil
+			}
+			packet, _ := vault.PackBlindPacket(unit.DocID, unit.Text, unit.OccurredAt)
+			if err := vault.SaveLocalEpisodicPointerIndexed(unit.DocID, unit.OccurredAt, unit.RefPointer, unit.TurnRef, unit.Text, packet, thinclient.CloudIngestResponse{}); err != nil {
+				if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+					continue
+				}
+				logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
+				return "", nil
+			}
+			if exists == 0 {
+				inserted++
+			}
+		}
+		imported["messages"] = len(units)
+		imported["inserted"] = inserted
 	}
 	replayedCount := 0
 	if event == "close" || asIntDefault(imported["inserted"], 0) > 0 {
@@ -1095,44 +1117,7 @@ func saveActiveWorkspacePresence(cfg *config.Config, coords text.PresenceCoordin
 	if cfg == nil || cfg.Log == "" || coords.IsEmpty() || isEphemeralProbeSession(session) {
 		return
 	}
-	stateDir := filepath.Dir(cfg.Log)
-	if err := ensureHookStateDir(stateDir); err != nil {
-		return
-	}
-	statePath := filepath.Join(stateDir, "active_workspace.json")
-	lockPath := statePath + ".lock"
-	for attempt := 0; attempt < 8; attempt++ {
-		if info, sErr := os.Stat(lockPath); sErr == nil && time.Since(info.ModTime()) > 2*time.Second {
-			_ = os.Remove(lockPath)
-		}
-		lf, lErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if lErr == nil {
-			_ = lf.Close()
-			defer os.Remove(lockPath)
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	// The presence file holds only the latest writer's coordinates: the locus is the
-	// canonical workspace name (repository root basename) or "", and no per-locus
-	// session map is accumulated (it had no reader and preserved stale workspace keys).
-	data, err := json.Marshal(map[string]any{
-		"world":       coords.World,
-		"carrier":     coords.Carrier,
-		"locus":       coords.Locus,
-		"incarnation": coords.Incarnation,
-		"session_id":  session,
-		"updated_at":  ids.UTCNow(),
-	})
-	if err != nil {
-		return
-	}
-	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", statePath, os.Getpid(), time.Now().UnixNano())
-	if os.WriteFile(tmpPath, data, 0o600) == nil {
-		if os.Rename(tmpPath, statePath) != nil {
-			_ = os.Remove(tmpPath)
-		}
-	}
+	_ = text.SavePresenceFile(filepath.Dir(cfg.Log), coords, session, ids.UTCNow())
 }
 
 func nextSessionTurn(memory *api.Memory, scope, session string) int64 {

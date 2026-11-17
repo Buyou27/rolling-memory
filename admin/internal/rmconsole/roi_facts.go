@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -110,22 +111,24 @@ type roiUnitCitation struct {
 
 // roiTopCitedUnit ranks underlying L1/L2 memory units by how often L3 Noetic recalls cite them.
 type roiTopCitedUnit struct {
-	UnitID        string            `json:"unit_id"`
-	Layer         string            `json:"layer"`
-	Locus         string            `json:"locus"`
-	AddressURI    string            `json:"address_uri"`
-	WaveformBar   string            `json:"waveform_bar"`
-	CitationCount int64             `json:"citation_count"`
-	AdoptedCount  int64             `json:"adopted_count"`
-	LastCitedAt   int64             `json:"last_cited_at"`
-	OccurredAt    int64             `json:"occurred_at"`
-	Preview       string            `json:"preview"`
-	FullText      string            `json:"full_text"`
-	IsHydrated    bool              `json:"is_hydrated"`
-	Tokens        int64             `json:"tokens"`
-	IsZeroCopyRef bool              `json:"is_zero_copy_ref"`
-	RecentQueries []string          `json:"recent_queries"`
-	Citations     []roiUnitCitation `json:"citations"`
+	UnitID          string            `json:"unit_id"`
+	Layer           string            `json:"layer"`
+	Locus           string            `json:"locus"`
+	AddressURI      string            `json:"address_uri"`
+	WaveformBar     string            `json:"waveform_bar"`
+	CitationCount   int64             `json:"citation_count"`
+	AdoptedCount    int64             `json:"adopted_count"`
+	LastCitedAt     int64             `json:"last_cited_at"`
+	OccurredAt      int64             `json:"occurred_at"`
+	Preview         string            `json:"preview"`
+	FullText        string            `json:"full_text"`
+	IsHydrated      bool              `json:"is_hydrated"`
+	Tokens          int64             `json:"tokens"`
+	IsZeroCopyRef   bool              `json:"is_zero_copy_ref"`
+	RecentQueries   []string          `json:"recent_queries"`
+	Citations       []roiUnitCitation `json:"citations"`
+	storedRef       string
+	fallbackPreview string
 }
 
 // roiCitedUnitDetail is one cited unit expanded for the L3 evidence drawer.
@@ -299,30 +302,12 @@ func bytesToTokenzR(bytes int64) int64 {
 	return tok
 }
 
-// 零拷贝指针水合的进程内缓存与后台预热。
-//
-// 宿主库（~/.zcode/cli/db/db.sqlite）由外部进程持续读写、体量在 GB 级，而控制台面板每 5s 轮询一轮、
-// 同一批 `@ref:` 指针反复出现：在请求路径上逐指针读取宿主库会把读接口堆死（实测并发 /dashboard
-// 全部停在宿主库 WAL 读上）。因此请求只读缓存（含空结果负缓存），未命中排队后台单飞预热，
-// 本轮预览回退到干句（调用方已有该回退）。
+// The background-document cache does not store episodic pointer text.
 const (
-	hydrateCacheTTL = 6 * time.Hour
-	// hydrateCacheMaxKeys 需容纳本地金库的全部零拷贝指针（当前生产库已达 ~2×10^4 行且持续增长）：
-	// 旧值 16384 在指针数增至 19,682 后于单次全表扫描中途触发整表清空，造成 100% 缓存抖动。
-	// 现扩容至 131072 并采用渐进淘汰（先清过期、再按需淘汰 1/4），消除跨尺度悬崖。
-	hydrateCacheMaxKeys = 131072
-	hydrateQueueDepth   = 32
-	// hydrateFlavorRaw 纯对话正文（ROI 抽屉的零拷贝指针水合）；
-	// hydrateFlavorLive 带角色前缀的列表正文（三层列表的 Harness 原位读）；
-	// hydrateFlavorLocalDoc L1 背景分块的现场正文（守护进程 /v1/documents 解析结果）。
-	// 三者格式不同，缓存按口径分键，绝不混用。
-	hydrateFlavorRaw      = "raw"
-	hydrateFlavorLive     = "live"
+	hydrateCacheTTL       = 2 * time.Minute
+	hydrateCacheMaxKeys   = 131072
 	hydrateFlavorLocalDoc = "localdoc"
-
-	// localDocCacheTTL 有意短于指针水合缓存：L1 分块正文是源文件磁盘现场的重读重切结果，
-	// 文件随时可能被编辑或删除，展示面应尽快反映现场，而不是长时间回放旧文。
-	localDocCacheTTL = 2 * time.Minute
+	localDocCacheTTL      = hydrateCacheTTL
 )
 
 type hydrateCacheEntry struct {
@@ -330,30 +315,16 @@ type hydrateCacheEntry struct {
 	at   time.Time
 }
 
-type hydrateJob struct {
-	flavor  string
-	home    string
-	pointer string
-}
-
 var (
 	hydrateMu    sync.Mutex
 	hydrateCache = map[string]hydrateCacheEntry{}
-	hydrateQueue = make(chan hydrateJob, hydrateQueueDepth)
-	hydrateStart sync.Once
 )
 
 func hydrateCacheKey(flavor, home, pointer string) string {
 	return flavor + "\x00" + strings.TrimSpace(home) + "\x00" + strings.TrimSpace(pointer)
 }
 
-// readHydrateCache 取缓存水合结果（含空结果负缓存），过期视为未命中。
-func readHydrateCache(key string) (string, bool) {
-	return readHydrateCacheWithin(key, hydrateCacheTTL)
-}
-
-// readHydrateCacheWithin 以指定新鲜度窗口读取缓存：L1 分块正文按磁盘现场读取，
-// 需要比指针水合更短的窗口（见 hydrateFlavorLocalDoc），键空间与淘汰规则共用同一张缓存表。
+// readHydrateCacheWithin reads a cached background document body within its TTL.
 func readHydrateCacheWithin(key string, ttl time.Duration) (string, bool) {
 	hydrateMu.Lock()
 	entry, ok := hydrateCache[key]
@@ -396,50 +367,26 @@ func evictHydrateCacheLocked(now time.Time) {
 	}
 }
 
-// hydratedEpisodicPointer 只从缓存取水合结果；未命中时排队后台预热并返回 ok=false。
-func hydratedEpisodicPointer(home, pointer string) (string, bool) {
-	key := hydrateCacheKey(hydrateFlavorRaw, home, pointer)
-	if text, ok := readHydrateCache(key); ok {
-		return text, true
-	}
-	scheduleHydrateWarm(hydrateJob{flavor: hydrateFlavorRaw, home: home, pointer: pointer})
-	return "", false
+type hydrateRef struct {
+	DocID string `json:"doc_id"`
+	Ref   string `json:"ref"`
 }
 
-// hydratedEpisodicPointerLive 缓存优先、未命中同步解析一次并写入缓存：
-// 三层列表的关键字检索基于水合后的正文，必须保证本轮拿到正文（不做异步回退）。
-// 解析顺序 = 引擎守护进程（规范口径）→ 本地兜底扫描（守护进程不可用时）。
-func hydratedEpisodicPointerLive(home, pointer string) (string, bool) {
-	key := hydrateCacheKey(hydrateFlavorLive, home, pointer)
-	if text, ok := readHydrateCache(key); ok {
-		return text, text != ""
-	}
-	if texts, handled := hydrateRefsViaDaemon(home, []string{pointer}); handled {
-		text := strings.TrimSpace(texts[pointer])
-		// 守护进程给出的是规范判定：越界/缺失即空，按空结果负缓存，
-		// 绝不用本地副本的整段合并回退把错误文本顶上来。
-		storeHydrateCache(key, text)
-		return text, text != ""
-	}
-	text := resolveAdminEpisodicRefLive(home, pointer)
-	storeHydrateCache(key, text)
+// hydratedEpisodicPointerLive never reuses a prior verification across requests.
+func hydratedEpisodicPointerLive(home, dbPath, docID, pointer string) (string, bool) {
+	item := hydrateRef{DocID: strings.TrimSpace(docID), Ref: strings.TrimSpace(pointer)}
+	texts, _ := hydrateRefsViaDaemon(home, dbPath, []hydrateRef{item})
+	text := strings.TrimSpace(texts[item])
 	return text, text != ""
 }
 
 // hydrateDaemonBatchSize 单次向守护进程请求水合的指针数上限；超出即分批。
 const hydrateDaemonBatchSize = 64
 
-// hydrateRefsViaDaemon 通过本机唯一常驻守护进程（engine.sock）批量水合零拷贝 `@ref:` 指针。
-//
-// 分段与清洗口径必须与摄取侧完全同源：控制台曾自研按 turn 扫描的副本，在「下一条 user 消息」
-// 处就截断 turn（不管该消息是否只是 synthetic 队列通知），而规范侧的定段是「下一位带正文的
-// user 消息才开新 turn」—— 副本里越界的 `#k` 会回退成整段合并文本，把同一条消息的分段行
-// 渲染成重复内容。因此以守护进程的正典解析（与产品 recall / recent 同一条
-// ResolveEpisodicPointerLive）为准；handled=false 表示守护进程不可用，调用方退回本地兜底扫描。
-//
-// 返回 map 中出现的 ref 即为守护进程已裁决（text 可能为空 = 规范判定不可用，调用方应负缓存）。
-func hydrateRefsViaDaemon(home string, refs []string) (map[string]string, bool) {
-	if len(refs) == 0 {
+// hydrateRefsViaDaemon returns only results explicitly verified for the requested
+// document and pointer. Missing, malformed, or failed results remain unavailable.
+func hydrateRefsViaDaemon(home, dbPath string, refs []hydrateRef) (map[hydrateRef]string, bool) {
+	if len(refs) == 0 || strings.TrimSpace(dbPath) == "" {
 		return nil, false
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON"))) {
@@ -448,7 +395,7 @@ func hydrateRefsViaDaemon(home string, refs []string) (map[string]string, bool) 
 	}
 	sockPath := resolveDaemonSocketPath(home)
 	if _, err := os.Stat(sockPath); err != nil {
-		triggerConsoleDaemonBootstrap(home, resolveMemoryDBPath(home))
+		triggerConsoleDaemonBootstrap(home, dbPath)
 		return nil, false
 	}
 	// 测试二进制默认不路由守护进程（与引擎侧 ShouldUseUnixDaemon 同一不变量），
@@ -457,17 +404,27 @@ func hydrateRefsViaDaemon(home string, refs []string) (map[string]string, bool) 
 	if (strings.HasSuffix(exe, ".test") || strings.Contains(exe, ".test.")) && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
 		return nil, false
 	}
-	dbPath := resolveMemoryDBPath(home)
-	out := make(map[string]string, len(refs))
+	out := make(map[hydrateRef]string, len(refs))
+	handled := false
+	unique := make([]hydrateRef, 0, len(refs))
+	seenRefs := make(map[hydrateRef]bool, len(refs))
+	for _, ref := range refs {
+		ref.DocID, ref.Ref = strings.TrimSpace(ref.DocID), strings.TrimSpace(ref.Ref)
+		if ref.DocID != "" && strings.HasPrefix(ref.Ref, "@ref:") && !seenRefs[ref] {
+			seenRefs[ref] = true
+			unique = append(unique, ref)
+		}
+	}
+	refs = unique
 	for start := 0; start < len(refs); start += hydrateDaemonBatchSize {
 		end := start + hydrateDaemonBatchSize
 		if end > len(refs) {
 			end = len(refs)
 		}
-		chunk := refs[start:end]
-		items := make([]map[string]string, 0, len(chunk))
-		for _, ref := range chunk {
-			items = append(items, map[string]string{"ref": ref})
+		items := refs[start:end]
+		requested := make(map[hydrateRef]bool, len(items))
+		for _, ref := range items {
+			requested[ref] = true
 		}
 		bodyBytes, err := json.Marshal(map[string]any{"db": dbPath, "items": items})
 		if err != nil {
@@ -500,8 +457,12 @@ func hydrateRefsViaDaemon(home string, refs []string) (map[string]string, bool) 
 		var dResp struct {
 			OK    bool `json:"ok"`
 			Texts []struct {
-				Ref  string `json:"ref"`
-				Text string `json:"text"`
+				DocID     string `json:"doc_id"`
+				Ref       string `json:"ref"`
+				ActualRef string `json:"actual_ref"`
+				Text      string `json:"text"`
+				Verified  bool   `json:"verified"`
+				Error     string `json:"error"`
 			} `json:"texts"`
 		}
 		rawBody, rErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -509,18 +470,26 @@ func hydrateRefsViaDaemon(home string, refs []string) (map[string]string, bool) 
 		if rErr != nil || json.Unmarshal(rawBody, &dResp) != nil || !dResp.OK {
 			break
 		}
+		handled = true
+		seen := make(map[hydrateRef]bool, len(items))
 		for _, item := range dResp.Texts {
-			ref := strings.TrimSpace(item.Ref)
-			if ref == "" {
+			key := hydrateRef{DocID: strings.TrimSpace(item.DocID), Ref: strings.TrimSpace(item.Ref)}
+			if !requested[key] {
 				continue
 			}
-			out[ref] = item.Text
+			if seen[key] {
+				delete(out, key)
+				requested[key] = false
+				continue
+			}
+			seen[key] = true
+			// A relocated source cannot be displayed under the requested coordinate.
+			if item.Verified && item.Error == "" && strings.TrimSpace(item.ActualRef) == key.Ref && strings.TrimSpace(item.Text) != "" {
+				out[key] = item.Text
+			}
 		}
 	}
-	if len(out) == 0 {
-		return nil, false
-	}
-	return out, true
+	return out, handled
 }
 
 // documentDaemonBatchSize 单次向守护进程请求正文解析的文档数上限；超出即分批。
@@ -738,730 +707,37 @@ func warmHydrateLocalDocumentsBatch(home string, rows []map[string]any) {
 	}
 }
 
-// hydrateZCodePointersViaDaemon 先让守护进程按规范口径批量水合 rows 中的 `@ref:` 指针：
-// 已裁决的指针写入水合缓存（含空结果负缓存），返回仍需本地兜底扫描的行。
-// handled=false（守护进程不可用）时原样返回全部行，交由下方既有兜底逻辑处理。
-func hydrateZCodePointersViaDaemon(home string, rows []map[string]any) []map[string]any {
-	const zPrefix = "@ref:zcode:"
-	const jPrefix = "@ref:jsonl:"
-	seen := make(map[string]struct{}, len(rows))
-	refs := make([]string, 0, len(rows))
-	unanswered := make([]map[string]any, 0, len(rows))
+// warmHydrateZCodePointersBatch keeps verified text only in the caller-owned rows.
+func warmHydrateZCodePointersBatch(home, dbPath string, rows []map[string]any) {
+	refs := make([]hydrateRef, 0, len(rows))
+	seen := make(map[hydrateRef]bool, len(rows))
 	for _, r := range rows {
-		raw := strings.TrimSpace(asString(r["content"]))
-		if !strings.HasPrefix(raw, zPrefix) && !strings.HasPrefix(raw, jPrefix) {
-			unanswered = append(unanswered, r)
+		delete(r, "_hydrated_ref_text")
+		delete(r, "_hydrated_ref_checked")
+		ref := strings.TrimSpace(asString(r["content"]))
+		if !strings.HasPrefix(ref, "@ref:") {
 			continue
 		}
-		if _, dup := seen[raw]; dup {
-			continue
-		}
-		seen[raw] = struct{}{}
-		if _, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, raw)); ok {
-			continue
-		}
-		refs = append(refs, raw)
-	}
-	if len(refs) == 0 {
-		return nil
-	}
-	texts, handled := hydrateRefsViaDaemon(home, refs)
-	if !handled {
-		return rows
-	}
-	now := time.Now()
-	hydrateMu.Lock()
-	evictHydrateCacheLocked(now)
-	for _, raw := range refs {
-		text, answered := texts[raw]
-		if !answered {
-			unanswered = append(unanswered, map[string]any{"content": raw})
-			continue
-		}
-		text = strings.TrimSpace(text)
-		hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, raw)] = hydrateCacheEntry{text: text, at: now}
-		hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, raw)] = hydrateCacheEntry{text: text, at: now}
-	}
-	hydrateMu.Unlock()
-	return unanswered
-}
-
-// scheduleHydrateWarm 把指针排进后台预热队列；队列满即丢弃（下一轮轮询会再次请求）。
-func scheduleHydrateWarm(job hydrateJob) {
-	hydrateStart.Do(func() { go hydrateWorkerLoop() })
-	select {
-	case hydrateQueue <- job:
-	default:
-	}
-}
-
-// hydrateWorkerLoop 单飞预热：同一时刻只读一次宿主库，避免并发读外部库互相争 WAL。
-// 与前台水合同一口径：优先走引擎守护进程的规范解析（与产品 recall / recent 同一条
-// 定段与清洗），守护进程不可用时才回落到本地兜底扫描。
-func hydrateWorkerLoop() {
-	for job := range hydrateQueue {
-		text := ""
-		if texts, handled := hydrateRefsViaDaemon(job.home, []string{job.pointer}); handled {
-			text = strings.TrimSpace(texts[job.pointer])
-		} else {
-			text = hydrateEpisodicPointer(job.home, job.pointer)
-		}
-		storeHydrateCache(hydrateCacheKey(job.flavor, job.home, job.pointer), text)
-	}
-}
-
-// zcodeSpeechMessageFilter mirrors the canonical server-side predicate
-// (`internal/episodic.ZCodeTextPartFilter`): the agent's process narration — a tool
-// step's text (any message that invoked a tool, whatever its finish shape) and
-// harness-hidden messages (`semantics.uiVisibility:"hidden"`) — is never
-// conversation. Keep this clone in lockstep with the canonical filter, or hydrated
-// `#<k>` indices diverge.
-const zcodeSpeechMessageFilter = `COALESCE((SELECT json_extract(am.data, '$.semantics.uiVisibility') FROM message am WHERE am.id = p.message_id), 'visible') <> 'hidden'
-		  AND NOT EXISTS (SELECT 1 FROM part tp WHERE tp.message_id = p.message_id AND json_extract(tp.data, '$.type') = 'tool')`
-
-// hydrateEpisodicPointer resolves a zero-copy `@ref:zcode:<session>:<msg>[#k]`
-// or `@ref:jsonl:<abs_path>:<turn>[#k]` pointer to the FULL speech text held by
-// the local harness database or transcript, so the provenance drawer and layer
-// browser render complete content instead of the stored pointer.
-func hydrateEpisodicPointer(home, pointer string) string {
-	trimmed := strings.TrimSpace(pointer)
-	if strings.HasPrefix(trimmed, "@ref:jsonl:") {
-		return hydrateJSONLEpisodicPointer(home, trimmed)
-	}
-	const prefix = "@ref:zcode:"
-	if !strings.HasPrefix(trimmed, prefix) || strings.TrimSpace(home) == "" {
-		return ""
-	}
-	rest := strings.TrimPrefix(trimmed, prefix)
-	sep := strings.Index(rest, ":")
-	if sep <= 0 || sep >= len(rest)-1 {
-		return ""
-	}
-	sessionID := rest[:sep]
-	tail := rest[sep+1:]
-	messageID := tail
-	segmentIndex := -1
-	if hash := strings.LastIndex(tail, "#"); hash > 0 && hash < len(tail)-1 {
-		segPart := tail[hash+1:]
-		if dot := strings.IndexByte(segPart, '.'); dot > 0 {
-			segPart = segPart[:dot]
-		}
-		if parsed, err := strconv.Atoi(segPart); err == nil && parsed >= 0 {
-			messageID = tail[:hash]
-			segmentIndex = parsed
+		r["_hydrated_ref_checked"] = true
+		item := hydrateRef{DocID: strings.TrimSpace(asString(r["id"])), Ref: ref}
+		if item.DocID != "" && !seen[item] {
+			seen[item] = true
+			refs = append(refs, item)
 		}
 	}
-	// 复用按路径 + inode 缓存的只读连接池 memoryRODB：避免每次水合都 sql.Open + db.Close
-	// 7.8GB 宿主库并重建 14GB WAL 的 -shm 索引（1.9 万条指针下曾耗 264s）。
-	zdb, zErr := memoryRODB(filepath.Join(home, ".zcode", "cli", "db", "db.sqlite"))
-	if zErr != nil || zdb == nil {
-		return ""
-	}
-	// 两阶段查询（与 internal/episodic.ZCodeTurnSegments 同构）：
-	// 1) 先只查 message 表（走 message_session_sequence_idx 范围索引，不跨表 JOIN part，
-	//    消除跨表 ORDER BY 触发的 USE TEMP B-TREE 全 session 扫描），遇到下一条 user 消息即早停；
-	// 2) 只对本轮 turn 的 1..N 条 message 按 message_id 查 part，并用 64B 前缀短路跳过大 tool-result。
-	var startSeq sql.NullInt64
-	if err := zdb.QueryRow(`SELECT sequence FROM message WHERE id = ? AND session_id = ?`, messageID, sessionID).Scan(&startSeq); err != nil {
-		return ""
-	}
-	var mRows *sql.Rows
-	var err error
-	if startSeq.Valid {
-		mRows, err = zdb.Query(`
-			SELECT m.id, COALESCE(json_extract(m.data, '$.role'), '')
-			FROM message m
-			WHERE m.session_id = ? AND m.sequence >= ?
-			ORDER BY m.sequence ASC
-			LIMIT 32`, sessionID, startSeq.Int64)
-	} else {
-		mRows, err = zdb.Query(`
-			SELECT m.id, COALESCE(json_extract(m.data, '$.role'), '')
-			FROM message m
-			WHERE m.session_id = ?
-			ORDER BY m.sequence ASC
-			LIMIT 32`, sessionID)
-	}
-	if err != nil {
-		return ""
-	}
-	type msgHdr struct {
-		id   string
-		role string
-	}
-	hdrs := make([]msgHdr, 0, 6)
-	seenTurnStart := false
-	for mRows.Next() {
-		var mid, role string
-		if mRows.Scan(&mid, &role) != nil {
-			continue
-		}
-		role = strings.ToLower(strings.TrimSpace(role))
-		if role == "" {
-			role = "unknown"
-		}
-		if !seenTurnStart && startSeq.Valid && mid != messageID && role != "user" {
-			continue
-		}
-		if role == "user" {
-			if !seenTurnStart {
-				seenTurnStart = true
-			} else if mid != messageID {
-				break
-			}
-		} else {
-			seenTurnStart = true
-		}
-		hdrs = append(hdrs, msgHdr{id: mid, role: role})
-	}
-	mRows.Close()
-	if len(hdrs) == 0 {
-		return ""
-	}
-
-	segments := make([]string, 0, 8)
-	for _, h := range hdrs {
-		pRows, pErr := zdb.Query(`
-			SELECT COALESCE(json_extract(p.data, '$.text'), '')
-			FROM part p
-			WHERE p.message_id = ?
-			  AND json_extract(p.data, '$.type') = 'text'
-			  AND COALESCE(json_extract(p.data, '$.synthetic'), 0) = 0
-			  AND `+zcodeSpeechMessageFilter+`
-			ORDER BY p.sequence ASC
-			LIMIT 64`, h.id)
-		if pErr != nil {
-			continue
-		}
-		for pRows.Next() {
-			var text string
-			if pRows.Scan(&text) != nil {
-				continue
-			}
-			text = strings.TrimSpace(text)
-			if text == "" {
-				continue
-			}
-			segments = append(segments, "["+h.role+"] "+text)
-		}
-		pRows.Close()
-	}
-	if len(segments) == 0 {
-		return ""
-	}
-	joined := strings.Join(segments, "\n")
-	// 同一次查询已经取出该 turn 的全部分片：顺手把 base 指针与 #0..#k 全部写入缓存，
-	// 同一轮对话的后续分片（#1, #2...）直接 O(1) 命中内存，无需再次查询宿主库。
-	basePtr := prefix + sessionID + ":" + messageID
-	now := time.Now()
-	hydrateMu.Lock()
-	evictHydrateCacheLocked(now)
-	hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, basePtr)] = hydrateCacheEntry{text: joined, at: now}
-	hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, basePtr)] = hydrateCacheEntry{text: joined, at: now}
-	for idx, seg := range segments {
-		segPtr := basePtr + "#" + strconv.Itoa(idx)
-		hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, segPtr)] = hydrateCacheEntry{text: seg, at: now}
-		hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, segPtr)] = hydrateCacheEntry{text: seg, at: now}
-	}
-	hydrateMu.Unlock()
-	if segmentIndex >= 0 && segmentIndex < len(segments) {
-		return segments[segmentIndex]
-	}
-	return joined
-}
-
-func parseAdminJSONLSpeakerLine(line string) (string, []string) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
-		return "", nil
-	}
-	var obj map[string]any
-	if json.Unmarshal([]byte(trimmed), &obj) != nil || obj == nil {
-		return "", nil
-	}
-	if isTruthy, _ := obj["isMeta"].(bool); isTruthy {
-		return "", nil
-	}
-	if isCompact, _ := obj["isCompactSummary"].(bool); isCompact {
-		return "", nil
-	}
-	message, _ := obj["message"].(map[string]any)
-	if message == nil {
-		if payload, ok := obj["payload"].(map[string]any); ok && payload != nil {
-			if pType, _ := payload["type"].(string); pType == "message" || payload["role"] != nil {
-				message = payload
-			}
-		}
-	}
-	if message == nil {
-		message = obj
-	}
-	roleText, _ := message["role"].(string)
-	if roleText == "" {
-		roleText, _ = obj["type"].(string)
-	}
-	var speaker string
-	switch strings.ToLower(strings.TrimSpace(roleText)) {
-	case "user", "human":
-		speaker = "user"
-	case "assistant", "ai", "bot", "agent":
-		speaker = "assistant"
-	default:
-		return "", nil
-	}
-	if speaker == "assistant" {
-		// Process narration of a tool step, mirroring the canonical filter: the
-		// assistant row ended with a tool call (`stop_reason:"tool_use"`).
-		if stopReason, _ := message["stop_reason"].(string); strings.TrimSpace(stopReason) == "tool_use" {
-			return "", nil
-		}
-	}
-	var parts []string
-	switch content := message["content"].(type) {
-	case string:
-		if s := strings.TrimSpace(content); s != "" {
-			parts = append(parts, s)
-		}
-	case []any:
-		for _, block := range content {
-			item, ok := block.(map[string]any)
-			if !ok {
-				continue
-			}
-			blockType, _ := item["type"].(string)
-			if blockType != "text" && blockType != "input_text" && blockType != "output_text" {
-				continue
-			}
-			if value, ok := item["text"].(string); ok && strings.TrimSpace(value) != "" {
-				parts = append(parts, strings.TrimSpace(value))
-			}
-		}
-	}
-	var texts []string
-	for _, p := range parts {
-		if strings.HasPrefix(p, "<app-context>") || strings.HasPrefix(p, "# AGENTS.md instructions for ") || strings.HasPrefix(p, "<environment_context>") {
-			continue
-		}
-		texts = append(texts, p)
-	}
-	if len(texts) == 0 {
-		return "", nil
-	}
-	return speaker, texts
-}
-
-func isAdminJSONLToolCallLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
-		return false
-	}
-	if !strings.Contains(trimmed, "function_call") &&
-		!strings.Contains(trimmed, "custom_tool_call") &&
-		!strings.Contains(trimmed, "web_search_call") &&
-		!strings.Contains(trimmed, "local_shell_call") {
-		return false
-	}
-	var obj map[string]any
-	if json.Unmarshal([]byte(trimmed), &obj) != nil || obj == nil {
-		return false
-	}
-	checkType := func(t string) bool {
-		switch strings.TrimSpace(t) {
-		case "function_call", "custom_tool_call", "web_search_call", "local_shell_call":
-			return true
-		}
-		return false
-	}
-	if topType, _ := obj["type"].(string); checkType(topType) {
-		return true
-	}
-	if payload, ok := obj["payload"].(map[string]any); ok && payload != nil {
-		if pType, _ := payload["type"].(string); checkType(pType) {
-			return true
-		}
-	}
-	return false
-}
-
-func hydrateJSONLEpisodicPointer(home, pointer string) string {
-	const prefix = "@ref:jsonl:"
-	if !strings.HasPrefix(pointer, prefix) {
-		return ""
-	}
-	rest := strings.TrimPrefix(pointer, prefix)
-	lastColon := strings.LastIndex(rest, ":")
-	if lastColon <= 0 || lastColon >= len(rest)-1 {
-		return ""
-	}
-	absPath := strings.TrimSpace(rest[:lastColon])
-	tail := rest[lastColon+1:]
-	turnStr := tail
-	segmentIndex := -1
-	if hash := strings.LastIndex(tail, "#"); hash > 0 && hash < len(tail)-1 {
-		segPart := tail[hash+1:]
-		if dot := strings.IndexByte(segPart, '.'); dot > 0 {
-			segPart = segPart[:dot]
-		}
-		if parsed, err := strconv.Atoi(segPart); err == nil && parsed >= 0 {
-			turnStr = tail[:hash]
-			segmentIndex = parsed
-		}
-	}
-	turnIndex, err := strconv.Atoi(strings.TrimSpace(turnStr))
-	if err != nil || turnIndex < 0 || absPath == "" {
-		return ""
-	}
-	info, err := os.Stat(absPath)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 256*1024*1024 {
-		return ""
-	}
-	raw, err := os.ReadFile(absPath)
-	if err != nil {
-		return ""
-	}
-	var turns [][]string
-	current := -1
-	var pendingAssist []string
-	flushPending := func() {
-		if current < 0 || len(pendingAssist) == 0 {
-			pendingAssist = pendingAssist[:0]
-			return
-		}
-		turns[current] = append(turns[current], pendingAssist...)
-		pendingAssist = pendingAssist[:0]
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if isAdminJSONLToolCallLine(line) {
-			pendingAssist = pendingAssist[:0]
-			continue
-		}
-		speaker, texts := parseAdminJSONLSpeakerLine(line)
-		if speaker == "" || len(texts) == 0 {
-			continue
-		}
-		if speaker == "user" {
-			flushPending()
-			current++
-			for len(turns) <= current {
-				turns = append(turns, nil)
-			}
-		}
-		if current >= 0 {
-			if speaker == "assistant" {
-				for _, txt := range texts {
-					pendingAssist = append(pendingAssist, "["+speaker+"] "+txt)
-				}
-			} else {
-				for _, txt := range texts {
-					turns[current] = append(turns[current], "["+speaker+"] "+txt)
-				}
-			}
-		}
-	}
-	flushPending()
-	now := time.Now()
-	hydrateMu.Lock()
-	evictHydrateCacheLocked(now)
-	for tIdx, segs := range turns {
-		if len(segs) == 0 {
-			continue
-		}
-		joined := strings.Join(segs, "\n")
-		basePtr := prefix + absPath + ":" + strconv.Itoa(tIdx)
-		hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, basePtr)] = hydrateCacheEntry{text: joined, at: now}
-		hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, basePtr)] = hydrateCacheEntry{text: joined, at: now}
-		for sIdx, seg := range segs {
-			segPtr := basePtr + "#" + strconv.Itoa(sIdx)
-			hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, segPtr)] = hydrateCacheEntry{text: seg, at: now}
-			hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, segPtr)] = hydrateCacheEntry{text: seg, at: now}
-		}
-	}
-	hydrateMu.Unlock()
-	if turnIndex >= len(turns) || len(turns[turnIndex]) == 0 {
-		return ""
-	}
-	if segmentIndex >= 0 && segmentIndex < len(turns[turnIndex]) {
-		return turns[turnIndex][segmentIndex]
-	}
-	return strings.Join(turns[turnIndex], "\n")
-}
-
-func hydrateZCodeSessionBatch(home, sessionID string) {
-	if strings.TrimSpace(home) == "" || strings.TrimSpace(sessionID) == "" {
-		return
-	}
-	zdb, zErr := memoryRODB(filepath.Join(home, ".zcode", "cli", "db", "db.sqlite"))
-	if zErr != nil || zdb == nil {
-		return
-	}
-	jRows, err := zdb.Query(`
-		SELECT m.id,
-		       COALESCE(json_extract(m.data, '$.role'), '') AS role,
-		       COALESCE(json_extract(p.data, '$.text'), '') AS txt,
-		       COALESCE(p.sequence, 0) AS pseq,
-		       p.rowid AS prowid
-		FROM message m
-		JOIN part p ON p.message_id = m.id
-		WHERE m.session_id = ?
-		  AND json_extract(p.data, '$.type') = 'text'
-		  AND COALESCE(json_extract(p.data, '$.synthetic'), 0) = 0
-		  AND `+zcodeSpeechMessageFilter+`
-		ORDER BY m.sequence ASC`, sessionID)
-	if err != nil {
-		return
-	}
-	type msgHdr struct {
-		id   string
-		role string
-	}
-	type partRow struct {
-		txt    string
-		pseq   int64
-		prowid int64
-	}
-	var hdrs []msgHdr
-	partsByMsg := make(map[string][]string, 64)
-	curMid := ""
-	curRole := ""
-	var curParts []partRow
-	flushMsg := func() {
-		if curMid == "" || len(curParts) == 0 {
-			curParts = curParts[:0]
-			return
-		}
-		if len(curParts) > 1 {
-			sort.SliceStable(curParts, func(i, j int) bool {
-				if curParts[i].pseq != curParts[j].pseq {
-					return curParts[i].pseq < curParts[j].pseq
-				}
-				return curParts[i].prowid < curParts[j].prowid
-			})
-		}
-		txts := make([]string, 0, len(curParts))
-		for _, pt := range curParts {
-			if pt.txt != "" {
-				txts = append(txts, pt.txt)
-			}
-		}
-		curParts = curParts[:0]
-		if len(txts) > 0 {
-			hdrs = append(hdrs, msgHdr{id: curMid, role: curRole})
-			partsByMsg[curMid] = txts
-		}
-	}
-	for jRows.Next() {
-		var mid, role, txt string
-		var pseq, prowid int64
-		if jRows.Scan(&mid, &role, &txt, &pseq, &prowid) != nil {
-			continue
-		}
-		role = strings.ToLower(strings.TrimSpace(role))
-		if role != "user" && role != "assistant" {
-			continue
-		}
-		txt = strings.TrimSpace(txt)
-		if txt == "" {
-			continue
-		}
-		if mid != curMid {
-			flushMsg()
-			curMid = mid
-			curRole = role
-		}
-		curParts = append(curParts, partRow{txt: txt, pseq: pseq, prowid: prowid})
-	}
-	flushMsg()
-	jRows.Close()
-	if len(hdrs) == 0 {
-		return
-	}
-
-	type turnEntry struct {
-		userMsgID string
-		segments  []string
-	}
-	var turns []turnEntry
-	cur := -1
-	for _, h := range hdrs {
-		txts := partsByMsg[h.id]
-		if len(txts) == 0 {
-			continue
-		}
-		if h.role == "user" && (cur < 0 || turns[cur].userMsgID != h.id) {
-			turns = append(turns, turnEntry{userMsgID: h.id})
-			cur = len(turns) - 1
-		}
-		if cur >= 0 {
-			for _, t := range txts {
-				turns[cur].segments = append(turns[cur].segments, "["+h.role+"] "+t)
-			}
-		}
-	}
-	now := time.Now()
-	hydrateMu.Lock()
-	evictHydrateCacheLocked(now)
-	for _, tr := range turns {
-		if len(tr.segments) == 0 {
-			continue
-		}
-		joined := strings.Join(tr.segments, "\n")
-		basePtr := "@ref:zcode:" + sessionID + ":" + tr.userMsgID
-		hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, basePtr)] = hydrateCacheEntry{text: joined, at: now}
-		hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, basePtr)] = hydrateCacheEntry{text: joined, at: now}
-		for sIdx, seg := range tr.segments {
-			segPtr := basePtr + "#" + strconv.Itoa(sIdx)
-			hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, segPtr)] = hydrateCacheEntry{text: seg, at: now}
-			hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, segPtr)] = hydrateCacheEntry{text: seg, at: now}
-		}
-	}
-	hydrateMu.Unlock()
-}
-
-// warmHydrateZCodePointersBatch 按 session/文件聚合尚未进入缓存的 @ref:zcode: 与 @ref:jsonl: 指针，
-// 对多轮同会话直接按 session 一次扫描并并发预热，使全表水合检索保持极速响应。
-// 优先走引擎守护进程的规范批量水合（与摄取侧同一分段/清洗口径），只有守护进程不可用时
-// 才落到下方的本地兜底扫描。
-func warmHydrateZCodePointersBatch(home string, rows []map[string]any) {
-	if strings.TrimSpace(home) == "" || len(rows) == 0 {
-		return
-	}
-	rows = hydrateZCodePointersViaDaemon(home, rows)
-	if len(rows) == 0 {
-		return
-	}
-	const zPrefix = "@ref:zcode:"
-	const jPrefix = "@ref:jsonl:"
-	seenBase := make(map[string]struct{}, 256)
-	zSessionBases := make(map[string][]string, 64)
-	seenJSONLFile := make(map[string]string, 32)
-	var pendingRaws []string
-
+	texts, _ := hydrateRefsViaDaemon(home, dbPath, refs)
 	for _, r := range rows {
-		raw := strings.TrimSpace(asString(r["content"]))
-		if strings.HasPrefix(raw, zPrefix) {
-			if _, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, raw)); ok {
-				continue
-			}
-			pendingRaws = append(pendingRaws, raw)
-			base := raw
-			if hash := strings.LastIndex(raw, "#"); hash > len(zPrefix) {
-				base = raw[:hash]
-			}
-			if _, dup := seenBase[base]; dup {
-				continue
-			}
-			seenBase[base] = struct{}{}
-			rest := strings.TrimPrefix(base, zPrefix)
-			if sep := strings.IndexByte(rest, ':'); sep > 0 {
-				sid := rest[:sep]
-				zSessionBases[sid] = append(zSessionBases[sid], base)
-			}
-		} else if strings.HasPrefix(raw, jPrefix) {
-			if _, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, raw)); ok {
-				continue
-			}
-			pendingRaws = append(pendingRaws, raw)
-			rest := strings.TrimPrefix(raw, jPrefix)
-			if lastColon := strings.LastIndex(rest, ":"); lastColon > 0 {
-				fpath := rest[:lastColon]
-				if _, dup := seenJSONLFile[fpath]; !dup {
-					seenJSONLFile[fpath] = raw
-				}
-			}
+		ref := hydrateRef{DocID: strings.TrimSpace(asString(r["id"])), Ref: strings.TrimSpace(asString(r["content"]))}
+		if text, ok := texts[ref]; ok {
+			r["_hydrated_ref_text"] = strings.TrimSpace(text)
 		}
 	}
+}
 
-	type batchWork struct {
-		sessionID string
-		pointer   string
-	}
-	var works []batchWork
-	for _, samplePtr := range seenJSONLFile {
-		works = append(works, batchWork{pointer: samplePtr})
-	}
-	for sid, bases := range zSessionBases {
-		// 单轮点查（hydrateEpisodicPointer）走 (session_id, sequence) 范围索引且遇到下一条 user 消息即早停，
-		// 单次仅需 ~2-5ms；而整会话扫描（hydrateZCodeSessionBatch）在数千条消息的巨型会话上需读取全部历史分片。
-		// 因此只有当同一会话待水合的独立 turn 数达到 32 条以上时才切换整会话批量扫描。
-		if len(bases) >= 32 {
-			works = append(works, batchWork{sessionID: sid})
-		} else {
-			for _, b := range bases {
-				works = append(works, batchWork{pointer: b})
-			}
-		}
-	}
-	if len(works) > 0 {
-		runWork := func(w batchWork) {
-			if w.sessionID != "" {
-				hydrateZCodeSessionBatch(home, w.sessionID)
-				for _, b := range zSessionBases[w.sessionID] {
-					if _, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, b)); !ok {
-						storeHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, b), "")
-					}
-				}
-				return
-			}
-			text := hydrateEpisodicPointer(home, w.pointer)
-			if text == "" {
-				storeHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, w.pointer), "")
-			}
-		}
-		if len(works) <= 6 {
-			for _, w := range works {
-				runWork(w)
-			}
-		} else {
-			workers := 6
-			ch := make(chan batchWork, len(works))
-			for _, w := range works {
-				ch <- w
-			}
-			close(ch)
-			var wg sync.WaitGroup
-			for i := 0; i < workers; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					for w := range ch {
-						runWork(w)
-					}
-				}()
-			}
-			wg.Wait()
-		}
-	}
-
-	if len(pendingRaws) > 0 {
-		now := time.Now()
-		hydrateMu.Lock()
-		evictHydrateCacheLocked(now)
-		for _, raw := range pendingRaws {
-			kLive := hydrateCacheKey(hydrateFlavorLive, home, raw)
-			if entry, ok := hydrateCache[kLive]; ok && now.Sub(entry.at) < hydrateCacheTTL {
-				continue
-			}
-			resolved := ""
-			if hash := strings.LastIndex(raw, "#"); hash > 0 {
-				segPart := raw[hash+1:]
-				if dot := strings.IndexByte(segPart, '.'); dot > 0 {
-					parentPtr := raw[:hash+1+dot]
-					if pEntry, ok := hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, parentPtr)]; ok {
-						resolved = pEntry.text
-					}
-				}
-				if resolved == "" {
-					basePtr := raw[:hash]
-					if bEntry, ok := hydrateCache[hydrateCacheKey(hydrateFlavorLive, home, basePtr)]; ok && bEntry.text != "" {
-						resolved = bEntry.text
-					}
-				}
-			}
-			hydrateCache[kLive] = hydrateCacheEntry{text: resolved, at: now}
-			hydrateCache[hydrateCacheKey(hydrateFlavorRaw, home, raw)] = hydrateCacheEntry{text: resolved, at: now}
-		}
-		hydrateMu.Unlock()
-	}
+func hydratedPointerRowText(r map[string]any) (string, bool) {
+	text := strings.TrimSpace(asString(r["_hydrated_ref_text"]))
+	checked, _ := r["_hydrated_ref_checked"].(bool)
+	return text, checked && text != ""
 }
 
 // zcodeRecallLedgerLookback 是宿主库首次导入的回溯窗口。宿主库
@@ -1506,6 +782,43 @@ func readZcodeToolWatermark(ldb *sql.DB) int64 {
 	return ms
 }
 
+// readAdminLedgerFingerprint 只读读取账本已绑定的 db_fingerprint；文件缺失、
+// 未绑定或读取失败一律返回 ""（调用方按「无法证明异库」处理，绝不误判）。
+func readAdminLedgerFingerprint(ledgerPath string) string {
+	db := openVaultReadOnly(ledgerPath)
+	if db == nil {
+		return ""
+	}
+	defer db.Close()
+	var stored string
+	if err := db.QueryRow(`SELECT value FROM efficacy_meta WHERE key = 'db_fingerprint'`).Scan(&stored); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stored)
+}
+
+// rotateAdminLedgerEpoch 把账本与其 -wal/-shm 归档成 .epoch-<unix>[-N] 侧册
+// （与引擎侧轮转约定同名，绝不删除数据）；重名时递增序号直到可用。
+func rotateAdminLedgerEpoch(ledgerPath string) error {
+	baseSuffix := fmt.Sprintf(".epoch-%d", time.Now().Unix())
+	suffix := baseSuffix
+	for seq := 1; ; seq++ {
+		if _, err := os.Stat(ledgerPath + suffix); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		suffix = fmt.Sprintf("%s-%d", baseSuffix, seq)
+	}
+	for _, candidate := range []string{ledgerPath, ledgerPath + "-wal", ledgerPath + "-shm"} {
+		if _, err := os.Stat(candidate); err != nil {
+			continue
+		}
+		if err := os.Rename(candidate, candidate+suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // syncProductionRecallLedger idempotently merges any rotated .epoch-* sidecar
 // ledgers and ingests completed MCP recall tool_usage records from the local
 // ZCode host database into the production efficacy ledger. It is strictly no-op
@@ -1523,6 +836,15 @@ func syncProductionRecallLedger(home, memoryPath string) {
 		return
 	}
 	ledgerPath := memoryPath + ".efficacy.sqlite"
+	// 账本与金库身份绑定：已绑定指纹与当前金库不符时，这本账属于另一个金库
+	// （或变更前的旧世代），绝不改写指纹、把两边事件混在同一身份下——按既有轮转
+	// 约定（.epoch-*）把旧账归档到旁边，从空账重新开世代；归档件在下一步按自身
+	// 指纹核验，异库侧册不会被拉回。
+	if storedFP := readAdminLedgerFingerprint(ledgerPath); storedFP != "" && storedFP != fp {
+		if err := rotateAdminLedgerEpoch(ledgerPath); err != nil {
+			return
+		}
+	}
 	ldb, err := openPlainSQLite(ledgerPath)
 	if err != nil {
 		return
@@ -1555,15 +877,22 @@ func syncProductionRecallLedger(home, memoryPath string) {
 	_, _ = ldb.Exec(`INSERT OR REPLACE INTO efficacy_meta(key, value) VALUES ('db_fingerprint', ?)`, fp)
 
 	// 1. Merge any rotated .epoch-* sidecar ledgers from the same production database.
+	//    侧册必须与当前金库指纹一致才可并入；异库（或旧世代）侧册保留在磁盘上，
+	//    既不并入也不删除。合并失败（读表、插入或提交任一失败）一律不删侧册，
+	//    留到下一轮重试，杜绝「未确认迁移成功就删归档」。
 	if matches, gErr := filepath.Glob(ledgerPath + ".epoch-*"); gErr == nil {
 		for _, epPath := range matches {
 			if strings.HasSuffix(epPath, "-wal") || strings.HasSuffix(epPath, "-shm") {
+				continue
+			}
+			if sideFP := readAdminLedgerFingerprint(epPath); sideFP != "" && sideFP != fp {
 				continue
 			}
 			edb := openVaultReadOnly(epPath)
 			if edb == nil {
 				continue
 			}
+			merged := false
 			rows, qErr := edb.Query(`
 				SELECT event_id, execution_id, session, scope, harness, hook,
 				       output_outcome, action, target_event_id, observed_at,
@@ -1573,32 +902,48 @@ func syncProductionRecallLedger(home, memoryPath string) {
 			if qErr == nil {
 				tx, txErr := ldb.Begin()
 				if txErr == nil {
-					for rows.Next() {
+					failed := false
+					for rows.Next() && !failed {
 						var evID, execID, sess, sc, harn, hk, outc, act, tgt, obs, sha string
 						var obsAt int64
 						var tb sql.NullInt64
-						if rows.Scan(&evID, &execID, &sess, &sc, &harn, &hk, &outc, &act, &tgt, &obsAt, &obs, &sha, &tb) == nil {
-							var tbArg any
-							if tb.Valid {
-								tbArg = tb.Int64
-							}
-							_, _ = tx.Exec(`
-								INSERT OR IGNORE INTO efficacy_event(
-									event_id, execution_id, session, scope, harness, hook,
-									output_outcome, action, target_event_id, observed_at,
-									observation, text_sha256, text_bytes
-								) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-							`, evID, execID, sess, sc, harn, hk, outc, act, tgt, obsAt, obs, sha, tbArg)
+						if rows.Scan(&evID, &execID, &sess, &sc, &harn, &hk, &outc, &act, &tgt, &obsAt, &obs, &sha, &tb) != nil {
+							failed = true
+							continue
+						}
+						var tbArg any
+						if tb.Valid {
+							tbArg = tb.Int64
+						}
+						if _, err := tx.Exec(`
+							INSERT OR IGNORE INTO efficacy_event(
+								event_id, execution_id, session, scope, harness, hook,
+								output_outcome, action, target_event_id, observed_at,
+								observation, text_sha256, text_bytes
+							) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+						`, evID, execID, sess, sc, harn, hk, outc, act, tgt, obsAt, obs, sha, tbArg); err != nil {
+							failed = true
 						}
 					}
-					_ = tx.Commit()
+					if rows.Err() != nil {
+						failed = true
+					}
+					rows.Close()
+					if failed {
+						_ = tx.Rollback()
+					} else if err := tx.Commit(); err == nil {
+						merged = true
+					}
+				} else {
+					rows.Close()
 				}
-				rows.Close()
 			}
 			edb.Close()
-			_ = os.Remove(epPath)
-			_ = os.Remove(epPath + "-wal")
-			_ = os.Remove(epPath + "-shm")
+			if merged {
+				_ = os.Remove(epPath)
+				_ = os.Remove(epPath + "-wal")
+				_ = os.Remove(epPath + "-shm")
+			}
 		}
 	}
 
@@ -1633,6 +978,7 @@ func syncProductionRecallLedger(home, memoryPath string) {
 		return
 	}
 	var maxStartedMS int64
+	var minRunningStartMS int64
 	for zRows.Next() {
 		var callID, sessID, status string
 		var startMS, endMS, outBytes int64
@@ -1643,6 +989,15 @@ func syncProductionRecallLedger(home, memoryPath string) {
 		if callID == "" {
 			continue
 		}
+		if status == "running" {
+			// 进行中的调用不能被当成「空结果」固化：跳过不入账，并把水位回退到最早
+			// 进行中的调用起点，下一轮其状态落定后重新扫描、按真实 outcome 记一笔
+			// （旧行为按 start 时间插入 empty，完成后的 INSERT OR IGNORE 无法修正）。
+			if startMS > 0 && (minRunningStartMS == 0 || startMS < minRunningStartMS) {
+				minRunningStartMS = startMS
+			}
+			continue
+		}
 		tsMS := endMS
 		if tsMS <= 0 {
 			tsMS = startMS
@@ -1651,12 +1006,7 @@ func syncProductionRecallLedger(home, memoryPath string) {
 			continue
 		}
 		obsAt := tsMS * int64(time.Millisecond)
-		outcome := "hits"
-		if status == "error" || status == "cancelled" {
-			outcome = "error"
-		} else if outBytes <= 0 {
-			outcome = "empty"
-		}
+		outcome := zcodeRecallToolOutcome(status, outBytes)
 		sum := sha256.Sum256([]byte("zcode\x00" + callID))
 		shaHex := hex.EncodeToString(sum[:])
 		sessSum := sha256.Sum256([]byte(fp + "\x00" + strings.TrimSpace(sessID)))
@@ -1692,10 +1042,35 @@ func syncProductionRecallLedger(home, memoryPath string) {
 			  )
 		`)
 	// 水位只前进（写已提交之后落盘）：下轮导入从本次最大 started_at 接着扫。
+	// 尚有进行中的调用时，水位收回到最早那一笔的起点，保证其完成后会被重新扫到
+	// （已入账行按 INSERT OR IGNORE 幂等重放）。
+	maxStartedMS = zcodeToolWatermark(maxStartedMS, minRunningStartMS)
 	if maxStartedMS > 0 {
 		_, _ = ldb.Exec(`INSERT OR REPLACE INTO efficacy_meta(key, value) VALUES ('zcode_tool_watermark', ?)`, strconv.FormatInt(maxStartedMS, 10))
 		notifyStreamKindRefresh(streamKindROI)
 	}
+}
+
+// zcodeRecallToolOutcome 把一条 zcode tool_usage 记录映射成账本 outcome：
+// error/cancelled → error，零输出 → empty，其余 → hits（进行中的记录在调用方
+// 先行跳过，绝不入账）。
+func zcodeRecallToolOutcome(status string, outBytes int64) string {
+	if status == "error" || status == "cancelled" {
+		return "error"
+	}
+	if outBytes <= 0 {
+		return "empty"
+	}
+	return "hits"
+}
+
+// zcodeToolWatermark 决定本轮 zcode 导入的下一水位：存在进行中的调用时以最早一笔
+// 起点为准（其完成后必须被重新扫到），否则取本轮已入账的最大 started_at。
+func zcodeToolWatermark(maxStartedMS, minRunningStartMS int64) int64 {
+	if minRunningStartMS > 0 {
+		return minRunningStartMS
+	}
+	return maxStartedMS
 }
 
 // openVaultReadOnly opens the memory database read-only. It returns nil when the
@@ -1848,6 +1223,10 @@ var roiVaultComputeMu sync.Mutex
 // readROIFactsVaultBundle reads the live vault telemetry, L3 Noetic citation graph,
 // per-workspace coverage matrix, daily ingestion/crystallization series, and top cited units.
 func readROIFactsVaultBundle(memoryPath string) vaultAnalyticsBundle {
+	return refreshROIEpisodicTexts(memoryPath, readROIFactsVaultBundleCached(memoryPath))
+}
+
+func readROIFactsVaultBundleCached(memoryPath string) vaultAnalyticsBundle {
 	now := time.Now()
 	writeEp := currentVaultWriteEpoch()
 	sig := roiVaultBundleSignature(memoryPath, now)
@@ -1916,6 +1295,52 @@ func readROIFactsVaultBundle(memoryPath string) vaultAnalyticsBundle {
 		roiVaultBundleMu.Unlock()
 	}
 	return out
+}
+
+func refreshROIEpisodicTexts(memoryPath string, bundle vaultAnalyticsBundle) vaultAnalyticsBundle {
+	bundle.topCitedUnits = append([]roiTopCitedUnit(nil), bundle.topCitedUnits...)
+	bundle.noeticStream = append([]roiNoeticEvent(nil), bundle.noeticStream...)
+	var refs []hydrateRef
+	for _, item := range bundle.topCitedUnits {
+		if item.IsZeroCopyRef {
+			refs = append(refs, hydrateRef{DocID: strings.TrimSpace(item.UnitID), Ref: strings.TrimSpace(item.storedRef)})
+		}
+	}
+	for i := range bundle.noeticStream {
+		bundle.noeticStream[i].CitedUnits = append([]roiCitedUnitDetail(nil), bundle.noeticStream[i].CitedUnits...)
+		for _, item := range bundle.noeticStream[i].CitedUnits {
+			if item.IsZeroCopyRef {
+				refs = append(refs, hydrateRef{DocID: strings.TrimSpace(item.UnitID), Ref: strings.TrimSpace(item.StoredText)})
+			}
+		}
+	}
+	home, _ := os.UserHomeDir()
+	texts, _ := hydrateRefsViaDaemon(home, memoryPath, refs)
+	for i := range bundle.topCitedUnits {
+		item := &bundle.topCitedUnits[i]
+		if !item.IsZeroCopyRef {
+			continue
+		}
+		text := strings.TrimSpace(texts[hydrateRef{DocID: strings.TrimSpace(item.UnitID), Ref: strings.TrimSpace(item.storedRef)}])
+		item.FullText, item.IsHydrated = clipRunes(text, 8192), text != ""
+		item.Tokens = int64(estimateTokenzRCount(text))
+		if text != "" {
+			item.Preview = clipRunes(text, 240)
+		} else {
+			item.Preview = clipRunes(item.fallbackPreview, 240)
+		}
+	}
+	for i := range bundle.noeticStream {
+		for j := range bundle.noeticStream[i].CitedUnits {
+			item := &bundle.noeticStream[i].CitedUnits[j]
+			if !item.IsZeroCopyRef {
+				continue
+			}
+			text := strings.TrimSpace(texts[hydrateRef{DocID: strings.TrimSpace(item.UnitID), Ref: strings.TrimSpace(item.StoredText)}])
+			item.FullText, item.IsHydrated = clipRunes(text, 8192), text != ""
+		}
+	}
+	return bundle
 }
 
 func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string) {
@@ -2504,13 +1929,19 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	var bgDocRows []map[string]any
 	for uid, m := range unitMetaMap {
 		if raw := strings.TrimSpace(m.rawText); strings.HasPrefix(raw, "@ref:") {
-			refRows = append(refRows, map[string]any{"content": raw})
+			refRows = append(refRows, map[string]any{"id": uid, "content": raw})
 		} else if m.isBGChunk {
 			bgDocRows = append(bgDocRows, map[string]any{"src": "chunk", "id": uid})
 		}
 	}
+	refTexts := make(map[hydrateRef]string, len(refRows))
 	if len(refRows) > 0 {
-		warmHydrateZCodePointersBatch(home, refRows)
+		warmHydrateZCodePointersBatch(home, memoryPath, refRows)
+		for _, row := range refRows {
+			if text, ok := hydratedPointerRowText(row); ok {
+				refTexts[hydrateRef{DocID: strings.TrimSpace(asString(row["id"])), Ref: strings.TrimSpace(asString(row["content"]))}] = text
+			}
+		}
 	}
 	if len(bgDocRows) > 0 {
 		warmHydrateLocalDocumentsBatch(home, bgDocRows)
@@ -2543,10 +1974,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		if isRef {
 			// 指针行只回水合正文：无法水合时留空（前端回退片段预览 + 「宿主原文已清理」提示），
 			// 绝不把原始 `@ref:` 指针当正文下发。
-			full = ""
-			if hydrated, ok := hydratedEpisodicPointer(home, stored); ok && hydrated != "" {
-				full = hydrated
-			}
+			full = refTexts[hydrateRef{DocID: uid, Ref: stored}]
 		}
 		hydrationCache[uid] = full
 		return full, full != "" && full != stored, isRef
@@ -2692,23 +2120,31 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		if preview == "" {
 			preview = uid
 		}
+		fallbackPreview := st.firstSnippet
+		if isRef {
+			fallbackPreview = vaultRefGapMarker
+		} else if fallbackPreview == "" {
+			fallbackPreview = uid
+		}
 		out.topCitedUnits = append(out.topCitedUnits, roiTopCitedUnit{
-			UnitID:        uid,
-			Layer:         layer,
-			Locus:         m.locus,
-			AddressURI:    m.addressURI,
-			WaveformBar:   m.waveformBar,
-			CitationCount: st.count,
-			AdoptedCount:  st.adoptedCount,
-			LastCitedAt:   st.lastAt,
-			OccurredAt:    m.occurredAt,
-			Preview:       clipRunes(preview, 240),
-			FullText:      clipRunes(fullText, 8192),
-			IsHydrated:    isHydrated,
-			Tokens:        int64(estimateTokenzRCount(fullText)),
-			IsZeroCopyRef: isRef,
-			RecentQueries: st.queries,
-			Citations:     st.citations,
+			storedRef:       m.rawText,
+			fallbackPreview: fallbackPreview,
+			UnitID:          uid,
+			Layer:           layer,
+			Locus:           m.locus,
+			AddressURI:      m.addressURI,
+			WaveformBar:     m.waveformBar,
+			CitationCount:   st.count,
+			AdoptedCount:    st.adoptedCount,
+			LastCitedAt:     st.lastAt,
+			OccurredAt:      m.occurredAt,
+			Preview:         clipRunes(preview, 240),
+			FullText:        clipRunes(fullText, 8192),
+			IsHydrated:      isHydrated,
+			Tokens:          int64(estimateTokenzRCount(fullText)),
+			IsZeroCopyRef:   isRef,
+			RecentQueries:   st.queries,
+			Citations:       st.citations,
 		})
 	}
 

@@ -574,6 +574,10 @@ func normalizeJSONValue(value any) any {
 
 // handle dispatches one decoded message; nil means "notification, no response".
 func handle(request any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer) any {
+	return handleWithMemoryMode(request, memory, lazy, debugOut, memory == nil)
+}
+
+func handleWithMemoryMode(request any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
 	request = normalizeJSONValue(request)
 	object, ok := request.(map[string]any)
 	if !ok {
@@ -613,14 +617,14 @@ func handle(request any, memory *api.Memory, lazy *LazyMemory, debugOut io.Write
 	case "tools/list":
 		return resultResponse(requestID, map[string]any{"tools": tools})
 	case "tools/call":
-		return toolCall(requestID, object["params"], memory, lazy, debugOut)
+		return toolCall(requestID, object["params"], memory, lazy, debugOut, liveDaemon)
 	}
 	return errorResponse(requestID, codeMethodNotFound, "method not found: "+method)
 }
 
 // toolCall runs recall and turns every failure into an isError result, never a
 // crash.
-func toolCall(requestID any, rawParams any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer) any {
+func toolCall(requestID any, rawParams any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
 	params, ok := rawParams.(map[string]any)
 	if !ok {
 		return errorResponse(requestID, codeInvalidParams, "params must be an object")
@@ -631,7 +635,6 @@ func toolCall(requestID any, rawParams any, memory *api.Memory, lazy *LazyMemory
 		return errorResponse(requestID, codeInvalidParams, "unknown tool: "+pyStr(params["name"]))
 	}
 	active := memory
-	liveDaemon := memory == nil
 	if active == nil {
 		if lazy == nil {
 			lazy = NewLazyMemory()
@@ -966,6 +969,7 @@ func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon
 				coords.Locus = inferred
 			}
 			if merged := mergeExplicit(coords); merged != nil {
+				persistResolvedPresence(stateDir, *merged)
 				return merged
 			}
 		}
@@ -981,6 +985,7 @@ func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon
 				coords.Locus = inferred
 			}
 			if merged := mergeExplicit(coords); merged != nil {
+				persistResolvedPresence(stateDir, *merged)
 				return merged
 			}
 		}
@@ -997,6 +1002,16 @@ func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon
 		}
 	}
 	return mergeExplicit(text.PresenceCoordinates{})
+}
+
+// persistResolvedPresence mirrors a live-resolved presence (the daemon's own
+// repository cwd or the host's in-flight tool-call directory) into the shared
+// active_workspace.json, keeping a fresh writer for the reconcile / console /
+// widget readers when no harness hook is wired. The L2 saved-state branch
+// never persists: echoing file-derived coordinates with a new timestamp would
+// fake activity recency.
+func persistResolvedPresence(stateDir string, coords text.PresenceCoordinates) {
+	_ = text.SavePresenceFile(stateDir, coords, "", ids.UTCNow())
 }
 
 // resolvedHarnessHint picks the harness identity for daemon-side presence. The

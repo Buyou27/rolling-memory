@@ -4,9 +4,14 @@
 package harness
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -43,7 +48,7 @@ func TestInstallWritesAllSurfaces(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("shim is not executable: %v", info.Mode())
 	}
-	if content := readFile(t, shim); !strings.Contains(content, `exec "`+executablePath()+`" "$@"`) {
+	if content := readFile(t, shim); !strings.Contains(content, `exec `+shellDoubleQuote(executablePath())+` "$@"`) {
 		t.Fatalf("shim does not exec the Go binary:\n%s", content)
 	}
 
@@ -287,7 +292,7 @@ func TestTOMLSectionSurgery(t *testing.T) {
 
 	updated := Install(registry, fx.optionsWith(func(options *InstallOptions) { options.DB = "/tmp/n.db" }))
 	if action := firstAction(t, updated, "codex", "mcp"); action.Status != StatusUpdated {
-		t.Fatalf("updated status = %q", action.Status)
+		t.Fatalf("updated action = %#v", action)
 	}
 	parsed, err = parseTOML(readFile(t, config))
 	if err != nil {
@@ -324,7 +329,7 @@ func TestHooksWiredAndRemoved(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(config), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	initial := `{"hooks": {"enabled": false, "events": {"PreToolUse": [{"hooks": [{"type": "command", "command": "guard.sh"}]}]}}}`
+	initial := `{"hooks": {"enabled": true, "events": {"PreToolUse": [{"hooks": [{"type": "command", "command": "guard.sh"}]}]}}}`
 	if err := os.WriteFile(config, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -369,12 +374,11 @@ func TestHooksFreshConfigKeyOrder(t *testing.T) {
 		t.Fatalf("select: %v", err)
 	}
 	assertNoFailures(t, Install(zcode, options))
-	text := readFile(t, fx.zcodeConfig())
-	if strings.Index(text, `"events"`) > strings.Index(text, `"enabled"`) {
-		t.Fatalf("events must be created before enabled:\n%s", text)
+	if _, found := objectAt(t, readJSONObject(t, fx.zcodeConfig()), "hooks")["enabled"]; found {
+		t.Fatal("install must not add a global hooks switch")
 	}
 	assertNoFailures(t, Uninstall(zcode, options))
-	want := "{\n  \"mcp\": {\n    \"servers\": {}\n  },\n  \"hooks\": {\n    \"events\": {},\n    \"enabled\": true\n  }\n}\n"
+	want := "{\n  \"mcp\": {\n    \"servers\": {}\n  },\n  \"hooks\": {\n    \"events\": {}\n  }\n}\n"
 	if got := readFile(t, fx.zcodeConfig()); got != want {
 		t.Fatalf("post-uninstall zcode config mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -383,9 +387,46 @@ func TestHooksFreshConfigKeyOrder(t *testing.T) {
 func TestHooksSkippedWithoutSurface(t *testing.T) {
 	fx := newFixture(t)
 	report := Install(fx.registry(), fx.optionsWith(func(options *InstallOptions) { options.Hooks = true }))
-	action := firstAction(t, report, "codex", "hooks")
+	action := firstAction(t, report, "codebuddy", "hooks")
 	if action.Status != StatusSkipped {
 		t.Fatalf("status = %q", action.Status)
+	}
+}
+
+// TestCodexHooksRoundtrip pins the Codex hook surface: the optional wiring
+// writes the Claude-shaped command hook into ~/.codex/hooks.json (a
+// first-hand-verified read point; the very first run additionally requires the
+// user's review/trust inside Codex), stays idempotent, reports OK on check,
+// and uninstall removes only our group.
+func TestCodexHooksRoundtrip(t *testing.T) {
+	fx := newFixture(t)
+	options := fx.optionsWith(func(options *InstallOptions) { options.Hooks = true })
+	codex, err := SelectHarnesses(fx.registry(), []string{"codex"}, true)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	assertNoFailures(t, Install(codex, options))
+	path := filepath.Join(fx.home, ".codex", "hooks.json")
+	events := objectAt(t, readJSONObject(t, path), "hooks")
+	groups, ok := events["UserPromptSubmit"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("codex hooks = %#v", events["UserPromptSubmit"])
+	}
+	if got, want := groupCommand(t, groups[0]), shlexQuote(options.ResolvedBinary())+" hook recall --json"; got != want {
+		t.Fatalf("codex hook command = %q, want %q", got, want)
+	}
+	if action := firstAction(t, Install(codex, options), "codex", "hooks"); action.Status != StatusUnchanged {
+		t.Fatalf("reinstall = %#v", action)
+	}
+	if action := firstAction(t, Check(codex, options, false), "codex", "hooks"); action.Status != StatusOK {
+		t.Fatalf("check = %#v", action)
+	}
+	assertNoFailures(t, Uninstall(codex, options))
+	if events := objectAt(t, readJSONObject(t, path), "hooks"); func() bool {
+		_, found := events["UserPromptSubmit"]
+		return found
+	}() {
+		t.Fatalf("UserPromptSubmit not removed: %#v", events)
 	}
 }
 
@@ -658,6 +699,1024 @@ func TestInstallAndUninstallClaudeEntries(t *testing.T) {
 	}
 	if fileExists(target) {
 		t.Fatalf("skill file survived uninstall: %s", target)
+	}
+}
+
+func TestConfigSafetyTOMLSpans(t *testing.T) {
+	original := "[before]\nx=1\n[mcp_servers.rmem]\ncommand = 'rmem'\nargs = ['mcp']\n[after]\nx=2\n"
+	spans, err := tomlTableSpans(original, []string{"mcp_servers", "rmem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := tomlWithoutSpans(original, spans)
+	if strings.Contains(remaining, "[mcp_servers.rmem]") || strings.Contains(remaining, "command = 'rmem'") {
+		t.Fatalf("spans = %#v remaining = %q", spans, remaining)
+	}
+}
+
+func TestConfigSafetyTOMLSeparatedTables(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	codex := harnessIndex(fx.registry())["codex"]
+	original := "[mcp_servers.rmem] # keep header comment\ncommand = '" + options.ResolvedBinary() + "'\nargs = ['mcp']\n" +
+		"[other]\ntext = '''\n[not.a.table]\n'''\n" +
+		"[mcp_servers.rmem.env]\nROLLING_MEMORY_DB = 'old'\n" +
+		"[[profiles]]\nname = 'stay'\n"
+	if err := os.WriteFile(codex.MCPPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := newReport("uninstall", options)
+	uninstallMCPToml(codex, options, codex.MCPPath, report)
+	if action := firstAction(t, report, "codex", "mcp"); action.Status != StatusRemoved {
+		t.Fatalf("status = %#v", action)
+	}
+	got := readFile(t, codex.MCPPath)
+	if !strings.Contains(got, "# keep header comment") || !strings.Contains(got, "[other]\ntext = '''\n[not.a.table]\n'''\n") || !strings.Contains(got, "[[profiles]]\nname = 'stay'\n") {
+		t.Fatalf("unrelated bytes changed: %q", got)
+	}
+}
+
+func TestConfigSafetyTOML(t *testing.T) {
+	cases := []struct {
+		name     string
+		original func(InstallOptions) string
+		status   string
+	}{
+		{"array-table", func(o InstallOptions) string {
+			return "[mcp_servers.rmem]\ncommand = '" + o.ResolvedBinary() + "'\nargs = ['mcp']\n[[profiles]]\nname = 'keep'\n"
+		}, StatusRemoved},
+		{"foreign-comment", func(o InstallOptions) string {
+			return "[mcp_servers.rmem]\ncommand = '/usr/bin/other'\nargs = ['mcp']\n# " + o.ResolvedBinary() + "\n"
+		}, StatusConflict},
+		{"invalid-source", func(o InstallOptions) string {
+			return "[mcp_servers.rmem]\ncommand = '" + o.ResolvedBinary() + "'\nargs = ['mcp']\ninvalid = [\n"
+		}, StatusError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			codex := harnessIndex(fx.registry())["codex"]
+			original := tc.original(options)
+			if err := os.WriteFile(codex.MCPPath, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			report := newReport("uninstall", options)
+			uninstallMCPToml(codex, options, codex.MCPPath, report)
+			if action := firstAction(t, report, "codex", "mcp"); action.Status != tc.status {
+				t.Fatalf("status = %#v", action)
+			}
+			got := readFile(t, codex.MCPPath)
+			if tc.status != StatusRemoved && got != original {
+				t.Fatalf("protected config changed: %q", got)
+			}
+			if tc.name == "array-table" && !strings.Contains(got, "[[profiles]]\nname = 'keep'") {
+				t.Fatalf("array table lost: %q", got)
+			}
+		})
+	}
+
+	t.Run("dotted-name", func(t *testing.T) {
+		fx := newFixture(t)
+		t.Setenv("HOME", fx.home)
+		options := fx.options()
+		options.Name = "team.memory"
+		codex := harnessIndex(fx.registry())["codex"]
+		original := "[mcp_servers.team.other]\ncommand = 'keep'\n"
+		if err := os.WriteFile(codex.MCPPath, []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report := newReport("install", options)
+		installMCPToml(codex, options, codex.MCPPath, report)
+		if action := firstAction(t, report, "codex", "mcp"); action.Status != StatusInstalled {
+			t.Fatalf("status = %#v", action)
+		}
+		parsed, err := parseTOML(readFile(t, codex.MCPPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		servers := parsed["mcp_servers"].(map[string]any)
+		if _, ok := servers["team.memory"]; !ok {
+			t.Fatalf("dotted name is not a single key: %#v", servers)
+		}
+		if servers["team"].(map[string]any)["other"].(map[string]any)["command"] != "keep" {
+			t.Fatalf("other server changed: %#v", servers)
+		}
+	})
+}
+
+func TestConfigSafetyHooks(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	zcode := harnessIndex(fx.registry())["zcode"]
+	path := *zcode.HooksPath
+	command := hookCommands(options)[0].Command
+	original := `{"hooks":{"enabled":false,"events":{"UserPromptSubmit":[{"matcher":"keep","hooks":[{"type":"command","command":"guard.sh","extra":"preserve"},{"type":"command","command":` + strconv.Quote(command) + `}] }]}}}`
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := objectAt(t, readJSONObject(t, path), "hooks", "events")["UserPromptSubmit"].([]any)[0].(map[string]any)
+	guard := before["hooks"].([]any)[0]
+	report := newReport("uninstall", options)
+	uninstallHooks(zcode, options, report)
+	if action := firstAction(t, report, "zcode", "hooks"); action.Status != StatusRemoved {
+		t.Fatalf("status = %#v", action)
+	}
+	hooks := objectAt(t, readJSONObject(t, path), "hooks")
+	if hooks["enabled"] != false {
+		t.Fatalf("global switch changed: %#v", hooks)
+	}
+	groups, ok := objectAt(t, hooks, "events")["UserPromptSubmit"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("mixed group lost: %#v", groups)
+	}
+	group := groups[0].(map[string]any)
+	if group["matcher"] != "keep" || !reflect.DeepEqual(group["hooks"], []any{guard}) {
+		t.Fatalf("foreign hook changed: %#v", group)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"hooks":{"enabled":false,"events":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report = newReport("install", options)
+	installHooks(zcode, options, report)
+	if objectAt(t, readJSONObject(t, path), "hooks")["enabled"] != false {
+		t.Fatal("install enabled a disabled global switch")
+	}
+}
+
+func TestConfigSafetyHookDisabledAndMalformed(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	zcode := harnessIndex(fx.registry())["zcode"]
+	path := *zcode.HooksPath
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, original := range []string{
+		`{"hooks":false}`,
+		`{"hooks":{"enabled":"invalid","events":{}}}`,
+		`{"hooks":{"events":{"UserPromptSubmit":[{"hooks":false}]}}}`,
+	} {
+		if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report := newReport("install", options)
+		installHooks(zcode, options, report)
+		if action := firstAction(t, report, "zcode", "hooks"); action.Status != StatusConflict {
+			t.Fatalf("invalid config accepted: %#v", action)
+		}
+		if got := readFile(t, path); got != original {
+			t.Fatalf("invalid config changed: %q", got)
+		}
+	}
+	original := `{"hooks":{"events":{"UserPromptSubmit":[{"hooks":[{"command":"guard.sh"}]}]}}}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := newReport("install", options)
+	installHooks(zcode, options, report)
+	assertNoFailures(t, report)
+	if _, found := objectAt(t, readJSONObject(t, path), "hooks")["enabled"]; found {
+		t.Fatal("install enabled unrelated hooks by adding the global switch")
+	}
+}
+
+func TestConfigSafetyHookInstances(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	first := fx.options()
+	second := first
+	first.Binary = filepath.Join(fx.home, "one", "rolling-memory")
+	second.Binary = filepath.Join(fx.home, "two", "rolling-memory")
+	zcode := harnessIndex(fx.registry())["zcode"]
+	for _, options := range []InstallOptions{first, second} {
+		report := newReport("install", options)
+		installHooks(zcode, options, report)
+		assertNoFailures(t, report)
+	}
+	report := newReport("uninstall", first)
+	uninstallHooks(zcode, first, report)
+	assertNoFailures(t, report)
+	groups := objectAt(t, readJSONObject(t, *zcode.HooksPath), "hooks", "events")["UserPromptSubmit"].([]any)
+	if len(groups) != 1 || groupCommand(t, groups[0]) != hookCommands(second)[0].Command {
+		t.Fatalf("other instance changed: %#v", groups)
+	}
+}
+
+func TestConfigSafetyProjectHookIsolation(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Hooks = true
+	zcode := harnessIndex(fx.registry())["zcode"]
+	assertNoFailures(t, Install([]Harness{zcode}, options))
+	global := readFile(t, *zcode.HooksPath)
+	project := options
+	project.Project = true
+	assertNoFailures(t, Install([]Harness{zcode}, project))
+	assertNoFailures(t, Uninstall([]Harness{zcode}, project))
+	if got := readFile(t, *zcode.HooksPath); got != global {
+		t.Fatalf("project operations changed user hooks:\n%s", got)
+	}
+}
+
+func TestConfigSafetyDSHMarkers(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	dsh := harnessIndex(fx.registry())["dsh"]
+	path, _ := mcpTargetPath(dsh, options)
+	begin, end := dshMarkers(options.Name)
+	for _, original := range []string{
+		end + "\n" + begin + "\n",
+		begin + "\ncommand: '/usr/bin/other'\n# " + options.ResolvedBinary() + "\n" + end + "\n",
+	} {
+		if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report := newReport("uninstall", options)
+		uninstallMCPDsh(dsh, options, path, report)
+		if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusConflict {
+			t.Fatalf("status = %#v", action)
+		}
+		if got := readFile(t, path); got != original {
+			t.Fatalf("foreign or malformed block changed: %q", got)
+		}
+	}
+}
+
+func TestConfigSafetyShimAndBinaryFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell probe")
+	}
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	marker := filepath.Join(fx.home, "injected")
+	binary := filepath.Join(fx.home, "$(touch${IFS}"+marker+")")
+	shim := filepath.Join(fx.home, "probe.sh")
+	if err := os.WriteFile(shim, []byte(shimTextFor("darwin", binary)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = exec.Command("/bin/sh", shim).Run()
+	if fileExists(marker) {
+		t.Fatal("shell expanded the binary path")
+	}
+	portableRoot := filepath.Join(fx.home, "'$(touch${IFS}"+marker+")")
+	portableBinary := filepath.Join(portableRoot, "bin", "rm")
+	if err := os.WriteFile(shim, []byte(PortableShimTextFor("darwin", portableBinary, portableRoot)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = exec.Command("/bin/sh", shim).Run()
+	if fileExists(marker) {
+		t.Fatal("portable shell expanded a path")
+	}
+
+	options := fx.options()
+	blocked := DefaultShimPath(fx.home)
+	if err := os.MkdirAll(filepath.Dir(blocked), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blocked, []byte("foreign"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	report := Install([]Harness{harnessIndex(fx.registry())["zcode"]}, options)
+	if len(report.Failures()) == 0 {
+		t.Fatal("foreign shim should fail")
+	}
+	if fileExists(fx.zcodeConfig()) {
+		t.Fatal("MCP config written despite failed launcher")
+	}
+}
+
+func TestConfigSafetyDSHBundleSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		bundles  string
+		selected bool
+	}{
+		{"selected", `["@rocareer/dsh-rolling-memory"]`, true},
+		{"not-selected", `["@rocareer/other"]`, false},
+		{"similar-name", `["@another/dsh-rolling-memory"]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			options.Name = DefaultName
+			options.Hooks = true
+			dsh := harnessIndex(fx.registry())["dsh"]
+			path, _ := mcpTargetPath(dsh, options)
+			manifest := `{"dependencies":{"@rocareer/dsh-rolling-memory":"file:bundle.tgz"},"dsh":{"profile":{"bundles":` + tc.bundles + `}}}`
+			if err := os.WriteFile(filepath.Join(filepath.Dir(path), "package.json"), []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				report := Install([]Harness{dsh}, options)
+				action := firstAction(t, report, "dsh", "mcp")
+				if tc.selected && action.Status != StatusSkipped {
+					t.Fatalf("selected bundle accepted duplicate: %#v", action)
+				}
+				if !tc.selected && action.Status != StatusInstalled && action.Status != StatusUnchanged {
+					t.Fatalf("unselected bundle blocked installation: %#v", action)
+				}
+			}
+			if tc.selected && fileExists(path) {
+				t.Fatal("selected bundle caused a manual marker to be created")
+			}
+		})
+	}
+}
+
+func TestConfigSafetyDSHForeignServer(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Name = DefaultName
+	dsh := harnessIndex(fx.registry())["dsh"]
+	path, _ := mcpTargetPath(dsh, options)
+	original := "- insert:\n    - id: external\n      config:\n        serverName: rolling-memory\n        command: other\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Install([]Harness{dsh}, options)
+	if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusConflict {
+		t.Fatalf("foreign server accepted: %#v", action)
+	}
+	if got := readFile(t, path); got != original {
+		t.Fatalf("foreign entry changed: %q", got)
+	}
+}
+
+func TestConfigSafetyDSHBundleExistingMarker(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Name = DefaultName
+	options.Hooks = true
+	dsh := harnessIndex(fx.registry())["dsh"]
+	path, _ := mcpTargetPath(dsh, options)
+	assertNoFailures(t, Install([]Harness{dsh}, options))
+	original := readFile(t, path)
+	manifest := `{"dsh":{"profile":{"bundles":["@rocareer/dsh-rolling-memory"]}}}`
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		report := Install([]Harness{dsh}, options)
+		if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusConflict {
+			t.Fatalf("existing duplicate status = %#v", action)
+		}
+		if got := readFile(t, path); got != original {
+			t.Fatalf("existing marker changed: %q", got)
+		}
+	}
+}
+
+func TestConfigSafetyDSHProfile(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	dsh := harnessIndex(fx.registry())["dsh"]
+	outside := filepath.Join(fx.home, "victim", "cordis.patch.yml")
+	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("untouched\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []string{"../../victim", ".", "..", "/tmp/victim", `..\..\victim`, `C:\victim`, "dir/name"} {
+		options := fx.options()
+		options.DSHProfile = profile
+		report := Install([]Harness{dsh}, options)
+		if len(report.Failures()) == 0 {
+			t.Fatalf("accepted profile %q", profile)
+		}
+		if got := readFile(t, outside); got != "untouched\n" {
+			t.Fatalf("profile %q changed outside file: %q", profile, got)
+		}
+	}
+}
+
+func TestConfigSafetyDSHSymlinks(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	dsh := harnessIndex(fx.registry())["dsh"]
+	options := fx.options()
+	outside := filepath.Join(fx.home, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(outside, "cordis.patch.yml")
+	if err := os.WriteFile(victim, []byte("untouched\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(*dsh.ProfilesDir, "linked")
+	if err := os.Symlink(outside, profile); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	options.DSHProfile = "linked"
+	report := Install([]Harness{dsh}, options)
+	if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusConflict {
+		t.Fatalf("profile symlink status = %#v", action)
+	}
+	if got := readFile(t, victim); got != "untouched\n" {
+		t.Fatalf("symlink target changed: %q", got)
+	}
+	options.DSHProfile = "web"
+	patch := filepath.Join(*dsh.ProfilesDir, "web", "cordis.patch.yml")
+	if err := os.Symlink(victim, patch); err != nil {
+		t.Fatal(err)
+	}
+	report = Install([]Harness{dsh}, options)
+	if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusConflict {
+		t.Fatalf("patch symlink status = %#v", action)
+	}
+	if got := readFile(t, victim); got != "untouched\n" {
+		t.Fatalf("patch target changed: %q", got)
+	}
+}
+
+func TestRedTeamDSHBundleCheck(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Name = DefaultName
+	dsh := harnessIndex(fx.registry())["dsh"]
+	path, _ := mcpTargetPath(dsh, options)
+	manifest := `{"dsh":{"profile":{"bundles":["@rocareer/dsh-rolling-memory"]}}}`
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, withFile := range []bool{false, true} {
+		if withFile {
+			if err := os.WriteFile(path, []byte("# empty\n[]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		report := newReport("check", options)
+		checkMCP(dsh, options, report)
+		if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusSkipped || !strings.Contains(action.Detail, "unverified") {
+			t.Fatalf("selected bundle check = %#v", action)
+		}
+	}
+}
+
+func TestRedTeamDSHTrustedRootSymlink(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	root := filepath.Join(fx.home, "dsh-root-link")
+	if err := os.Symlink(fx.dsh, root); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	dsh := harnessIndex(BuildHarnesses(fx.home, root))["dsh"]
+	options := fx.options()
+	report := newReport("install", options)
+	installMCP(dsh, options, report)
+	if action := firstAction(t, report, "dsh", "mcp"); action.Status != StatusInstalled {
+		t.Fatalf("trusted root symlink rejected: %#v", action)
+	}
+}
+
+func TestRedTeamJSONUserFields(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	zcode := harnessIndex(fx.registry())["zcode"]
+	path := zcode.MCPPath
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"mcp":{"servers":{"rmem":{"type":"stdio","command":` + strconv.Quote(options.ResolvedBinary()) + `,"args":["mcp"],"disabled":true,"env":{"USER_KEY":"keep"},"custom":{"keep":1}}}}}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := newReport("install", options)
+	installMCPJSON(zcode, options, path, report)
+	if action := firstAction(t, report, "zcode", "mcp"); action.Status != StatusConflict {
+		t.Fatalf("custom entry accepted: %#v", action)
+	}
+	if got := readFile(t, path); got != original {
+		t.Fatalf("custom entry overwritten: %q", got)
+	}
+}
+
+func TestRedTeamTOMLMultilineComment(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	codex := harnessIndex(fx.registry())["codex"]
+	original := "[mcp_servers.rmem]\ncommand = '" + options.ResolvedBinary() + "'\nargs = [\n  'mcp', # keep inline comment\n]\n[other]\nx = 1\n"
+	if err := os.WriteFile(codex.MCPPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := newReport("uninstall", options)
+	uninstallMCPToml(codex, options, codex.MCPPath, report)
+	if action := firstAction(t, report, "codex", "mcp"); action.Status != StatusRemoved {
+		t.Fatalf("status = %#v", action)
+	}
+	if got := readFile(t, codex.MCPPath); !strings.Contains(got, "# keep inline comment") || !strings.Contains(got, "[other]\nx = 1") {
+		t.Fatalf("comments or unrelated fields lost: %q", got)
+	}
+}
+
+func TestRedTeamSharedHookNames(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	first := fx.options()
+	first.Hooks = true
+	first.Name = "first"
+	second := first
+	second.Name = "second"
+	zcode := harnessIndex(fx.registry())["zcode"]
+	assertNoFailures(t, Install([]Harness{zcode}, first))
+	assertNoFailures(t, Install([]Harness{zcode}, second))
+	assertNoFailures(t, Uninstall([]Harness{zcode}, first))
+	data := readJSONObject(t, *zcode.HooksPath)
+	groups, ok := objectAt(t, data, "hooks", "events")["UserPromptSubmit"].([]any)
+	if !ok || len(groups) != 1 || groupCommand(t, groups[0]) != hookCommands(second)[0].Command {
+		t.Fatalf("remaining instance lost shared hook: %#v", groups)
+	}
+	assertNoFailures(t, Uninstall([]Harness{zcode}, second))
+	data = readJSONObject(t, *zcode.HooksPath)
+	if _, exists := objectAt(t, data, "hooks", "events")["UserPromptSubmit"]; exists {
+		t.Fatal("last instance did not remove shared hook")
+	}
+}
+
+func TestRedTeamReinstallPreservesSettings(t *testing.T) {
+	for _, kind := range []string{"json", "toml"} {
+		t.Run(kind, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			options.DB = "/old/vault.db"
+			options.Scope = "old-scope"
+			index := harnessIndex(fx.registry())
+			harness := index["codex"]
+			if kind == "json" {
+				harness = index["zcode"]
+			}
+			report := newReport("install", options)
+			installMCP(harness, options, report)
+			assertNoFailures(t, report)
+			if kind == "toml" {
+				original := readFile(t, harness.MCPPath)
+				original = strings.Replace(original, "startup_timeout_sec = 30", "startup_timeout_sec = 123", 1)
+				if err := os.WriteFile(harness.MCPPath, []byte(original), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			options.DB, options.Scope = "", ""
+			report = newReport("install", options)
+			installMCP(harness, options, report)
+			assertNoFailures(t, report)
+			text := readFile(t, harness.MCPPath)
+			if !strings.Contains(text, "/old/vault.db") || !strings.Contains(text, "old-scope") || (kind == "toml" && !strings.Contains(text, "startup_timeout_sec = 123")) {
+				t.Fatalf("reinstall discarded settings: %q", text)
+			}
+			options.DB = "/new/vault.db"
+			report = newReport("install", options)
+			installMCP(harness, options, report)
+			assertNoFailures(t, report)
+			text = readFile(t, harness.MCPPath)
+			if !strings.Contains(text, "/new/vault.db") || !strings.Contains(text, "old-scope") || (kind == "toml" && !strings.Contains(text, "startup_timeout_sec = 123")) {
+				t.Fatalf("explicit update lost settings: %q", text)
+			}
+		})
+	}
+}
+
+func TestRedTeamPluginDeclarationUnverified(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Name = DefaultName
+	options.SkillName = DefaultName
+	zcode := harnessIndex(fx.registry())["zcode"]
+	pluginDir := filepath.Join(fx.home, ".zcode", "cli", "plugins", "cache", "market", DefaultName, "1.0")
+	manifestPath := filepath.Join(pluginDir, ".zcode-plugin", "plugin.json")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"mcpServers":{"rolling-memory":{"command":"/not/installed","args":["mcp"]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(zcode.MCPPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := `{"plugins":{"enabledPlugins":{"rolling-memory@market":true}}}`
+	if err := os.WriteFile(zcode.MCPPath, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := newReport("install", options)
+	installMCPJSON(zcode, options, zcode.MCPPath, report)
+	if action := firstAction(t, report, "zcode", "mcp"); action.Status != StatusConflict {
+		t.Fatalf("unverified plugin accepted: %#v", action)
+	}
+	if got := readFile(t, zcode.MCPPath); got != config {
+		t.Fatalf("plugin config changed: %q", got)
+	}
+}
+
+func TestRedTeamFailedMCPUninstallRetainsHooks(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(strconv.FormatBool(dryRun), func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			options.Project = true
+			options.Hooks = true
+			claude := harnessIndex(fx.registry())["claude-code"]
+			assertNoFailures(t, Install([]Harness{claude}, options))
+			mcpPath, _ := mcpTargetPath(claude, options)
+			data := readJSONObject(t, mcpPath)
+			objectAt(t, data, "mcpServers", options.Name)["disabled"] = true
+			encoded, err := json.Marshal(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(mcpPath, encoded, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			hooksPath, _ := hooksTargetPath(claude, options)
+			before := readFile(t, hooksPath)
+			options.DryRun = dryRun
+			report := Uninstall([]Harness{claude}, options)
+			if firstAction(t, report, "claude-code", "mcp").Status != StatusConflict {
+				t.Fatalf("modified MCP entry was not protected: %#v", report.Actions)
+			}
+			if got := readFile(t, hooksPath); got != before {
+				t.Fatalf("dependent hook changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestRedTeamUninstallDryRunSharedHook(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Hooks = true
+	zcode := harnessIndex(fx.registry())["zcode"]
+	assertNoFailures(t, Install([]Harness{zcode}, options))
+	options.DryRun = true
+	report := Uninstall([]Harness{zcode}, options)
+	if action := firstAction(t, report, "zcode", "hooks"); action.Status != StatusPlanned {
+		t.Fatalf("last user's hook not planned for removal: %#v", action)
+	}
+}
+
+func TestRedTeamShimSymlinks(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(existing), func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			path := DefaultShimPath(fx.home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(fx.home, "outside")
+			if existing {
+				if err := os.WriteFile(target, []byte("untouched"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			report := newReport("install", options)
+			ensureBinary(options, report)
+			if action := firstAction(t, report, "*", "binary"); action.Status != StatusConflict {
+				t.Fatalf("symlink accepted: %#v", action)
+			}
+			if existing && readFile(t, target) != "untouched" || !existing && fileExists(target) {
+				t.Fatal("symlink target changed")
+			}
+		})
+	}
+}
+
+func TestRedTeamProjectLanguagePreference(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		project bool
+		lang    string
+		writes  bool
+	}{
+		{"user-explicit", false, "zh-CN", true},
+		{"user-default", false, "", false},
+		{"project-explicit", true, "zh-CN", false},
+		{"project-default", true, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			options.Project, options.Lang = tc.project, tc.lang
+			assertNoFailures(t, Install([]Harness{harnessIndex(fx.registry())["zcode"]}, options))
+			if got := fileExists(UILangStatePath(fx.home)); got != tc.writes {
+				t.Fatalf("language preference exists = %v, want %v", got, tc.writes)
+			}
+		})
+	}
+}
+
+func TestRedTeamProjectUninstallShortcut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("desktop shortcut probe uses temporary HOME")
+	}
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	spec := desktopShortcutSpec(runtime.GOOS, fx.home, options.ResolvedBinary())
+	if err := os.MkdirAll(filepath.Dir(spec.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spec.Path, []byte(spec.Content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options.Project = true
+	Uninstall([]Harness{harnessIndex(fx.registry())["zcode"]}, options)
+	if got := readFile(t, spec.Path); got != spec.Content {
+		t.Fatalf("project uninstall changed user shortcut: %q", got)
+	}
+}
+
+func TestRedTeamClaudeDisableAllHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		value    string
+		conflict bool
+	}{
+		{"disabled", `true`, true},
+		{"enabled", `false`, false},
+		{"invalid", `"yes"`, true},
+		{"missing", ``, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			claude := harnessIndex(fx.registry())["claude-code"]
+			path := *claude.HooksPath
+			field := ""
+			if tc.value != "" {
+				field = `"disableAllHooks":` + tc.value + `,`
+			}
+			original := "{" + field + `"hooks":{}}`
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			report := newReport("install", options)
+			installHooks(claude, options, report)
+			action := firstAction(t, report, "claude-code", "hooks")
+			if tc.conflict {
+				if action.Status != StatusConflict || readFile(t, path) != original {
+					t.Fatalf("disabled setting changed or accepted: %#v", action)
+				}
+			} else if action.Status != StatusInstalled {
+				t.Fatalf("enabled setting rejected: %#v", action)
+			}
+			check := newReport("check", options)
+			checkHooks(claude, options, check)
+			if tc.conflict && firstAction(t, check, "claude-code", "hooks").Status != StatusConflict {
+				t.Fatalf("check accepted disabled setting: %#v", check.Actions)
+			}
+		})
+	}
+}
+
+func TestRedTeamClaudeProjectDisableAllHooks(t *testing.T) {
+	fx := newFixture(t)
+	t.Setenv("HOME", fx.home)
+	options := fx.options()
+	options.Project = true
+	claude := harnessIndex(fx.registry())["claude-code"]
+	user := `{"disableAllHooks":true}`
+	if err := os.WriteFile(*claude.HooksPath, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"install", "check"} {
+		report := newReport(mode, options)
+		if mode == "install" {
+			installHooks(claude, options, report)
+		} else {
+			checkHooks(claude, options, report)
+		}
+		if action := firstAction(t, report, "claude-code", "hooks"); action.Status != StatusConflict {
+			t.Fatalf("%s ignored disabled user hooks: %#v", mode, action)
+		}
+		if got := readFile(t, *claude.HooksPath); got != user {
+			t.Fatalf("%s changed user settings: %q", mode, got)
+		}
+	}
+}
+
+func TestRedTeamHookDuplicatesAndSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		enabled  string
+		groups   string
+		conflict bool
+	}{
+		{"disabled", `false`, `[{"hooks":[%s]}]`, true},
+		{"duplicate-groups", `true`, `[{"hooks":[%s]},{"hooks":[%s]}]`, true},
+		{"valid-and-disabled", `true`, `[{"hooks":[%s,{"type":"command","enabled":false,"command":COMMAND}]}]`, true},
+		{"duplicate-mixed-group", `true`, `[{"hooks":[{"type":"command","command":"guard.sh"},%s,%s]}]`, true},
+		{"single-mixed-group", `true`, `[{"hooks":[{"type":"command","command":"guard.sh"},%s]}]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			zcode := harnessIndex(fx.registry())["zcode"]
+			path := *zcode.HooksPath
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			hook := `{"type":"command","command":` + strconv.Quote(hookCommands(options)[0].Command) + `}`
+			groups := strings.ReplaceAll(tc.groups, "%s", hook)
+			groups = strings.ReplaceAll(groups, "COMMAND", strconv.Quote(hookCommands(options)[0].Command))
+			original := `{"hooks":{"enabled":` + tc.enabled + `,"events":{"UserPromptSubmit":` + groups + `}}}`
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []string{"install", "check"} {
+				report := newReport(mode, options)
+				if mode == "install" {
+					installHooks(zcode, options, report)
+				} else {
+					checkHooks(zcode, options, report)
+				}
+				action := firstAction(t, report, "zcode", "hooks")
+				if tc.conflict && action.Status != StatusConflict {
+					t.Fatalf("%s accepted unsafe hooks: %#v", mode, action)
+				}
+				if !tc.conflict && action.Status != StatusUnchanged && action.Status != StatusOK {
+					t.Fatalf("%s rejected single mixed hook: %#v", mode, action)
+				}
+				if got := readFile(t, path); got != original {
+					t.Fatalf("%s changed hook config: %q", mode, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRedTeamPluginHookSwitch(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			options.Name = DefaultName
+			options.SkillName = DefaultName
+			zcode := harnessIndex(fx.registry())["zcode"]
+			setupZCodePluginCache(t, fx, "0.7.4")
+			path := *zcode.HooksPath
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original := `{"plugins":{"enabledPlugins":{"rolling-memory@marketplace":true}},"hooks":{"enabled":` + strconv.FormatBool(enabled) + `,"events":{}}}`
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []string{"install", "check"} {
+				report := newReport(mode, options)
+				if mode == "install" {
+					installHooks(zcode, options, report)
+				} else {
+					checkHooks(zcode, options, report)
+				}
+				action := firstAction(t, report, "zcode", "hooks")
+				if !enabled && action.Status != StatusConflict {
+					t.Fatalf("%s accepted disabled plugin hooks: %#v", mode, action)
+				}
+				if enabled && action.Status != StatusUnchanged && action.Status != StatusOK {
+					t.Fatalf("%s rejected enabled plugin declaration: %#v", mode, action)
+				}
+				if got := readFile(t, path); got != original {
+					t.Fatalf("%s changed config: %q", mode, got)
+				}
+			}
+			if enabled {
+				command := strconv.Quote(hookCommands(options)[0].Command)
+				mixed := `{"plugins":{"enabledPlugins":{"rolling-memory@marketplace":true}},"hooks":{"enabled":true,"events":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"guard.sh"},{"type":"command","command":` + command + `}]}]}}}`
+				if err := os.WriteFile(path, []byte(mixed), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				for _, mode := range []string{"install", "check"} {
+					report := newReport(mode, options)
+					if mode == "install" {
+						installHooks(zcode, options, report)
+					} else {
+						checkHooks(zcode, options, report)
+					}
+					if action := firstAction(t, report, "zcode", "hooks"); action.Status != StatusConflict {
+						t.Fatalf("%s accepted plugin and mixed global hook: %#v", mode, action)
+					}
+					if got := readFile(t, path); got != mixed {
+						t.Fatalf("%s changed mixed hook group: %q", mode, got)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRedTeamHookUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		group string
+	}{
+		{"disabled", `{"hooks":[{"type":"command","enabled":false,"command":%s}]}`},
+		{"wrong-type", `{"hooks":[{"type":"prompt","command":%s}]}`},
+		{"matcher", `{"matcher":"only-some-events","hooks":[{"type":"command","command":%s}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			zcode := harnessIndex(fx.registry())["zcode"]
+			path := *zcode.HooksPath
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			group := fmt.Sprintf(tc.group, strconv.Quote(hookCommands(options)[0].Command))
+			original := `{"hooks":{"enabled":true,"events":{"UserPromptSubmit":[` + group + `]}}}`
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []string{"install", "check"} {
+				report := newReport(mode, options)
+				if mode == "install" {
+					installHooks(zcode, options, report)
+				} else {
+					checkHooks(zcode, options, report)
+				}
+				if action := firstAction(t, report, "zcode", "hooks"); action.Status != StatusConflict {
+					t.Fatalf("%s accepted unavailable hook: %#v", mode, action)
+				}
+				if got := readFile(t, path); got != original {
+					t.Fatalf("%s changed user hook: %q", mode, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRedTeamDSHYAML(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		original string
+		conflict bool
+	}{
+		{"empty-sequence", "# initialized profile\n[]\n", false},
+		{"foreign-space", "- insert:\n    - id: other\n      config:\n        serverName : rolling-memory\n", true},
+		{"unrelated", "- insert:\n    - id: other\n      config:\n        serverName: different\n        note: rolling-memory\n", false},
+		{"tagged-js", "- insert:\n    - id: other\n      config:\n        serverName: different\n        expression: !!js process.env.VALUE\n", false},
+		{"dynamic-server", "- insert:\n    - id: other\n      config:\n        serverName: !!js process.env.VALUE\n", true},
+		{"alias-server", "- insert:\n    - id: other\n      config:\n        serverName: &name different\n        other: *name\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			t.Setenv("HOME", fx.home)
+			options := fx.options()
+			options.Name = DefaultName
+			dsh := harnessIndex(fx.registry())["dsh"]
+			path, _ := mcpTargetPath(dsh, options)
+			if err := os.WriteFile(path, []byte(tc.original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			report := newReport("install", options)
+			installMCPDsh(dsh, options, path, report)
+			action := firstAction(t, report, "dsh", "mcp")
+			got := readFile(t, path)
+			if tc.conflict {
+				if action.Status != StatusConflict || got != tc.original {
+					t.Fatalf("foreign entry not protected: %#v %q", action, got)
+				}
+				return
+			}
+			if action.Status != StatusInstalled || !strings.Contains(got, "# >>> rolling-memory") {
+				t.Fatalf("valid profile not installed: %#v %q", action, got)
+			}
+			if tc.name == "empty-sequence" && strings.Contains(got, "[]\n\n# >>>") {
+				t.Fatalf("empty sequence followed by another document: %q", got)
+			}
+			if tc.name == "tagged-js" && !strings.Contains(got, "expression: !!js process.env.VALUE") {
+				t.Fatalf("tagged expression changed: %q", got)
+			}
+		})
 	}
 }
 

@@ -2,7 +2,7 @@
 
 **[English](../../TRADEMARK.md) · [简体中文](TRADEMARK.md)**
 
-PolyForm Noncommercial 1.0.0 许可（及 `sdk/` 的 Apache-2.0 许可）按 `LICENSE` 规定授予相应的版权与专利使用权，但**不**授予商标权。
+PolyForm Noncommercial 1.0.0 许可按 `LICENSE` 规定授予相应的版权与专利使用权，但**不**授予商标权。
 
 ## 名称与标识
 

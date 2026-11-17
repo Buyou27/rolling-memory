@@ -1438,14 +1438,6 @@ func loadMultiHarnessJSONLFollowupCorpora(home, memoryPath string, events []roiN
 	if len(events) == 0 {
 		return out
 	}
-	for _, ev := range events {
-		for _, cu := range ev.CitedUnits {
-			if p := extractJSONLPathFromPointer(cu.StoredText); p != "" {
-				extraJSONLPaths = append(extraJSONLPaths, p)
-			}
-		}
-	}
-
 	minSec := events[len(events)-1].OccurredAt
 	for _, ev := range events {
 		if ev.OccurredAt > 0 && (minSec == 0 || ev.OccurredAt < minSec) {
@@ -1570,11 +1562,9 @@ func syncMultiHarnessJSONLRecallLedger(home, fp string, ldb *sql.DB) {
 	_ = tx.Commit()
 }
 
-// loadVaultFollowupDocs loads inline and hydrated episodic documents from thin_vault_docs
-// so non-ZCode harnesses (Claude Code, Codex, Cursor, WorkBuddy) and unit tests also
-// undergo deterministic post-recall intersection auditing, while collecting any @ref:jsonl:
-// transcript paths for direct JSONL tool/reply extraction.
-func loadVaultFollowupDocs(ctx context.Context, db *sql.DB, home string, minOccurredAt int64) ([]vaultDocFollowupRow, []string) {
+// loadVaultFollowupDocs loads inline and verified episodic documents for adoption auditing.
+// Pointer paths are not used to open additional transcripts.
+func loadVaultFollowupDocs(ctx context.Context, db *sql.DB, home, memoryPath string, minOccurredAt int64) ([]vaultDocFollowupRow, []string) {
 	if db == nil {
 		return nil, nil
 	}
@@ -1599,8 +1589,6 @@ func loadVaultFollowupDocs(ctx context.Context, db *sql.DB, home string, minOccu
 	}
 	var scanned []scannedFollowupRow
 	var extraJSONLPaths []string
-	seenJSONL := make(map[string]bool, 16)
-	seenRefWarm := make(map[string]bool, 16)
 	var refWarmRows []map[string]any
 	for rows.Next() {
 		var occAt int64
@@ -1609,19 +1597,8 @@ func loadVaultFollowupDocs(ctx context.Context, db *sql.DB, home string, minOccu
 			continue
 		}
 		trimmed := strings.TrimSpace(rawText)
-		if jp := extractJSONLPathFromPointer(trimmed); jp != "" && !seenJSONL[jp] {
-			seenJSONL[jp] = true
-			extraJSONLPaths = append(extraJSONLPaths, jp)
-		}
-		// 零拷贝指针尚未进缓存时先收集，循环后一次性走规范批量水合（守护进程优先）；
-		// 早期实现只读缓存，冷缓存行会被静默丢弃、审计语料随缓存冷暖而漂移。
-		if strings.HasPrefix(trimmed, "@ref:") && !seenRefWarm[trimmed] {
-			_, rawHit := readHydrateCache(hydrateCacheKey(hydrateFlavorRaw, home, trimmed))
-			_, liveHit := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, trimmed))
-			if !rawHit && !liveHit {
-				seenRefWarm[trimmed] = true
-				refWarmRows = append(refWarmRows, map[string]any{"content": trimmed})
-			}
+		if strings.HasPrefix(trimmed, "@ref:") {
+			refWarmRows = append(refWarmRows, map[string]any{"id": docID, "content": trimmed})
 		}
 		scanned = append(scanned, scannedFollowupRow{
 			docID:      docID,
@@ -1631,24 +1608,27 @@ func loadVaultFollowupDocs(ctx context.Context, db *sql.DB, home string, minOccu
 			sentsJSON:  sentsJSON,
 		})
 	}
+	refTexts := make(map[hydrateRef]string, len(refWarmRows))
 	if len(refWarmRows) > 0 {
-		warmHydrateZCodePointersBatch(home, refWarmRows)
+		warmHydrateZCodePointersBatch(home, memoryPath, refWarmRows)
+		for _, row := range refWarmRows {
+			if text, ok := hydratedPointerRowText(row); ok {
+				refTexts[hydrateRef{DocID: strings.TrimSpace(asString(row["id"])), Ref: strings.TrimSpace(asString(row["content"]))}] = text
+			}
+		}
 	}
 
 	var out []vaultDocFollowupRow
 	for _, r := range scanned {
 		trimmed := strings.TrimSpace(r.rawText)
 		body := ""
-		if strings.HasPrefix(trimmed, "@ref:") {
-			if cached, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorRaw, home, trimmed)); ok && cached != "" {
-				body = cached
-			} else if cachedLive, ok := readHydrateCache(hydrateCacheKey(hydrateFlavorLive, home, trimmed)); ok && cachedLive != "" {
-				body = cachedLive
-			}
+		isRef := strings.HasPrefix(trimmed, "@ref:")
+		if isRef {
+			body = refTexts[hydrateRef{DocID: strings.TrimSpace(r.docID), Ref: trimmed}]
 		} else {
 			body = trimmed
 		}
-		if body == "" && r.sentsJSON != "" && r.sentsJSON != "[]" {
+		if !isRef && body == "" && r.sentsJSON != "" && r.sentsJSON != "[]" {
 			var sents []string
 			if json.Unmarshal([]byte(r.sentsJSON), &sents) == nil && len(sents) > 0 {
 				body = strings.Join(sents, "\n")
@@ -1836,7 +1816,7 @@ func auditNoeticStreamAdoption(ctx context.Context, db *sql.DB, home, memoryPath
 		}
 		zcodeMap, zcodeCompleted = loadZCodeFollowupCorpora(ctx, home, memoryPath, uncachedEvents)
 		var extraJSONLPaths []string
-		vaultDocs, extraJSONLPaths = loadVaultFollowupDocs(ctx, db, home, minOcc)
+		vaultDocs, extraJSONLPaths = loadVaultFollowupDocs(ctx, db, home, memoryPath, minOcc)
 		jsonlMap = loadMultiHarnessJSONLFollowupCorpora(home, memoryPath, uncachedEvents, extraJSONLPaths)
 	}
 

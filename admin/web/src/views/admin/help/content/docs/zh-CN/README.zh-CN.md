@@ -2,7 +2,7 @@
 
 **[简体中文](README.zh-CN.md) · [English](../../README.md) · [官方网站](https://rolling-memory.rocareer.com/) · [文档中心](README.md) · [省 Token 算账与边界](token-economics.md) · [常见问答](faq.md) · [评测与复现](benchmarks.md) · [立场与免责声明](DECLARATION.md)**
 
-**Rolling Memory**（中文品牌「洛灵」）是一个源码公开、本地优先的记忆工具，面向 AI 编程助手与 Agent——Claude Code、Codex、Cursor、Windsurf、Cline、ZCode 等——由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。它把你的对话与挂载文件**原文逐字**记录在本机 SQLite 金库，经唯一 MCP 工具 `recall`（回忆）提供给每一个接入的编程助手。**无云端、无向量、无后台大模型调用**；非商业用途免费。
+**Rolling Memory**（中文品牌「洛灵」）是一个源码公开、本地优先的记忆工具，面向 AI 编程助手与 Agent——Claude Code、Codex、Cursor、Windsurf、Cline、ZCode 等——由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。它在本地索引受支持的对话来源与挂载文件，经唯一 MCP 工具 `recall`（回忆）提供给接入的编程助手；对话采集范围和手工导入方式见[接入指南](harness.md#45-对话采集范围与手工导入)。**无云端、无向量、无后台大模型调用**；非商业用途免费。
 
 ![Rolling Memory Live Console — 本地金库遥测、MCP recall 账本与记忆资产增长](../assets/live-console-zh.webp)
 
@@ -16,7 +16,7 @@
 
 所以，这套记忆系统在日常使用中有几个最直观的特点：**真免费、实时不用等、安全无第三方经手，还可以放进 U 盘随身带走**——
 - **真免费（零隐性账单）**：不用付后台 LLM 抽取费（0 后台 Token 账单）、不用付在线向量化（Embedding）API 费、不用付各种云数据库托管费与账号费，不用注册也不用绑卡；
-- **实时的（不需要等待建库和抽取）**：没有后台排队调大模型抽摘要、也没有耗时的向量化建库等待。对话和文档写入本地 SQLite 毫秒级实时完成，刚聊完的内容立即可查，随写随用；
+- **本地检索**：无需后台大模型抽摘要或向量化服务；已索引的对话和文档可通过 `recall` 按需查询；
 - **安全的（没有第三方经手你的代码和信息）**：编译出来就一个单文件 Go 程序，所有数据都存在你自己电脑的一个 SQLite 文件里，记忆检索全程不连外网——**除了你自己和正在给你干活的那个 Agent，没有任何第三方记忆平台或外部服务商能接触到你的代码、路径和对话信息。** 一个精确的边界：如果你的 Agent 连接的是云端大模型 API，`recall` 找出的片段会作为上下文发往对应模型服务商（详见 [privacy.md](privacy.md) 第 1 节）；
 - **默认启用体验评价与后台 ROI 估算模块（随时可关）**：在本地模式下，我们默认启用了记忆体验评价 Hook 与评价卡，让你在日常使用中对“这次记忆到底有没有帮上忙”有直观感受；Web 后台也预置了一个粗略的 ROI 评价模块供参考（坦率讲，自动统计很难做到完全精准，看个大概趋势就好）。如果你觉得这些 Hook 提示打扰了工作，随时可以关掉或只装纯工具模式：
   ```bash
@@ -76,7 +76,7 @@
 | **2. 建索引与检索** | 同一个 SQLite 文件内的本地索引 | 在 SQLite FTS5 三元组（trigram）与 BM25 基础上，融合三项非向量信息论机制：**① 在线自适应信息量与同日刷屏折叠**（词项稀有度权重完全随你本地记忆库的真实分布动态演化，不依赖外部冻结词表，且同一天内重复粘贴的刷屏日志会自动按对数折叠，绝不冲垮稀有词权重）；**② 跨形式确定性对齐**（无需向量模型即可将 `"May 12, 2025"` 与 ISO `"2025-05-12"`、词形时态变体、复合标识符以及 `"500ms"` / `"16GiB"` 等内联数字与计量单位对齐）；**③ 多线索事件链共鸣**（当提问中的多个稀有线索在候选记录中同时出现且时间邻近时，按无量纲信息重合度放大权重）。索引随时可从原文重建。 |
 | **3. 阅读与判断** | 你的宿主 Agent 或你自己 | Agent 通过唯一的 MCP 工具 `recall` 拿到相关原文片段和出处后，结合当前问题去阅读、核对和作答。 |
 
-日常使用时不需要手动调“写记忆”接口：后台进程会在对话间隙自动把已完成的对话轮次收入本地库；当 `recall` 查到有用片段时，系统也会在本地记录这次查询与命中片段的关联，方便后续同类问题更快定位。
+日常使用时不需要 Agent 手动调用“写记忆”接口：后台进程可导入受支持来源的对话轮次；其他来源可能需要手工导入。当 `recall` 查到有用片段时，系统也会在本地记录这次查询与命中片段的关联。
 
 ---
 
@@ -223,14 +223,14 @@ rmem eval --tier 1540 --answerer none --judge off --top-k 20
 
 ## 10. 常见疑问：各家 Harness 厂商都有自己的记忆工具了，为什么还要用你们的？
 
-现在 Claude Code、Cursor、Windsurf、ZCode 等工具确实都带了自己的记忆功能（比如 `CLAUDE.md` / `AGENTS.md`、Auto-Memory 的 `MEMORY.md` 笔记文件、Rules 等）。**我们自己平时也在用宿主自带的记忆，它们和 Rolling Memory 根本不是“二选一”的冲突关系，而是“桌面便签纸”和“全量历史黑匣子”的互补配合**：
+Claude Code、Cursor、Windsurf、ZCode 等工具提供各自的指令和记忆功能。它们与 Rolling Memory 可以互补：笔记提供简明指引，已导入的来源可供本地检索。
 
 1. **宿主自带的笔记“写的时候要花钱，而且只记了冰山一角”**：
-   宿主自带的 Auto-Memory 通常是靠 Agent 在干活中途认为“这件事值得记”，然后主动调一次写文件工具存成几行笔记。这有两个问题：一是**每次 Agent 动手写笔记，本身就要多走一轮 `100k ~ 400k` 的工具往返**；二是**那些当时没觉得重要、没被写进笔记本的大量对话细节**（比如三天前某次报错的完整输出、随口提过的一个路径或配置项），会话一关就找不到了。而 Rolling Memory 在后台自动把每轮对话原话零成本收进本地 SQLite，平时占 `0` 个 Prompt Token，当你的精选笔记里没记某个细节时，调一下 `recall` 就能去全量历史对话里捞出来。
+   宿主自带的 Auto-Memory 通常依靠 Agent 主动写笔记，未写入的细节可能不会保留。Rolling Memory 可在本地索引受支持的对话来源，让 `recall` 按需检索已导入的原文；它不保证自动采集全部历史，其他来源可[手工导入](harness.md#45-对话采集范围与手工导入)。
 2. **常驻笔记塞多了会撑爆上下文，而按需检索平时不占地方**：
-   `AGENTS.md` 或 `MEMORY.md` 索引每轮对话都会全量塞进上下文里重读一遍，非常适合放几十条核心规则；但如果你把几个月几千轮的排障细节全塞进去，每轮都会白烧 Token 并分散模型注意力。把长尾历史交给按需调用的 `recall`，平时不占上下文，问到相关问题时再取回几百字。
+   `AGENTS.md` 或 `MEMORY.md` 适合保存简明的项目规则；不同宿主加载它们的时机和方式不同，文件过大可能占用更多上下文。已导入的历史记录可以通过 `recall` 按需检索。
 3. **跨工具、跨 Harness 共享同一个本地记忆底座（不被单一工具锁定）**：
-   很多开发者会同时用 Claude Code、Cursor、Codex、ZCode 等多个工具。各家厂商自带的记忆是**各自孤立的孤岛**——你在 A 工具里踩过的坑、记下的笔记，切到 B 工具里它完全不知道。Rolling Memory 用一条 `rolling-memory install` 命令把 **10 个主流 Harness 挂在同一个本地 SQLite 记忆库**上：在 Claude Code 里排过的障，切到 Cursor 或 ZCode 里调 `recall` 照样能直接查出来。
+   接入的多个工具可以查询同一个本地 SQLite 金库，包括已从受支持来源导入的记录；接入工具本身不等于自动导入该工具的对话历史。
 4. **保留未经模型改写的“第一现场原话”，防止摘要笔记写错后死无对证**：
    宿主自带的自动记忆往往是模型总结后的几句话。一旦模型总结时理解偏了，那条错笔记就会一直误导后续会话。Rolling Memory 不改写事实，存的是当时的原话和出处，相当于给你的所有 Agent 配了一个本地“行车记录仪”，随时能核对当时到底是怎么说的。
 
@@ -239,7 +239,7 @@ rmem eval --tier 1540 --answerer none --judge off --top-k 20
 ## 11. 源码许可、贡献入口与致谢
 
 - **贡献入口**：非常欢迎大家提 Issue、分享想法或提交 PR 一起完善——见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [SUPPORT.md](SUPPORT.md)。本项目采用**「人类定义架构、形式化不变量与验收标准 + AI 辅助代码实现」**的协作模式；完整免责说明见 [DECLARATION.md](DECLARATION.md)。
-- **源码许可**：采用 **[PolyForm Noncommercial License 1.0.0](../../LICENSE)**（SPDX：`PolyForm-Noncommercial-1.0.0`）公开全部源码，**任何非商业用途均可自由使用、修改与分享**；**商业使用与商业分发（含 SaaS 托管与商业产品内嵌）须另行签署书面商业许可**。`sdk/` 下客户端 SDK 单独采用 **Apache-2.0**（`sdk/LICENSE`）。第三方组件署名见 [NOTICE](../../NOTICE)。
+- **源码许可**：采用 **[PolyForm Noncommercial License 1.0.0](../../LICENSE)**（SPDX：`PolyForm-Noncommercial-1.0.0`）公开全部源码（含 `sdk/` 下客户端 SDK，见 `sdk/LICENSE`），**任何非商业用途均可自由使用、修改与分享**；**商业使用与商业分发（含 SaaS 托管与商业产品内嵌）须另行签署书面商业许可**。第三方组件署名见 [NOTICE](../../NOTICE)。
 - **致谢**：本项目的 Web 管理控制台以 **[AI GO ADMIN](https://github.com/ai-go-hub/ai-go-admin)**（Apache-2.0，Go + Gin + Vue 3 后台框架；镜像：[Gitee](https://gitee.com/ai-go-hub/ai-go-admin) · [AtomGit](https://atomgit.com/ai-go-hub/ai-go-admin)）为基座衍生开发；其 UI 血统承自 **[BuildAdmin](https://gitee.com/wonderful-code/buildadmin)**（Apache-2.0，© 妙码生花），插件清单页按 BuildAdmin `v2.3.9` 移植改写。逐文件归属与修改说明见 [NOTICE](../../NOTICE) §2。感谢两个开源项目的作者与社区。
 
 Copyright © 2026 Rocareer & Rolling-Memory Organization (Albert `<albert@rocareer.com>`). All rights reserved.

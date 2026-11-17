@@ -69,8 +69,7 @@ type ThreeLayerRow struct {
 	AssistantID     string   `json:"assistant_id,omitempty"`
 	AdoptionOutcome string   `json:"adoption_outcome,omitempty"`
 	MatchedAnchors  []string `json:"matched_anchors,omitempty"`
-	// BodyUnavailable 仅 L1 背景分块使用：源文件被移动/删除或本地读取引擎未就绪时，
-	// 分块正文不可读，content 退化为来源位置预览，展示层据此给出如实说明。
+	// BodyUnavailable marks source text that could not be read or verified.
 	BodyUnavailable bool `json:"body_unavailable,omitempty"`
 }
 
@@ -416,22 +415,25 @@ func layersGetHandler(c *gin.Context) {
 		if lyr != "background" && lyr != "noetic" {
 			lyr = "episodic"
 		}
+		bodyUnavailable := false
 		if strings.HasPrefix(strings.TrimSpace(rawTxt), "@ref:") {
-			if resolved, ok := hydratedEpisodicPointerLive(home, rawTxt); ok && resolved != "" {
+			if resolved, ok := hydratedEpisodicPointerLive(home, dbPath, did, rawTxt); ok {
 				rawTxt = resolved
 			} else {
 				rawTxt = vaultRefGapMarker
+				bodyUnavailable = true
 			}
 		}
 		row := ThreeLayerRow{
-			ID:         did,
-			Layer:      lyr,
-			Status:     "active",
-			Title:      clipRunes(rawTxt, 64),
-			Content:    rawTxt,
-			AddressURI: addr,
-			OccurredAt: occ,
-			TimeText:   formatUnixTime(occ, false),
+			ID:              did,
+			Layer:           lyr,
+			Status:          "active",
+			Title:           clipRunes(rawTxt, 64),
+			Content:         rawTxt,
+			AddressURI:      addr,
+			OccurredAt:      occ,
+			TimeText:        formatUnixTime(occ, false),
+			BodyUnavailable: bodyUnavailable,
 		}
 		httpx.Success(c, httpx.WithData(gin.H{"row": row}))
 		return
@@ -515,64 +517,21 @@ func layersDeleteHandler(c *gin.Context) {
 	}
 	defer db.Close()
 
-	deleted := 0
-	invalidatedNoetic := 0
-	purgedIDs := []string{}
-	if req.PurgeStale {
-		// 先取待回收的 L3 单元 ID，供云端一致性 purge 使用，再本地删除。
-		if rows, err := db.Query(`SELECT noetic_id FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`); err == nil {
-			for rows.Next() {
-				var id string
-				if rows.Scan(&id) == nil && strings.TrimSpace(id) != "" {
-					purgedIDs = append(purgedIDs, id)
-				}
-			}
-			rows.Close()
-		}
-		res, err := db.Exec(`DELETE FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
-		if err != nil {
-			httpx.Fail(c, httpx.WithMessage("清理失效记忆失败: "+err.Error()))
-			return
-		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			deleted += int(n)
-		}
-	}
-
 	cleanPKs := make([]string, 0, len(req.PKs))
 	for _, pk := range req.PKs {
 		if s := strings.TrimSpace(pk); s != "" {
 			cleanPKs = append(cleanPKs, s)
 		}
 	}
-	if len(cleanPKs) == 0 {
-		// purge_stale 单独调用（无 pks）：完成 stale 回收与云端一致后收口；
-		// 携带 pks 的调用不在此早退——清除失效 L3 与删除指定单元必须在同一请求内都生效。
-		if !req.PurgeStale {
-			httpx.Fail(c, httpx.WithMessage("请选择要删除的记忆单元"))
-			return
-		}
-		if msg := purgeCloudUnitsIfCloudMode(home, purgedIDs); msg != "" {
-			httpx.Fail(c, httpx.WithMessage(msg))
-			return
-		}
-		invalidateVaultReadCaches()
-		invalidateEnvHealthCache(home)
-		httpx.Success(c, httpx.WithData(gin.H{
-			"deleted":            deleted,
-			"invalidated_noetic": invalidatedNoetic,
-		}))
+	if len(cleanPKs) == 0 && !req.PurgeStale {
+		httpx.Fail(c, httpx.WithMessage("请选择要删除的记忆单元"))
 		return
 	}
-
-	batchDeleted, batchInvalidated, batchPurged, delErr := deleteMemoryUnitsByPKs(db, cleanPKs)
+	deleted, invalidatedNoetic, purgedIDs, delErr := deleteMemoryUnits(db, cleanPKs, req.PurgeStale)
 	if delErr != nil {
 		httpx.Fail(c, httpx.WithMessage(delErr.Error()))
 		return
 	}
-	deleted += batchDeleted
-	invalidatedNoetic += batchInvalidated
-	purgedIDs = append(purgedIDs, batchPurged...)
 
 	// 云端模式下本地已删的单元必须同步 purge：否则两侧记忆状态分叉，且本地金库已无明文可水合。
 	// 本地模式（零外呼硬边界）恒不发请求；失败时如实上报，绝不静默吞掉不一致。
@@ -592,34 +551,95 @@ func layersDeleteHandler(c *gin.Context) {
 // deleteMemoryUnitsByPKs 在本地金库中按主键删除记忆单元，并完整维护 FTS5 映射、
 // 谱系行、防同步复活墓碑（thin_vault_deleted_units）、背景文件记账收敛与 L3 引证级联置 stale。
 func deleteMemoryUnitsByPKs(db *sql.DB, cleanPKs []string) (deleted int, invalidatedNoetic int, purgedIDs []string, err error) {
-	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_deleted_units (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`)
+	return deleteMemoryUnits(db, cleanPKs, false)
+}
+
+func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted int, invalidatedNoetic int, purgedIDs []string, err error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("开始删除事务失败: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_deleted_units (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		return 0, 0, nil, fmt.Errorf("创建删除墓碑表失败: %w", err)
+	}
+	if purgeStale {
+		rows, qErr := tx.Query(`SELECT noetic_id FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
+		if qErr != nil {
+			return 0, 0, nil, fmt.Errorf("读取失效记忆失败: %w", qErr)
+		}
+		for rows.Next() {
+			var id string
+			if scanErr := rows.Scan(&id); scanErr != nil {
+				_ = rows.Close()
+				return 0, 0, nil, fmt.Errorf("读取失效记忆失败: %w", scanErr)
+			}
+			if strings.TrimSpace(id) != "" {
+				purgedIDs = append(purgedIDs, id)
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			return 0, 0, nil, fmt.Errorf("读取失效记忆失败: %w", rowsErr)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return 0, 0, nil, fmt.Errorf("关闭失效记忆查询失败: %w", closeErr)
+		}
+		res, execErr := tx.Exec(`DELETE FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
+		if execErr != nil {
+			return 0, 0, nil, fmt.Errorf("清理失效记忆失败: %w", execErr)
+		}
+		n, countErr := res.RowsAffected()
+		if countErr != nil {
+			return 0, 0, nil, fmt.Errorf("读取清理数量失败: %w", countErr)
+		}
+		deleted += int(n)
+	}
 	nowUnix := time.Now().Unix()
 	deletedEvidence := map[string]bool{}
 	touchedFiles := map[string]bool{}
 	for _, pk := range cleanPKs {
 		var docLayer string
-		_ = db.QueryRow(`SELECT COALESCE(layer, 'episodic') FROM thin_vault_docs WHERE doc_id = ?`, pk).Scan(&docLayer)
-		res, execErr := db.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, pk)
-		if execErr != nil {
-			return deleted, invalidatedNoetic, purgedIDs, errors.New("删除记忆文档失败: " + execErr.Error())
+		if scanErr := tx.QueryRow(`SELECT COALESCE(layer, 'episodic') FROM thin_vault_docs WHERE doc_id = ?`, pk).Scan(&docLayer); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return 0, 0, nil, fmt.Errorf("读取记忆文档失败: %w", scanErr)
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
+		res, execErr := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, pk)
+		if execErr != nil {
+			return 0, 0, nil, fmt.Errorf("删除记忆文档失败: %w", execErr)
+		}
+		n, execErr := res.RowsAffected()
+		if execErr != nil {
+			return 0, 0, nil, fmt.Errorf("读取删除文档数量失败: %w", execErr)
+		}
+		if n > 0 {
 			deleted += int(n)
 			deletedEvidence[pk] = true
 			purgedIDs = append(purgedIDs, pk)
-			deleteVaultFTSRow(db, pk)
-			_, _ = db.Exec(`DELETE FROM thin_vault_episodic_lineage WHERE doc_id = ?`, pk)
 			lyr := strings.ToLower(strings.TrimSpace(docLayer))
 			if lyr == "" {
 				lyr = "episodic"
 			}
-			_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, pk, lyr, nowUnix)
+			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, pk, lyr, nowUnix); execErr != nil {
+				return 0, 0, nil, fmt.Errorf("写入删除墓碑失败: %w", execErr)
+			}
+			if execErr := deleteVaultFTSRow(tx, pk); execErr != nil {
+				return 0, 0, nil, fmt.Errorf("删除记忆索引失败: %w", execErr)
+			}
+			for _, table := range []string{"thin_vault_episodic_lineage", "thin_vault_episodic_index", "thin_vault_episodic_sources"} {
+				if execErr := deleteOptionalVaultRow(tx, table, "doc_id", pk); execErr != nil {
+					return 0, 0, nil, fmt.Errorf("删除记忆索引或谱系失败: %w", execErr)
+				}
+			}
 		}
-		res, execErr = db.Exec(`DELETE FROM thin_vault_noetic WHERE noetic_id = ?`, pk)
+		res, execErr = tx.Exec(`DELETE FROM thin_vault_noetic WHERE noetic_id = ?`, pk)
 		if execErr != nil {
-			return deleted, invalidatedNoetic, purgedIDs, errors.New("删除沉淀记忆失败: " + execErr.Error())
+			return 0, 0, nil, fmt.Errorf("删除沉淀记忆失败: %w", execErr)
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
+		n, execErr = res.RowsAffected()
+		if execErr != nil {
+			return 0, 0, nil, fmt.Errorf("读取删除沉淀数量失败: %w", execErr)
+		}
+		if n > 0 {
 			deleted += int(n)
 			deletedEvidence[pk] = true
 			purgedIDs = append(purgedIDs, pk)
@@ -628,95 +648,167 @@ func deleteMemoryUnitsByPKs(db *sql.DB, cleanPKs []string) (deleted int, invalid
 		// 删除后必须把该文件的派生记账（chunk_count / unit_ids_json / chunk_hashes_json）收敛，
 		// 否则 thin_vault_bg_files 会一直声称这些分块仍然存在（目录统计虚高、增量同步语义错乱）。
 		var ownerAbsPath string
-		_ = db.QueryRow(`SELECT abs_path FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk).Scan(&ownerAbsPath)
-		res, execErr = db.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk)
-		if execErr != nil {
-			return deleted, invalidatedNoetic, purgedIDs, errors.New("删除背景分块失败: " + execErr.Error())
+		if scanErr := tx.QueryRow(`SELECT abs_path FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk).Scan(&ownerAbsPath); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return 0, 0, nil, fmt.Errorf("读取背景分块失败: %w", scanErr)
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
+		res, execErr = tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk)
+		if execErr != nil {
+			return 0, 0, nil, fmt.Errorf("删除背景分块失败: %w", execErr)
+		}
+		n, execErr = res.RowsAffected()
+		if execErr != nil {
+			return 0, 0, nil, fmt.Errorf("读取删除分块数量失败: %w", execErr)
+		}
+		if n > 0 {
 			deleted += int(n)
 			deletedEvidence[pk] = true
 			purgedIDs = append(purgedIDs, pk)
-			deleteVaultFTSRow(db, pk)
-			_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'background', ?)`, pk, nowUnix)
+			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'background', ?)`, pk, nowUnix); execErr != nil {
+				return 0, 0, nil, fmt.Errorf("写入删除墓碑失败: %w", execErr)
+			}
+			if execErr := deleteVaultFTSRow(tx, pk); execErr != nil {
+				return 0, 0, nil, fmt.Errorf("删除背景索引失败: %w", execErr)
+			}
 			if strings.TrimSpace(ownerAbsPath) != "" {
 				touchedFiles[ownerAbsPath] = true
 			}
 		}
 	}
 	for absPath := range touchedFiles {
-		resyncBackgroundFileBookkeeping(db, absPath)
+		if execErr := resyncBackgroundFileBookkeeping(tx, absPath); execErr != nil {
+			return 0, 0, nil, fmt.Errorf("更新背景文件记录失败: %w", execErr)
+		}
 	}
 
 	// 若删除了底层 L1/L2/L3 单元，级联将引证它的 L3 Noetic 置为 stale（引证链不再指向失效证据）。
 	if len(deletedEvidence) > 0 {
-		if nRows, qErr := db.Query(`SELECT noetic_id, cited_unit_ids_json FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') = 'active'`); qErr == nil {
-			var toStale []string
-			for nRows.Next() {
-				var nid, citedJSON string
-				if nRows.Scan(&nid, &citedJSON) == nil {
-					var cited []string
-					_ = json.Unmarshal([]byte(citedJSON), &cited)
-					for _, cid := range cited {
-						if deletedEvidence[strings.TrimSpace(cid)] {
-							toStale = append(toStale, nid)
-							break
-						}
-					}
-				}
+		nRows, qErr := tx.Query(`SELECT noetic_id, cited_unit_ids_json FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') = 'active'`)
+		if qErr != nil {
+			return 0, 0, nil, fmt.Errorf("读取引证失败: %w", qErr)
+		}
+		var toStale []string
+		for nRows.Next() {
+			var nid, citedJSON string
+			if scanErr := nRows.Scan(&nid, &citedJSON); scanErr != nil {
+				_ = nRows.Close()
+				return 0, 0, nil, fmt.Errorf("读取引证失败: %w", scanErr)
 			}
-			nRows.Close()
-			for _, nid := range toStale {
-				if _, uErr := db.Exec(`UPDATE thin_vault_noetic SET status = 'stale' WHERE noetic_id = ?`, nid); uErr == nil {
-					invalidatedNoetic++
+			var cited []string
+			if parseErr := json.Unmarshal([]byte(citedJSON), &cited); parseErr != nil {
+				_ = nRows.Close()
+				return 0, 0, nil, fmt.Errorf("解析引证失败: %w", parseErr)
+			}
+			for _, cid := range cited {
+				if deletedEvidence[strings.TrimSpace(cid)] {
+					toStale = append(toStale, nid)
+					break
 				}
 			}
 		}
+		if rowsErr := nRows.Err(); rowsErr != nil {
+			_ = nRows.Close()
+			return 0, 0, nil, fmt.Errorf("读取引证失败: %w", rowsErr)
+		}
+		if closeErr := nRows.Close(); closeErr != nil {
+			return 0, 0, nil, fmt.Errorf("关闭引证查询失败: %w", closeErr)
+		}
+		for _, nid := range toStale {
+			if _, uErr := tx.Exec(`UPDATE thin_vault_noetic SET status = 'stale' WHERE noetic_id = ?`, nid); uErr != nil {
+				return 0, 0, nil, fmt.Errorf("更新引证状态失败: %w", uErr)
+			}
+			invalidatedNoetic++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, nil, fmt.Errorf("提交删除事务失败: %w", err)
 	}
 	return deleted, invalidatedNoetic, purgedIDs, nil
 }
 
 // deleteVaultFTSRow 同步清理 contentless FTS5 映射表（thin_vault_fts_map + 按 rowid 删 thin_vault_docs_fts）
 // 以及旧版带内容 FTS5 表的 doc_id 列，确保后台删除 L1/L2 单元后不残留孤儿倒排索引。
-func deleteVaultFTSRow(db *sql.DB, docID string) {
-	docID = strings.TrimSpace(docID)
-	if db == nil || docID == "" {
-		return
+func vaultTableExistsTx(tx *sql.Tx, name string) (bool, error) {
+	var exists int
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, name).Scan(&exists)
+	return exists != 0, err
+}
+
+func deleteOptionalVaultRow(tx *sql.Tx, table, column, id string) error {
+	exists, err := vaultTableExistsTx(tx, table)
+	if err != nil || !exists {
+		return err
 	}
-	var rowID int64
-	if err := db.QueryRow(`SELECT rowid FROM thin_vault_fts_map WHERE doc_id = ?`, docID).Scan(&rowID); err == nil {
-		_, _ = db.Exec(`DELETE FROM thin_vault_docs_fts WHERE rowid = ?`, rowID)
-		_, _ = db.Exec(`DELETE FROM thin_vault_fts_map WHERE rowid = ?`, rowID)
-		return
+	_, err = tx.Exec(`DELETE FROM `+table+` WHERE `+column+` = ?`, id)
+	return err
+}
+
+func deleteVaultFTSRow(tx *sql.Tx, docID string) error {
+	hasFTS, err := vaultTableExistsTx(tx, "thin_vault_docs_fts")
+	if err != nil {
+		return err
 	}
-	_, _ = db.Exec(`DELETE FROM thin_vault_docs_fts WHERE doc_id = ?`, docID)
+	hasMap, err := vaultTableExistsTx(tx, "thin_vault_fts_map")
+	if err != nil {
+		return err
+	}
+	if hasMap {
+		var rowID int64
+		err := tx.QueryRow(`SELECT rowid FROM thin_vault_fts_map WHERE doc_id = ?`, docID).Scan(&rowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !hasFTS {
+			return errors.New("FTS map exists without FTS index")
+		}
+		if _, err := tx.Exec(`DELETE FROM thin_vault_docs_fts WHERE rowid = ?`, rowID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM thin_vault_fts_map WHERE rowid = ?`, rowID)
+		return err
+	}
+	if hasFTS {
+		_, err = tx.Exec(`DELETE FROM thin_vault_docs_fts WHERE doc_id = ?`, docID)
+	}
+	return err
 }
 
 // resyncBackgroundFileBookkeeping 收敛某个被 Console 改写过分块的 L1 文件的派生记账：
 // 以 thin_vault_bg_chunks 的真实剩余集合重算 chunk_count 与 unit_ids_json，并把
 // chunk_hashes_json 置空 —— 让引擎在下一次 background sync 重新分块校验，而不是信任一份被
 // Console 拼接过的哈希表（L1 背景单元的正确收敛方式永远是从磁盘文件重新派生）。
-func resyncBackgroundFileBookkeeping(db *sql.DB, absPath string) {
-	rows, err := db.Query(`SELECT unit_id FROM thin_vault_bg_chunks WHERE abs_path = ? ORDER BY chunk_index ASC, unit_id ASC`, absPath)
+func resyncBackgroundFileBookkeeping(tx *sql.Tx, absPath string) error {
+	rows, err := tx.Query(`SELECT unit_id FROM thin_vault_bg_chunks WHERE abs_path = ? ORDER BY chunk_index ASC, unit_id ASC`, absPath)
 	if err != nil {
-		return
+		return err
 	}
 	ids := []string{}
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
 		}
+		ids = append(ids, id)
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	uidJSON, err := json.Marshal(ids)
 	if err != nil {
-		return
+		return err
 	}
-	_, _ = db.Exec(
+	_, err = tx.Exec(
 		`UPDATE thin_vault_bg_files SET chunk_count = ?, unit_ids_json = ?, chunk_hashes_json = '[]' WHERE abs_path = ?`,
 		len(ids), string(uidJSON), absPath,
 	)
+	return err
 }
 
 // purgeCloudUnitsIfCloudMode 在云端模式下把已删除的单元同步 purge 到记忆引擎；
@@ -1426,10 +1518,4 @@ func brainChildEnv(ctx context.Context) (env []string, ready bool) {
 		"ROLLING_MEMORY_BRAIN_URL="+baseURL,
 		"ROLLING_MEMORY_BRAIN_KEY="+apiKey,
 	), true
-}
-
-// resolveAdminEpisodicRefLive 从 Harness 原位（~/.zcode/cli/db/db.sqlite 或 JSONL）实时读取 @ref: 指针对应的对话正文。
-// 仅作守护进程不可用时的本地兜底：定段与清洗以引擎守护进程的规范解析为准（见 hydrateRefsViaDaemon）。
-func resolveAdminEpisodicRefLive(home, refPointer string) string {
-	return hydrateEpisodicPointer(home, refPointer)
 }

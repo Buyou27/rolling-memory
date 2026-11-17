@@ -49,7 +49,7 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 	path := filepath.Join(sessionDir, "s1.jsonl")
 	transcript := strings.Join([]string{
 		`{"type":"user","sessionId":"s1","timestamp":"2026-01-06T03:00:00Z","message":{"role":"user","content":"violet observatory telescope"}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-01-06T03:00:10Z","message":{"role":"assistant","content":"amber greenhouse seedlings"}}`,
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-01-06T03:00:10Z","message":{"role":"assistant","stop_reason":"end_turn","content":"amber greenhouse seedlings"}}`,
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(transcript), 0o644); err != nil {
@@ -192,7 +192,7 @@ func TestEpisodicIndexReconcilePreservesUnverifiedSources(t *testing.T) {
 	path := filepath.Join(sessionDir, "s1.jsonl")
 	transcript := strings.Join([]string{
 		`{"type":"user","sessionId":"s1","timestamp":"2026-01-06T03:00:00Z","message":{"role":"user","content":"new source contents"}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-01-06T03:00:10Z","message":{"role":"assistant","content":"matching source contents"}}`,
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-01-06T03:00:10Z","message":{"role":"assistant","stop_reason":"end_turn","content":"matching source contents"}}`,
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(transcript), 0o644); err != nil {

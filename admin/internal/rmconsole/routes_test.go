@@ -63,6 +63,36 @@ auto_watch = false
 	}
 }
 
+func TestHookOutcomesDistinguishImportReplayAndFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hook.log")
+	lines := `{"event":"start","imported":2,"replayed":0,"written":0,"ts":1700000001}
+{"event":"close","imported":0,"replayed":3,"written":0,"ts":1700000002}
+{"event":"close","imported":0,"replayed":0,"written":0,"ts":1700000003}
+{"event":"close","source_error":"source unavailable","ts":1700000004}
+{"event":"start","imported":1,"replayed":1,"written":1,"ts":1700000005}
+`
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, events := range map[string][]HookEventItem{
+		"recent":    func() []HookEventItem { rows, _ := readHookEvents(path, 10); return rows }(),
+		"aggregate": func() []HookEventItem { return scanHookLog(path, time.Unix(1700000006, 0), time.Local).Recent }(),
+	} {
+		byTimestamp := make(map[int64]HookEventItem, len(events))
+		for _, event := range events {
+			byTimestamp[event.Timestamp] = event
+		}
+		for ts, want := range map[int64]string{1700000001: "imported", 1700000002: "replayed", 1700000003: "idle", 1700000004: "error", 1700000005: "written"} {
+			if got := byTimestamp[ts]; got.Outcome != want {
+				t.Errorf("%s ts=%d outcome=%q, want %q", name, ts, got.Outcome, want)
+			}
+		}
+		if got := byTimestamp[1700000004]; !got.SourceError {
+			t.Errorf("%s did not report source error", name)
+		}
+	}
+}
+
 func TestParseConfigSwitchesModeFollowsConfig(t *testing.T) {
 	cases := []struct {
 		name    string
