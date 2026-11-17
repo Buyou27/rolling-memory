@@ -64,3 +64,44 @@ func TestIngestPacketCipherRawTextNeverLeavesClientAdversarial(t *testing.T) {
 		t.Fatalf("raw-text-only pulse_cipher ingest issued %d extra request(s)", got-before)
 	}
 }
+
+type rawTextPopulatingStore struct {
+	ramesdk.PlaintextStore
+}
+
+func (s rawTextPopulatingStore) PackBlindPacket(docID, rawText string, occurredAt int64) (ramesdk.BlindPulsePacket, []string) {
+	pkt, sents := s.PlaintextStore.PackBlindPacket(docID, rawText, occurredAt)
+	pkt.RawText = rawText
+	return pkt, sents
+}
+
+// pulse_cipher 下 QueryHits 即便遇到自定义 PlaintextStore.PackBlindPacket 在返回包上预填了
+// RawText，也必须在发往 /query 前剥离 wireQuery.RawText，确保查询侧同样零明文离端。
+func TestQueryHitsCipherRawTextNeverLeavesClientAdversarial(t *testing.T) {
+	var lastBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		lastBody = body
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success":    true,
+			"tenant_id":  "user",
+			"scope":      cloudTestScope,
+			"pulse_mode": ramesdk.ModePulseCipher,
+			"engine":     "autonoetic",
+			"hits":       []any{},
+			"count":      0,
+		})
+	}))
+	defer server.Close()
+	baseStore := ramesdk.NewMemoryStore([]byte("cipher-query-leak-secret"))
+	client := newCloudTestClient(server, rawTextPopulatingStore{PlaintextStore: baseStore})
+	if err := client.SetPulseMode(ramesdk.ModePulseCipher); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.QueryHits(context.Background(), "top secret query phrase", 5); err != nil {
+		t.Fatalf("QueryHits error: %v", err)
+	}
+	if strings.Contains(string(lastBody), "raw_text") || strings.Contains(string(lastBody), "top secret query phrase") {
+		t.Fatalf("pulse_cipher QueryHits leaked raw_text on the wire: %s", lastBody)
+	}
+}

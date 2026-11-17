@@ -911,6 +911,8 @@ func (c *Client) QueryHits(ctx context.Context, queryText string, topK int) ([]C
 	wireQuery.PulseMode = pulseMode
 	if c.IsPlaintextMode() {
 		wireQuery.RawText = queryText
+	} else {
+		wireQuery.RawText = ""
 	}
 	payload := map[string]any{
 		"tenant_id":  c.TenantID,
