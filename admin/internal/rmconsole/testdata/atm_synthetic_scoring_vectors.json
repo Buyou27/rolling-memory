@@ -1,0 +1,19 @@
+{
+  "version": "atmbench-official-v1",
+  "source": "synthetic",
+  "number_cases": [
+    {"id": "synthetic-number-match", "gold": "47", "prediction": "47", "question": "How many brass tokens are in the imaginary container?", "expected": true},
+    {"id": "synthetic-number-mismatch", "gold": "47", "prediction": "62", "question": "How many brass tokens are in the imaginary container?", "expected": false},
+    {"id": "synthetic-abstention", "gold": "unknown", "prediction": "unknown", "question": "How many invisible pebbles are present?", "expected": true}
+  ],
+  "list_cases": [
+    {"id": "synthetic-list-overlap", "gold": "cobalt, amber", "prediction": "amber, violet", "expected": 0.3333333333333333},
+    {"id": "synthetic-list-identical", "gold": "cedar, quartz", "prediction": "quartz, cedar", "expected": 1},
+    {"id": "synthetic-list-empty", "gold": "", "prediction": "", "expected": 1}
+  ],
+  "judge_cases": [
+    {"id": "synthetic-json-true", "raw": "{\"accuracy\": true, \"explanation\": \"synthetic\"}", "expected_accuracy": true, "expected_parse_fallback": false},
+    {"id": "synthetic-json-false", "raw": "{\"accuracy\": false}", "expected_accuracy": false, "expected_parse_fallback": false},
+    {"id": "synthetic-fallback", "raw": "unparseable synthetic response", "expected_accuracy": false, "expected_parse_fallback": true}
+  ]
+}

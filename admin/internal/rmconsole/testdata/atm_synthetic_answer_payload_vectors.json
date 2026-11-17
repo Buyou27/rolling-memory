@@ -1,0 +1,22 @@
+{
+  "version": "atmbench-official-v1",
+  "source": "synthetic",
+  "system_prompt": "You are a memory QA assistant. Use ONLY the provided evidence to answer. If the evidence is insufficient, answer 'Unknown'. Respond with only the answer. If the question asks to recall or list items (photos/emails/videos), respond with the corresponding evidence IDs only, comma-separated, with no extra text.",
+  "user_template": "Question: {question}\n\nEvidence:\n{evidence}\n\nProvide the answer based solely on the evidence.",
+  "cases": [
+    {
+      "id": "synthetic-two-chunks",
+      "question": "Which imaginary object is in the violet crate?",
+      "evidence_chunks": ["The violet crate contains a brass compass.", "A wooden spool is outside the crate."],
+      "system": "You are a memory QA assistant. Use ONLY the provided evidence to answer. If the evidence is insufficient, answer 'Unknown'. Respond with only the answer. If the question asks to recall or list items (photos/emails/videos), respond with the corresponding evidence IDs only, comma-separated, with no extra text.",
+      "user": "Question: Which imaginary object is in the violet crate?\n\nEvidence:\nEvidence 1:\nThe violet crate contains a brass compass.\nEvidence 2:\nA wooden spool is outside the crate.\n\nProvide the answer based solely on the evidence."
+    },
+    {
+      "id": "synthetic-empty-evidence",
+      "question": "What is hidden beneath the fictional platform?",
+      "evidence_chunks": [],
+      "system": "You are a memory QA assistant. Use ONLY the provided evidence to answer. If the evidence is insufficient, answer 'Unknown'. Respond with only the answer. If the question asks to recall or list items (photos/emails/videos), respond with the corresponding evidence IDs only, comma-separated, with no extra text.",
+      "user": "Question: What is hidden beneath the fictional platform?\n\nEvidence:\n\n\nProvide the answer based solely on the evidence."
+    }
+  ]
+}

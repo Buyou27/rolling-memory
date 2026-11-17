@@ -1,0 +1,16 @@
+# Rolling brand pack locale (key prefix plugin.rolling-brand.*)
+siteName: Rolling
+brandSystem: Rolling
+brandTriad: Autonoetic Memory Engine
+recordNumber: ''
+presetTip: "Local demo account: {username}"
+presetFill: "Fill in"
+welcomeTip: "Rolling · Autonoetic Memory Engine — 100% Vector-Free × 100% LLM-Free."
+heroTitle: "A New Paradigm for AI Memory Engines"
+heroDescription: "Rolling Autonoetic Memory Engine · Language-Free · Semantics-Free · Model-Free · Vector-Free"
+pointRouterTitle: "Ultra Efficient · < 10 ms Coherent Recall"
+pointRouterDesc: "Rolling Autonoetic Memory Engine addressing drives instant L1 · L2 · L3 memory recall"
+pointEvalTitle: "Ultra Secure · Local SQLite Vault"
+pointEvalDesc: "Plaintext and keys stay in your local SQLite database fully offline"
+pointAuditTitle: "Ultra Economical · Zero Vector & LLM Tax"
+pointAuditDesc: "No embedding compute or LLM extraction bills · 85.26% on the full LoCoMo 1,540 set"
