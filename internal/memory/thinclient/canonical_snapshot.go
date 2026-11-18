@@ -114,6 +114,25 @@ func canonicalSnapshotFromDocs(state canonicalCorpusState, docs []vaultDocEntry,
 	return snap
 }
 
+// thinCorpusHasRows reports whether the pre-canonical thin corpus still holds
+// rows. Tables are created lazily, so a missing table counts as empty.
+func (v *Vault) thinCorpusHasRows(ctx context.Context) bool {
+	if v == nil || v.db == nil {
+		return false
+	}
+	for _, table := range []string{"thin_vault_docs", "thin_vault_bg_chunks"} {
+		var present int
+		if err := v.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).Scan(&present); err != nil || present == 0 {
+			continue
+		}
+		var has int
+		if err := v.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+`)`).Scan(&has); err == nil && has != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // buildCanonicalSnapshotFromCSR reuses the mmap baseline when the canonical
 // revision signature matches, or serves baseline + a bounded delta when only a
 // few units changed. Any other drift returns false and the caller rebuilds from

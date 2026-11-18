@@ -1,6 +1,6 @@
 <!-- plugin: rolling-memory v0.0.58 -->
 <!--
-    Rolling-Memory 评测实验室：按所选评测臂展示本地明文、脉冲明文或脉冲密文上下文。
+    Rolling-Memory 评测实验室：展示本地明文（`local_plain`）评测上下文。
     明文金库、租户专属评测 scope、语料摘要与逐题引擎 provenance 均只读回带；
     Oracle 仅提供金标证据上限，不计入引擎成绩。
 -->
@@ -684,16 +684,12 @@
                 :title="
                     evalConfig.arm_mode === 'oracle'
                         ? (isEn ? 'Oracle supplies gold evidence, not an engine score' : 'Oracle 提供金标证据，不是引擎成绩')
-                        : evalConfig.arm_mode === 'sdk-local-plain'
-                          ? (isEn ? 'Local Plain: retrieval stays on this machine' : '本地明文：检索只在本机运行')
-                          : (isEn ? `${evalArmLabel}: Answer/Judge switches do not disable pulse requests` : `${evalArmLabel}：关闭 Answer/Judge 不等于关闭脉冲请求`)
+                        : (isEn ? 'Local Plain: retrieval stays on this machine' : '本地明文：检索只在本机运行')
                 "
                 :description="
                     evalConfig.arm_mode === 'oracle'
                         ? (isEn ? 'Oracle directly supplies gold evidence. Optional Answer/Judge calls use your configured model endpoint.' : 'Oracle 直接注入金标证据；可选的 Answer/Judge 调用使用你配置的模型接口。')
-                        : evalConfig.arm_mode === 'sdk-local-plain'
-                          ? (isEn ? 'Local Plain reads the local SQLite vault without cloud requests. Optional Answer/Judge calls use your configured model endpoint.' : '本地明文读取本机 SQLite 金库，零云端请求；可选的 Answer/Judge 调用使用你配置的模型接口。')
-                          : (isEn ? `${evalArmLabel} calls /open/memory/v1 even when Answer/Judge are off.` : `${evalArmLabel} 即使关闭 Answer/Judge 仍会请求 /open/memory/v1。`)
+                        : (isEn ? 'Local Plain reads the local SQLite vault without cloud requests. Optional Answer/Judge calls use your configured model endpoint.' : '本地明文读取本机 SQLite 金库，零云端请求；可选的 Answer/Judge 调用使用你配置的模型接口。')
                 "
             />
 
@@ -2187,7 +2183,7 @@
                         plain
                         @click="fallbackToRetrievalOnlyEval"
                     >
-                            {{ evalConfig.arm_mode === 'oracle' ? (isEn ? 'Continue with Answer/Judge off' : '关闭 Answer/Judge 继续') : evalConfig.arm_mode === 'sdk-local-plain' ? (isEn ? 'Continue with Local Plain retrieval' : '继续本地明文检索') : (isEn ? `Continue with ${evalArmLabel} requests` : `继续 ${evalArmLabel} 请求`) }}
+                            {{ evalConfig.arm_mode === 'oracle' ? (isEn ? 'Continue with Answer/Judge off' : '关闭 Answer/Judge 继续') : (isEn ? 'Continue with Local Plain retrieval' : '继续本地明文检索') }}
                     </el-button>
                     <div style="margin-left: auto; display: flex; gap: 8px">
                         <el-button size="small" type="success" plain :loading="testingAI" @click="runAIConnectionTest">
@@ -2696,7 +2692,7 @@ const startCapSuffix = computed(() => {
 const activeTab = ref('run')
 const liveViewMode = ref<'feed' | 'log'>('feed')
 const overview = ref<Partial<EvalOverviewResponse>>({})
-// 本地模式为纯本地发布面：仅 local_plain 臂可运行（零脉冲、零云端请求）；脉冲协议与 SDK 保留供下一代接入。
+// 本地模式为纯本地发布面：仅 local_plain 臂可运行（零脉冲、零云端请求）。
 const isLocalMode = computed(() => String(overview.value?.mode || 'local') !== 'cloud')
 const selectedRecord = ref<EvalRunRecord | null>(null)
 const aiTestResult = ref<AIConnectionTestResponse | null>(null)

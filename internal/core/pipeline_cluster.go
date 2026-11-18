@@ -924,6 +924,22 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		}
 	}
 
+	// Canonical match order: every later float sum over a candidate's matches
+	// (query mass, missing mass, phrase witness) must add the same magnitudes in
+	// the same order, otherwise two hash layouts that attach the same evidence to
+	// different group ids differ in the last bits. Sorting by (mass, group) makes
+	// the accumulation order independent of the discovery order.
+	for _, u := range sc.lexUnits {
+		ms := candidates[u].matches
+		if len(ms) > 1 {
+			sort.Slice(ms, func(i, j int) bool {
+				if ms[i].mass != ms[j].mass {
+					return ms[i].mass < ms[j].mass
+				}
+				return ms[i].group < ms[j].group
+			})
+		}
+	}
 	groupKeys := sc.groupKeys[:0]
 	for g := range groups {
 		groupKeys = append(groupKeys, g)
@@ -1876,7 +1892,11 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 	sc.latticeHashes = activeHashes
 	evalPass(activeHashes, hashGroup, groupW, groupDF, true, 3, false)
 
-	eulerFirstHorizon := int(float64(idx.N) / math.E)
+	// highDFMidCeil bounds the mid-band of high-DF terms at N/e. The 1/e factor is a
+	// calibrated threshold, not a value derived from the df distribution: terms above
+	// highDFThresh and at or below this ceiling may still enter the lattice when they
+	// carry rigid quantity markers. Changing the factor changes the mid-band population.
+	highDFMidCeil := int(float64(idx.N) / math.E)
 	const rmRigidDigitQtyMask uint8 = (1 << 2) | (1 << 7)
 	hasMidRigid := false
 	qGroupMid := sc.latticeQGroupMid
@@ -1907,7 +1927,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 			continue
 		}
 		df := idx.TermDF(h)
-		isMidRigid := df > highDFThresh && df <= eulerFirstHorizon && (qa.Flags&rmRigidDigitQtyMask != 0)
+		isMidRigid := df > highDFThresh && df <= highDFMidCeil && (qa.Flags&rmRigidDigitQtyMask != 0)
 		if df > highDFThresh && !isMidRigid {
 			continue
 		}

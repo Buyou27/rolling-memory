@@ -4,6 +4,8 @@
 package thinclient
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +15,15 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 )
+
+func TestResolveEpisodicPointerLiveContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := ResolveEpisodicPointerLiveContext(ctx, "@ref:jsonl:/nonexistent:0"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled before touching the transcript", err)
+	}
+}
 
 func TestJSONLStreamResolverPointerProtocol(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session:多语种.jsonl")

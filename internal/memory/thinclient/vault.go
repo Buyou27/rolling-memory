@@ -394,6 +394,11 @@ type Vault struct {
 	// 不改动运行时上限）。构建的活集可数倍于守护进程的稳态上限，在上限内构建会退化为
 	// GC 空转而非完成，故由调用方按可用物理内存给出构建窗口。
 	coldBuildMemoryLimit *int64
+	// canonicalMigrationMu serialises the one-time derivation of the canonical
+	// store from the thin corpus; the flag short-circuits the marker lookup after
+	// the first successful pass in this process.
+	canonicalMigrationMu   sync.Mutex
+	canonicalMigrationDone bool
 }
 
 // vaultSnapshotRef holds the corpus snapshot behind a pointer shared across clones.
@@ -424,14 +429,10 @@ type vaultSnapshotRef struct {
 	lastSnapTime time.Time
 	// csrEngine caches the mmap .zcsr baseline engine opened for a freshness-checked
 	// corpus state (file identity = .zcsr mtime+size); csrFileMTimeNS / csrFileSize
-	// anchor that identity so incremental writes never force a re-mmap. csrUnits /
-	// csrUnitsGen cache the unit-fingerprint sidecar that must match the cached
-	// baseline's freshness line.
+	// anchor that identity so incremental writes never force a re-mmap.
 	csrEngine        *core.Engine
 	csrFileMTimeNS   int64
 	csrFileSize      int64
-	csrUnits         map[string]uint64
-	csrUnitsGen      string
 	faultReady       bool
 	lastFaultTime    time.Time
 	faultDocCnt      int64
@@ -468,8 +469,6 @@ func (v *Vault) clearSlotCache() {
 			v.snapRef.csrEngine = nil
 			v.snapRef.csrFileMTimeNS = 0
 			v.snapRef.csrFileSize = 0
-			v.snapRef.csrUnits = nil
-			v.snapRef.csrUnitsGen = ""
 			v.snapRef.faultReady = false
 			v.snapRef.noeticReady = false
 		}
@@ -1721,12 +1720,15 @@ func (v *Vault) EpisodicPointerFor(docID string) string {
 	return raw
 }
 
-// LoadEpisodicTurnSegments resolves the ordered speech segments of one harness turn
-// as rendered `[role] text` lines. The reference is a turn-level pointer; a `#<k>`
-// segment suffix (or `#<k>.<c>` chunk suffix) is stripped and ignored. Enumeration is
-// delegated to `internal/episodic`, so the window a caller renders is exactly the
-// segmentation the pulses were built from.
-func LoadEpisodicTurnSegments(turnRef string) ([]string, error) {
+// LoadEpisodicTurnSegmentsContext resolves a turn-level pointer while honoring
+// cancellation during JSONL source hashing and streaming.
+func LoadEpisodicTurnSegmentsContext(ctx context.Context, turnRef string) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	trimmed := strings.TrimSpace(turnRef)
 	if index := strings.LastIndex(trimmed, "#"); index > 0 {
 		trimmed = trimmed[:index]
@@ -1745,6 +1747,9 @@ func LoadEpisodicTurnSegments(turnRef string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return renderEpisodicSegments(segments), nil
 	}
 	if strings.HasPrefix(trimmed, "@ref:jsonl:") {
@@ -1757,7 +1762,7 @@ func LoadEpisodicTurnSegments(turnRef string) ([]string, error) {
 		if err != nil || turnIndex < 0 {
 			return nil, fmt.Errorf("invalid jsonl turn index in %q", turnRef)
 		}
-		segments, err := episodic.JSONLTurnSegments(rest[:lastColon], turnIndex)
+		segments, err := episodic.JSONLTurnSegmentsContext(ctx, rest[:lastColon], turnIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -1790,6 +1795,18 @@ func renderEpisodicSegments(segments []episodic.Segment) []string {
 // Segment enumeration is delegated to `internal/episodic`, the same package the
 // ingest scanner uses, so `#<k>` always resolves to the segment it was built from.
 func ResolveEpisodicPointerLive(refPointer string) (string, error) {
+	return ResolveEpisodicPointerLiveContext(context.Background(), refPointer)
+}
+
+// ResolveEpisodicPointerLiveContext resolves an episodic pointer and stops
+// transcript reads when the calling background operation is cancelled.
+func ResolveEpisodicPointerLiveContext(ctx context.Context, refPointer string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	trimmed := strings.TrimSpace(refPointer)
 	if strings.HasPrefix(trimmed, "@ref:zcode:") {
 		rest := strings.TrimPrefix(trimmed, "@ref:zcode:")
@@ -1812,9 +1829,9 @@ func ResolveEpisodicPointerLive(refPointer string) (string, error) {
 		absPath := rest[:lastColon]
 		turnStr, segmentIndex, chunkIndex, hasSegment, hasChunk := splitPointerSegment(rest[lastColon+1:])
 		if hasSegment {
-			return resolveJSONLSegmentLive(absPath, turnStr, segmentIndex, chunkIndex, hasChunk)
+			return resolveJSONLSegmentLiveContext(ctx, absPath, turnStr, segmentIndex, chunkIndex, hasChunk)
 		}
-		return resolveJSONLTurnLive(absPath, turnStr)
+		return resolveJSONLTurnLiveContext(ctx, absPath, turnStr)
 	}
 	return trimmed, nil
 }
@@ -1890,13 +1907,12 @@ func openZCodeReadOnly() (*sql.DB, error) {
 	return zcodeReadHandle(zdbPath)
 }
 
-// resolveJSONLSegmentLive hydrates one speech segment (or one chunk of it) of a JSONL turn.
-func resolveJSONLSegmentLive(absPath, turnStr string, segmentIndex, chunkIndex int, hasChunk bool) (string, error) {
+func resolveJSONLSegmentLiveContext(ctx context.Context, absPath, turnStr string, segmentIndex, chunkIndex int, hasChunk bool) (string, error) {
 	targetTurn, err := strconv.Atoi(strings.TrimSpace(turnStr))
 	if err != nil || targetTurn < 0 {
 		return "", fmt.Errorf("invalid turn index %q", turnStr)
 	}
-	segments, err := episodic.JSONLTurnSegments(absPath, targetTurn)
+	segments, err := episodic.JSONLTurnSegmentsContext(ctx, absPath, targetTurn)
 	if err != nil {
 		return "", err
 	}
@@ -2369,6 +2385,10 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// The retrieval engine reads only the canonical store. A vault written before
+	// that store existed is derived from the thin corpus once, before any
+	// snapshot work, so an upgrade never recalls an empty corpus.
+	v.ensureCanonicalCorpus(ctx)
 	episodicCodecKey, err := v.episodicCodecKey()
 	var genAtStart uint64
 	if v.snapRef != nil {
@@ -2795,168 +2815,6 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	return snap, nil
 }
 
-// localQueryClockHeaderExclusiveHashes identifies reference clock-header day/beacon hashes in SentenceFrames[0]
-// (e.g. "Today is June 1, 2025. <actual question...>") using pure pulse structure (zero wordlists):
-//   - Requires SentenceFrames[0] to contain at least 2 distinct digit slots (day + year) within its first 8 primary slots,
-//     followed by >= 2 non-digit salient content tokens in the question body;
-//   - Returns the set of clock-header-exclusive calendar beacon hashes (width 588/284) and day-number hashes not repeated in the body,
-//     so they are de-rigidified to soft carrier width (18) instead of hijacking the query's salient denominator.
-func localQueryClockHeaderExclusiveHashes(pkt BlindPulsePacket) map[uint64]bool {
-	if len(pkt.SentenceFrames) == 0 || len(pkt.Slots) == 0 {
-		return nil
-	}
-	sf0 := pkt.SentenceFrames[0]
-	isCalBeacon := func(tok BlindTokenAtom) bool {
-		return (tok.ClassFlags&(FlagHasDigit|FlagHasConn)) == (FlagHasDigit|FlagHasConn) &&
-			(tok.RawBitsX10 == plain.CalendarBeaconWidthX10 || tok.RawBitsX10 == 284)
-	}
-	isStemHarmonic := func(prev, cur BlindTokenAtom) bool {
-		if prev.H == 0 || (cur.RawBitsX10&1) == 0 || (cur.ClassFlags&FlagHasConn) == 0 || (cur.ClassFlags&FlagHasDigit) != 0 {
-			return false
-		}
-		return prev.RawBitsX10 >= cur.RawBitsX10 && (prev.RawBitsX10-cur.RawBitsX10 == 1 || prev.RawBitsX10-cur.RawBitsX10 == 3)
-	}
-	type pTok struct {
-		atom          BlindTokenAtom
-		extraDigitH   uint64
-		sf0RawIdx     int
-		followedByQty bool
-	}
-	var sf0Beacons []uint64
-	var sf0Primary []pTok
-	var prevP BlindTokenAtom
-	for rawIdx, tok := range sf0 {
-		if isStemHarmonic(prevP, tok) {
-			continue
-		}
-		if isCalBeacon(tok) {
-			sf0Beacons = append(sf0Beacons, tok.H)
-			continue
-		}
-		if (tok.ClassFlags & plain.FlagIsQuantityOrUnit) != 0 {
-			nP := len(sf0Primary)
-			if nP >= 2 &&
-				(sf0Primary[nP-1].atom.ClassFlags&FlagHasDigit) != 0 &&
-				(sf0Primary[nP-2].atom.ClassFlags&FlagHasDigit) != 0 &&
-				sf0Primary[nP-2].extraDigitH == 0 {
-				sf0Primary[nP-2].extraDigitH = sf0Primary[nP-1].atom.H
-				sf0Primary[nP-2].sf0RawIdx = sf0Primary[nP-1].sf0RawIdx
-				sf0Primary[nP-2].followedByQty = true
-				sf0Primary = sf0Primary[:nP-1]
-			} else if nP >= 1 {
-				sf0Primary[nP-1].followedByQty = true
-			}
-			continue
-		}
-		prevP = tok
-		sf0Primary = append(sf0Primary, pTok{atom: tok, sf0RawIdx: rawIdx})
-	}
-	if len(sf0Primary) < 4 {
-		return nil
-	}
-	scanLim := 8
-	if len(sf0Primary) < scanLim {
-		scanLim = len(sf0Primary)
-	}
-	var digits []int
-	for i := 0; i < scanLim; i++ {
-		fl := sf0Primary[i].atom.ClassFlags
-		if (fl&FlagHasDigit) != 0 && (fl&FlagHasConn) == 0 && (fl&FlagHasCamel) == 0 {
-			digits = append(digits, i)
-		}
-	}
-	if len(digits) < 2 {
-		return nil
-	}
-	dayIdx := digits[0]
-	yearIdx := digits[len(digits)-1]
-	if sf0Primary[yearIdx].followedByQty {
-		return nil
-	}
-	if len(pkt.SentenceFrames) == 1 || len(sf0Primary) > 8 {
-		if dayIdx < 2 || yearIdx-dayIdx > 2 {
-			return nil
-		}
-	}
-	if sf0Primary[dayIdx].atom.H == sf0Primary[yearIdx].atom.H {
-		return nil
-	}
-
-	bodySeen := make(map[uint64]bool, len(pkt.Slots))
-	bodySalient := 0
-	afterRawIdx := sf0Primary[yearIdx].sf0RawIdx + 1
-	for afterRawIdx < len(sf0) {
-		if isStemHarmonic(sf0Primary[yearIdx].atom, sf0[afterRawIdx]) {
-			afterRawIdx++
-		} else {
-			break
-		}
-	}
-	var prevB BlindTokenAtom
-	for rawIdx := afterRawIdx; rawIdx < len(sf0); rawIdx++ {
-		tok := sf0[rawIdx]
-		if isStemHarmonic(prevB, tok) {
-			bodySeen[tok.H] = true
-			continue
-		}
-		if isCalBeacon(tok) {
-			continue
-		}
-		prevB = tok
-		bodySeen[tok.H] = true
-		if tok.RawBitsX10 >= 26 && (tok.ClassFlags&FlagHasDigit) == 0 && (tok.ClassFlags&plain.FlagIsQuantityOrUnit) == 0 {
-			bodySalient++
-		}
-	}
-	for si := 1; si < len(pkt.SentenceFrames); si++ {
-		var prevS BlindTokenAtom
-		for _, tok := range pkt.SentenceFrames[si] {
-			if isStemHarmonic(prevS, tok) {
-				bodySeen[tok.H] = true
-				continue
-			}
-			if isCalBeacon(tok) {
-				bodySeen[tok.H] = true
-				continue
-			}
-			prevS = tok
-			bodySeen[tok.H] = true
-			if tok.RawBitsX10 >= 26 && (tok.ClassFlags&FlagHasDigit) == 0 && (tok.ClassFlags&plain.FlagIsQuantityOrUnit) == 0 {
-				bodySalient++
-			}
-		}
-	}
-	if bodySalient < 2 {
-		return nil
-	}
-	clockYearH := sf0Primary[yearIdx].atom.H
-	dayExcl := make(map[uint64]bool, len(digits)+len(sf0Beacons)+2)
-	if dayIdx > 0 {
-		mTok := sf0Primary[dayIdx-1].atom
-		if (mTok.ClassFlags&FlagHasDigit) == 0 && !bodySeen[mTok.H] {
-			dayExcl[mTok.H] = true
-		}
-	}
-	if !bodySeen[clockYearH] {
-		dayExcl[clockYearH] = true
-	}
-	for _, dIdx := range digits[:len(digits)-1] {
-		dh := sf0Primary[dIdx].atom.H
-		if dh != clockYearH && !bodySeen[dh] {
-			dayExcl[dh] = true
-		}
-		if exH := sf0Primary[dIdx].extraDigitH; exH != 0 && exH != clockYearH && !bodySeen[exH] {
-			dayExcl[exH] = true
-		}
-	}
-	for _, bH := range sf0Beacons {
-		if !bodySeen[bH] {
-			dayExcl[bH] = true
-		}
-	}
-	return dayExcl
-}
-
 // SearchClientSDKDefault executes the canonical RB 4-step dual-cluster engine
 // (`internal/core` + `sdk/go/pulse/plain`) over the Vault's full in-memory
 // corpus snapshot and merges matched Layer-3 Noetic retrieval handles.
@@ -3209,7 +3067,13 @@ func resolveZCodeTurnLive(sessionID, userMsgID string) (string, error) {
 // hand-crafted ref (/dev/zero, a huge file) from exhausting memory.
 const maxLiveJSONLReadBytes int64 = 256 * 1024 * 1024
 
-func resolveJSONLTurnLive(absPath, turnStr string) (string, error) {
+func resolveJSONLTurnLiveContext(ctx context.Context, absPath, turnStr string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	targetTurn, err := strconv.Atoi(strings.TrimSpace(turnStr))
 	if err != nil || targetTurn < 0 {
 		return "", fmt.Errorf("invalid turn index %q", turnStr)
@@ -3226,6 +3090,9 @@ func resolveJSONLTurnLive(absPath, turnStr string) (string, error) {
 	}
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	lines := strings.Split(string(raw), "\n")
@@ -3285,7 +3152,12 @@ func resolveJSONLTurnLive(absPath, turnStr string) (string, error) {
 		return role, txt
 	}
 
-	for _, line := range lines {
+	for lineIndex, line := range lines {
+		if lineIndex%512 == 0 {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
 		role, txt := extractLineRoleAndText(line)
 		if role == "" || txt == "" {
 			continue

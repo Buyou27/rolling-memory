@@ -27,9 +27,9 @@ const (
 
 // Cluster types emitted by the engine projection.
 const (
-	ClusterEpisode  = "episode"
-	ClusterEntity   = "entity"
-	ClusterDocument = "document"
+	ClusterEpisode = "episode"
+	ClusterEntity  = "entity"
+	ClusterSource  = "source"
 )
 
 // Edge relations emitted by the engine projection.
@@ -194,9 +194,9 @@ type KindCounts struct {
 
 // ClusterTypeCounts reports cluster counts by container type.
 type ClusterTypeCounts struct {
-	Episode  int `json:"episode"`
-	Entity   int `json:"entity"`
-	Document int `json:"document"`
+	Episode int `json:"episode"`
+	Entity  int `json:"entity"`
+	Source  int `json:"source"`
 }
 
 // Stats is the graph HUD/statistics envelope.

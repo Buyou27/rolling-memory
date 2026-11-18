@@ -55,6 +55,17 @@
     "skill": "<HOME>/.codebuddy/skills"
   },
   {
+    "detect": "<HOME>/.config/opencode",
+    "detected": false,
+    "hooks": "-",
+    "id": "opencode",
+    "instructions": "-",
+    "label": "OpenCode",
+    "mcp": "<HOME>/.config/opencode/opencode.json",
+    "notes": "V2 local MCP entry; user skills in <HOME>/.config/opencode/skills or .opencode/skills",
+    "skill": "<HOME>/.config/opencode/skills"
+  },
+  {
     "detect": "<HOME>/.cursor",
     "detected": false,
     "hooks": "-",

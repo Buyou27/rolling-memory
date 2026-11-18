@@ -1296,6 +1296,9 @@ interface DashboardPayload {
     node_spark: number[]
     last_recall_ms: number
     avg_recall_ms: number
+    latency_p50_ms: number
+    latency_max_ms: number
+    latency_samples: number
     latency_trend: number
     latency_spark: number[]
     total_hook_events: number
@@ -1360,6 +1363,9 @@ const rmData = reactive<DashboardPayload>({
     node_spark: [],
     last_recall_ms: 0,
     avg_recall_ms: 0,
+    latency_p50_ms: 0,
+    latency_max_ms: 0,
+    latency_samples: 0,
     latency_trend: 0,
     latency_spark: [],
     total_hook_events: 0,

@@ -152,7 +152,11 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 		if err := ctx.Err(); err != nil {
 			break
 		}
-		switch tc.Vault.ClassifyAndHealEpisodicUnit(scope, item.docID, item.refPointer, item.occurredAt, apply) {
+		status := tc.Vault.ClassifyAndHealEpisodicUnitContext(ctx, scope, item.docID, item.refPointer, item.occurredAt, apply)
+		if ctx.Err() != nil {
+			break
+		}
+		switch status {
 		case thinclient.EpisodicContentAbsent:
 			// Deletion must prove the content is gone, not merely that its old coordinate
 			// stopped addressing it: a turn renumbering inside the same file makes a row

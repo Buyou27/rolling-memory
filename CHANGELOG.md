@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Background episodic maintenance now runs one pass at a time per process and stops long transcript scans as soon as its lease is revoked, so several connected hosts no longer stack repeated reads of the same session file or pin a CPU core after a session goes idle.
+- The memory console, in-app help centre, and benchmark/privacy documentation now describe the shipped deterministic cluster kernel instead of the retired FTS5/BM25 lexical index, and the evaluation page no longer mentions a retired cloud endpoint.
+
 ## [0.0.5] - 2026-11-19
 
 ### Added

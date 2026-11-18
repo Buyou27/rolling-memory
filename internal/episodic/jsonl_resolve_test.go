@@ -4,6 +4,8 @@
 package episodic
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,16 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestJSONLTurnSegmentsContextCanceled(t *testing.T) {
+	path := writeJSONL(t, []string{`{"role":"user","content":"question"}`})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := JSONLTurnSegmentsContext(ctx, path, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
 
 func TestJSONLStreamResolverAgreesAcrossScales(t *testing.T) {
 	for _, count := range []int{1, 100, 10000} {

@@ -548,12 +548,12 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
         summaryEn:
             'Explains what never leaves the machine (plaintext, consolidated memory, and the local key stay in the local SQLite vault), local vault defense-in-depth, audience isolation, and one-command self-verification, plus the application-based cloud capability preview (ciphertext-only, for advanced & enterprise users).',
         sectionsZh: [
-            '哪些数据永不离开本机：原始对话、沉淀记忆、主密钥与本地索引全部留在本机 SQLite 金库（0 出网）',
+            '哪些数据永不离开本机：原始对话、沉淀记忆与主密钥留在本机 SQLite 金库，召回索引缓存（由金库原文派生）留在本机金库目录（0 出网）',
             '本地金库纵深防御：单文件 SQLite + 0700/0600 权限 + 全盘加密继承 + 原位流式读取 + 四级受众隔离',
             '一键自证与数据主权：doctor / check / export / go test 自证命令，以及导出、备份、删除、迁移规程',
         ],
         sectionsEn: [
-            'What Never Leaves Your Machine: raw conversations, consolidated memory, the local key, and local indexes all stay in the local SQLite vault (zero egress)',
+            'What Never Leaves Your Machine: raw conversations, consolidated memory, and the local key stay in the local SQLite vault; the recall index cache (derived from the vault) stays in the local vault directory (zero egress)',
             'Local Vault Defense-in-Depth: single-file SQLite with 0700/0600 permissions, full-disk encryption inheritance, source-in-place reads, and four audience tiers',
             'Self-Verification & Data Sovereignty: doctor / check / export / go test, plus export, backup, delete, and migrate procedures',
         ],

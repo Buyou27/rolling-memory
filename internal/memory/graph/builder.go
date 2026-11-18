@@ -10,7 +10,6 @@ package graph
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -80,16 +79,16 @@ func (b *Builder) Snapshot(ctx context.Context) (*Snapshot, error) {
 			return b.snap, nil
 		}
 		b.snap = &Snapshot{
-			Key:              key,
-			UnitByID:         map[string]*Unit{},
-			Episodes:         map[int32]*Cluster{},
-			EntityClusters:   map[uint64]*Cluster{},
-			DocumentClusters: map[string]*Cluster{},
-			ClusterByKey:     map[string]*Cluster{},
-			Citations:        citations,
-			CitedBy:          map[string][]string{},
-			GroupEnergy:      map[uint64]float64{},
-			BuiltAt:          time.Now(),
+			Key:            key,
+			UnitByID:       map[string]*Unit{},
+			Episodes:       map[int32]*Cluster{},
+			EntityClusters: map[uint64]*Cluster{},
+			SourceClusters: map[string]*Cluster{},
+			ClusterByKey:   map[string]*Cluster{},
+			Citations:      citations,
+			CitedBy:        map[string][]string{},
+			GroupEnergy:    map[uint64]float64{},
+			BuiltAt:        time.Now(),
 		}
 		b.key = key
 		return b.snap, nil
@@ -128,7 +127,7 @@ type Snapshot struct {
 	UnitByID         map[string]*Unit
 	Episodes         map[int32]*Cluster
 	EntityClusters   map[uint64]*Cluster
-	DocumentClusters map[string]*Cluster
+	SourceClusters   map[string]*Cluster
 	ClusterByKey     map[string]*Cluster
 	Citations        map[string][]string
 	CitedBy          map[string][]string
@@ -145,12 +144,14 @@ type Unit struct {
 	Row              graphmodel.UnitRow
 	EngineIndex      int32
 	HasEngine        bool
+	DocHash          uint64
+	BlockHash        uint64
 	GroupWeights     map[uint64]float64
 	DominantGroup    uint64
 	DominantWeight   float64
 	EpisodeID        int32
 	EntityClusterKey string
-	DocumentCluster  string
+	SourceCluster    string
 	PrimaryCluster   string
 	Free             bool
 	Summary          string
@@ -183,7 +184,7 @@ func (b *Builder) build(ctx context.Context, rows []graphmodel.UnitRow, citation
 		UnitByID:         make(map[string]*Unit, len(rows)),
 		Episodes:         make(map[int32]*Cluster),
 		EntityClusters:   make(map[uint64]*Cluster),
-		DocumentClusters: make(map[string]*Cluster),
+		SourceClusters:   make(map[string]*Cluster),
 		ClusterByKey:     make(map[string]*Cluster),
 		Citations:        citations,
 		CitedBy:          make(map[string][]string, len(citations)),
@@ -229,6 +230,11 @@ func (b *Builder) build(ctx context.Context, rows []graphmodel.UnitRow, citation
 					}
 				}
 				u.EpisodeID = eng.EpisodeIDOf(idx)
+				if int(idx) >= 0 && int(idx) < len(eng.Index.UnitMeta) {
+					meta := eng.Index.UnitMeta[idx]
+					u.DocHash = meta.DocHash
+					u.BlockHash = meta.BlockHash
+				}
 			}
 			for group, weight := range u.GroupWeights {
 				snap.GroupEnergy[group] += weight
@@ -248,8 +254,8 @@ func (b *Builder) build(ctx context.Context, rows []graphmodel.UnitRow, citation
 		for _, u := range units {
 			snap.UnitByID[u.Row.UnitID] = u
 			u.DominantGroup, u.DominantWeight = dominantGroup(u.GroupWeights)
-			if u.Row.Source == graphmodel.SourceBG {
-				u.DocumentCluster = documentKey(u.Row)
+			if u.DocHash != 0 {
+				u.SourceCluster = sourceKey(u.DocHash)
 			}
 			if u.DominantGroup != 0 && snap.GroupEnergy[u.DominantGroup] >= snap.GroupMean {
 				u.EntityClusterKey = entityKey(u.DominantGroup)
@@ -322,35 +328,44 @@ func (b *Builder) build(ctx context.Context, rows []graphmodel.UnitRow, citation
 			c.Span = fmt.Sprintf("实体簇 · %d 个单元", c.MemberCount)
 		}
 
-		// Document clusters: background chunks of one physical file.
+		// Source clusters: units sharing one engine document provenance
+		// (DocHash). The physical shape is irrelevant — a multi-chunk file, a
+		// PDF, an email thread or any other chunked source groups identically.
 		for _, u := range units {
-			if u.Row.Source != graphmodel.SourceBG || u.DocumentCluster == "" {
+			if u.SourceCluster == "" {
 				continue
 			}
-			c := snap.DocumentClusters[u.DocumentCluster]
+			c := snap.SourceClusters[u.SourceCluster]
 			if c == nil {
-				c = &Cluster{
-					Key:      u.DocumentCluster,
-					Type:     graphmodel.ClusterDocument,
-					Layer:    thinclient.LayerBackground,
-					LayerMix: map[string]int{thinclient.LayerBackground: 0},
-					RelPath:  u.Row.RelPath,
-					Anchor:   u.DocumentCluster,
+				label := ""
+				if u.Row.Source == graphmodel.SourceBG {
+					label = u.Row.RelPath
 				}
-				snap.DocumentClusters[u.DocumentCluster] = c
+				c = &Cluster{
+					Key:      u.SourceCluster,
+					Type:     graphmodel.ClusterSource,
+					LayerMix: map[string]int{},
+					RelPath:  label,
+					Anchor:   u.SourceCluster,
+				}
+				snap.SourceClusters[u.SourceCluster] = c
 			}
 			c.MemberIDs = append(c.MemberIDs, u.Row.UnitID)
 		}
-		for _, c := range snap.DocumentClusters {
+		for _, c := range snap.SourceClusters {
 			sort.Strings(c.MemberIDs)
 			c.MemberCount = len(c.MemberIDs)
 			c.LayerMix = layerMixOf(snap, c.MemberIDs)
-			c.Layer = thinclient.LayerBackground
+			c.Layer = dominantLayer(c.LayerMix)
 			if c.RelPath == "" {
-				c.RelPath = c.MemberIDs[0]
+				sourceID := strings.TrimPrefix(c.Key, "cluster:source:")
+				if len(sourceID) > 8 {
+					sourceID = sourceID[:8]
+				}
+				c.RelPath = "来源 #" + sourceID
 			}
 			c.Label = c.RelPath
-			c.Summary = fmt.Sprintf("文件簇 · %s · %d 个分块", c.RelPath, c.MemberCount)
+			c.Summary = fmt.Sprintf("来源簇 · %s · %d 个单元", c.RelPath, c.MemberCount)
 			c.Span = c.Summary
 		}
 
@@ -361,7 +376,7 @@ func (b *Builder) build(ctx context.Context, rows []graphmodel.UnitRow, citation
 		for _, c := range snap.EntityClusters {
 			snap.ClusterByKey[c.Key] = c
 		}
-		for _, c := range snap.DocumentClusters {
+		for _, c := range snap.SourceClusters {
 			snap.ClusterByKey[c.Key] = c
 		}
 		for _, u := range units {
@@ -369,8 +384,8 @@ func (b *Builder) build(ctx context.Context, rows []graphmodel.UnitRow, citation
 			if ep := snap.Episodes[u.EpisodeID]; u.EpisodeID >= 0 && ep != nil && ep.MemberCount > 1 {
 				u.PrimaryCluster = ep.Key
 			}
-			if u.PrimaryCluster == "" && u.DocumentCluster != "" {
-				u.PrimaryCluster = u.DocumentCluster
+			if u.PrimaryCluster == "" && u.SourceCluster != "" {
+				u.PrimaryCluster = u.SourceCluster
 			}
 			if u.PrimaryCluster == "" && u.EntityClusterKey != "" {
 				u.PrimaryCluster = u.EntityClusterKey
@@ -496,15 +511,8 @@ func entityKey(group uint64) string {
 	return "cluster:entity:" + hex16(group)
 }
 
-func documentKey(row graphmodel.UnitRow) string {
-	relPath := strings.TrimSpace(row.RelPath)
-	absPath := strings.TrimSpace(row.AbsPath)
-	key := relPath + "\x00" + absPath
-	if relPath == "" && absPath == "" {
-		key = row.UnitID
-	}
-	sum := sha256.Sum256([]byte(key))
-	return "cluster:document:" + hex.EncodeToString(sum[:6])
+func sourceKey(docHash uint64) string {
+	return "cluster:source:" + hex16(docHash)
 }
 
 func episodeLabel(snap *Snapshot, ids []string) (string, string) {

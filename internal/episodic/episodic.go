@@ -566,7 +566,7 @@ func asJSONString(value any) string {
 
 // JSONLTurnSegments enumerates one turn of a JSONL transcript by ordinal.
 func JSONLTurnSegments(path string, turnIndex int) ([]Segment, error) {
-	return jsonlTurnSegments(path, turnIndex)
+	return jsonlTurnSegments(context.Background(), path, turnIndex)
 }
 
 // parseJSONLLine extracts one speaker row of a harness transcript. It accepts the

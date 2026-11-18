@@ -1094,7 +1094,7 @@ interface GraphPayload {
         cluster_total?: number
         free_unit_total?: number
         kind_counts?: { units?: number; words?: number; phrases?: number; clusters?: number; free_units?: number }
-        cluster_type_counts?: { episode?: number; entity?: number; document?: number }
+        cluster_type_counts?: { episode?: number; entity?: number; source?: number }
         build_ms?: number
         label_coverage_pct?: number
         top_atoms?: GraphAtomParticle[]

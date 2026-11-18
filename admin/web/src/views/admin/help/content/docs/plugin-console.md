@@ -125,7 +125,7 @@ Every content surface (memory browser detail, recall debugger raw hits and full 
 
 ### 2.6 `Dashboard -> Memory Graph`
 
-The Memory Graph is generated from your local vault by the engine itself. Nodes follow two orthogonal axes: the memory layer (**L1 Background / L2 Episodic / L3 Noetic**) and the structural level — **word** (word family), **phrase** (two adjacent primary words), **cluster** (container), and **unit** / **free unit**. Containers are grouped as **time episodes**, **entity clusters** (dominant word family), and **file clusters** (background document chunks). Units outside every container are shown as **free units** on the outer shell.
+The Memory Graph is generated from your local vault by the engine itself. Nodes follow two orthogonal axes: the memory layer (**L1 Background / L2 Episodic / L3 Noetic**) and the structural level — **word** (word family), **phrase** (two adjacent primary words), **cluster** (container), and **unit** / **free unit**. Containers are grouped as **time episodes**, **entity clusters** (dominant word family), and **source clusters** (one engine document provenance — a multi-chunk file, PDF, email thread or any other chunked source). Units outside every container are shown as **free units** on the outer shell.
 
 The canvas supports layer / kind / cluster-type filters, word and phrase inspection, cluster member drill-down, citation edges, and a detail drawer with word energy, phrase binding energy, and cluster membership. When the local memory service is not running, the page shows an explicit empty state instead of sample data. The built-in LoCoMo sample remains available on the public landing page for layout preview.
 

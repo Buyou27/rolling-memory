@@ -1,8 +1,6 @@
 // Copyright 2026 Rocareer & Rolling & PsychologyLake.org.cn
 // Author: Albert <albert@rocareer.com>
 
-//go:build devtools
-
 package thinclient
 
 import (
@@ -31,8 +29,10 @@ type CanonicalBackfillReport struct {
 // is capped at one connection, so writing while a result set is open would
 // deadlock.
 //
-// This file is compiled only with the `devtools` build tag; the product binary
-// never carries migration code.
+// A vault written before the canonical store existed still carries its corpus in
+// the thin tables and their source files. The first open derives those sources
+// into rm_docs once; the marker in rm_migration keeps later opens free of the
+// scan.
 func (v *Vault) BackfillCanonicalCorpus(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool) error {
 	if report == nil {
 		report = &CanonicalBackfillReport{}
@@ -40,13 +40,16 @@ func (v *Vault) BackfillCanonicalCorpus(ctx context.Context, report *CanonicalBa
 	if v == nil || v.db == nil {
 		return fmt.Errorf("thinclient: nil Vault db")
 	}
-	if err := v.backfillInlineDocs(ctx, report, onlyMissing); err != nil {
+	// User deletions are tombstones: deriving the canonical store must not bring a
+	// unit the user removed back into retrieval.
+	deleted := v.DeletedUnitSet("")
+	if err := v.backfillInlineDocs(ctx, report, onlyMissing, deleted); err != nil {
 		return err
 	}
-	if err := v.backfillBackgroundChunks(ctx, report, onlyMissing); err != nil {
+	if err := v.backfillBackgroundChunks(ctx, report, onlyMissing, deleted); err != nil {
 		return err
 	}
-	if err := v.backfillEpisodicPointerDocs(ctx, report, onlyMissing); err != nil {
+	if err := v.backfillEpisodicPointerDocs(ctx, report, onlyMissing, deleted); err != nil {
 		return err
 	}
 	return nil
@@ -76,7 +79,7 @@ type canonicalBackfillInline struct {
 	inserted    int64
 }
 
-func (v *Vault) backfillInlineDocs(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool) error {
+func (v *Vault) backfillInlineDocs(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool, deleted map[string]bool) error {
 	rows, err := v.db.QueryContext(ctx, `
 		SELECT doc_id, layer, occurred_at, raw_text, COALESCE(sentences_json, '[]'), COALESCE(kept_indices_json, '[]'),
 		       COALESCE(address_uri, ''), COALESCE(coord64, 0), COALESCE(waveform_bar, ''), COALESCE(doc_macro_wave, ''),
@@ -105,6 +108,9 @@ func (v *Vault) backfillInlineDocs(ctx context.Context, report *CanonicalBackfil
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if deleted[item.docID] {
+			continue
 		}
 		if strings.TrimSpace(item.rawText) == "" {
 			report.Unavailable++
@@ -144,7 +150,7 @@ type canonicalBackfillChunk struct {
 	anchor   string
 }
 
-func (v *Vault) backfillBackgroundChunks(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool) error {
+func (v *Vault) backfillBackgroundChunks(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool, deleted map[string]bool) error {
 	type fileRow struct {
 		absPath string
 		relPath string
@@ -208,6 +214,9 @@ func (v *Vault) backfillBackgroundChunks(ctx context.Context, report *CanonicalB
 			byIndex[chunk.ChunkIndex] = chunk.Text
 		}
 		for _, chunk := range chunks {
+			if deleted[chunk.unitID] {
+				continue
+			}
 			text, ok := byIndex[int(chunk.chunkIdx)]
 			if !ok || strings.TrimSpace(text) == "" {
 				report.Unavailable++
@@ -264,7 +273,7 @@ type canonicalBackfillEpisodic struct {
 	locus       string
 }
 
-func (v *Vault) backfillEpisodicPointerDocs(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool) error {
+func (v *Vault) backfillEpisodicPointerDocs(ctx context.Context, report *CanonicalBackfillReport, onlyMissing bool, deleted map[string]bool) error {
 	rows, err := v.db.QueryContext(ctx, `
 		SELECT doc_id, layer, occurred_at, raw_text, COALESCE(inserted_at, 0), COALESCE(address_uri, ''),
 		       COALESCE(coord64, 0), COALESCE(waveform_bar, ''), COALESCE(kept_indices_json, '[]'),
@@ -292,6 +301,9 @@ func (v *Vault) backfillEpisodicPointerDocs(ctx context.Context, report *Canonic
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if deleted[item.docID] {
+			continue
 		}
 		text, err := ResolveEpisodicPointerLive(item.ref)
 		if err != nil || strings.TrimSpace(text) == "" {

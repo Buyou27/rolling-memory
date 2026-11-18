@@ -111,6 +111,7 @@ func TestNewVaultBootstrapTableSet(t *testing.T) {
 		"rm_docs",
 		"rm_episodic_index",
 		"rm_episodic_sources",
+		"rm_migration",
 		"rm_noetic",
 		"rm_revision",
 		"rm_terms",

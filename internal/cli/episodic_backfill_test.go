@@ -116,6 +116,28 @@ func TestAutoWatchLeaseConcurrentAndFencedRelease(t *testing.T) {
 	releaseAutoWatchLease(db, lease)
 }
 
+func TestAutoWatchProcessGateIsSingleFlight(t *testing.T) {
+	if !tryAcquireAutoWatchProcessGate() {
+		t.Fatal("initial process gate acquisition failed")
+	}
+	held := true
+	defer func() {
+		if held {
+			releaseAutoWatchProcessGate()
+		}
+	}()
+	if tryAcquireAutoWatchProcessGate() {
+		releaseAutoWatchProcessGate()
+		t.Fatal("process gate admitted a concurrent auto-watch pass")
+	}
+	releaseAutoWatchProcessGate()
+	held = false
+	if !tryAcquireAutoWatchProcessGate() {
+		t.Fatal("process gate remained held after release")
+	}
+	held = true
+}
+
 func TestEpisodicCheckpointConcurrentWriters(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "checkpoint.sqlite")+"?_pragma=busy_timeout(5000)")
 	if err != nil {

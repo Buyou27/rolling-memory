@@ -1,6 +1,6 @@
 <template>
     <div class="default-main rm-artifacts-console">
-        <!-- 顶部标题栏与 WebSocket 实时脉冲状态 -->
+        <!-- 顶部标题栏与 WebSocket 实时流状态 -->
         <div class="console-hero">
             <div class="hero-left">
                 <span class="hero-title">

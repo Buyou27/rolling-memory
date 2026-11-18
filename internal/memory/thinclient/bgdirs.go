@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1031,6 +1032,28 @@ func (v *Vault) BackgroundChunkLocation(unitID string) (relPath, absPath, anchor
 		return "", "", "", false
 	}
 	return strings.TrimSpace(meta.relPath), strings.TrimSpace(meta.absPath), strings.TrimSpace(meta.anchor), true
+}
+
+// parseBackgroundAnchorLines extracts 1-based (LineStart, LineEnd) from a line-range
+// anchor such as "L12-40" or "L12"; non-line anchors (e.g. "p1", "page2") return (0, 0).
+func parseBackgroundAnchorLines(anchor string) (int, int) {
+	s := strings.TrimSpace(anchor)
+	if len(s) < 2 || (s[0] != 'L' && s[0] != 'l') {
+		return 0, 0
+	}
+	rest := s[1:]
+	if dash := strings.IndexByte(rest, '-'); dash > 0 {
+		start, err1 := strconv.Atoi(rest[:dash])
+		end, err2 := strconv.Atoi(rest[dash+1:])
+		if err1 == nil && err2 == nil && start > 0 && end >= start {
+			return start, end
+		}
+		return 0, 0
+	}
+	if line, err := strconv.Atoi(rest); err == nil && line > 0 {
+		return line, line
+	}
+	return 0, 0
 }
 
 // AddBackgroundDir mounts a local directory on the Client's Vault.

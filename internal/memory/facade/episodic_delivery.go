@@ -27,6 +27,7 @@ type episodicTurnGroup struct {
 	segments   []string
 	hitIndex   int
 	score      float64
+	direct     float64
 	unitID     string
 	authors    []string
 }

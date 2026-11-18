@@ -57,7 +57,10 @@ func storeJSONLTurnsCache(path string, entry cachedJSONLTurns) {
 // jsonlTurnSegments uses the same row parser and turn boundaries as JSONLTurns,
 // caching parsed turn segments keyed by file identity so resolving thousands of
 // segment pointers in the same transcript does not re-parse the file per pointer.
-func jsonlTurnSegments(path string, turnIndex int) ([]Segment, error) {
+func jsonlTurnSegments(ctx context.Context, path string, turnIndex int) ([]Segment, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, errors.New("episodic: empty jsonl path")
@@ -69,7 +72,7 @@ func jsonlTurnSegments(path string, turnIndex int) ([]Segment, error) {
 	if err != nil {
 		return nil, err
 	}
-	sum, err := hashJSONLSource(context.Background(), path)
+	sum, err := hashJSONLSource(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +92,7 @@ func jsonlTurnSegments(path string, turnIndex int) ([]Segment, error) {
 	var result []Segment
 	cacheBytes := 0
 	cacheable := true
-	err = VisitJSONLTurns(context.Background(), path, func(turn JSONLTurn, _ bool) error {
+	err = VisitJSONLTurns(ctx, path, func(turn JSONLTurn, _ bool) error {
 		if turn.Index == turnIndex {
 			result = append([]Segment(nil), turn.Segments...)
 		}
@@ -115,7 +118,7 @@ func jsonlTurnSegments(path string, turnIndex int) ([]Segment, error) {
 	if err != nil {
 		return nil, err
 	}
-	afterSum, err := hashJSONLSource(context.Background(), path)
+	afterSum, err := hashJSONLSource(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -129,4 +132,10 @@ func jsonlTurnSegments(path string, turnIndex int) ([]Segment, error) {
 		return nil, fmt.Errorf("episodic: turn %d not found in %s", turnIndex, path)
 	}
 	return result, nil
+}
+
+// JSONLTurnSegmentsContext resolves a turn while honoring cancellation from the
+// caller, including during source hashing and streamed transcript parsing.
+func JSONLTurnSegmentsContext(ctx context.Context, path string, turnIndex int) ([]Segment, error) {
+	return jsonlTurnSegments(ctx, path, turnIndex)
 }

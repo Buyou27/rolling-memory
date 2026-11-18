@@ -19,11 +19,11 @@ func TestEvalLogWriterKeepsJSONStdoutClean(t *testing.T) {
 		func(format string, args ...any) { fmt.Fprintf(&stdout, format+"\n", args...) },
 		func(format string, args ...any) { fmt.Fprintf(&stderr, format+"\n", args...) },
 	)
-	logf("[eval] arm=%s tier=%s", "sdk-pulse-cipher-none", "100")
+	logf("[eval] arm=%s tier=%s", "sdk-local-plain", "100")
 	if stdout.Len() != 0 {
 		t.Fatalf("json mode leaked logs to stdout: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "[eval] arm=sdk-pulse-cipher-none tier=100") {
+	if !strings.Contains(stderr.String(), "[eval] arm=sdk-local-plain tier=100") {
 		t.Fatalf("json mode logs missing on stderr: %q", stderr.String())
 	}
 }

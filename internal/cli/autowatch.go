@@ -83,6 +83,21 @@ func IsAutoSyncEnabled(cfgPath string) bool {
 
 const episodicSyncPausedMetaKey = "episodic_sync_paused"
 
+var autoWatchProcessGate = make(chan struct{}, 1)
+
+func tryAcquireAutoWatchProcessGate() bool {
+	select {
+	case autoWatchProcessGate <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseAutoWatchProcessGate() {
+	<-autoWatchProcessGate
+}
+
 // IsEpisodicSyncPaused reports whether background episodic scanning/backfilling is paused
 // either via the SQLite runtime flag (`episodic_sync_paused = '1'`) or config (`auto_sync = false`).
 func IsEpisodicSyncPaused(db *sql.DB, cfgPath string) bool {
@@ -139,6 +154,13 @@ func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quie
 	if IsEpisodicSyncPaused(db, cfgPath) {
 		return false, 0, 0
 	}
+	// Multiple MCP connections share this process and database. The SQLite lease
+	// fences independent processes; this gate prevents stale in-process scans from
+	// stacking if a slow pass outlives its lease.
+	if !tryAcquireAutoWatchProcessGate() {
+		return false, 0, 0
+	}
+	defer releaseAutoWatchProcessGate()
 	passCtx, cancel := context.WithCancel(ctx)
 	facade.RegisterBackgroundWorkCancel(cancel)
 	defer func() {
@@ -155,6 +177,9 @@ func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quie
 	if _, err := runEpisodicIndexBackfillTick(ctx, memory); err != nil {
 		log.Printf("episodic index backfill: %v", err)
 	}
+	if ctx.Err() != nil {
+		return false, 0, 0
+	}
 
 	// 常规 tick 的只愈合巡检：漂移的情景指针（含跨轮次重锚）在后台被逐步重指并重封，
 	// 用户无需先跑 `sync prune` 才能看到来源缺口消失；确证不存在的行不在此处回收。
@@ -162,6 +187,9 @@ func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quie
 		log.Printf("episodic pointer heal: %v", healErr)
 	} else if healed > 0 {
 		log.Printf("episodic pointer heal: re-anchored %d drifted pointer(s)", healed)
+	}
+	if ctx.Err() != nil {
+		return false, bgChunks, epiPushed
 	}
 
 	// 1. L1 Background: only sync when mounted dirs have dirty/new/deleted files whose

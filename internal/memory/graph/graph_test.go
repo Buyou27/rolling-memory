@@ -6,6 +6,8 @@ package graph_test
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,6 +149,64 @@ func TestGraphViewLabelsCJKSurfaces(t *testing.T) {
 	}
 	if labeled == 0 || resp.Stats.LabelCoveragePct == 0 {
 		t.Fatalf("CJK word surfaces must be recovered, labeled=%d coverage=%.2f", labeled, resp.Stats.LabelCoveragePct)
+	}
+}
+
+func TestGraphViewGroupsChunksBySourceProvenance(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:graph_source_cluster_test?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	vault, err := thinclient.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "source-a.md")
+	pathB := filepath.Join(dir, "source-b.md")
+	if err := os.WriteFile(pathA, []byte(strings.Repeat("alpha source line\n", 4000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathB, []byte(strings.Repeat("beta other line\n", 5)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := thinclient.NewLocalClient(vault)
+	if _, err := client.AddBackgroundDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SyncBackgroundDirs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	builder := graph.NewBuilder(vault)
+	rows, err := vault.GraphUnits(context.Background())
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("graph rows = %d, err=%v", len(rows), err)
+	}
+	resp, err := builder.View(context.Background(), graphmodel.ViewRequest{Limit: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sourceClusters []graphmodel.Node
+	for _, node := range resp.Nodes {
+		if node.Kind == graphmodel.KindCluster && node.ClusterType == graphmodel.ClusterSource {
+			sourceClusters = append(sourceClusters, node)
+		}
+	}
+	if len(sourceClusters) != 2 {
+		t.Fatalf("expected two source clusters (one per DocHash), got %d", len(sourceClusters))
+	}
+	var grouped bool
+	for _, node := range sourceClusters {
+		if node.MemberCount > 1 {
+			grouped = true
+		}
+	}
+	if !grouped {
+		t.Fatalf("chunks sharing one DocHash must land in one source cluster: %+v", sourceClusters)
+	}
+	if resp.Stats.ClusterTypeCounts.Source != 2 {
+		t.Fatalf("source cluster count = %d, want 2", resp.Stats.ClusterTypeCounts.Source)
 	}
 }
 

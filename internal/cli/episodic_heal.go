@@ -152,7 +152,10 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, lim
 		scanned++
 		// 只读分类：原地补索引由同一 tick 的回填负责（heal=true 的 4.4ms/行 → 0.8ms/行），
 		// 巡检只为「漂移」这一件事写库，且每次都走下面带双证的同源重锚路径。
-		status := tc.Vault.ClassifyAndHealEpisodicUnit(scope, row.docID, refPointer, row.occurredAt, false)
+		status := tc.Vault.ClassifyAndHealEpisodicUnitContext(ctx, scope, row.docID, refPointer, row.occurredAt, false)
+		if ctx.Err() != nil {
+			break
+		}
 		if status != thinclient.EpisodicContentVerified {
 			if status == thinclient.EpisodicContentRelocatable {
 				// 只做同源重锚：备用坐标必须落在与行内指针同一个源（jsonl = 同一文件、

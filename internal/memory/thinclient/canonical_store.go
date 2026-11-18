@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS rm_revision (
 );
 INSERT OR IGNORE INTO rm_revision(id) VALUES (1);
 
+CREATE TABLE IF NOT EXISTS rm_migration (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+
 CREATE TRIGGER IF NOT EXISTS rm_rev_docs_ai AFTER INSERT ON rm_docs BEGIN
 	UPDATE rm_revision SET docs_rev = docs_rev + 1 WHERE id = 1;
 END;

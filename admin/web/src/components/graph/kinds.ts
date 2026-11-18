@@ -8,7 +8,7 @@
  */
 export type GraphKind = 'cluster' | 'unit' | 'word' | 'phrase' | 'free_unit' | 'cell' | 'atom' | 'molecule'
 
-export type ClusterType = 'episode' | 'entity' | 'document'
+export type ClusterType = 'episode' | 'entity' | 'source'
 
 export interface KindMeta {
     labelZh: string
@@ -31,7 +31,7 @@ export const KIND_META: Record<string, KindMeta> = {
 export const CLUSTER_TYPE_META: Record<string, { labelZh: string; labelEn: string; color: string }> = {
     episode: { labelZh: '时间簇', labelEn: 'Time episode', color: '#0d9488' },
     entity: { labelZh: '实体簇', labelEn: 'Entity cluster', color: '#6366f1' },
-    document: { labelZh: '文件簇', labelEn: 'File cluster', color: '#1d4ed8' },
+    source: { labelZh: '来源簇', labelEn: 'Source cluster', color: '#1d4ed8' },
 }
 
 export function isContainerKind(kind: string | undefined): boolean {

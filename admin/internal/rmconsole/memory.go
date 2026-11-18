@@ -3567,9 +3567,9 @@ type GraphKindCounts struct {
 
 // GraphClusterTypeCounts 簇按容器类型计数（引擎投影）。
 type GraphClusterTypeCounts struct {
-	Episode  int `json:"episode"`
-	Entity   int `json:"entity"`
-	Document int `json:"document"`
+	Episode int `json:"episode"`
+	Entity  int `json:"entity"`
+	Source  int `json:"source"`
 }
 
 // GraphStats 图谱统计栏读数（含 M27/M28/M28b/M28c 连通率指标与五级粒子拓扑统计）。

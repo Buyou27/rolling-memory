@@ -48,10 +48,12 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Retrieval now comes from the canonical store; an unusable source is removed
-	// from it instead of being filtered at snapshot time.
+	// from it instead of being filtered at snapshot time. The tombstone keeps the
+	// one-time canonical derivation from re-adding it.
 	if err := v.deleteCanonicalUnits("bad"); err != nil {
 		t.Fatal(err)
 	}
+	v.RecordDeletedUnits("episodic", "bad")
 	report, err := v.EpisodicIndexFaultDiagnostics()
 	if err != nil || report.Compatible != 1 || report.Corrupt != 1 || report.Incompatible != 0 || report.Missing != 0 {
 		t.Fatalf("diagnostics: %+v %v", report, err)
@@ -216,6 +218,7 @@ func TestEpisodicIndexSwappedRows(t *testing.T) {
 	if err := v.deleteCanonicalUnits("one", "two"); err != nil {
 		t.Fatal(err)
 	}
+	v.RecordDeletedUnits("episodic", "one", "two")
 	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.Corrupt != 2 || report.Compatible != 1 {
 		t.Fatalf("swapped rows: %+v %v", report, err)
 	}

@@ -958,7 +958,7 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		}
 		group := groups[ref]
 		if group == nil {
-			group = &episodicTurnGroup{ref: ref, rawPointer: actualRef, hitIndex: segmentIndex, score: h.FinalWeight, unitID: h.UnitID, authors: h.Authors}
+			group = &episodicTurnGroup{ref: ref, rawPointer: actualRef, hitIndex: segmentIndex, score: h.FinalWeight, direct: h.DirectWeight, unitID: h.UnitID, authors: h.Authors}
 			groups[ref] = group
 			groupOrder = append(groupOrder, ref)
 		}
@@ -967,6 +967,7 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		})
 		if h.FinalWeight > group.score {
 			group.score = h.FinalWeight
+			group.direct = h.DirectWeight
 			group.rawPointer = actualRef
 			group.hitIndex = segmentIndex
 			group.unitID = h.UnitID
@@ -992,16 +993,6 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		effectiveChars -= competingBands * 96
 	}
 	windowBudget := turnWindowBudget(effectiveChars, competingBands)
-	type deliveredCandidate struct {
-		band       map[string]any
-		rawHit     map[string]any
-		score      float64
-		locusMatch bool
-		sessionKey string
-		occurredAt int64
-		order      int
-		truncated  bool
-	}
 	candidates := make([]deliveredCandidate, 0, len(groupOrder)+len(standalone))
 	nextOrder := 0
 	for _, ref := range groupOrder {
@@ -1100,6 +1091,7 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 			band:       bandEntry,
 			rawHit:     rawEntry,
 			score:      group.score,
+			direct:     group.direct,
 			locusMatch: anchor != "" && strings.EqualFold(strings.TrimSpace(locus), anchor),
 			sessionKey: episodicTurnSessionKey(ref),
 			occurredAt: turnOccurredAt,
@@ -1197,6 +1189,7 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 			band:       bandEntry,
 			rawHit:     rawEntry,
 			score:      h.FinalWeight,
+			direct:     h.DirectWeight,
 			locusMatch: anchor != "" && strings.EqualFold(strings.TrimSpace(locus), anchor),
 			order:      nextOrder,
 			truncated:  wasTruncated,
@@ -1244,17 +1237,12 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		}
 		return candidates[i].order < candidates[j].order
 	})
-	candPeakScore := 0.0
-	for _, cand := range candidates {
-		if cand.score > candPeakScore {
-			candPeakScore = cand.score
-		}
-	}
+	candPeakScore, candPeakRef := peakDecayReference(candidates)
 	for _, cand := range candidates {
 		if len(bands) >= topK {
 			break
 		}
-		if adaptiveEnergyWindow && len(bands) > 0 && candPeakScore > 0 && !cand.locusMatch && cand.score < candPeakScore/math.E {
+		if adaptiveEnergyWindow && len(bands) > 0 && candPeakScore > 0 && !cand.locusMatch && cand.score < candPeakRef/math.E {
 			break
 		}
 		if cand.truncated {

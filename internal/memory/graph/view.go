@@ -591,7 +591,7 @@ func (s *viewState) assemble() ([]graphmodel.Node, []graphmodel.Edge, graphmodel
 		addNode(node)
 		clusterTypeCounts.Episode += boolInt(cluster.Type == graphmodel.ClusterEpisode)
 		clusterTypeCounts.Entity += boolInt(cluster.Type == graphmodel.ClusterEntity)
-		clusterTypeCounts.Document += boolInt(cluster.Type == graphmodel.ClusterDocument)
+		clusterTypeCounts.Source += boolInt(cluster.Type == graphmodel.ClusterSource)
 		kindCounts.Clusters++
 	}
 
@@ -1058,8 +1058,8 @@ func membershipKeys(snap *Snapshot, u *Unit) []string {
 	if ep := snap.Episodes[u.EpisodeID]; u.EpisodeID >= 0 && ep != nil && ep.MemberCount > 1 {
 		out = append(out, ep.Key)
 	}
-	if u.DocumentCluster != "" {
-		out = append(out, u.DocumentCluster)
+	if u.SourceCluster != "" {
+		out = append(out, u.SourceCluster)
 	}
 	if u.EntityClusterKey != "" {
 		out = append(out, u.EntityClusterKey)
@@ -1355,8 +1355,8 @@ func normalizeClusterTypeSet(types []string) map[string]bool {
 			out[graphmodel.ClusterEpisode] = true
 		case graphmodel.ClusterEntity:
 			out[graphmodel.ClusterEntity] = true
-		case graphmodel.ClusterDocument:
-			out[graphmodel.ClusterDocument] = true
+		case graphmodel.ClusterSource:
+			out[graphmodel.ClusterSource] = true
 		}
 	}
 	return out

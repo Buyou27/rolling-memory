@@ -70,6 +70,9 @@ func (v *Vault) BackfillEpisodicIndexes(ctx context.Context, scope, cursor strin
 	}
 	turnCache := make(map[string]turnCacheEntry, 64)
 	resolveCached := func(refPointer string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		trimmed := strings.TrimSpace(refPointer)
 		tail := trimmed
 		if colon := strings.LastIndex(tail, ":"); colon >= 0 {
@@ -77,21 +80,24 @@ func (v *Vault) BackfillEpisodicIndexes(ctx context.Context, scope, cursor strin
 		}
 		_, segIdx, chunkIdx, hasSeg, hasChunk := splitPointerSegment(tail)
 		if !hasSeg {
-			return ResolveEpisodicPointerLive(trimmed)
+			return ResolveEpisodicPointerLiveContext(ctx, trimmed)
 		}
 		hashIdx := strings.LastIndex(trimmed, "#")
 		if hashIdx <= 0 {
-			return ResolveEpisodicPointerLive(trimmed)
+			return ResolveEpisodicPointerLiveContext(ctx, trimmed)
 		}
 		turnRef := trimmed[:hashIdx]
 		cached, ok := turnCache[turnRef]
 		if !ok {
-			segs, sErr := LoadEpisodicTurnSegments(turnRef)
+			segs, sErr := LoadEpisodicTurnSegmentsContext(ctx, turnRef)
 			cached = turnCacheEntry{segs: segs, err: sErr}
 			turnCache[turnRef] = cached
 		}
 		if cached.err != nil {
 			return "", cached.err
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		if segIdx < 0 || segIdx >= len(cached.segs) {
 			return "", fmt.Errorf("thinclient: segment %d out of range for %s", segIdx, turnRef)
@@ -151,7 +157,12 @@ func (v *Vault) BackfillEpisodicIndexes(ctx context.Context, scope, cursor strin
 		if !strings.HasPrefix(ref.pointer, "@ref:jsonl:") && !strings.HasPrefix(ref.pointer, "@ref:zcode:") {
 			report.Unavailable++
 		} else if text, err := resolveCached(ref.pointer); err != nil || strings.TrimSpace(text) == "" {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return report, ctxErr
+			}
 			report.Unavailable++
+		} else if ctxErr := ctx.Err(); ctxErr != nil {
+			return report, ctxErr
 		} else if episodicunit.DocID(scope, text) != ref.id {
 			report.Unverified++
 		} else {
@@ -171,6 +182,9 @@ func (v *Vault) BackfillEpisodicIndexes(ctx context.Context, scope, cursor strin
 			} else {
 				report.Unchanged++
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return report, err
 		}
 		report.Scanned++
 		report.Cursor = ref.id

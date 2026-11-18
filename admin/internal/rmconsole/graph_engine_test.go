@@ -35,7 +35,7 @@ func TestGraphHandlerRelaysEngineProjection(t *testing.T) {
 				"event_total":1,"link_total":1,"node_shown":3,"edge_shown":1,"isolated_shown":0,
 				"avg_entity_degree":1,"multi_edge_entity_ratio":0,"avg_relation_reuse":1,"object_node_ratio":100,
 				"kind_counts":{"units":1,"words":1,"phrases":0,"clusters":1,"free_units":0},
-				"cluster_type_counts":{"episode":1,"entity":0,"document":0},
+				"cluster_type_counts":{"episode":1,"entity":0,"source":0},
 				"word_total":1,"phrase_total":0,"cluster_total":1,"free_unit_total":0
 			},
 			"truncated":{"nodes":false,"edges":false}

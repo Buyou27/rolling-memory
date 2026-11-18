@@ -251,48 +251,6 @@ const (
 	EpisodicContentAbsent
 )
 
-// EpisodicPointerContentStatus classifies an indexed unit: resolvable at its stored
-// index (Verified), present elsewhere in the same turn (Relocatable), provably
-// absent from a successfully enumerated turn (Absent), or unclassifiable because
-// the source is unavailable (Unreadable).
-func (v *Vault) EpisodicPointerContentStatus(docID, refPointer string) EpisodicContentStatus {
-	if v == nil || v.db == nil {
-		return EpisodicContentUnreadable
-	}
-	refPointer = strings.TrimSpace(refPointer)
-	key, err := v.episodicCodecKey()
-	if err != nil {
-		return EpisodicContentUnreadable
-	}
-	var digest, payload, mac, storedKey []byte
-	if err := v.db.QueryRow(`SELECT content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, refPointer, key).Scan(&digest, &payload, &mac, &storedKey); err != nil || !v.validEpisodicPayloadMAC(docID, refPointer, storedKey, payload, digest, mac) {
-		return EpisodicContentUnreadable
-	}
-	if text, err := ResolveEpisodicPointerLive(refPointer); err == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
-		return EpisodicContentVerified
-	}
-	if sources, err := v.episodicSources(docID, ""); err != nil {
-		return EpisodicContentUnreadable
-	} else {
-		for _, source := range sources {
-			if source.turnRef != pointerStem(refPointer) && hmac.Equal(source.digest, digest) {
-				return EpisodicContentRelocatable
-			}
-		}
-	}
-	segments, err := episodicPointerTurnSegments(refPointer)
-	if err != nil {
-		if strings.Contains(err.Error(), "empty zcode turn") {
-			return EpisodicContentAbsent
-		}
-		return EpisodicContentUnreadable
-	}
-	if _, ok := v.episodicTurnDigestMatch(segments, digest); ok {
-		return EpisodicContentRelocatable
-	}
-	return EpisodicContentAbsent
-}
-
 // isPollutedInlineEpisodicText reports whether a legacy non-pointer episodic row
 // contains unstripped tool-call wire traces or internal thinking scratchpads.
 // Line-anchored checks ensure genuine inline memories that merely mention tags
@@ -340,7 +298,19 @@ func isPollutedInlineEpisodicText(raw string) bool {
 // chains (SaveLocalEpisodicPointerIndexedVerified, EnsureLocalEpisodicIndexVerified)
 // has nothing to share here.
 func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurredAt int64, heal bool) EpisodicContentStatus {
+	return v.ClassifyAndHealEpisodicUnitContext(context.Background(), scope, docID, rawText, occurredAt, heal)
+}
+
+// ClassifyAndHealEpisodicUnitContext allows background sweeps to stop live
+// transcript reads as soon as their lease or caller context is revoked.
+func (v *Vault) ClassifyAndHealEpisodicUnitContext(ctx context.Context, scope, docID, rawText string, occurredAt int64, heal bool) EpisodicContentStatus {
 	if v == nil || v.db == nil {
+		return EpisodicContentUnreadable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
 		return EpisodicContentUnreadable
 	}
 	rawText = strings.TrimSpace(rawText)
@@ -370,7 +340,11 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 	}
 	wasIndexed := err == nil
 	if len(digest) == sha256.Size {
-		if text, err := ResolveEpisodicPointerLive(rawText); err == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
+		text, resolveErr := ResolveEpisodicPointerLiveContext(ctx, rawText)
+		if ctx.Err() != nil {
+			return EpisodicContentUnreadable
+		}
+		if resolveErr == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
 			if heal && !wasIndexed {
 				_ = v.healEpisodicPointerUnit(docID, occurredAt, rawText, rawText, stem, text)
 			}
@@ -385,7 +359,13 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 			return EpisodicContentRelocatable
 		}
 	}
-	segments, err := episodicPointerTurnSegments(rawText)
+	if ctx.Err() != nil {
+		return EpisodicContentUnreadable
+	}
+	segments, err := episodicPointerTurnSegmentsContext(ctx, rawText)
+	if ctx.Err() != nil {
+		return EpisodicContentUnreadable
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "empty zcode turn") {
 			if wasIndexed {
@@ -594,6 +574,16 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 // episodicPointerTurnSegments enumerates the speech segments of the turn a segment
 // pointer names, ignoring the positional `#<k>` / `#<k>.<c>` suffix.
 func episodicPointerTurnSegments(refPointer string) ([]episodic.Segment, error) {
+	return episodicPointerTurnSegmentsContext(context.Background(), refPointer)
+}
+
+func episodicPointerTurnSegmentsContext(ctx context.Context, refPointer string) ([]episodic.Segment, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	trimmed := strings.TrimSpace(refPointer)
 	if strings.HasPrefix(trimmed, "@ref:zcode:") {
 		rest := strings.TrimPrefix(trimmed, "@ref:zcode:")
@@ -626,7 +616,7 @@ func episodicPointerTurnSegments(refPointer string) ([]episodic.Segment, error) 
 		if err != nil || turnIndex < 0 {
 			return nil, fmt.Errorf("thinclient: invalid jsonl turn index in %q", refPointer)
 		}
-		return episodic.JSONLTurnSegments(rest[:lastColon], turnIndex)
+		return episodic.JSONLTurnSegmentsContext(ctx, rest[:lastColon], turnIndex)
 	}
 	return nil, fmt.Errorf("thinclient: unsupported episodic pointer %q", refPointer)
 }

@@ -105,12 +105,6 @@ func (v *Vault) extractVaultCoreDoc(te *plain.TermExtractor, docID string, occ i
 	return te.ExtractDoc(docID, occ, rawText)
 }
 
-// coreTermsFromPacket remains only for the legacy thin-table codec that the
-// canonical store replaced; it returns no terms and is never on a live path.
-func coreTermsFromPacket(_ []BlindTokenAtom, _ [][]BlindTokenAtom) (map[uint64]core.Term, map[uint64]int, map[uint64][]core.TermPosition) {
-	return map[uint64]core.Term{}, map[uint64]int{}, map[uint64][]core.TermPosition{}
-}
-
 // applyColdBuildWindow raises the runtime soft memory limit to the given build
 // window and returns the function that restores the previous limit (and returns
 // cached pages). A zero window, or one no larger than the current limit, leaves
@@ -196,43 +190,6 @@ func (s *vaultCorpusSnapshot) ensureSnapshotCoreEngine(v *Vault) *core.Engine {
 		s.coreEngine = eng
 	})
 	return s.coreEngine
-}
-
-// releaseTransientDocTermMaps drops the per-document Go maps (`termMeta`,
-// `termPositions`, and `termCounts`) from large snapshots and component caches
-// once `core.Engine` has built its flat CSR arrays, eliminating multi-gigabyte
-// duplicate heap residency (`DocAtomCoverageWithCueHashes` reads directly from
-// `core.Engine` CSR entries via `ForEachDocEntry`).
-func (s *vaultCorpusSnapshot) releaseTransientDocTermMaps(v *Vault) {
-	if s == nil {
-		return
-	}
-	for i := range s.docs {
-		d := &s.docs[i]
-		d.termMeta = nil
-		d.termPositions = nil
-		d.termCounts = nil
-		d.allHashes = nil
-	}
-	for i := range s.episodicDocs {
-		ed := &s.episodicDocs[i]
-		ed.termMeta = nil
-		ed.termPositions = nil
-		ed.termCounts = nil
-		ed.allHashes = nil
-	}
-	if v != nil && v.slotCacheMu != nil && v.snapRef != nil {
-		v.slotCacheMu.Lock()
-		for k, entry := range v.slotCache {
-			if len(entry.termMeta) > 0 || len(entry.termPositions) > 0 {
-				entry.termMeta = nil
-				entry.termPositions = nil
-				entry.termCounts = nil
-				v.slotCache[k] = entry
-			}
-		}
-		v.slotCacheMu.Unlock()
-	}
 }
 
 // extractQueryFromBlindPacket reconstructs query terms and positions when a
