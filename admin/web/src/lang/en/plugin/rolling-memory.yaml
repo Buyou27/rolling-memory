@@ -162,6 +162,42 @@ overview:
     pendingTag: Pending Sync
     unknownStatus: Status unknown
     healthUnavailable: Health status unavailable; check again
+    maintenanceTitle: Retire & Self-heal
+    maintenanceSub: Retires only provably-stale units and re-anchors drifted pointers; rows with unreadable sources are kept
+    maintenancePreviewBtn: Preview scan
+    maintenanceApplyBtn: Apply maintenance
+    maintenanceVerifiedLbl: Verified
+    maintenanceReanchorLbl: Re-anchorable
+    maintenanceReanchoredLbl: Re-anchored
+    maintenanceAbsentLbl: Provably stale
+    maintenanceRemovedLbl: Retired
+    maintenanceUnreadableLbl: Kept (source unavailable)
+    maintenanceNoeticLbl: Orphan traces cleaned
+    maintenanceReceiptLbl: Receipt
+    maintenancePreviewHint: Preview is a read-only classification and writes nothing
+    maintenancePreviewToast: Preview complete
+    maintenanceDoneToast: Maintenance finished
+    maintenanceApplyConfirm: This retires provably-stale units, re-anchors drifted pointers and cleans orphan traces, recording a receipt file. Apply now?
+    maintenanceConfirmOk: Apply
+    maintenanceConfirmCancel: Cancel
+    spaceMaintenanceTitle: Disk Space Maintenance
+    spaceMaintenanceSub: One-stop upkeep for obsolete binary backups, regenerable caches and vault free pages; scanning is read-only and cleanup/compaction always ask first
+    spaceMaintenanceScanBtn: Scan reclaimable space
+    spaceMaintenanceCleanBtn: Clean old copies & caches
+    spaceMaintenanceCompactBtn: Compact the vault
+    spaceMaintenanceHint: Old copies are kept newest-2 per (directory, family); compaction briefly pauses the shared engine daemon and restores it afterwards
+    spaceMaintenanceTotalLbl: Total reclaimable
+    spaceMaintenanceBackupsLbl: Obsolete backups
+    spaceMaintenanceCachesLbl: Regenerable caches
+    spaceMaintenanceCompactLbl: Vault free pages
+    spaceMaintenanceFreedLbl: Freed this run
+    spaceMaintenanceReceiptLbl: Receipt
+    spaceMaintenanceScanToast: Space scan complete
+    spaceMaintenanceDoneToast: Space maintenance finished
+    spaceMaintenanceCleanConfirm: This deletes binary backups beyond the retention count (running programs are unaffected) and clears regenerable caches (they rebuild on next use). Apply now?
+    spaceMaintenanceCompactConfirm: This briefly pauses the shared engine daemon and runs VACUUM on the local vault (the daemon restarts automatically; in-flight recalls may wait a moment). Apply now?
+    spaceMaintenanceConfirmOk: Apply
+    spaceMaintenanceConfirmCancel: Cancel
     progressTitle: Checking environment & memory health
     progressHint: Results will appear automatically once ready
     progressElapsed: '{s}s elapsed'

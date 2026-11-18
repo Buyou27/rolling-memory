@@ -16,7 +16,7 @@ import (
 )
 
 func TestVaultScopePreflightBeforeOpen(t *testing.T) {
-	for _, mode := range []string{"local", "cloud"} {
+	for _, mode := range []string{"local"} {
 		for _, table := range []string{"trace", "noetic", "thin_vault_docs", "unexpected_user_data", "foreign_fts_data"} {
 			t.Run(mode+"/"+table, func(t *testing.T) {
 				dir := t.TempDir()
@@ -74,7 +74,7 @@ func TestVaultScopePreflightAcceptsMatchingAndRejectsOtherScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("scope-witness", testNow, "private witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("scope-witness", testNow, "private witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := *memory.Config

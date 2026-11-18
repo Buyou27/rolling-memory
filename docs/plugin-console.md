@@ -74,7 +74,7 @@ The console is **not a bespoke admin framework written from scratch**. Its prove
 
 Alongside the **Live Console**, **ROI Monitor**, and **Memory Graph**, the dashboard provides a dedicated **`Dashboard -> Memory Console`** (`/#/admin/dashboard/artifacts`) for unified monitoring and control of the **Rolling Autonoetic Memory Engine** (100% Vector-Free · 100% LLM-Free):
 
-- **Vector-Free & LLM-Free Architecture Panel**: Requires zero embedding model or cross-encoder reranking configuration — directly monitors memory engine connectivity, pulse throughput, and local plaintext vault statistics.
+- **Vector-Free & LLM-Free Architecture Panel**: Requires zero embedding model or cross-encoder reranking configuration — directly monitors local memory engine status, recall throughput, and local plaintext vault statistics.
 - **Live Runtime Switches**: Toggle session-start memory injection (`boot_context`), recall ledger recording (`ledger`), sparse raw fallback (`raw_when_sparse`), and the floating status widget (`widget_enabled`) in real time.
 
 ### 2.2 Zero-Poll Real-Time WebSocket Streams
@@ -106,7 +106,7 @@ The panel extracts five signals from the local plaintext vault and recall ledger
 - **L3 Crystallization & Citation Yield**: Tracks how often agent-initiated `recall` queries hit underlying L1/L2 evidence and crystallize into L3 Noetic handles with explicit `cited_unit_ids` links.
 - **Memory Reuse Multiplier (Write Once, Cite N×)**: Measures average and peak cross-session citation reuse per hit unit, surfacing the **Top Cited Memory Units** leaderboard with full query provenance.
 - **`tokenz-r` Delivery Budget & Distillation Compression**: Uses the unified `tokenz-r` tokenizer to measure average delivered tokens per recall and dry-sentence distillation compression.
-- **Zero-Copy `@ref:` Vault Footprint & 14-Day Pulse**: Reports the zero-copy episodic pointer ratio, the deduplicated memory-address count, and a 14-day daily ingestion vs. L3 crystallization trend.
+- **Zero-Copy `@ref:` Vault Footprint & 14-Day Growth × Crystallization × Adoption**: Reports the zero-copy episodic pointer ratio, the deduplicated memory-address count, and a 14-day three-track trend of daily memory growth (L1 docs & code / L2 sessions), L3 crystallization, and evidence adoption rate.
 - **Per-Workspace (Locus) Heat Matrix & Evidence Drawer**: Diagnoses memory coverage and recall activity across workspaces (Active Recall hot zones vs. uncited cold zones) with one-click filtering and provenance drawers.
 
 ### 2.4 Online Version Check & In-Place Self-Update (`Version & Update` Dialog)
@@ -121,7 +121,7 @@ Both **`Memory Management -> Memory Overview`** (`/#/admin/plugin/rolling-memory
 
 The memory overview and the L1 / L2 / L3 pages share one memory-unit browser. Lists and the detail dialog show the **original content** directly; L1 mounted chunk bodies are re-read from the source file when you open the detail, and if a source file has been moved or deleted the console says so plainly, shows the source location, and offers a one-click retry instead of pretending the coordinates are the content.
 
-Every content surface (memory browser detail, recall debugger raw hits and full trace, cloud recall results, and the ROI evidence drawer) shares one Markdown reading face with **no manual switch**: prose and Markdown documents render as standard Markdown (headings, lists, tables, quotes, and fenced code blocks with one-click copy and line numbers), while structured content is formatted automatically into fenced code blocks — JSON is pretty-printed, JSONL keeps one record per line, and source files are highlighted by language. **Copy raw** always copies the unmodified stored bytes. Formatting only changes how the text is displayed — it never rewrites, truncates, or fabricates content.
+Every content surface (memory browser detail, recall debugger raw hits and full trace, recall results, and the ROI evidence drawer) shares one Markdown reading face with **no manual switch**: prose and Markdown documents render as standard Markdown (headings, lists, tables, quotes, and fenced code blocks with one-click copy and line numbers), while structured content is formatted automatically into fenced code blocks — JSON is pretty-printed, JSONL keeps one record per line, and source files are highlighted by language. **Copy raw** always copies the unmodified stored bytes. Formatting only changes how the text is displayed — it never rewrites, truncates, or fabricates content.
 
 ### 2.6 `Dashboard -> Memory Graph` (Preview Feature)
 

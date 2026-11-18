@@ -1,4 +1,4 @@
 {
-  "error": "<CASE>/input/missing.jsonl",
+  "error": "stat <CASE>/input/missing.jsonl: no such file or directory",
   "ok": false
 }

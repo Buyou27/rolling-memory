@@ -7,16 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-18
+
+### Added
+
+- **Codex hooks support**: `install codex --with-hooks` writes the Claude-shaped `~/.codex/hooks.json` (and project `.codex/hooks.json`), bringing the zero-intrusion memory readiness prompt to Codex sessions; the first run requires the hook to be reviewed and trusted inside Codex.
+- **Memory curation commands**: `rmem maintain` (disk-space maintenance — prune old backups and caches, compact and slim the vault; dry-run by default) and `rmem prune` re-anchoring same-source hits by default (cross-source substitution requires an explicit `--reanchor-cross-source`).
+- **Cross-turn pointer re-anchoring** with a recurring same-source pointer patrol and a "Cleanup & Self-Healing" console entry, plus a dry-run-first unmount preview for `background remove` that shows the re-bind/retire/citation impact before confirming.
+- **L3 verification-reuse gain & ROI gold leaderboard**: crystallized insights whose cited evidence is recalled again rank through a continuous log gain over their citation closure, surfaced as a first-class tier in the console.
+- **Evaluation**: the official LoCoMo Cat-5 adversarial tier (446 questions) is scored through the tri-state evaluator, together with three adversarial probe suites (ATM absence 100 / ATM conflict 100 / LoCoMo adversarial 446) published with reproducible evidence.
+
+### Changed
+
+- **Memory governance for large vaults**: steady-state resident memory dropped from runaway multi-gigabyte growth to a bounded footprint — on a 34k-unit live vault, steady ≈3 GB (≈2 GB file-backed pages) where the session previously peaked above 20 GB. The engine now serves rebuilds from disk-backed zero-copy snapshots, releases per-build term maps after use, and no longer rebuilds the full index on every background write, so continuous ingestion keeps foreground recall responsive.
+- **Single local-first runtime**: the client was streamlined onto its one supported local mode; the retired local lexical index (FTS5/BM25) and its comparison arm were removed so retrieval runs solely on the engine's cluster kernel — smaller vault files and faster cold scans, with the frozen ATM baseline preserved bit-for-bit (1,044 questions).
+- **Smart adaptive delivery window**: recall now delivers through a natural energy window by default (`auto`, up to 16 bands), with optional wider windows (`0-32` / `0-64`) for audits; the MCP `chars` parameter was removed in favor of the window controls.
+- **Vault hygiene**: opening a vault now reclaims legacy leftover tables (session cursors, retired indexes), and fresh databases bootstrap thin — no legacy assertion graph — keeping user vaults small and simple.
+- **Kernel synchronization**: the retrieval kernel picked up the latest engine revisions — package-internal deduplication, ordinal-day canonicalization, an exported high-DF fraction, and curated closed-set tables — validated bit-for-bit against the frozen ATM baseline.
+- Panel lifecycle management is unified: the `rolling-memory-panel` wrapper and the `panel` command share the same pid/log locations.
+- Console: the ROI 14-day panel was redesigned (distillation × crystallization × adoption tracks with independent scales and per-day adoption), the real-time recall latency card reports a robust median, and the monitoring float now speaks the Local Vault vocabulary only.
+
+### Removed
+
+- Pre-local-first legacy layers were removed from the client — obsolete remote-client code paths, the optional model-extraction layer, and standalone duplicate helper primitives — a smaller, faster-to-audit codebase with no memory-quality change.
+
 ### Fixed
 
 - Recall delivery budget is now enforced end to end: the legacy 200-character per-item truncation floor was removed and truncation markers count against the budget, so `caps.chars = 300` never over-delivers.
 - Installer integrity checks are fail-closed: a SHA-256 mismatch for a downloaded release asset is a fatal error instead of a silent fallback to a source build; when no checksum tool or entry is available the installer reports `unverified` with an explicit reason.
 - Bare installs and one-command installs now honor the persisted language preference (`--lang` is no longer reset to English).
 - Harness conversation capture keeps envelope-only turns out of the user-speech stream.
-
-### Changed
-
-- Panel lifecycle management is unified: the `rolling-memory-panel` wrapper and the `panel` command share the same pid/log locations.
+- L3 crystallization citations can no longer collapse to a bare label line: citations keep the full role block (role line plus continuation lines) and reuse the delivery-side cleaning predicate.
+- The real-time stream no longer replays stale memory content: frames that carry memory text are computed fresh for new subscribers.
+- Episodic import, scan, and reconcile share one frozen per-source parse and a content-addressed identity per turn, fixing cross-turn drift and enabling safe same-source re-anchoring before deletion checks.
+- The console's real-time recall latency card reports a robust median (latest and peak values in the tooltip) instead of a single spike-prone sample.
+- LoCoMo corpus rebuilds assign globally unique line ids and dedupe on the locator, eliminating rare id collisions in rebuilt evaluation corpora.
 
 ## [0.0.2] - 2026-11-18
 
@@ -50,6 +75,7 @@ Initial public release.
 - **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
 - **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
 
-[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/rocareer/rolling-memory/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/rocareer/rolling-memory/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/rocareer/rolling-memory/releases/tag/v0.0.1

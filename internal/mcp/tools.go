@@ -57,9 +57,12 @@ var recallTool = map[string]any{
 			"caps": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"delivery_window": map[string]any{
+						"enum":        []any{"auto", "0-16", "0-32", "0-64"},
+						"description": "Smart adaptive delivery window (default `auto` uses the console setting, `0-16` by default): delivers 0 to N memories within the natural physical information energy envelope E(u_k) >= E(u_1)/e without a minimum floor. Omit or pass `auto` for normal turns; pass `0-32` or `0-64` only for cross-session history audits or broad multi-event synthesis.",
+					},
 					"bands":  map[string]any{"type": "integer", "minimum": 0, "maximum": 64, "description": "Maximum memory bands/turns to deliver (default 10, max 64)."},
 					"nodes":  map[string]any{"type": "integer", "description": "Maximum total nodes across delivered bands.", "minimum": 0},
-					"chars":  map[string]any{"type": "integer", "description": "Maximum character budget for rendered text delivery (default 16000).", "minimum": 0},
 					"chains": map[string]any{"type": "integer", "description": "Chains per band (delivery breadth)."},
 					"rows":   map[string]any{"type": "integer", "description": "Rows per chain (delivery breadth)."},
 					"raw": map[string]any{
@@ -69,6 +72,10 @@ var recallTool = map[string]any{
 						"description": "Raw-hit delivery cap (default 10; 0 uses the default).",
 					},
 				},
+			},
+			"delivery_window": map[string]any{
+				"enum":        []any{"auto", "0-16", "0-32", "0-64"},
+				"description": "Smart adaptive delivery window (default `auto` uses the console setting, `0-16` by default): delivers 0 to N memories within the natural physical information energy envelope E(u_k) >= E(u_1)/e without a minimum floor. Omit or pass `auto` for normal turns; pass `0-32` or `0-64` only for cross-session history audits or broad multi-event synthesis.",
 			},
 			"result_unit": map[string]any{
 				"enum":        []any{"band", "item"},

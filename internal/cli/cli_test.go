@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/cli"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/version"
 
 	_ "modernc.org/sqlite"
@@ -88,6 +89,30 @@ func newEnv(t *testing.T) *cliEnv {
 	return &cliEnv{base: base}
 }
 
+// ensureLegacyGraphDB applies the canonical assertion-graph schema to a test
+// database. Fresh production databases bootstrap thin; the graph-era command
+// tests below deliberately exercise the historical surfaces.
+func ensureLegacyGraphDB(t *testing.T, path string) {
+	t.Helper()
+	connection, err := db.Connect(path, db.LocalProfile())
+	if err != nil {
+		t.Fatalf("connect %s: %v", path, err)
+	}
+	defer connection.Close()
+	if _, err := db.Migrate(connection); err != nil {
+		t.Fatalf("migrate %s: %v", path, err)
+	}
+	if err := db.EnsureLegacyGraphSchema(connection); err != nil {
+		t.Fatalf("legacy graph schema %s: %v", path, err)
+	}
+}
+
+// ensureLegacyGraphEnv is ensureLegacyGraphDB for the env's default database.
+func ensureLegacyGraphEnv(t *testing.T, env *cliEnv) {
+	t.Helper()
+	ensureLegacyGraphDB(t, filepath.Join(env.base, "memory.db"))
+}
+
 type cliResult struct {
 	code   int
 	stdout string
@@ -125,13 +150,15 @@ func jsonArray(t *testing.T, text string) []any {
 }
 
 // seedTranscript 以现役写侧（`import` 转录 JSONL）播种测试库。
+// 助手行携带显式完成证据（`stop_reason: end_turn`）：canonical 管道与后台扫描
+// 同口径，未完成的尾轮不会被 ingest。
 // `remember` 子命令已随本地断言图停用，断言图在无写侧后不再由 CLI 生成。
 func seedTranscript(t *testing.T, lines ...string) {
 	t.Helper()
 	if len(lines) == 0 {
 		lines = []string{
 			`{"type":"user","sessionId":"cm1","timestamp":"2026-03-02T08:00:00Z","message":{"role":"user","content":"老张养了一只猫，叫小白。"}}`,
-			`{"type":"assistant","sessionId":"cm1","timestamp":"2026-03-02T08:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":"记住了。"}]}}`,
+			`{"type":"assistant","sessionId":"cm1","timestamp":"2026-03-02T08:01:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"记住了。"}]}}`,
 		}
 	}
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
@@ -173,7 +200,7 @@ func TestDBFlagPreservesExistingParent(t *testing.T) {
 }
 
 func TestEndToEnd(t *testing.T) {
-	newEnv(t)
+	env := newEnv(t)
 	initResult := run(t, "init", "--json")
 	if initResult.code != 0 {
 		t.Fatalf("init exit %d: %s", initResult.code, initResult.stderr)
@@ -198,8 +225,30 @@ func TestEndToEnd(t *testing.T) {
 	if status.code != 0 {
 		t.Fatalf("status exit %d: %s", status.code, status.stderr)
 	}
-	if active := jsonObject(t, status.stdout)["active_assertions"]; active != float64(0) {
-		t.Fatalf("active_assertions = %#v (want 0：写侧停用后 CLI 不再生成断言)", active)
+	// 薄库（vault-only）：CLI 不生成任何断言图表（数据库里根本没有 assertion 表），
+	// status 的 active_assertions 映射为活体记忆单元数（docs + active noetic）。
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(env.base, "memory.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	var assertionTables, vaultUnits int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'assertion'`).Scan(&assertionTables); err != nil {
+		t.Fatalf("count assertion tables: %v", err)
+	}
+	if assertionTables != 0 {
+		t.Fatal("thin database must not create the assertion table")
+	}
+	if err := db.QueryRow(
+		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active')`,
+	).Scan(&vaultUnits); err != nil {
+		t.Fatalf("count vault units: %v", err)
+	}
+	if vaultUnits == 0 {
+		t.Fatal("expected seeded vault units in the thin database")
+	}
+	if active := jsonObject(t, status.stdout)["active_assertions"]; active != float64(vaultUnits) {
+		t.Fatalf("active_assertions = %#v (want %d vault units: docs + active noetic)", active, vaultUnits)
 	}
 
 	recent := run(t, "recent", "--json")
@@ -261,8 +310,8 @@ func TestConfigAndMode(t *testing.T) {
 	}
 
 	switched := run(t, "mode", "cloud")
-	if switched.code != 0 || !strings.Contains(switched.stdout, "cloud") {
-		t.Fatalf("mode cloud = %d %q %s", switched.code, switched.stdout, switched.stderr)
+	if switched.code == 0 {
+		t.Fatalf("mode cloud succeeded unexpectedly: %q %s", switched.stdout, switched.stderr)
 	}
 	switchedBack := run(t, "mode", "local")
 	if switchedBack.code != 0 || !strings.Contains(switchedBack.stdout, "local") {
@@ -284,8 +333,13 @@ func TestConfigAndMode(t *testing.T) {
 	}
 }
 
-func TestExportUnavailableAfterImportedEvents(t *testing.T) {
+// TestExportUnavailableAfterImportedUnits locks export refusal once an import
+// left durable local data: the canonical JSONL import writes content-addressed
+// vault units (it no longer populates the retired event graph), and the export
+// still refuses because the vault and referenced sources are not covered.
+func TestExportUnavailableAfterImportedUnits(t *testing.T) {
 	env := newEnv(t)
+	ensureLegacyGraphEnv(t, env)
 	seedTranscript(t)
 
 	exportPath := filepath.Join(env.base, "export.json")
@@ -301,9 +355,9 @@ func TestExportUnavailableAfterImportedEvents(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	var events int
-	if err := db.QueryRow("SELECT count(*) FROM event").Scan(&events); err != nil || events != 2 {
-		t.Fatalf("events = %d, err = %v; want 2 imported events", events, err)
+	var units int
+	if err := db.QueryRow("SELECT count(*) FROM thin_vault_docs").Scan(&units); err != nil || units != 2 {
+		t.Fatalf("units = %d, err = %v; want 2 imported units", units, err)
 	}
 }
 
@@ -330,6 +384,7 @@ func TestErrorsAreJSONWhenRequested(t *testing.T) {
 
 func TestImportHistoricalJSONExport(t *testing.T) {
 	env := newEnv(t)
+	ensureLegacyGraphEnv(t, env)
 	exportPath := writeFile(t, filepath.Join(env.base, "historical-export.json"), `{
 		"format":"rolling-memory-export", "version":1, "scope":"mem:test",
 		"traces":[
@@ -598,7 +653,8 @@ func TestInstallList(t *testing.T) {
 }
 
 func TestReindexAndSyncGap(t *testing.T) {
-	newEnv(t)
+	env := newEnv(t)
+	ensureLegacyGraphEnv(t, env)
 	seedTranscript(t)
 	reindex := run(t, "reindex", "--json")
 	if reindex.code != 0 {
@@ -626,6 +682,7 @@ func asInt64(value any) int64 {
 
 func TestCheckExitsOneOnError(t *testing.T) {
 	env := newEnv(t)
+	ensureLegacyGraphEnv(t, env)
 	seedTranscript(t)
 
 	// 注入可被 check 检出的不一致：悬挂断言行（测试自身连接的 SQLite 默认 FKs OFF，

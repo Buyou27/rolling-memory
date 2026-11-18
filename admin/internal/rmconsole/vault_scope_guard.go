@@ -24,7 +24,7 @@ func consoleVaultScopeGuard() gin.HandlerFunc {
 		// Only explicitly identified non-vault endpoints bypass this guard. New
 		// routes stay protected until their complete data path has been reviewed.
 		path := c.FullPath()
-		if strings.Contains(path, "/eval/") || strings.Contains(path, "/cloud/account/") ||
+		if strings.Contains(path, "/eval/") ||
 			path == "/admin/plugin/rolling-memory/ai/config" || path == "/admin/plugin/rolling-memory/ai/save" ||
 			path == "/admin/plugin/rolling-memory/background/select" {
 			c.Next()
@@ -33,13 +33,10 @@ func consoleVaultScopeGuard() gin.HandlerFunc {
 
 		home, err := os.UserHomeDir()
 		if err == nil {
-			if !isLocalModeForHome(home) {
-				err = fmt.Errorf("console direct vault access requires local_plain")
-			} else {
-				err = checkConsoleVaultScope(home)
-				if err == nil && c.Request.Method != http.MethodGet {
-					err = checkConsoleRequestScope(c)
-				}
+			// 控制台只服务本地明文金库（local_plain）：作用域绑定必须与配置一致。
+			err = checkConsoleVaultScope(home)
+			if err == nil && c.Request.Method != http.MethodGet {
+				err = checkConsoleRequestScope(c)
 			}
 		}
 		if err != nil {

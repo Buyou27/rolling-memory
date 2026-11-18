@@ -12,7 +12,7 @@ Please report suspected vulnerabilities privately to the Chief Architect and mai
 
 ## Security-relevant invariants
 
-- Default `local` mode (no explicit `ROLLING_MEMORY_BRAIN_URL`) never builds an HTTP cloud transport and never sends a cloud request. An explicit `ROLLING_MEMORY_BRAIN_URL` is an intentional cloud override and should be treated as such.
+- Rolling Memory builds no memory-plane network transport at all: recall, storage, and consolidation run in the local vault. The only outbound calls are the evaluation LLM endpoint you configure yourself, the optional upstream benchmark-corpus download, and the optional update check; an environment variable or configuration that tries to point the memory plane at a remote service has no effect. The separate application-based cloud memory service (ciphertext-only by design) is an independent security surface outside this client and this repository.
 - Protect sensitive data in local storage, backups, and any data shared with external services.
 - API keys are read from environment variables or `0600` files; they are not stored in the database or config.
 - The SQLite database is local-only and unencrypted; use full-disk encryption or an encrypted volume if the

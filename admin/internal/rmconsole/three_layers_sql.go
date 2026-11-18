@@ -107,7 +107,7 @@ func fillCachedLayerGlobalCounts(dbPath string, resp *LayerStatsResponse) {
 		resp.BackgroundChunkCount = c.bgChunks
 		resp.BackgroundCount = c.bgCount
 		resp.EpisodicCount = c.epCount
-		resp.EpisodicCellCount = c.epCells
+		resp.EpisodicClusterCount = c.epCells
 		resp.NoeticActiveCount = c.noeticActive
 		resp.NoeticStaleCount = c.noeticStale
 		resp.NoeticCitedLinks = c.noeticLinks
@@ -157,7 +157,7 @@ func fillCachedLayerGlobalCounts(dbPath string, resp *LayerStatsResponse) {
 	resp.BackgroundChunkCount = c.bgChunks
 	resp.BackgroundCount = c.bgCount
 	resp.EpisodicCount = c.epCount
-	resp.EpisodicCellCount = c.epCells
+	resp.EpisodicClusterCount = c.epCells
 	resp.NoeticActiveCount = c.noeticActive
 	resp.NoeticStaleCount = c.noeticStale
 	resp.NoeticCitedLinks = c.noeticLinks

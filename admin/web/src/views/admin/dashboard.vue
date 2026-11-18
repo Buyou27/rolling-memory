@@ -917,13 +917,9 @@ const terminal = useTerminal()
 const { t } = useI18n()
 const workTimerKey = 'ai-go-dashboard-work-timer'
 
-const modeLabel = computed(() => {
-    return rmData.mode === 'cloud' ? t('dashboard.cloudPulse') : t('dashboard.localPlain')
-})
+const modeLabel = computed(() => t('dashboard.localPlain'))
 
-const modeTooltip = computed(() => {
-    return rmData.mode === 'cloud' ? t('dashboard.cloudPulseTip') : t('dashboard.localPlainTip')
-})
+const modeTooltip = computed(() => t('dashboard.localPlainTip'))
 
 const goGraphPage = () => {
     router.push('/admin/dashboard/graph')
@@ -1437,9 +1433,9 @@ const showPulseApplyTip = () => {
     const isEnLang = config.lang.active === 'en'
     ElMessageBox.alert(
         isEnLang
-            ? 'Pulse plain (pulse_plain) sends pulses and text; pulse cipher (pulse_cipher) sends encrypted pulses without text. To request preview access, email pick@psychologylake.org.cn (support: support@psychologylake.org.cn).'
-            : '脉冲明文（pulse_plain）同时发送脉冲与原文；脉冲密文（pulse_cipher）仅发送密文脉冲，不发送原文。如需申请预览，请发邮件至 pick@psychologylake.org.cn（支持：support@psychologylake.org.cn）。',
-        isEnLang ? 'Preview access' : '申请预览',
+            ? 'Cloud memory service (preview): everything sent to it is ciphertext-only — irreversibly encoded on your device first, so plaintext never leaves your local vault — and it adds stronger retrieval operators plus cross-device continuity. Access is application-based; email pick@psychologylake.org.cn (support: support@psychologylake.org.cn).'
+            : '云端记忆服务（预览）：上行载荷端到端密文——端侧先做不可逆编码，原文永不离开本地金库；并提供更强的高级检索算子与跨设备连续性能力。接入采用申请制，请发邮件至 pick@psychologylake.org.cn（支持：support@psychologylake.org.cn）。',
+        isEnLang ? 'Cloud capability preview' : '云端能力预览',
         { confirmButtonText: isEnLang ? 'OK' : '确定', type: 'info' }
     )
 }
@@ -1770,19 +1766,19 @@ const kpiList = computed<KpiItem[]>(() => {
             key: 'sales',
             title: t('dashboard.salesAmount'),
             tooltip: isEn
-                ? '0-LLM Local Recall Latency (ms): End-to-end execution time of SQLite FTS5/BM25 + Shannon Self-Information Continuous Gain + Temporal Window ranking.'
-                : '0-LLM 本地检索耗时（毫秒）：本地 SQLite 明文金库（FTS5/BM25 + 香农自信息连续增益 + 时序共振）检索并返回结果的端到端延迟。',
-            value: `${rmData.last_recall_ms} ms`,
+                ? '0-LLM Local Recall Latency (ms): the median end-to-end wall time of the latest successful MCP recall calls (local vault path incl. process/transport overhead). A single spike no longer sets the headline; latest and peak are in the hover detail.'
+                : '0-LLM 本地检索耗时（毫秒）：最近若干次成功 MCP 召回端到端墙钟耗时（本地金库路径，含进程/传输开销）的中位数。单次尖峰不再决定主读数；最近一次与峰值见悬停说明。',
+            value: `${rmData.latency_p50_ms || rmData.last_recall_ms} ms`,
             valueTip: isEn
-                ? `Latest recall: ${rmData.last_recall_ms} ms · Rolling 20-call average: ${rmData.avg_recall_ms} ms`
-                : `最近一次召回耗时：${rmData.last_recall_ms} ms · 近 20 次滑动均值：${rmData.avg_recall_ms} ms`,
+                ? `Median (latest ${rmData.latency_samples || 0} successful MCP recalls): ${rmData.latency_p50_ms} ms · Latest: ${rmData.last_recall_ms} ms · Peak: ${rmData.latency_max_ms} ms`
+                : `近 ${rmData.latency_samples || 0} 次成功 MCP 召回的墙钟中位数：${rmData.latency_p50_ms} ms · 最近一次：${rmData.last_recall_ms} ms · 峰值：${rmData.latency_max_ms} ms`,
             trend: rmData.latency_trend,
             trendUp: rmData.latency_trend <= 0,
             kind: 'delta',
             sub: `${t('dashboard.kpiSubLatency')} (${rmData.avg_recall_ms}ms)`,
             subTip: isEn
-                ? 'Relative delta between latest recall latency and rolling average (green downward means faster)'
-                : '最近一次耗时相对近期均值的变化率（下降/绿色表示检索更快）',
+                ? 'Relative delta between the median recall latency and the rolling average (green downward means faster)'
+                : '中位耗时相对近期均值的变化率（下降/绿色表示检索更快）',
             icon: 'el-timer',
             spark: rmData.latency_spark?.length ? rmData.latency_spark : [210, 215, 205, 211],
         },

@@ -82,7 +82,7 @@ func TestLocalRecallEpisodicIndexDiagnostics(t *testing.T) {
 			ref := "@ref:jsonl:" + path + ":0#0"
 			text := "[user] quartz nebula evidence"
 			packet, _ := client.Vault.PackBlindPacket("ep_index", text, testNow)
-			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_index", testNow, ref, "", text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_index", testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 				t.Fatal(err)
 			}
 			if tt.mutation != "" {
@@ -124,31 +124,6 @@ func TestLocalRecallEmptyIndexDiagnostics(t *testing.T) {
 	if !result.Absent || result.Gaps["index_incomplete"] != 0 || !reflect.DeepEqual(result.Meta["episodic_index"], want) {
 		t.Fatalf("empty index: %+v", result)
 	}
-}
-
-func TestRecallIndexDiagnosticsIsLocalTransportOnly(t *testing.T) {
-	t.Run("HTTP transport", func(t *testing.T) {
-		_, baseURL := newNoeticEngineMock(t)
-		memory := thinBrainMemory(t, baseURL)
-		client, err := memory.ThinClient()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := client.Vault.SaveLocalPlaintext("ep_missing", testNow, "@ref:jsonl:/sensitive/path:0#0", nil, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
-			t.Fatal(err)
-		}
-		result, err := memory.Recall(api.RecallRequest{Cue: "quartz nebula", NoCrystallize: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := result.Meta["episodic_index"]; ok || result.Gaps["index_incomplete"] != 0 || !result.Absent {
-			t.Fatalf("local index attributed to HTTP transport: %+v", result)
-		}
-		var noetic int
-		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_noetic`).Scan(&noetic); err != nil || noetic != 0 {
-			t.Fatalf("recall wrote L3: count=%d err=%v", noetic, err)
-		}
-	})
 }
 
 func TestLocalRecallIndexSchemaFailurePrecedesDiagnostics(t *testing.T) {

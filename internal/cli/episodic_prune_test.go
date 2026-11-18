@@ -151,10 +151,10 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 
 	// Inline episodic rows that merely mention markers like `[thinking]` or `[tool_result]`
 	// mid-sentence must stay Verified, whereas line-anchored unstripped traces are retired.
-	if err := tc.Vault.SaveLocalPlaintext("inline_legit", 10, "[user] 请排查为什么解析器遇到了 [thinking] 和 [tool_result] 字面量。", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("inline_legit", 10, "[user] 请排查为什么解析器遇到了 [thinking] 和 [tool_result] 字面量。", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tc.Vault.SaveLocalPlaintext("inline_polluted", 11, "[assistant]\n[thinking]\ninternal scratchpad trace", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("inline_polluted", 11, "[assistant]\n[thinking]\ninternal scratchpad trace", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	inlinePrune, err := pruneEpisodicUnits(context.Background(), memory, 100, true, true)

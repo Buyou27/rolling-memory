@@ -29,14 +29,5 @@
     "relative_tag": false,
     "token_correct": false
   },
-  "scope": "mem:golden:208",
-  "sync": {
-    "auto": false,
-    "base_url": "",
-    "enabled": false,
-    "key": {
-      "configured": false,
-      "source": "none"
-    }
-  }
+  "scope": "mem:golden:208"
 }

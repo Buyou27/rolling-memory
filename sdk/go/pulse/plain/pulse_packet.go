@@ -17,7 +17,7 @@ import (
 
 const (
 	SpecVersion            = "RAME-BlindPulse-v1"
-	CodecVersion           = "1.11.3"
+	CodecVersion           = "1.12.0"
 	LayerBackground        = "background"
 	LayerEpisodic          = "episodic"
 	LayerNoetic            = "noetic"
@@ -385,6 +385,30 @@ func ComposeSubUnitID(parentID, kind string, index int) string {
 	return fmt.Sprintf("%s#%s:%d", p, k, index)
 }
 
+// ResolveSubUnitIDAndText normalizes a SubUnit's text (combining Text and FileParse),
+// resolves its canonical kind and ordinal index within kindCounts, and derives its subID.
+func ResolveSubUnitIDAndText(parentID string, su SubUnit, kindCounts map[string]int) (subID, kind, txt string, idx int, ok bool) {
+	txt = strings.TrimSpace(su.Text)
+	fp := strings.TrimSpace(su.FileParse)
+	if txt == "" {
+		txt = fp
+	} else if fp != "" && !strings.Contains(txt, fp) {
+		txt = txt + "\n" + fp
+	}
+	if txt == "" {
+		return "", "", "", 0, false
+	}
+	if kind = strings.TrimSpace(su.Kind); kind == "" {
+		kind = "sub"
+	}
+	idx = kindCounts[kind]
+	kindCounts[kind] = idx + 1
+	if subID = strings.TrimSpace(su.ID); subID == "" {
+		subID = ComposeSubUnitID(parentID, kind, idx)
+	}
+	return subID, kind, txt, idx, true
+}
+
 func (e *BlindEncoder) PackCompositePackets(parentID string, parentText string, occurredAt int64, subUnits []SubUnit) ([]BlindPulsePacket, map[string]string) {
 	parentID = strings.TrimSpace(parentID)
 	var parentDocHash uint64
@@ -401,25 +425,9 @@ func (e *BlindEncoder) PackCompositePackets(parentID string, parentText string, 
 	}
 	kindCounts := make(map[string]int, 4)
 	for _, su := range subUnits {
-		txt := strings.TrimSpace(su.Text)
-		fp := strings.TrimSpace(su.FileParse)
-		if txt == "" {
-			txt = fp
-		} else if fp != "" && !strings.Contains(txt, fp) {
-			txt = txt + "\n" + fp
-		}
-		if txt == "" {
+		subID, kind, txt, idx, ok := ResolveSubUnitIDAndText(parentID, su, kindCounts)
+		if !ok {
 			continue
-		}
-		kind := strings.TrimSpace(su.Kind)
-		if kind == "" {
-			kind = "sub"
-		}
-		idx := kindCounts[kind]
-		kindCounts[kind] = idx + 1
-		subID := strings.TrimSpace(su.ID)
-		if subID == "" {
-			subID = ComposeSubUnitID(parentID, kind, idx)
 		}
 		subPkt, _ := e.PackBlindPacket(subID, txt, occurredAt)
 		if len(subPkt.Slots) == 0 {
@@ -791,7 +799,7 @@ func EvaluatePulseSignal(pkt BlindPulsePacket) PulseSignalReport {
 	if modScore < 65 {
 		warnings = append(warnings, PulseSignalWarning{
 			Code:    WarnFlatCarrierModulation,
-			Message: "Flat carrier modulation detected: uniform or single-slot pulse width reduces waveform peak-to-floor contrast and weakens cell addressing.",
+			Message: "Flat carrier modulation detected: uniform or single-slot pulse width reduces waveform peak-to-floor contrast and weakens cluster addressing.",
 		})
 	}
 	if (effectiveUnits >= 48 && m == 1) || (m >= 6 && singleFramePermille > 600) {
@@ -1100,7 +1108,9 @@ func DecodeWirePayload(b64 string) ([]BlindTokenTerm, [][]BlindTokenTerm, error)
 	return DecodeWireBytes(raw)
 }
 
-// EncodeWireBytes encodes flat slots and sentence frames into the compact lossless binary stream.
+// EncodeWireBytes encodes flat slots and sentence frames into the compact binary stream
+// (lossless over the {H, RawBitsX10, ClassFlags} atom surface; Role 不进线格式、由伴随位
+// 与奇偶声明在消费端重推导).
 func EncodeWireBytes(slots []BlindTokenTerm, frames [][]BlindTokenTerm) ([]byte, error) {
 	sent := make([]int, 0, len(frames))
 	if len(frames) > 0 {
@@ -1146,6 +1156,7 @@ func EncodeWireBytes(slots []BlindTokenTerm, frames [][]BlindTokenTerm) ([]byte,
 
 	all := make([]wireAtomKey, len(slots))
 	for i, s := range slots {
+		// 线格式只承载 {H, RawBitsX10, ClassFlags}：Role 由伴随位/奇偶声明在消费端重推导。
 		all[i] = wireAtomKey{H: s.H, RawBitsX10: s.RawBitsX10, ClassFlags: s.ClassFlags}
 	}
 	sort.Slice(all, func(i, j int) bool { return wireAtomLess(all[i], all[j]) })
@@ -1352,7 +1363,8 @@ func EncodeWireBytes(slots []BlindTokenTerm, frames [][]BlindTokenTerm) ([]byte,
 	return out, nil
 }
 
-// DecodeWireBytes decodes a compact lossless binary stream into flat slots and sentence frames.
+// DecodeWireBytes decodes a compact binary stream (lossless over {H, RawBitsX10, ClassFlags})
+// into flat slots and sentence frames.
 func DecodeWireBytes(raw []byte) ([]BlindTokenTerm, [][]BlindTokenTerm, error) {
 	if len(raw) < wireHeaderBytes {
 		return nil, nil, errors.New("codec: wire payload truncated")
@@ -1660,6 +1672,8 @@ func DecodeWireBytes(raw []byte) ([]BlindTokenTerm, [][]BlindTokenTerm, error) {
 	atoms := make([]BlindTokenTerm, slotN)
 	for i, p := range index {
 		d := dict[p]
+		// 线层无损：RawBitsX10 原值返回；B 下界钳位（<10→10）是引擎投影层
+		// （engine/blindwire 的 toEngineAtoms）职责，不在解码器做。
 		atoms[i] = BlindTokenTerm{H: d.H, RawBitsX10: d.RawBitsX10, ClassFlags: d.ClassFlags}
 	}
 	var frames [][]BlindTokenTerm

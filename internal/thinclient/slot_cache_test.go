@@ -57,7 +57,7 @@ func TestCorpusSnapshotInvalidatesOnEpisodicPointerAndDirectSQLUpdate(t *testing
 	if err != nil {
 		t.Fatalf("NewVault: %v", err)
 	}
-	if err := v.SaveLocalPlaintext("DOC-1", 1700000000, "Cornwall coastal cliff hiking trail", []string{"Cornwall coastal cliff hiking trail"}, CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := v.SaveLocalPlaintext("DOC-1", 1700000000, "Cornwall coastal cliff hiking trail", []string{"Cornwall coastal cliff hiking trail"}, IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatalf("SaveLocalPlaintext: %v", err)
 	}
 	hits, err := v.SearchClientSDKDefault("Cornwall hiking", 5)
@@ -65,7 +65,7 @@ func TestCorpusSnapshotInvalidatesOnEpisodicPointerAndDirectSQLUpdate(t *testing
 		t.Fatalf("expected DOC-1 hit before pointer migration, got %+v (err=%v)", hits, err)
 	}
 	// Migrating DOC-1 to a zero-copy @ref: pointer must invalidate both slotCache and corpusSnap.
-	if err := v.SaveLocalEpisodicPointer("DOC-1", 1700000000, "@ref:jsonl:/tmp/nonexistent.jsonl:0#0", "@ref:jsonl:/tmp/nonexistent.jsonl:0", CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := v.SaveLocalEpisodicPointer("DOC-1", 1700000000, "@ref:jsonl:/tmp/nonexistent.jsonl:0#0", "@ref:jsonl:/tmp/nonexistent.jsonl:0", IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatalf("SaveLocalEpisodicPointer: %v", err)
 	}
 	hitsAfterPtr, err := v.SearchClientSDKDefault("Cornwall hiking", 5)

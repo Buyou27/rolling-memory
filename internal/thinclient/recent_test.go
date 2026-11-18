@@ -37,7 +37,7 @@ func TestRecentDocsTimeOrderAcrossLayers(t *testing.T) {
 		{"bg_new", "最新挂载目录变更", base - 60, "background"},
 		{"ep_mid", "中间一轮对话", base - 120, "episodic"},
 	} {
-		if err := vault.SaveLocalPlaintext(doc.id, doc.at, doc.text, []string{doc.text}, thinclient.CloudIngestResponse{}); err != nil {
+		if err := vault.SaveLocalPlaintext(doc.id, doc.at, doc.text, []string{doc.text}, thinclient.IngestResponse{}); err != nil {
 			t.Fatalf("save doc %d: %v", index, err)
 		}
 		if _, err := db.Exec(`UPDATE thin_vault_docs SET layer = ? WHERE doc_id = ?`, doc.layer, doc.id); err != nil {

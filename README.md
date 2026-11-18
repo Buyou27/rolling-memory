@@ -2,7 +2,7 @@
 
 **[English](README.md) · [简体中文](docs/zh-CN/README.zh-CN.md) · [Official Website](https://rolling-memory.rocareer.com/) · [Documentation Hub](docs/README.md) · [Token Math & Falsification](docs/token-economics.md) · [FAQ](docs/faq.md) · [Benchmarks](docs/benchmarks.md) · [Declaration & Disclaimer](DECLARATION.md)**
 
-**Rolling Memory** is a source-available, local-first memory tool for AI coding agents — Claude Code, Codex, Cursor, Windsurf, Cline, ZCode, and more — built on the **Rolling Autonoetic Memory Engine**. It indexes supported conversation sources and mounted files locally for connected agents to query through one MCP tool: `recall`. See the [integration guide](docs/harness.md#45-conversation-collection-and-manual-import) for collection limits and manual import. **No cloud, no vectors, no background LLM calls**; free for every noncommercial use.
+**Rolling Memory** is a source-available, local-first memory tool for AI coding agents — Claude Code, Codex, Cursor, Windsurf, Cline, ZCode, and more — built on the **Rolling Autonoetic Memory Engine**. It indexes supported conversation sources and mounted files locally for connected agents to query through one MCP tool: `recall`. See the [integration guide](docs/harness.md#45-conversation-collection-and-manual-import) for collection limits and manual import. **No cloud required, no vectors, no background LLM calls**; free for every noncommercial use.
 
 ![Rolling Memory Live Console — local vault telemetry, MCP recall ledger and memory asset growth](docs/assets/live-console.webp)
 
@@ -29,7 +29,7 @@ In everyday use, that comes down to four practical things: **genuinely free, rea
   ```
 - **Built-in USB portable mode**: Because both the binary and the SQLite vault are self-contained files, we also included a USB portable mode (see [`docs/usb-portable.md`](docs/usb-portable.md)) so you can put the tool and your memory vault onto a thumb drive and carry them around. It is still experimental and not thoroughly tested yet, and it comes with a real prerequisite: **for project-specific memories to be useful on another machine, you have to be working on the same project there**. If you are curious and like tinkering, feel free to try it out and tell us what works and what does not.
 
-> **About this release**: This repository ships **pure local mode (`local_plain`)**, running fully offline with zero external network requests. The cloud memory engine is offered separately on an application basis and is not part of this repository; see [DECLARATION.md](DECLARATION.md) for the release and license boundary and [SUPPORT.md](SUPPORT.md) for how to get help.
+> **About this release**: This repository ships **pure local mode (`local_plain`)**: recall, storage, and consolidation all run in the local vault, with no memory-plane network requests. The only outbound calls are the evaluation LLM endpoint you configure, the optional upstream benchmark-corpus download, and the optional update check. A separate **cloud memory service** — ciphertext-only by design and aimed at advanced and enterprise users — is offered by application and is not part of this repository; see [DECLARATION.md](DECLARATION.md) for the release and license boundary and [SUPPORT.md](SUPPORT.md) for how to get help.
 
 ---
 

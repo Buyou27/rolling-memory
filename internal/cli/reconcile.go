@@ -18,6 +18,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
@@ -251,7 +252,13 @@ func (a *application) runSyncCommand(memory *api.Memory) (int, error) {
 				rep.BackgroundPushedToRemote, rep.NoeticPushedToRemote, rep.Status.HealthScore)
 		})
 	case "prune":
-		report, err := pruneEpisodicUnits(context.Background(), memory, a.args.Int("limit"), a.args.Flag("apply"), a.args.Flag("yes"), a.args.Flag("include_unreadable"))
+		report, err := pruneEpisodicUnitsWithOptions(context.Background(), memory, EpisodicPruneOptions{
+			Limit:               a.args.Int("limit"),
+			Apply:               a.args.Flag("apply"),
+			Confirmed:           a.args.Flag("yes"),
+			IncludeUnreadable:   a.args.Flag("include_unreadable"),
+			ReanchorCrossSource: a.args.Flag("reanchor_cross_source"),
+		})
 		if err != nil {
 			return 1, err
 		}
@@ -337,6 +344,15 @@ func (a *application) runSyncCommand(memory *api.Memory) (int, error) {
 				}
 				cancelScan()
 			}
+			// 只愈合巡检：漂移的情景指针（含跨轮次重锚）随「推进一轮」一并修复；
+			// 确证不存在的行留给 `sync prune --apply --yes`，本步永不删除。
+			healCtx, cancelHeal := context.WithTimeout(context.Background(), autoWatchReconcileBudget)
+			healScanned, healRepaired, healErr := healDriftedEpisodicPointers(healCtx, memory, episodicHealStepLimit)
+			cancelHeal()
+			if healRepaired > 0 && memory.Config != nil && mcp.ShouldUseUnixDaemon(memory.Config.DB) {
+				// 跨进程写：通知常驻守护进程丢弃内存快照，面板与 MCP 立刻看到重锚后的坐标。
+				mcp.InvalidateUnixDaemonCaches("")
+			}
 			st, _ := inspectEnvHealth(context.Background(), memory, "", false)
 			var warnings []string
 			if backfillErr != nil && !errors.Is(backfillErr, context.DeadlineExceeded) && !strings.Contains(backfillErr.Error(), "checkpoint changed") {
@@ -345,15 +361,25 @@ func (a *application) runSyncCommand(memory *api.Memory) (int, error) {
 			if scanErr != nil && !errors.Is(scanErr, context.DeadlineExceeded) && !strings.Contains(scanErr.Error(), "checkpoint changed") {
 				warnings = append(warnings, scanErr.Error())
 			}
+			if healErr != nil && !errors.Is(healErr, context.DeadlineExceeded) {
+				warnings = append(warnings, healErr.Error())
+			}
 			out := map[string]any{
 				"ok":             true,
 				"stepped":        true,
 				"backfill":       backfillRep,
 				"episodic_index": st.EpisodicIndex,
-				"warnings":       warnings,
+				"heal": map[string]any{
+					"scanned":  healScanned,
+					"repaired": healRepaired,
+				},
+				"warnings": warnings,
 			}
 			return 0, a.emit(out, func() {
 				a.printf("sync step: backfilled +%d (scanned %d) · cursor=%s\n", backfillRep.Indexed, backfillRep.Scanned, backfillRep.Cursor)
+				if healScanned > 0 {
+					a.printf("sync step: pointer heal scanned %d · repaired %d\n", healScanned, healRepaired)
+				}
 			})
 		}
 		intervalSec := a.args.Int("interval_sec")
@@ -384,9 +410,7 @@ func inspectEnvHealthAndSync(ctx context.Context, memory *api.Memory, harnessFil
 	return inspectEnvHealth(ctx, memory, harnessFilter, true)
 }
 
-// resolveSyncTransport 返回薄客户端及其实际传输面是否绑定云端引擎：
-// HTTP 传输（云端配置或显式端点覆盖）= 云面（可探针、可推送）；本地金库传输 = 本地面（零外呼）。
-// ThinClient() 同时负责物化本地金库 schema，故本地面也必须调用它（不会拨号）。
+// resolveSyncTransport 初始化并返回薄客户端及本地金库传输面（纯本地模式零外呼，cloudFace 恒为 false）。
 func resolveSyncTransport(memory *api.Memory) (*thinclient.Client, bool, error) {
 	tc, err := memory.ThinClient()
 	if err != nil {
@@ -395,11 +419,7 @@ func resolveSyncTransport(memory *api.Memory) (*thinclient.Client, bool, error) 
 	if tc == nil {
 		return nil, false, fmt.Errorf("init thinclient failed: no client returned")
 	}
-	httpTr, ok := tc.Transport.(*thinclient.HTTPBrainTransport)
-	if !ok || httpTr == nil {
-		return tc, false, nil
-	}
-	return tc, true, nil
+	return tc, false, nil
 }
 
 // cloudFaceWarning 报告「配置声明云端但实际仅有本地面」的降级事实（本地对齐照常执行）。
@@ -717,38 +737,8 @@ func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter str
 	remoteEpisodic := map[string]bool{}
 	remoteBackground := map[string]bool{}
 	remoteNoetic := map[string]bool{}
-
-	if cloudFace {
-		out.Mode = "cloud"
-		httpTr, _ := tc.Transport.(*thinclient.HTTPBrainTransport)
-		out.CloudEndpoint = httpTr.BaseURL
-		out.CloudUserID = httpTr.UserID
-		t0 := time.Now()
-		gCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		uIDs, gErr := httpTr.ListUnits(gCtx, httpTr.Scope, []string{"background", "episodic", "noetic"})
-		cancel()
-		if gErr == nil {
-			out.CloudOnline = true
-			out.CloudLatencyMS = int(time.Since(t0).Milliseconds())
-			for _, rawID := range uIDs {
-				id := strings.TrimSpace(rawID)
-				if id == "" {
-					continue
-				}
-				switch classifyRemoteUnitLayer(id, localBackground, localNoeticActive) {
-				case "background":
-					remoteBackground[id] = true
-				case "noetic":
-					remoteNoetic[id] = true
-				default:
-					remoteEpisodic[id] = true
-				}
-			}
-		}
-	} else {
-		out.Mode = "local"
-		out.CloudEndpoint = "local://vault"
-	}
+	out.Mode = "local"
+	out.CloudEndpoint = "local://vault"
 
 	// 4. Compute per-layer alignment stats
 	epiStat := computeLayerDiff("episodic", localEpisodic, remoteEpisodic, out.CloudOnline, localMode, totalHarnessUnsynced, 0)
@@ -974,15 +964,52 @@ func computeLayerDiff(layer string, localSet, remoteSet map[string]bool, cloudOn
 	}
 }
 
-func classifyRemoteUnitLayer(id string, localBackground, localNoetic map[string]bool) string {
-	trimmed := strings.TrimSpace(id)
-	if localBackground[trimmed] || strings.HasPrefix(trimmed, "bg:") || strings.HasPrefix(trimmed, "bg_") {
-		return "background"
+// episodicTurnGroup is one frozen-parse batch of the reconcile save section: every
+// turn whose pointer names the same JSONL source, in the order the scanned page
+// produced them.
+type episodicTurnGroup struct {
+	path  string
+	turns []candidateEpisodicTurn
+}
+
+// groupEpisodicTurnsBySource buckets scanned turns by the JSONL transcript their
+// pointer names, in the order the sources first appear, so one frozen parse per
+// source can drive every Verified save of that source's turns. Turns whose
+// pointers are not JSONL refs (zcode, empty) fall into a pathless group and keep
+// the live save path.
+func groupEpisodicTurnsBySource(turns []candidateEpisodicTurn) []episodicTurnGroup {
+	if len(turns) == 0 {
+		return nil
 	}
-	if localNoetic[trimmed] || strings.HasPrefix(trimmed, "nt_") || strings.HasPrefix(trimmed, "noetic_") {
-		return "noetic"
+	groups := make([]episodicTurnGroup, 0, 4)
+	slotByPath := make(map[string]int, 4)
+	for _, turn := range turns {
+		path := episodicTurnSourcePath(turn.RefPointer)
+		slot, known := slotByPath[path]
+		if !known {
+			slot = len(groups)
+			slotByPath[path] = slot
+			groups = append(groups, episodicTurnGroup{path: path})
+		}
+		groups[slot].turns = append(groups[slot].turns, turn)
 	}
-	return "episodic"
+	return groups
+}
+
+// episodicTurnSourcePath extracts the transcript path of one JSONL pointer
+// (`@ref:jsonl:<abs path>:<turn>#<k>`), empty when the pointer is not a JSONL ref.
+// The suffix grammar is the one the ingest writes: the path runs up to the colon
+// before the turn index.
+func episodicTurnSourcePath(refPointer string) string {
+	trimmed := strings.TrimSpace(refPointer)
+	if !strings.HasPrefix(trimmed, "@ref:jsonl:") {
+		return ""
+	}
+	rest := strings.TrimPrefix(trimmed, "@ref:jsonl:")
+	if colon := strings.LastIndex(rest, ":"); colon > 0 {
+		return rest[:colon]
+	}
+	return ""
 }
 
 func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnessFilter string, limit int) (ReconcileReport, error) {
@@ -998,7 +1025,7 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 		return rep, fmt.Errorf("reconcile requires an open local SQLite memory store")
 	}
 
-	tc, cloudFace, err := resolveSyncTransport(memory)
+	tc, _, err := resolveSyncTransport(memory)
 	if err != nil {
 		return rep, err
 	}
@@ -1008,9 +1035,8 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 	if memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
 		scope = strings.TrimSpace(memory.Config.Scope)
 	}
-	// 本地面（本地模式或未绑定云端传输）= 零外呼硬边界：只补齐本地（宿主对话导入 +
-	// 挂载目录分块），不推远端、不等云端可达；远端计数恒为 0。
-	localMode := !cloudFace
+	// 纯本地零外呼硬边界：只补齐本地（宿主对话导入 + 挂载目录分块），不推远端、
+	// 不等云端可达；远端计数恒为 0。
 	if warning := cloudFaceWarning(memory); warning != "" {
 		rep.Warnings = append(rep.Warnings, warning)
 	}
@@ -1028,70 +1054,9 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 		targetHar = preStatus.ActiveHarnessID
 	}
 	rep.TargetHarness = targetHar
-	if !localMode && !preStatus.CloudOnline {
-		rep.Warnings = append(rep.Warnings, "cloud engine unreachable: skipped remote reconcile")
-		rep.Status = preStatus
-		return rep, nil
-	}
-
-	// Fetch remote unit sets from preStatus/ListUnits
-	remoteEpisodic := map[string]bool{}
-	remoteBackground := map[string]bool{}
-	remoteNoetic := map[string]bool{}
-	localBackground := map[string]bool{}
-	localNoeticActive := map[string]bool{}
 	db := memory.Store.DB()
-	if rows, err := db.Query(`SELECT doc_id FROM thin_vault_docs WHERE LOWER(COALESCE(layer,'')) = 'background'`); err == nil {
-		for rows.Next() {
-			var id string
-			if rows.Scan(&id) == nil && strings.TrimSpace(id) != "" {
-				localBackground[strings.TrimSpace(id)] = true
-			}
-		}
-		rows.Close()
-	}
-	if rows, err := db.Query(`SELECT unit_id FROM thin_vault_bg_chunks`); err == nil {
-		for rows.Next() {
-			var uid string
-			if rows.Scan(&uid) == nil && strings.TrimSpace(uid) != "" {
-				localBackground[strings.TrimSpace(uid)] = true
-			}
-		}
-		rows.Close()
-	}
-	if rows, err := db.Query(`SELECT noetic_id FROM thin_vault_noetic WHERE LOWER(COALESCE(status,'active')) = 'active'`); err == nil {
-		for rows.Next() {
-			var nid string
-			if rows.Scan(&nid) == nil && strings.TrimSpace(nid) != "" {
-				localNoeticActive[strings.TrimSpace(nid)] = true
-			}
-		}
-		rows.Close()
-	}
-	if !localMode {
-		if httpTr, ok := tc.Transport.(*thinclient.HTTPBrainTransport); ok && httpTr != nil {
-			gCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-			if uIDs, gErr := httpTr.ListUnits(gCtx, httpTr.Scope, []string{"background", "episodic", "noetic"}); gErr == nil {
-				for _, rawID := range uIDs {
-					id := strings.TrimSpace(rawID)
-					if id == "" {
-						continue
-					}
-					switch classifyRemoteUnitLayer(id, localBackground, localNoeticActive) {
-					case "background":
-						remoteBackground[id] = true
-					case "noetic":
-						remoteNoetic[id] = true
-					default:
-						remoteEpisodic[id] = true
-					}
-				}
-			}
-			cancel()
-		}
-	}
 
-	// 1. Reconcile L2 Episodic (Harness history + local vault missing on remote)
+	// 1. Reconcile L2 Episodic (Harness history into local vault)
 	if layer == "all" || layer == "episodic" {
 		localEpi := map[string]bool{}
 		deletedEpi := tc.Vault.DeletedUnitSet("episodic")
@@ -1113,13 +1078,10 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 			rows.Close()
 		}
 
-		// Step 1a: bring harness turns into the local vault, then pulse the completed
-		// ones to the engine. Local import is a zero-copy pointer write (no network,
-		// no plaintext duplication, and it resolves live on read), so it is never
-		// budgeted: every turn the harness already finished must be visible to local
-		// recall/recent on this very pass. The remote budget only bounds network
-		// ingest, and turns are offered newest-first so a long backlog cannot starve
-		// the conversation that is happening right now.
+		// Step 1a: bring harness turns into the local vault. Local import is a zero-copy
+		// pointer write (no network, no plaintext duplication, and it resolves live on
+		// read), so every turn the harness already finished is visible to local
+		// recall/recent on this very pass.
 		var harnessIDs []string
 		if harnessFilter == "all" {
 			for _, h := range preStatus.Harnesses {
@@ -1131,21 +1093,15 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 			harnessIDs = []string{targetHar}
 		}
 
-		budgetLeft := limit
 		// Scan breadth: a background pass (caller set a deadline) only needs the newest
-		// window it could possibly push, because local import converges over successive
-		// ticks; a foreground run keeps the full window so one command can drain a
-		// backlog. Both walk newest-first, so the window always covers live work.
+		// window because local import converges over successive ticks; a foreground run
+		// keeps the full window so one command can drain a backlog. Both walk newest-first.
 		scanCap := 2000
 		if backgroundPass {
-			scanCap = limit * 4
-			if scanCap < limit {
-				scanCap = limit
-			}
+			scanCap = max(limit*4, limit)
 		}
 		rep.EpisodicIndexScanLimit = scanCap
 		rep.Warnings = append(rep.Warnings, "episodic index backfill covers only the scanned harness window; unavailable or unscanned historical sources are unknown")
-		var pendingPush []candidateEpisodicTurn
 		changedSources := map[string]bool{}
 		for _, hid := range harnessIDs {
 			_, turns, _, complete := scanHarnessTurnsWithCoverageContext(ctx, home, hid, scope, scanCap)
@@ -1157,116 +1113,112 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 			}
 			rep.EpisodicIndexScanned += len(turns)
 			sort.SliceStable(turns, func(i, j int) bool { return turns[i].OccurredAt > turns[j].OccurredAt })
-			for _, turn := range turns {
-				if err := ctx.Err(); err != nil {
-					return rep, err
-				}
-				if !turn.Completed {
-					continue
-				}
-				if episodicunit.DocID(scope, turn.Text) != turn.DocID {
-					rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: content identity mismatch", turn.DocID))
-					continue
-				}
-				if deletedEpi[turn.DocID] {
-					continue
-				}
-				vault := tc.Vault.CloneWithSharedSlotCache()
-				vault.SetIdentity(thinclient.VaultIdentity{AssistantID: turn.HarnessID, IncarnationID: turn.SessionID, Locus: turn.Locus})
-				for _, id := range pointerDocs[turn.RefPointer] {
-					if id != turn.DocID && !changedSources[id] {
-						changedSources[id] = true
-						rep.EpisodicIndexSourceChanged++
+			for _, group := range groupEpisodicTurnsBySource(turns) {
+				var snapshot *episodic.SourceSnapshot
+				if group.path != "" {
+					if parsed, snapErr := episodic.NewSourceSnapshotContext(ctx, group.path); snapErr == nil {
+						snapshot = parsed
 					}
 				}
-				if localEpi[turn.DocID] {
-					// Preserve existing inline text and metadata: replacing them with a pointer
-					// before an index is committed can discard the only durable copy.
-					stored, ok := storedRaw[turn.DocID]
-					if !ok {
-						if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&stored); err != nil {
-							rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
-							continue
-						}
-						storedRaw[turn.DocID] = stored
-					}
-					if strings.HasPrefix(stored, "@ref:") {
-						if stored != turn.RefPointer {
-							// The same speech re-enumerated under a new `#<k>` (the segment filter
-							// itself may evolve): re-point the stored row. The save path verifies
-							// pointer stem and content identity and refuses anything else, so a
-							// stale index can only ever move inside its own turn; a refusal keeps
-							// counting as a genuine source mismatch.
-							healed := false
-							if strings.TrimSpace(turn.Text) != "" {
-								pkt, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-								if sErr := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, pkt, thinclient.CloudIngestResponse{}); sErr == nil {
-									var current string
-									if err := db.QueryRowContext(ctx, `SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&current); err != nil {
-										return rep, err
-									}
-									storedRaw[turn.DocID] = current
-									if current == turn.RefPointer {
-										delete(unverified, turn.DocID)
-									}
-									healed = true
-								} else if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
-									deletedEpi[turn.DocID] = true
-									continue
-								} else if !errors.Is(sErr, thinclient.ErrEpisodicIndexItem) && !errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
-									return rep, sErr
-								}
-							}
-							if !healed {
-								rep.EpisodicIndexPointerMismatch++
-							}
-						} else if strings.TrimSpace(turn.Text) != "" {
-							created, err := vault.EnsureLocalEpisodicIndex(scope, turn.DocID, turn.RefPointer, turn.Text)
-							if err != nil {
-								if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
-									deletedEpi[turn.DocID] = true
-									continue
-								}
-								if !errors.Is(err, thinclient.ErrEpisodicIndexItem) {
-									return rep, err
-								}
-								rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
-							} else {
-								delete(unverified, turn.DocID)
-								if created {
-									rep.EpisodicIndexesBackfilled++
-								}
-								if _, err := db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
-									return rep, err
-								}
-							}
-						}
-					}
-					if !localMode && !remoteEpisodic[turn.DocID] {
-						pendingPush = append(pendingPush, turn)
-					}
-					continue
-				}
-				if strings.TrimSpace(turn.Text) == "" || turn.RefPointer == "" {
-					continue
-				}
-				pkt, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-				if err := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, pkt, thinclient.CloudIngestResponse{}); err != nil {
-					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
-						deletedEpi[turn.DocID] = true
-						continue
-					}
-					if !errors.Is(err, thinclient.ErrEpisodicIndexItem) && !errors.Is(err, thinclient.ErrEpisodicPointerSourceConflict) {
+				for _, turn := range group.turns {
+					if err := ctx.Err(); err != nil {
 						return rep, err
 					}
-					rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic import %s: %v", turn.DocID, err))
-					continue
+					if !turn.Completed {
+						continue
+					}
+					if episodicunit.DocID(scope, turn.Text) != turn.DocID {
+						rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: content identity mismatch", turn.DocID))
+						continue
+					}
+					if deletedEpi[turn.DocID] {
+						continue
+					}
+					vault := tc.Vault.CloneWithSharedSlotCache()
+					vault.SetIdentity(thinclient.VaultIdentity{AssistantID: turn.HarnessID, IncarnationID: turn.SessionID, Locus: turn.Locus})
+					for _, id := range pointerDocs[turn.RefPointer] {
+						if id != turn.DocID && !changedSources[id] {
+							changedSources[id] = true
+							rep.EpisodicIndexSourceChanged++
+						}
+					}
+					if localEpi[turn.DocID] {
+						stored, ok := storedRaw[turn.DocID]
+						if !ok {
+							if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&stored); err != nil {
+								rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
+								continue
+							}
+							storedRaw[turn.DocID] = stored
+						}
+						if strings.HasPrefix(stored, "@ref:") {
+							if stored != turn.RefPointer {
+								healed := false
+								if strings.TrimSpace(turn.Text) != "" {
+									if sErr := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); sErr == nil {
+										var current string
+										if err := db.QueryRowContext(ctx, `SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&current); err != nil {
+											return rep, err
+										}
+										storedRaw[turn.DocID] = current
+										if current == turn.RefPointer {
+											delete(unverified, turn.DocID)
+										}
+										healed = true
+									} else if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
+										deletedEpi[turn.DocID] = true
+										continue
+									} else if !errors.Is(sErr, thinclient.ErrEpisodicIndexItem) && !errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
+										return rep, sErr
+									}
+								}
+								if !healed {
+									rep.EpisodicIndexPointerMismatch++
+								}
+							} else if strings.TrimSpace(turn.Text) != "" {
+								created, err := vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, turn.DocID, turn.RefPointer, turn.Text)
+								if err != nil {
+									if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+										deletedEpi[turn.DocID] = true
+										continue
+									}
+									if !errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+										return rep, err
+									}
+									rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
+								} else {
+									delete(unverified, turn.DocID)
+									if created {
+										rep.EpisodicIndexesBackfilled++
+									}
+									if _, err := db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+										return rep, err
+									}
+								}
+							}
+						}
+						continue
+					}
+					if strings.TrimSpace(turn.Text) == "" || turn.RefPointer == "" {
+						continue
+					}
+					if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); err != nil {
+						if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+							deletedEpi[turn.DocID] = true
+							continue
+						}
+						if !errors.Is(err, thinclient.ErrEpisodicIndexItem) && !errors.Is(err, thinclient.ErrEpisodicPointerSourceConflict) {
+							return rep, err
+						}
+						rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic import %s: %v", turn.DocID, err))
+						continue
+					}
+					storedRaw[turn.DocID] = turn.RefPointer
+					rep.EpisodicImportedFromHar++
+					localEpi[turn.DocID] = true
 				}
-				storedRaw[turn.DocID] = turn.RefPointer
-				rep.EpisodicImportedFromHar++
-				localEpi[turn.DocID] = true
-				if !localMode {
-					pendingPush = append(pendingPush, turn)
+				if snapshot != nil {
+					_ = snapshot.Close()
 				}
 			}
 		}
@@ -1281,242 +1233,20 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 			rep.EpisodicIndexCorrupt = coverage.Corrupt
 			rep.EpisodicIndexNeedsRebuild = coverage.NeedsRebuild
 		}
-		for _, turn := range pendingPush {
-			if budgetLeft <= 0 || ctx.Err() != nil {
-				break
-			}
-			if !turn.Completed {
-				continue
-			}
-			uCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_, ingErr := tc.RememberEpisodicByRef(uCtx, turn.DocID, turn.RefPointer, turn.TurnRef, turn.Text, turn.OccurredAt)
-			cancel()
-			if ingErr != nil {
-				rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic %s: %v", turn.DocID, ingErr))
-				continue
-			}
-			rep.EpisodicPushedToRemote++
-			remoteEpisodic[turn.DocID] = true
-			budgetLeft--
-		}
-
-		// Step 1b: Push existing local episodic docs that are missing on remote（仅云端模式）
-		if !localMode && budgetLeft > 0 {
-			type localDoc struct {
-				id  string
-				txt string
-				occ int64
-			}
-			var missingDocs []localDoc
-			if rows, qErr := db.Query(`
-					SELECT doc_id, raw_text, occurred_at
-					FROM thin_vault_docs
-					WHERE layer = 'episodic' OR layer = ''
-					ORDER BY occurred_at DESC
-				`); qErr == nil {
-				for rows.Next() {
-					var d localDoc
-					if rows.Scan(&d.id, &d.txt, &d.occ) == nil && d.id != "" && !remoteEpisodic[d.id] {
-						missingDocs = append(missingDocs, d)
-					}
-				}
-				rows.Close()
-			}
-			for _, d := range missingDocs {
-				if budgetLeft <= 0 || ctx.Err() != nil {
-					break
-				}
-				liveTxt := d.txt
-				refPtr := ""
-				turnRef := ""
-				if strings.HasPrefix(strings.TrimSpace(d.txt), "@ref:") {
-					refPtr = strings.TrimSpace(d.txt)
-					resolved, rErr := tc.Vault.LoadVerifiedEpisodicPointer(d.id, refPtr)
-					if rErr != nil {
-						rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic push %s: %v", d.id, rErr))
-						continue
-					}
-					liveTxt = resolved
-					turnRef = refPtr
-					if idx := strings.LastIndex(refPtr, "#"); idx > 0 {
-						turnRef = refPtr[:idx]
-					}
-				}
-				// The live resolver hands back the raw Harness turn; strip injected
-				// envelopes and non-speech protocol blocks before they are encoded
-				// into the L2 pulse (same denoise every other episode path applies).
-				if refPtr == "" {
-					liveTxt = ids.StripInjected(liveTxt)
-				}
-				if liveTxt == "" {
-					continue
-				}
-				uCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				_, ingErr := tc.RememberEpisodicByRef(uCtx, d.id, refPtr, turnRef, liveTxt, d.occ)
-				cancel()
-				if ingErr != nil {
-					rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic push %s: %v", d.id, ingErr))
-					continue
-				}
-				rep.EpisodicPushedToRemote++
-				remoteEpisodic[d.id] = true
-				budgetLeft--
-			}
-		}
 	}
 
-	// 2. Reconcile L1 Background (mounted dirs sync when dirty + missing chunks push)
+	// 2. Reconcile L1 Background (mounted dirs sync when dirty)
 	if layer == "all" || layer == "background" {
 		if layer == "background" || preStatus.Layers["background"].DirtyFilesCount > 0 {
 			if bgRep, bgErr := tc.SyncBackgroundDirs(ctx); bgErr == nil {
 				rep.BackgroundSyncedFiles = bgRep.IngestedFiles
-				if !localMode {
-					rep.BackgroundPushedToRemote += bgRep.IngestedChunks
-				}
 			} else {
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf("background dir sync: %v", bgErr))
 			}
 		}
-
-		// Check any local background units (`thin_vault_docs` with layer='background' or `thin_vault_bg_chunks`) still missing on remote
-		budgetLeft := limit
-		if !localMode {
-			if rows, qErr := db.Query(`
-				SELECT doc_id, raw_text, occurred_at
-				FROM thin_vault_docs
-				WHERE layer = 'background'
-			`); qErr == nil {
-				type bgDoc struct {
-					id  string
-					txt string
-					occ int64
-				}
-				var missing []bgDoc
-				for rows.Next() {
-					var d bgDoc
-					if rows.Scan(&d.id, &d.txt, &d.occ) == nil && d.id != "" && !remoteBackground[d.id] {
-						missing = append(missing, d)
-					}
-				}
-				rows.Close()
-				for _, d := range missing {
-					if budgetLeft <= 0 {
-						break
-					}
-					uCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-					if _, ingErr := tc.RememberWithLayer(uCtx, d.id, d.txt, d.occ, thinclient.LayerBackground, nil); ingErr == nil {
-						rep.BackgroundPushedToRemote++
-						remoteBackground[d.id] = true
-						budgetLeft--
-					}
-					cancel()
-				}
-			}
-		}
-
-		if !localMode && budgetLeft > 0 && tc.Transport != nil {
-			type bgChunk struct {
-				uid       string
-				occ       int64
-				slotsJSON string
-			}
-			var missingChunks []bgChunk
-			if rows, qErr := db.Query(`SELECT unit_id, occurred_at, slots_json FROM thin_vault_bg_chunks`); qErr == nil {
-				for rows.Next() {
-					var c bgChunk
-					if rows.Scan(&c.uid, &c.occ, &c.slotsJSON) == nil && c.uid != "" && !remoteBackground[c.uid] {
-						missingChunks = append(missingChunks, c)
-					}
-				}
-				rows.Close()
-			}
-			for _, ch := range missingChunks {
-				if budgetLeft <= 0 || ctx.Err() != nil {
-					break
-				}
-				var slots []thinclient.BlindTokenAtom
-				_ = json.Unmarshal([]byte(ch.slotsJSON), &slots)
-				if len(slots) == 0 {
-					if rawTxt, _, _, lErr := tc.Vault.LoadLocalDocument(ch.uid); lErr == nil && rawTxt != "" {
-						pkt, _ := tc.Vault.PackBlindPacket(ch.uid, rawTxt, ch.occ)
-						slots = pkt.Slots
-					}
-				}
-				if len(slots) == 0 {
-					continue
-				}
-				pkt := thinclient.BlindPulsePacket{
-					UnitID:         ch.uid,
-					Layer:          thinclient.LayerBackground,
-					OccurredAt:     ch.occ,
-					Slots:          slots,
-					SentenceFrames: [][]thinclient.BlindTokenAtom{slots},
-				}
-				uCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				if _, ingErr := tc.Transport.IngestBlindPulse(uCtx, pkt); ingErr == nil {
-					rep.BackgroundPushedToRemote++
-					remoteBackground[ch.uid] = true
-					budgetLeft--
-				}
-				cancel()
-			}
-		}
 	}
 
-	// 3. Reconcile L3 Noetic (push active local noetic records missing on remote)
-	if !localMode && (layer == "all" || layer == "noetic") {
-		if tc.Transport != nil && tc.Vault != nil {
-			type noeticRow struct {
-				id        string
-				occ       int64
-				qTxt      string
-				aTxt      string
-				citedJSON string
-			}
-			var missingNoetic []noeticRow
-			if rows, qErr := db.Query(`
-				SELECT noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json
-				FROM thin_vault_noetic
-				WHERE status = 'active'
-				ORDER BY occurred_at DESC
-			`); qErr == nil {
-				for rows.Next() {
-					var r noeticRow
-					if rows.Scan(&r.id, &r.occ, &r.qTxt, &r.aTxt, &r.citedJSON) == nil && r.id != "" && !remoteNoetic[r.id] {
-						missingNoetic = append(missingNoetic, r)
-					}
-				}
-				rows.Close()
-			}
-			budgetLeft := limit
-			for _, nr := range missingNoetic {
-				if budgetLeft <= 0 || ctx.Err() != nil {
-					break
-				}
-				var cited []string
-				_ = json.Unmarshal([]byte(nr.citedJSON), &cited)
-				pkt, _ := tc.Vault.PackBlindPacket(nr.id, nr.qTxt+"\n"+nr.aTxt, nr.occ)
-				pkt.Layer = thinclient.LayerNoetic
-				pkt.CitedUnitIDs = cited
-				uCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				if _, ingErr := tc.Transport.IngestBlindPulse(uCtx, pkt); ingErr == nil {
-					rep.NoeticPushedToRemote++
-					remoteNoetic[nr.id] = true
-					budgetLeft--
-				} else {
-					rep.Warnings = append(rep.Warnings, fmt.Sprintf("noetic push %s: %v", nr.id, ingErr))
-				}
-				cancel()
-			}
-		}
-	}
-
-	if localMode {
-		// 本地模式没有远端推送：对齐成果 = 宿主导入 + 挂载目录本地分块。
-		rep.TotalReconciled = rep.EpisodicImportedFromHar + rep.BackgroundSyncedFiles
-	} else {
-		rep.TotalReconciled = rep.EpisodicPushedToRemote + rep.BackgroundPushedToRemote + rep.NoeticPushedToRemote
-	}
+	rep.TotalReconciled = rep.EpisodicImportedFromHar + rep.BackgroundSyncedFiles
 	rep.ElapsedMS = int(time.Since(t0).Milliseconds())
 	if !backgroundPass && memory.Config != nil && mcp.ShouldUseUnixDaemon(memory.Config.DB) {
 		mcp.InvalidateUnixDaemonCaches("")

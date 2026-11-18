@@ -7,7 +7,7 @@
 - **官方网站**：<https://rolling-memory.rocareer.com/>。
 - **文档**：[docs/](README.md) 与应用内帮助中心。
 - **邮件支持**：`support@psychologylake.org.cn`（组织邮箱）。
-- **云端试用申请、合作与投资**：`pick@psychologylake.org.cn`。
+- **云端能力申请（高级 / 企业）、合作与投资**：`pick@psychologylake.org.cn`。
 - **缺陷报告与功能请求**：在 <https://github.com/rocareer/rolling-memory/issues> 提交 issue。
 - **安全报告**：请遵循 [SECURITY.md](SECURITY.md)；不要为漏洞提交公开 issue。
 - **使用问答与讨论**：优先使用 GitHub Discussions；不可用时使用带 `question` 标签的 issue。
@@ -23,8 +23,8 @@ issue 与文档支持英文与简体中文；其他语言同样欢迎，但响�
 
 ## 受支持版本
 
-最新发布的次版本会获得修复。较旧的次版本可能被要求在提供修复前先升级。本地模式无需账号或订阅；
-云端试用模式为邀请制，不在本支持政策覆盖范围内。
+最新发布的次版本会获得修复。较旧的次版本可能被要求在提供修复前先升级。本地产品无账号、无订阅，发布版
+不发起任何记忆面网络请求；独立的云端记忆服务采用申请制（[预览](privacy.md)），不在本社区支持政策覆盖范围内。
 
 ## 范围
 
@@ -44,6 +44,6 @@ issue 与文档支持英文与简体中文；其他语言同样欢迎，但响�
 ## 提交 issue 之前
 
 1. 运行 `rolling-memory doctor --json`，并附上已移除密钥的输出。
-2. 说明版本（`rolling-memory --version`）、操作系统、宿主集成方式与存储模式（`local` 或 `cloud`）。
+2. 说明版本（`rolling-memory --version`）、操作系统与宿主集成方式。
 3. 提供最小复现与你实际执行的完整命令。
 4. 从日志中移除 API Key、令牌、个人数据与金库内容。

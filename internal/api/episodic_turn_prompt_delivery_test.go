@@ -42,7 +42,7 @@ func TestLocalRecallEpisodicTurnKeepsUserPromptOutsideHitWindow(t *testing.T) {
 	}
 	for index, segment := range segments {
 		packet, _ := client.Vault.PackBlindPacket(segment.id, segment.text, testNow+int64(index))
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(segment.id, testNow+int64(index), segment.ptr, turnRef, segment.text, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(segment.id, testNow+int64(index), segment.ptr, turnRef, segment.text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatalf("save %s: %v", segment.id, err)
 		}
 	}

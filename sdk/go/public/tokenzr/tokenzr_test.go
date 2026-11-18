@@ -4,6 +4,7 @@
 package tokenzr
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -286,5 +287,77 @@ func BenchmarkBPEInflectionValenceAndSubroot(b *testing.B) {
 		_ = BPEInflectionValence("because")
 		_ = HasCompetingBPESubroot(rReach, rReacted, 4)
 		_ = IsTerminalInflectedExtension(rMove, rMoved)
+	}
+}
+
+// TestSplitSubwordsLosslessOnInvalidUTF8：非法 UTF-8 片段必须原样保留（不得静默丢字节），
+// 维持 strings.Join(SplitSubwords(x), "") == x 的 lossless 契约。
+func TestSplitSubwordsLosslessOnInvalidUTF8(t *testing.T) {
+	for _, in := range []string{"caf\xc3", "a\xffb", "\xc3\x28", "ok \xf0\x9f"} {
+		if got := strings.Join(SplitSubwords(in), ""); got != in {
+			t.Fatalf("SplitSubwords(%q) lossless roundtrip failed, got %q", in, got)
+		}
+	}
+}
+
+// TestHasCompetingBPESubrootOutOfContractLCP：契约外 lcpLen（非正 / 超过较短词长度）
+// 必须返回 false 而非越界切片 panic。
+func TestHasCompetingBPESubrootOutOfContractLCP(t *testing.T) {
+	q, w := []rune("a"), []rune("aa")
+	for _, lcp := range []int{0, -1, 2, 5} {
+		if HasCompetingBPESubroot(q, w, lcp) {
+			t.Fatalf("out-of-contract lcpLen=%d must return false", lcp)
+		}
+	}
+}
+
+// TestCountCacheShardByteBudget：计数缓存按「条数 + 键字节预算」双闸淘汰——
+// 40 个互异 32 KiB 键（合计 1.25 MiB）必须触发单分片 1 MiB 预算重置，
+// 活在缓存内的键字节不得越预算。
+func TestCountCacheShardByteBudget(t *testing.T) {
+	ctr, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
+	if ctr.codec == nil {
+		t.Fatalf("codec not initialized")
+	}
+	const keyBytes = 32768
+	var keys []string
+	var target uint32
+	found := false
+	for i := 0; len(keys) < 40 && i < 1<<20; i++ {
+		head := fmt.Sprintf("%08d", i)
+		k := head + strings.Repeat("b", keyBytes-len(head))
+		sid := shardIdx(k)
+		if !found {
+			target, found = sid, true
+		}
+		if sid == target {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) < 40 {
+		t.Fatalf("failed to collect same-shard keys")
+	}
+	for _, k := range keys {
+		if _, err := ctr.Count(k); err != nil {
+			t.Fatalf("Count: %v", err)
+		}
+	}
+	sh := &ctr.codec.countShards[target]
+	sh.mu.RLock()
+	used, live := sh.bytes, len(sh.m)
+	sh.mu.RUnlock()
+	// 清理本分片，避免污染其它测试。
+	sh.mu.Lock()
+	sh.m = make(map[string]int, 128)
+	sh.bytes = 0
+	sh.mu.Unlock()
+	if used > maxCountShardBytes {
+		t.Fatalf("count shard key bytes %d exceed budget %d", used, maxCountShardBytes)
+	}
+	if live == 0 {
+		t.Fatalf("expected live cache entries after eviction cycle")
 	}
 }

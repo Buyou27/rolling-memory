@@ -16,7 +16,7 @@ import (
 // XSSPlugin 过滤（非白名单标签以字面文本呈现），代码高亮注册本地 hljs 实例、不请求 CDN；
 // ② 自动格式化走 memoryMarkdown 纯函数（格式化测试文件必须同在），不再自维护渲染器、
 // 不再提供手动预览/原文切换；
-// ③ 三层浏览器 / 检索调试台 / 云端回忆 / ROI 证据抽屉四个正文阅读面必须经该组件展示，
+// ③ 三层浏览器 / 检索调试台 / 评测实验室 / ROI 证据抽屉四个正文阅读面必须经该组件展示，
 // 且已接入自动格式化的两个弹窗必须传内容线索（:hint=），不得各自复制第二套渲染实现；
 // ④ 中英语言包必须同时提供复制原文键与单元正文标题键（1:1 对称，缺一即红）。
 func TestMemoryContentMarkdownPreviewContract(t *testing.T) {
@@ -52,11 +52,10 @@ func TestMemoryContentMarkdownPreviewContract(t *testing.T) {
 	}
 
 	for name, path := range map[string]string{
-		"layerBrowser":       filepath.Join(viewsRoot, "layerBrowser.vue"),
-		"recall":             filepath.Join(viewsRoot, "recall.vue"),
-		"eval":               filepath.Join(viewsRoot, "eval.vue"),
-		"cloudAccountDialog": filepath.Join(viewsRoot, "cloudAccountDialog.vue"),
-		"roi":                filepath.Join(webRoot, "views", "admin", "dashboard", "roi.vue"),
+		"layerBrowser": filepath.Join(viewsRoot, "layerBrowser.vue"),
+		"recall":       filepath.Join(viewsRoot, "recall.vue"),
+		"eval":         filepath.Join(viewsRoot, "eval.vue"),
+		"roi":          filepath.Join(webRoot, "views", "admin", "dashboard", "roi.vue"),
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil {

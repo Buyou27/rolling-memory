@@ -57,10 +57,11 @@ type locomoUpstreamTurn struct {
 }
 
 type locomoUpstreamQA struct {
-	Question string          `json:"question"`
-	Answer   json.RawMessage `json:"answer"`
-	Evidence []string        `json:"evidence"`
-	Category json.RawMessage `json:"category"`
+	Question          string          `json:"question"`
+	Answer            json.RawMessage `json:"answer"`
+	AdversarialAnswer json.RawMessage `json:"adversarial_answer"`
+	Evidence          []string        `json:"evidence"`
+	Category          json.RawMessage `json:"category"`
 }
 
 type locomoUpstreamConversation struct {
@@ -95,6 +96,18 @@ type locomoOfficialQuestion struct {
 	Evidence         []string                `json:"evidence,omitempty"`
 	EvidenceTexts    []string                `json:"evidence_texts,omitempty"`
 	EvidenceMessages []locomoEvidenceMessage `json:"evidence_messages,omitempty"`
+}
+
+// locomoAdversarialQuestion 是 cat5 对抗题档的单题：没有金标答案，随附上游给出的
+// 对抗诱饵答案（plausible wrong answer）与仍指向会话证据的 dia_id。
+type locomoAdversarialQuestion struct {
+	ID                string   `json:"id"`
+	SampleID          string   `json:"sample_id"`
+	Category          string   `json:"category"`
+	Question          string   `json:"question"`
+	AdversarialAnswer string   `json:"adversarial_answer"`
+	Answer            string   `json:"answer,omitempty"`
+	Evidence          []string `json:"evidence,omitempty"`
 }
 
 // parseLoCoMoDateTime 解析上游会话时间串（如 `1:56 pm on 8 May, 2023`，秒可选）为 UTC 秒。
@@ -169,6 +182,8 @@ func BuildLoCoMoOfficialBundle(upstreamPath, outDir string) (map[string]any, err
 	sessionKeySeen := map[string]int{}
 	epochUsed := map[int64]int64{}
 	var questions []locomoOfficialQuestion
+	var adversarial []locomoAdversarialQuestion
+	adversarialCount := 0
 	categoryCounts := map[string]int{}
 	evidenceResolved, evidenceUnresolved := 0, 0
 	corpusRows := 0
@@ -231,10 +246,13 @@ func BuildLoCoMoOfficialBundle(upstreamPath, outDir string) (map[string]any, err
 			}
 			offset := epochUsed[session.epoch]
 			for turnIndex, turn := range session.turns {
+				locator := fmt.Sprintf("%s#%d", sessionKey, turnIndex)
 				row := locomoCorpusRow{
-					Author:     strings.TrimSpace(turn.Speaker),
-					ID:         turn.DiaID,
-					Locator:    fmt.Sprintf("%s#%d", sessionKey, turnIndex),
+					Author: strings.TrimSpace(turn.Speaker),
+					// 行 id 取全局唯一的定位串：上游 dia_id（如 `D1:1`）在每个会话内重新编号、
+					// 跨会话重复；装载器按 id 去重时会把重复 id 静默折叠，导致语料被截断。
+					ID:         locator,
+					Locator:    locator,
 					OccurredAt: strconv.FormatInt(session.epoch+offset+int64(turnIndex), 10),
 					Session:    sessionKey,
 					Text:       turn.Text,
@@ -255,8 +273,24 @@ func BuildLoCoMoOfficialBundle(upstreamPath, outDir string) (map[string]any, err
 		}
 
 		kept := 0
+		advKept := 0
 		for _, qa := range conv.QA {
 			category := strings.TrimSpace(stringifyLoCoMoValue(qa.Category))
+			if category == "5" {
+				// cat5 对抗题单独成档（无金标答案；随附对抗诱饵答案与证据 dia_id）。
+				adversarial = append(adversarial, locomoAdversarialQuestion{
+					ID:                fmt.Sprintf("%s#adv%d", conv.SampleID, advKept+1),
+					SampleID:          conv.SampleID,
+					Category:          category,
+					Question:          qa.Question,
+					AdversarialAnswer: stringifyLoCoMoValue(qa.AdversarialAnswer),
+					Answer:            stringifyLoCoMoValue(qa.Answer),
+					Evidence:          append([]string(nil), qa.Evidence...),
+				})
+				adversarialCount++
+				advKept++
+				continue
+			}
 			if category != "1" && category != "2" && category != "3" && category != "4" {
 				continue
 			}
@@ -316,6 +350,36 @@ func BuildLoCoMoOfficialBundle(upstreamPath, outDir string) (map[string]any, err
 		return nil, err
 	}
 
+	// cat5 对抗题档：独立文件 + 独立 manifest 条目；无金标答案，评分面在答案侧三态。
+	adversarialPath := filepath.Join(outDir, "tiers", "questions-adversarial-446.json")
+	adversarialDoc := map[string]any{
+		"_meta": map[string]any{
+			"version":        "1",
+			"generated_by":   "rmem eval --fetch locomo",
+			"official_basis": true,
+			"upstream": map[string]any{
+				"repo":     LoCoMoUpstreamRepoURL,
+				"revision": LoCoMoUpstreamRevision,
+				"file":     LoCoMoUpstreamPath,
+				"sha256":   LoCoMoUpstreamSHA256,
+			},
+			"questions": map[string]any{"count": len(adversarial), "categories": map[string]int{"5": adversarialCount}},
+			"note":      "LoCoMo cat5 对抗题全集（上游官方 446 题）：无金标答案，随附对抗诱饵答案；评分面为 NOT_FABRICATED / FABRICATED / NEUTRAL 三态。",
+		},
+		"questions": adversarial,
+	}
+	adversarialBytes, err := json.MarshalIndent(adversarialDoc, "", " ")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(adversarialPath, append(adversarialBytes, '\n'), 0o644); err != nil {
+		return nil, err
+	}
+	adversarialSHA, err := sha256FileHex(adversarialPath)
+	if err != nil {
+		return nil, err
+	}
+
 	corpusSHA, err := sha256FileHex(corpusPath)
 	if err != nil {
 		return nil, err
@@ -328,8 +392,9 @@ func BuildLoCoMoOfficialBundle(upstreamPath, outDir string) (map[string]any, err
 		"version":  "1",
 		"protocol": "local-qa-judge (locomo-frozen-2026-10-11)",
 		"source": map[string]string{
-			"corpus":         "LoCoMo10 standard 5,882-turn benchmark snapshot (upstream official, revision " + LoCoMoUpstreamRevision[:12] + ")",
-			"questions-1540": "LoCoMo official cat1-4 question set (282+321+96+841) with official evidence, rebuilt locally from upstream",
+			"corpus":                "LoCoMo10 standard 5,882-turn benchmark snapshot (upstream official, revision " + LoCoMoUpstreamRevision[:12] + ")",
+			"questions-1540":        "LoCoMo official cat1-4 question set (282+321+96+841) with official evidence, rebuilt locally from upstream",
+			"questions-adversarial": "LoCoMo official cat5 adversarial question set (446) with upstream plausible-wrong answers, rebuilt locally from upstream",
 		},
 		"corpus": map[string]any{"path": "corpus.jsonl", "sha256": corpusSHA, "rows": corpusRows},
 		"tiers": map[string]any{
@@ -338,6 +403,12 @@ func BuildLoCoMoOfficialBundle(upstreamPath, outDir string) (map[string]any, err
 				"sha256": questionsSHA,
 				"count":  len(questions),
 				"note":   "LoCoMo 官方 cat1-4 全集（随附官方证据文本）；100/200 便捷档不再提供",
+			},
+			TierLoCoMoAdversarial: map[string]any{
+				"file":   "tiers/questions-adversarial-446.json",
+				"sha256": adversarialSHA,
+				"count":  len(adversarial),
+				"note":   "LoCoMo 官方 cat5 对抗题全集（446 题，随附对抗诱饵答案）；评分面 = 答案侧三态",
 			},
 		},
 		"upstream": map[string]any{

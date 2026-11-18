@@ -889,6 +889,39 @@ func parseCNMonthNum(s string) int {
 	return total + cur
 }
 
+func parseSmallCount(s string) int {
+	if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		return n
+	}
+	switch s {
+	case "one":
+		return 1
+	case "two":
+		return 2
+	case "three":
+		return 3
+	case "four":
+		return 4
+	case "five":
+		return 5
+	case "six":
+		return 6
+	case "seven":
+		return 7
+	case "eight":
+		return 8
+	case "nine":
+		return 9
+	case "ten":
+		return 10
+	case "eleven":
+		return 11
+	case "twelve":
+		return 12
+	}
+	return 0
+}
+
 func resolveDSLWeekend(base time.Time, op string) time.Time {
 	switch op {
 	case "last", "-1":

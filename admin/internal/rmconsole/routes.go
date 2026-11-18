@@ -37,7 +37,7 @@ const (
 	// 模块本身经 registry.RegisterAdmin 静态挂载，不是插件）。
 	Name = "rolling-memory"
 	// Version 软件版本（随 VERSION 文件同步）。
-	Version = "0.0.2"
+	Version = "0.0.3"
 	// CoreVersion 记忆核心版本（Rolling Autonoetic Memory Engine · the memory engine）
 	CoreVersion = "1.0.1"
 	// CoreCodename 记忆核心引擎代号（the memory engine）
@@ -46,9 +46,8 @@ const (
 	Kind = "code"
 	// HostAPIVersion 宿主接口协议版本（状态面展示用）。
 	HostAPIVersion = "1.0"
-	// modeLocal / modeCloud 引擎运行模式取值（与引擎 `[mode] name` 对齐，见 internal/config/config.go validModes）。
+	// modeLocal 控制台运行模式读数：控制台只读写本地明文金库（local_plain），恒报 local。
 	modeLocal = "local"
-	modeCloud = "cloud"
 )
 
 var (
@@ -66,42 +65,17 @@ func snapshotBgTask() BgTaskStatus {
 	return bgTaskState
 }
 
-// rollingModeForHome 解析记忆引擎运行模式（local | cloud），口径与引擎 `[mode] name` 一致：
-// ROLLING_MEMORY_MODE → `<home>/.config/rolling-memory/config.toml` 的 `[mode] name` → 默认 local。
-func rollingModeForHome(home string) string {
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("ROLLING_MEMORY_MODE"))); v != "" {
-		return v
-	}
-	cfgPath := config.RollingConfigPath()
-	if strings.TrimSpace(os.Getenv("ROLLING_MEMORY_CONFIG")) == "" && strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")) == "" && strings.TrimSpace(home) != "" {
-		cfgPath = filepath.Join(home, ".config", "rolling-memory", "config.toml")
-	}
-	if v := strings.ToLower(strings.TrimSpace(config.ParseRollingConfig(cfgPath)["mode.name"])); v != "" {
-		return v
-	}
-	return modeLocal
-}
-
-// isLocalModeForHome 报告记忆引擎是否运行在本地模式。只有显式 `cloud` 才走云端路径，
-// 其余取值（含缺省与未知）一律按本地模式处置 —— 本地模式在控制台侧是零外呼硬边界。
-func isLocalModeForHome(home string) bool {
-	return rollingModeForHome(home) != modeCloud
-}
-
+// collectArtifactStats 汇总本地明文金库（thin_vault_docs / thin_vault_noetic）与引擎统计读数。
+// 控制台是纯本地面：恒报本地金库坐标（local://vault），绝不呈现任何云端地址 / 用户 ID。
 func collectArtifactStats(dbPath, scope string) ArtifactStats {
 	if scope == "" || scope == LegacyUserScope {
 		scope = UserScope
 	}
 	st := ArtifactStats{
 		UpstreamEngine:    "Rolling Autonoetic Memory Engine (the memory engine)",
-		UpstreamUserID:    defaultUpstreamDevUserID,
-		UpstreamEndpoint:  defaultCloudServerURL + "/open/memory/v1",
+		UpstreamUserID:    "",
+		UpstreamEndpoint:  "local://vault",
 		TraceDigestionPct: 100.0,
-	}
-	// 本地模式没有任何远端端点可展示：如实上报本地金库坐标，绝不把云端地址当读数呈现。
-	if home, err := os.UserHomeDir(); err == nil && isLocalModeForHome(home) {
-		st.UpstreamEndpoint = "local://vault"
-		st.UpstreamUserID = ""
 	}
 	if _, err := os.Stat(dbPath); err != nil {
 		return st
@@ -152,7 +126,7 @@ func init() {
 const maxConsoleBodyBytes = 8 << 20
 
 // limitConsoleRequestBody 给每个请求体套上硬上限。作用域守卫只检查它审计的路由，
-// 被豁免的 eval / ai / cloud account / locomo 路由必须同样有界，不能靠调用方自觉。
+// 被豁免的 eval / ai / locomo 路由必须同样有界，不能靠调用方自觉。
 func limitConsoleRequestBody() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Body != nil && c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
@@ -207,7 +181,6 @@ func mount(g *gin.RouterGroup) {
 	g.POST("/system/update/check", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateCheckHandler)
 	g.POST("/system/update/apply", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateApplyHandler)
 
-	mountCloudAccountRoutes(g)
 	triggerConsoleStartupPrewarm()
 }
 
@@ -243,8 +216,11 @@ type Switches struct {
 	Ledger        bool   `json:"ledger"`
 	RawWhenSparse bool   `json:"raw_when_sparse"`
 	Mode          string `json:"mode"`
-	CloudAutoSync bool   `json:"cloud_auto_sync"`
-	WidgetEnabled bool   `json:"widget_enabled"`
+	// SyncAutoWatch 自动监控同步开关（控制台只写本地配置键 `sync.auto_watch`，不涉及任何云端同步）。
+	// JSON 键名 `cloud_auto_sync` 为前端存量契约，跨版本兼容保留。
+	SyncAutoWatch  bool   `json:"cloud_auto_sync"`
+	WidgetEnabled  bool   `json:"widget_enabled"`
+	DeliveryWindow string `json:"delivery_window"`
 }
 
 // HookEventItem Hook 实时流水行（来自 ~/.local/state/rolling-memory/rolling-memory.log）。
@@ -409,47 +385,7 @@ func statusStreamSignature(home, dbPath, logPath string) string {
 	return b.String()
 }
 
-func probeUpstreamV1Health(ctx context.Context) (online bool, rttMS float64, engineName, endpoint string) {
-	acct := loadCloudAccountState()
-	base := strings.TrimRight(strings.TrimSpace(acct.BaseURL), "/")
-	if base == "" {
-		base = defaultCloudServerURL
-	}
-	if strings.HasSuffix(base, "/open/memory/v1") {
-		endpoint = base
-	} else if strings.HasSuffix(base, "/open/memory") {
-		endpoint = base + "/v1"
-	} else {
-		endpoint = base + "/open/memory/v1"
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-	defer cancel()
-	t0 := time.Now()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint+"/health", nil)
-	if err != nil {
-		return false, 0, "", endpoint
-	}
-	resp, err := http.DefaultClient.Do(req)
-	elapsedMS := float64(time.Since(t0).Microseconds()) / 1000.0
-	elapsedMS = float64(int(elapsedMS*10+0.5)) / 10.0
-	if err != nil {
-		return false, elapsedMS, "", endpoint
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false, elapsedMS, "", endpoint
-	}
-	var payload struct {
-		Status string `json:"status"`
-		Engine string `json:"engine"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&payload) == nil && payload.Status == "ok" {
-		return true, elapsedMS, payload.Engine, endpoint
-	}
-	return true, elapsedMS, "autonoetic", endpoint
-}
-
-// probeLocalVaultHealth 测量本地明文金库可用性与往返时延（local 模式浮标 1Hz 采样用；零外呼）。
+// probeLocalVaultHealth 测量本地明文金库可用性与往返时延（浮标 1Hz 采样用；控制台零外呼）。
 func probeLocalVaultHealth(home string) (online bool, rttMS float64, engineName, endpoint string) {
 	endpoint = "local://vault"
 	t0 := time.Now()
@@ -624,18 +560,17 @@ func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 	sw := Switches{
 		BootContext: true,
 		Ledger:      true,
-		// 运行模式缺省与引擎一致：`[mode] name` 未显式配置时引擎取 "local"（internal/config/config.go）。
-		RawWhenSparse: true,
-		Mode:          modeLocal,
-		CloudAutoSync: true,
-		WidgetEnabled: wEnabled,
+		// 控制台只读写本地明文金库（local_plain）：运行模式读数恒为 local，
+		// 引擎配置里的 `[mode] name` 不再参与控制台路径判定。
+		RawWhenSparse:  true,
+		Mode:           modeLocal,
+		SyncAutoWatch:  true,
+		WidgetEnabled:  wEnabled,
+		DeliveryWindow: "0-16",
 	}
 	cfg := config.ParseRollingConfig(configPath)
 	if len(cfg) == 0 {
 		return sw
-	}
-	if low := strings.ToLower(strings.TrimSpace(cfg["mode.name"])); low == modeLocal || low == modeCloud {
-		sw.Mode = low
 	}
 	if val, ok := cfg["hooks.boot_context"]; ok {
 		sw.BootContext = strings.TrimSpace(val) == "true"
@@ -646,14 +581,25 @@ func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 	if val, ok := cfg["recall.raw_when_sparse"]; ok {
 		sw.RawWhenSparse = strings.TrimSpace(val) == "true"
 	}
-	// 自动监控同步开关：三个键任一显式配置即生效（口径与引擎 internal/cli/autowatch.go 一致）。
-	for _, key := range []string{"sync.auto_watch", "hooks.auto_sync", "cloud.sync.auto_watch"} {
+	if val, ok := cfg["recall.delivery_window"]; ok {
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "auto", "0-16", "16":
+			sw.DeliveryWindow = "0-16"
+		case "0-32", "32":
+			sw.DeliveryWindow = "0-32"
+		case "0-64", "64":
+			sw.DeliveryWindow = "0-64"
+		}
+	}
+	// 自动监控同步开关（本地配置键）：`sync.auto_watch` 与 `hooks.auto_sync` 任一显式配置即生效
+	// （口径与引擎 internal/cli/autowatch.go 的本地键一致；历史云端键已随云端面回收）。
+	for _, key := range []string{"sync.auto_watch", "hooks.auto_sync"} {
 		val, ok := cfg[key]
 		if !ok {
 			continue
 		}
 		low := strings.ToLower(strings.TrimSpace(val))
-		sw.CloudAutoSync = low != "false" && low != "0" && low != "manual"
+		sw.SyncAutoWatch = low != "false" && low != "0" && low != "manual"
 	}
 	return sw
 }
@@ -726,14 +672,9 @@ func applySwitchToggle(home, key, value string) error {
 			return err
 		}
 		defer db.Close()
-		_, _, unitIDs, delErr := deleteMemoryUnitsByPKs(db, cleanPKs)
+		_, _, _, delErr := deleteMemoryUnitsByPKs(db, cleanPKs)
 		if delErr != nil {
 			return delErr
-		}
-		// 本地金库已删、云端未同步属不一致状态：如实上报（禁止静默吞错）。
-		// 口径与「记忆管理」表格删除完全一致（同一 helper，同一身份映射，同一本地模式零外呼闸）。
-		if msg := purgeCloudUnitsIfCloudMode(home, unitIDs); msg != "" {
-			return errors.New(msg)
 		}
 		invalidateVaultReadCaches()
 		invalidateEnvHealthCache(home)
@@ -757,6 +698,18 @@ func applySwitchToggle(home, key, value string) error {
 			return errors.New("raw_when_sparse 仅支持 true 或 false")
 		}
 		configKey = "recall.raw_when_sparse"
+	case "delivery_window":
+		switch strings.ToLower(value) {
+		case "auto", "0-16", "16":
+			value = "0-16"
+		case "0-32", "32":
+			value = "0-32"
+		case "0-64", "64":
+			value = "0-64"
+		default:
+			return errors.New("delivery_window 仅支持 0-16、0-32 或 0-64")
+		}
+		configKey = "recall.delivery_window"
 	case "cloud_auto_sync", "auto_sync", "sync_mode":
 		low := strings.ToLower(value)
 		switch low {
@@ -767,7 +720,8 @@ func applySwitchToggle(home, key, value string) error {
 		default:
 			return errors.New("cloud_auto_sync 仅支持 true/false 或 auto/manual")
 		}
-		configKey = "cloud.sync.auto_watch"
+		// 只写本地自动监控同步键（引擎 internal/cli/autowatch.go 的现役本地键）。
+		configKey = "sync.auto_watch"
 	default:
 		return errors.New("未知开关项: " + key)
 	}

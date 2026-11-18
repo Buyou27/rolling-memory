@@ -23,6 +23,9 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+//go:embed schema_thin.sql
+var schemaThinSQL string
+
 //go:embed schema_memcore.sql
 var schemaMemcoreSQL string
 
@@ -183,6 +186,25 @@ func LoadSchema() string {
 	return schemaSQL
 }
 
+// LoadThinSchema returns the embedded schema_thin.sql text applied to fresh
+// databases: the plaintext-vault product surface without the legacy graph.
+func LoadThinSchema() string {
+	return schemaThinSQL
+}
+
+// EnsureLegacyGraphSchema idempotently applies the canonical v1 schema and its
+// 1:1 extension tables. Fresh production databases no longer create the legacy
+// assertion graph; this entry point exists for historical-database maintenance
+// and for the graph regression fixtures that deliberately exercise it.
+func EnsureLegacyGraphSchema(connection *sql.DB) error {
+	for _, statement := range splitSchemaStatements(schemaSQL) {
+		if _, err := connection.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return EnsureMemcoreSchema(connection)
+}
+
 // LoadMemcoreSchema returns the embedded 1:1 isomorphic extension schema SQL.
 func LoadMemcoreSchema() string {
 	return schemaMemcoreSQL
@@ -286,8 +308,10 @@ func upgradeMetaEdgeEightKinds(connection *sql.DB) error {
 	})
 }
 
-// Migrate creates schema v1 for a new database and writes db_meta rows,
-// then ensures the 1:1 memcore extension tables exist.
+// Migrate creates the bootstrap schema for a new database and writes db_meta
+// rows, then ensures the 1:1 memcore extension tables exist for databases that
+// still carry the legacy graph. Fresh databases start thin (schema_thin.sql):
+// vault tables + shared bookkeeping only, no legacy assertion graph.
 func Migrate(connection *sql.DB) (int, error) {
 	current, err := userVersion(connection)
 	if err != nil {
@@ -300,7 +324,7 @@ func Migrate(connection *sql.DB) (int, error) {
 		)
 	}
 	if current == 0 {
-		for _, statement := range splitSchemaStatements(schemaSQL) {
+		for _, statement := range splitSchemaStatements(schemaThinSQL) {
 			if _, err := connection.Exec(statement); err != nil {
 				return 0, err
 			}

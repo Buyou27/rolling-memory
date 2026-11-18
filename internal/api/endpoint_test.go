@@ -30,10 +30,8 @@ func TestLocalModeNeverContactsBrain(t *testing.T) {
 			t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 			t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "")
 			memory := newMemory(t)
-			memory.Config.Cloud.Enabled = true
-			memory.Config.Cloud.BaseURL = server.URL + "/open/memory/v1"
 			if credential == "explicit" {
-				t.Setenv("ROLLING_MEMORY_BRAIN_URL", memory.Config.Cloud.BaseURL)
+				t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
 				t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "test-key")
 			} else {
 				account := filepath.Join(home, ".config", "rolling-memory", "cloud-account.json")
@@ -43,9 +41,6 @@ func TestLocalModeNeverContactsBrain(t *testing.T) {
 				if err := os.WriteFile(account, []byte(`{"base_url":"`+server.URL+`","api_key":"test-account"}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if memory.IsThinBrainProxy() {
-				t.Fatal("local mode selected remote proxy")
 			}
 			client, err := memory.ThinClient()
 			if err != nil {
@@ -61,23 +56,5 @@ func TestLocalModeNeverContactsBrain(t *testing.T) {
 				t.Fatalf("local mode made %d remote requests", got)
 			}
 		})
-	}
-}
-
-func TestThinClientBrainURLEnvPrecedence(t *testing.T) {
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "http://127.0.0.1:18099/open/memory/v1")
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "probe-key")
-	memory := newMemory(t)
-	memory.Config.Mode = "cloud"
-	client, err := memory.ThinClient()
-	if err != nil {
-		t.Fatalf("ThinClient: %v", err)
-	}
-	transport, ok := client.Transport.(*thinclient.HTTPBrainTransport)
-	if !ok {
-		t.Fatalf("transport = %T", client.Transport)
-	}
-	if transport.BaseURL != "http://127.0.0.1:18099/open/memory/v1" {
-		t.Fatalf("BaseURL = %q", transport.BaseURL)
 	}
 }

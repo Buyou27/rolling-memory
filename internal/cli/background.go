@@ -114,6 +114,23 @@ func (a *application) runBackground(memory *api.Memory) (int, error) {
 				report.ScannedFiles, report.UnchangedFiles, report.IngestedFiles, report.IngestedChunks, report.DeletedFiles, report.DeletedChunks, backgroundSkipNote(report))
 		})
 	case "remove":
+		if a.args.Flag("dry_run") {
+			preview, err := client.PreviewBackgroundDirRemoval(a.args.String("path"))
+			if err != nil {
+				return 1, err
+			}
+			result := map[string]any{
+				"dry_run":      true,
+				"root_path":    preview.RootPath,
+				"preview":      preview,
+				"kept_files":   preview.ReboundFiles,
+				"purged_files": preview.PurgedFiles,
+			}
+			return 0, a.emit(result, func() {
+				a.printf("background remove (dry run): %s · would purge %d files / %d chunks · would stale %d Noetic records · would keep %d files covered by %d remaining mount(s)\n",
+					preview.RootPath, preview.PurgedFiles, preview.PurgedChunks, preview.StaledNoetic, preview.ReboundFiles, preview.RemainingMounts)
+			})
+		}
 		report, err := client.RemoveBackgroundDirReport(ctx, a.args.String("path"))
 		if err != nil {
 			return 1, err

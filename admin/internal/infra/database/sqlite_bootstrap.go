@@ -348,12 +348,13 @@ func bootstrapSQLite(db *gorm.DB) error {
 	_ = db.Exec(`INSERT OR IGNORE INTO "admin_rules" ("id", "pid", "type", "title", "name", "path", "icon", "open_type", "url", "component", "keepalive", "extend", "remark", "weigh", "status", "plugin", "updated_at", "created_at") VALUES
 		(123, 101, 'node', '实时状态WS流', 'plugin/rolling-memory/ws', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 		(124, 101, 'node', '读取ROI统计事实', 'plugin/rolling-memory/roi/facts', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(125, 101, 'node', '云端账号连接与套餐（申请制预览）', 'plugin/rolling-memory/cloud/account', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 		(127, 105, 'node', 'Open Memory Arena横评', 'plugin/rolling-memory/eval/arena', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
 	_ = db.Exec(`UPDATE "configs" SET "value" = 'Rolling-Memory' WHERE "name" = 'name'`).Error
 	_ = db.Exec(`UPDATE "configs" SET "value" = '` + displayVersion + `' WHERE "name" = 'version'`).Error
 	_ = db.Exec(`DELETE FROM "admin_plugins" WHERE "name" = 'rolling-memory'`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "plugin" = '' WHERE "plugin" = 'rolling-memory'`).Error
+	// 云端账号面已下线（本地客户端不再管理云端账户）：清理既存库中指向已删路由的权限节点，幂等执行。
+	_ = db.Exec(`DELETE FROM "admin_rules" WHERE "name" = 'plugin/rolling-memory/cloud/account' OR "name" LIKE 'plugin/rolling-memory/cloud/account/%'`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "title" = '记忆浏览' WHERE "id" = 100 AND "name" = 'plugin/rolling-memory' AND "type" = 'dir' AND "title" = '记忆管理'`).Error
 	// 三层平行子页面与共享统计节点：既存库幂等补齐，不改动已有权限层级。
 	_ = db.Exec(`INSERT OR IGNORE INTO "admin_rules" ("id", "pid", "type", "title", "name", "path", "icon", "open_type", "url", "component", "keepalive", "extend", "remark", "weigh", "status", "plugin", "updated_at", "created_at") VALUES
@@ -380,15 +381,7 @@ func bootstrapSQLite(db *gorm.DB) error {
 		(151, 101, 'node', '查看三层记忆单元列表与详情', 'plugin/rolling-memory/layers/read', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 		(152, 101, 'node', '删除或清理三层记忆单元', 'plugin/rolling-memory/layers/delete', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 		(153, 101, 'node', '读取Harness与金库健康状态', 'plugin/rolling-memory/env/health', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(154, 101, 'node', '执行三层记忆手动对账同步', 'plugin/rolling-memory/sync/reconcile', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(155, 101, 'node', '读取云端账号绑定状态', 'plugin/rolling-memory/cloud/account/state', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(156, 101, 'node', '申请云端账号（申请制预览）', 'plugin/rolling-memory/cloud/account/register', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(157, 101, 'node', '登录云端账号', 'plugin/rolling-memory/cloud/account/login', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(158, 101, 'node', '退出云端账号', 'plugin/rolling-memory/cloud/account/logout', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(159, 101, 'node', '轮换云端账号密钥', 'plugin/rolling-memory/cloud/account/rotate-key', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(160, 101, 'node', '签发数据面直连签名钥', 'plugin/rolling-memory/cloud/account/sign-key', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(161, 101, 'node', '管理云端设备密钥列表', 'plugin/rolling-memory/cloud/account/devices', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		(162, 101, 'node', '云端记忆在线检索与写入', 'plugin/rolling-memory/cloud/account/memory', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
+		(154, 101, 'node', '执行三层记忆手动对账同步', 'plugin/rolling-memory/sync/reconcile', '', '', '', '', '', 1, '', '', 0, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
 	_ = db.Exec(`INSERT OR IGNORE INTO "admin_rules" ("id", "pid", "type", "title", "name", "path", "icon", "open_type", "url", "component", "keepalive", "extend", "remark", "weigh", "status", "plugin", "updated_at", "created_at") VALUES
 			(119, NULL, 'dir', '评测', 'plugin/rolling-memory/eval-dir', 'plugin/rolling-memory/eval-dir', 'lucide-flask-conical', '', '', '', 1, '', '', 994, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(120, 119, 'menu', 'LoCoMo-Backboard 榜单', 'plugin/rolling-memory/leaderboard', 'plugin/rolling-memory/leaderboard', 'lucide-trophy', 'tab', '', '/src/views/admin/plugin/rolling-memory/leaderboard.vue', 1, '', '', 97, 1, 'rolling-memory', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),

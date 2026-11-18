@@ -46,12 +46,12 @@ func TestEpisodicBackfillPagesAndRetries(t *testing.T) {
 	missingID := episodicunit.DocID(scope, text+" later")
 	changedID := episodicunit.DocID(scope, "[user] prior source")
 	for _, row := range []struct{ id, ref string }{{id, ref}, {missingID, missingRef}, {changedID, ref}} {
-		if err := v.SaveLocalEpisodicPointer(row.id, 1, row.ref, "", CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointer(row.id, 1, row.ref, "", IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	inline := "do not replace this original"
-	if err := v.SaveLocalPlaintext("inline", 1, inline, []string{inline}, CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := v.SaveLocalPlaintext("inline", 1, inline, []string{inline}, IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	var total EpisodicIndexBackfillReport
@@ -151,7 +151,7 @@ func TestEpisodicBackfillEncodingFailureDoesNotAdvancePage(t *testing.T) {
 	}
 	goodID := episodicunit.DocID(scope, goodText)
 	for _, row := range []struct{ id, ref string }{{badID, badRef}, {goodID, goodRef}} {
-		if err := v.SaveLocalEpisodicPointer(row.id, 1, row.ref, "", CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointer(row.id, 1, row.ref, "", IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -209,7 +209,7 @@ func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 	_, badText := writeSource("damaged index")
 	badID := episodicunit.DocID(scope, badText)
 	pkt, _ := v.PackBlindPacket(badID, badText, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(badID, 1, ref, "", badText, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(badID, 1, ref, "", badText, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = x'01' WHERE doc_id = ?`, badID); err != nil {
@@ -232,7 +232,7 @@ func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 		}
 		goodID = episodicunit.DocID(scope, goodText)
 	}
-	if err := v.SaveLocalEpisodicPointer(goodID, 1, goodRef, "", CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointer(goodID, 1, goodRef, "", IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	// Exercise an error inside Ensure after the page query has already succeeded.

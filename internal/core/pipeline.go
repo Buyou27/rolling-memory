@@ -64,6 +64,14 @@ type Engine struct {
 	clusterState *rmClusterState
 	queryScratch *rmQueryScratch
 	mmapUnmap    func() error
+
+	// 零拷贝增量叠加层（Delta Overlay）：在保持底层只读索引/.zcsr 映射区不卸载、不触发
+	// 全量反解与全量重建的前提下，承载小批量新增/更新文档（deltaEngine）与已删除/已覆写
+	// 单元遮蔽集（deltaMasked）。
+	deltaEngine *Engine
+	deltaMasked map[string]struct{}
+	deltaDocs   map[string]Doc
+	deltaOrder  []string
 }
 
 // Close 释放引擎挂载的任何底层 mmap 磁盘段资源，并在卸载映射前将 Index 上仍指向映射区的
@@ -177,8 +185,215 @@ func (e *Engine) ForEachDocEntry(u int, fn func(DocEntryView)) {
 	}
 }
 
-// ExportDocs 从当前 Engine（含内存态 Index 或 .zcsr 磁盘 mmap 零拷贝态）无损还原全部文档快照。
+// ForEachUnitDocEntry 按单元 ID 遍历其当前权威词项条目（优先读取增量叠加层 deltaEngine，
+// 自动跳过已被 deltaMasked 遮蔽/删除的旧基线单元）。若找到活跃单元则返回 true。
+func (e *Engine) ForEachUnitDocEntry(unitID string, fn func(DocEntryView)) bool {
+	if e == nil || unitID == "" {
+		return false
+	}
+	if e.deltaEngine != nil && e.deltaEngine.Index != nil {
+		if u, ok := e.deltaEngine.Index.LookupUnit(unitID); ok {
+			if fn != nil {
+				e.deltaEngine.ForEachDocEntry(int(u), fn)
+			}
+			return true
+		}
+	}
+	if len(e.deltaMasked) > 0 {
+		if _, masked := e.deltaMasked[unitID]; masked {
+			return false
+		}
+	}
+	if e.Index == nil {
+		return false
+	}
+	u, ok := e.Index.LookupUnit(unitID)
+	if !ok {
+		return false
+	}
+	if fn != nil {
+		e.ForEachDocEntry(int(u), fn)
+	}
+	return true
+}
+
+// HasDelta 报告当前 Engine 是否挂载了非空的增量叠加层或删除遮蔽集。
+func (e *Engine) HasDelta() bool {
+	if e == nil {
+		return false
+	}
+	return (e.deltaEngine != nil && e.deltaEngine.Index != nil && e.deltaEngine.Index.N > 0) || len(e.deltaMasked) > 0
+}
+
+// DeltaDocCount 返回当前增量叠加层中承载的新增/更新单元数量。
+func (e *Engine) DeltaDocCount() int {
+	if e == nil || e.deltaEngine == nil || e.deltaEngine.Index == nil {
+		return 0
+	}
+	return e.deltaEngine.Index.N
+}
+
+// ClearDelta 清空当前 Engine 上的增量叠加层与遮蔽集，恢复纯基线视图。
+func (e *Engine) ClearDelta() {
+	if e == nil {
+		return
+	}
+	e.deltaEngine = nil
+	e.deltaMasked = nil
+	e.deltaDocs = nil
+	e.deltaOrder = nil
+}
+
+// newOverlayChildEngine 用与父 Engine 相同的算法配置构造增量微簇 Engine。
+func (e *Engine) newOverlayChildEngine(docs []Doc) *Engine {
+	if len(docs) == 0 {
+		return nil
+	}
+	child := NewEngine(BuildIndex(docs))
+	if e != nil {
+		child.Hop1Budget = e.Hop1Budget
+		child.Hop2Budget = e.Hop2Budget
+		child.Energy = e.Energy
+		child.Contraction = e.Contraction
+		child.FlagsGain = e.FlagsGain
+		child.BitsMass = e.BitsMass
+		child.TimeKernel = e.TimeKernel
+		child.ClusterPipeline = e.ClusterPipeline
+	}
+	if child.ClusterPipeline {
+		child.MaterializeClusterState()
+	}
+	return child
+}
+
+// SetDeltaSnapshot 将相对于基线引擎的完整增量集（新增/修改文档 deltaDocs 与已删除/已修改
+// 单元 ID 列表 maskedUnitIDs）原位挂载到当前 Engine，不触碰底层基线索引与 .zcsr 映射区。
+func (e *Engine) SetDeltaSnapshot(deltaDocs []Doc, maskedUnitIDs []string) {
+	if e == nil {
+		return
+	}
+	if len(deltaDocs) == 0 && len(maskedUnitIDs) == 0 {
+		e.ClearDelta()
+		return
+	}
+	masked := make(map[string]struct{}, len(deltaDocs)+len(maskedUnitIDs))
+	for _, id := range maskedUnitIDs {
+		if id != "" {
+			masked[id] = struct{}{}
+		}
+	}
+	docMap := make(map[string]Doc, len(deltaDocs))
+	order := make([]string, 0, len(deltaDocs))
+	dedupDocs := make([]Doc, 0, len(deltaDocs))
+	for _, d := range deltaDocs {
+		if d.UnitID == "" {
+			continue
+		}
+		masked[d.UnitID] = struct{}{}
+		if _, exists := docMap[d.UnitID]; !exists {
+			order = append(order, d.UnitID)
+		}
+		docMap[d.UnitID] = d
+	}
+	for _, id := range order {
+		dedupDocs = append(dedupDocs, docMap[id])
+	}
+	e.deltaMasked = masked
+	e.deltaDocs = docMap
+	e.deltaOrder = order
+	e.deltaEngine = e.newOverlayChildEngine(dedupDocs)
+}
+
+// OverlayDelta 在不修改当前基线 Engine 的前提下，返回一个共享底层基线索引与 .zcsr 零拷贝
+// 映射区、并叠加了指定增量文档与遮蔽集的派生 Engine 视图（Copy-on-Write 零拷贝派生）。
+func (e *Engine) OverlayDelta(deltaDocs []Doc, maskedUnitIDs []string) *Engine {
+	if e == nil {
+		return nil
+	}
+	derived := &Engine{
+		Index:              e.Index,
+		Hop1Budget:         e.Hop1Budget,
+		Hop2Budget:         e.Hop2Budget,
+		Energy:             e.Energy,
+		Contraction:        e.Contraction,
+		FlagsGain:          e.FlagsGain,
+		BitsMass:           e.BitsMass,
+		TimeKernel:         e.TimeKernel,
+		ClusterPipeline:    e.ClusterPipeline,
+		EnableStage3Plugin: e.EnableStage3Plugin,
+		Stage3Plugin:       e.Stage3Plugin,
+		clusterState:       e.clusterState,
+	}
+	derived.SetDeltaSnapshot(deltaDocs, maskedUnitIDs)
+	return derived
+}
+
+// ApplyDelta 在当前 Engine 的增量叠加层上流式应用一批新增/更新文档与删除单元 ID，
+// 保持底层基线索引/.zcsr 映射区零拷贝不动，仅重建小体积的 deltaEngine 微簇。
+func (e *Engine) ApplyDelta(upserts []Doc, deletedUnitIDs []string) {
+	if e == nil || (len(upserts) == 0 && len(deletedUnitIDs) == 0) {
+		return
+	}
+	if e.deltaMasked == nil {
+		e.deltaMasked = make(map[string]struct{}, len(upserts)+len(deletedUnitIDs))
+	}
+	if e.deltaDocs == nil {
+		e.deltaDocs = make(map[string]Doc, len(upserts))
+	}
+	for _, id := range deletedUnitIDs {
+		if id == "" {
+			continue
+		}
+		e.deltaMasked[id] = struct{}{}
+		delete(e.deltaDocs, id)
+	}
+	for _, d := range upserts {
+		if d.UnitID == "" {
+			continue
+		}
+		e.deltaMasked[d.UnitID] = struct{}{}
+		if _, exists := e.deltaDocs[d.UnitID]; !exists {
+			e.deltaOrder = append(e.deltaOrder, d.UnitID)
+		}
+		e.deltaDocs[d.UnitID] = d
+	}
+	keptOrder := e.deltaOrder[:0]
+	dedupDocs := make([]Doc, 0, len(e.deltaDocs))
+	for _, id := range e.deltaOrder {
+		if d, ok := e.deltaDocs[id]; ok {
+			keptOrder = append(keptOrder, id)
+			dedupDocs = append(dedupDocs, d)
+		}
+	}
+	e.deltaOrder = keptOrder
+	e.deltaEngine = e.newOverlayChildEngine(dedupDocs)
+}
+
+// ExportDocs 从当前 Engine（含内存态 Index、.zcsr 磁盘 mmap 零拷贝态及增量叠加层）无损还原全部活跃文档快照。
 func (e *Engine) ExportDocs() []Doc {
+	if e == nil {
+		return nil
+	}
+	baseDocs := e.exportBaseDocs()
+	if !e.HasDelta() {
+		return baseDocs
+	}
+	out := make([]Doc, 0, len(baseDocs)+len(e.deltaOrder))
+	for _, d := range baseDocs {
+		if _, masked := e.deltaMasked[d.UnitID]; masked {
+			continue
+		}
+		out = append(out, d)
+	}
+	for _, id := range e.deltaOrder {
+		if d, ok := e.deltaDocs[id]; ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func (e *Engine) exportBaseDocs() []Doc {
 	if e == nil || e.Index == nil || e.Index.N == 0 {
 		return nil
 	}
@@ -298,6 +513,7 @@ func (e *Engine) AppendDocs(docs []Doc) {
 	e.Index = rebuilt
 	e.clusterState = nil
 	e.queryScratch = nil
+	e.ClearDelta()
 	if e.ClusterPipeline {
 		_ = e.ensureClusterState()
 	}
@@ -307,7 +523,7 @@ func (e *Engine) AppendDocs(docs []Doc) {
 // DeleteDocs 按 unitIDs 从当前 Engine（支持内存态与 .zcsr mmap 零拷贝态）精确移除指定记忆单元，
 // 自动同步底层 Index 与双簇 CSR 状态，保证删除后与从未入库过被删单元的全量构建 100% 0-ULP 逐位全等。
 func (e *Engine) DeleteDocs(unitIDs ...string) int {
-	if e == nil || e.Index == nil || e.Index.N == 0 || len(unitIDs) == 0 {
+	if e == nil || ((e.Index == nil || e.Index.N == 0) && !e.HasDelta()) || len(unitIDs) == 0 {
 		return 0
 	}
 	delSet := make(map[string]struct{}, len(unitIDs))
@@ -339,6 +555,7 @@ func (e *Engine) DeleteDocs(unitIDs ...string) int {
 	e.Index = rebuilt
 	e.clusterState = nil
 	e.queryScratch = nil
+	e.ClearDelta()
 	if e.ClusterPipeline && rebuilt.N > 0 {
 		_ = e.ensureClusterState()
 	}
@@ -403,6 +620,25 @@ func (e *Engine) Search(qTerms map[uint64]Term, topK int) []Hit {
 }
 
 func (e *Engine) SearchWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, topK int) []Hit {
+	if e == nil || len(qTerms) == 0 {
+		return nil
+	}
+	if !e.HasDelta() {
+		return e.searchBaseWithPositions(qTerms, qPositions, topK)
+	}
+	baseTopK := topK
+	if topK > 0 && len(e.deltaMasked) > 0 {
+		baseTopK = topK + len(e.deltaMasked)
+	}
+	baseHits := e.searchBaseWithPositions(qTerms, qPositions, baseTopK)
+	var deltaHits []Hit
+	if e.deltaEngine != nil {
+		deltaHits = e.deltaEngine.searchBaseWithPositions(qTerms, qPositions, topK)
+	}
+	return mergeOverlayHits(baseHits, deltaHits, e.deltaMasked, topK)
+}
+
+func (e *Engine) searchBaseWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, topK int) []Hit {
 	idx := e.Index
 	if idx == nil || idx.N == 0 || len(qTerms) == 0 {
 		return nil
@@ -907,6 +1143,28 @@ func (e *Engine) spread(seeds []int32, seedEnergy map[int32]float64, qTerms map[
 	if idx == nil || budget <= 0 {
 		return out
 	}
+	docTermsOf := func(u int32) []uint64 {
+		if int(u) < len(idx.DocTerms) && len(idx.DocTerms[u]) > 0 {
+			return idx.DocTerms[u]
+		}
+		if st == nil {
+			return nil
+		}
+		entries := st.docEntriesOf(u)
+		atoms := make([]uint64, len(entries))
+		for i, ent := range entries {
+			atoms[i] = ent.id
+		}
+		sort.Slice(atoms, func(a, b int) bool {
+			ma, _ := idx.TermMass(atoms[a])
+			mb, _ := idx.TermMass(atoms[b])
+			if ma == mb {
+				return atoms[a] < atoms[b]
+			}
+			return ma > mb
+		})
+		return atoms
+	}
 	var docMassCache []float64
 	docMassOf := func(u int32) float64 {
 		if u < 0 {
@@ -931,21 +1189,8 @@ func (e *Engine) spread(seeds []int32, seedEnergy map[int32]float64, qTerms map[
 			docMassCache[u] = 0
 			return 0
 		}
-		entries := st.docEntriesOf(u)
-		atoms := make([]uint64, len(entries))
-		for i, ent := range entries {
-			atoms[i] = ent.id
-		}
-		sort.Slice(atoms, func(a, b int) bool {
-			ma, _ := idx.TermMass(atoms[a])
-			mb, _ := idx.TermMass(atoms[b])
-			if ma == mb {
-				return atoms[a] < atoms[b]
-			}
-			return ma > mb
-		})
 		var sum float64
-		for _, h := range atoms {
+		for _, h := range docTermsOf(u) {
 			m, _ := idx.TermMass(h)
 			sum += m
 		}
@@ -963,28 +1208,6 @@ func (e *Engine) spread(seeds []int32, seedEnergy map[int32]float64, qTerms map[
 			return st.refTimes[u]
 		}
 		return 0
-	}
-	docTermsOf := func(u int32) []uint64 {
-		if int(u) < len(idx.DocTerms) && len(idx.DocTerms[u]) > 0 {
-			return idx.DocTerms[u]
-		}
-		if st == nil {
-			return nil
-		}
-		entries := st.docEntriesOf(u)
-		atoms := make([]uint64, len(entries))
-		for i, ent := range entries {
-			atoms[i] = ent.id
-		}
-		sort.Slice(atoms, func(a, b int) bool {
-			ma, _ := idx.TermMass(atoms[a])
-			mb, _ := idx.TermMass(atoms[b])
-			if ma == mb {
-				return atoms[a] < atoms[b]
-			}
-			return ma > mb
-		})
-		return atoms
 	}
 	remaining := budget
 	for start := 0; start < len(seeds) && remaining > 0; {
@@ -1149,35 +1372,114 @@ type reusableQueryExtractor interface {
 
 // Query extracts query terms with positions and executes the 4-step cluster pipeline.
 func (e *Engine) Query(az QueryExtractor, text string, topK int) []Hit {
-	if e != nil && e.Index != nil {
-		if rq, ok := az.(reusableQueryExtractor); ok {
-			st := e.ensureClusterState()
-			clusterN := 0
-			if st != nil {
-				clusterN = st.clusterN
-			}
-			sc := e.ensureQueryScratch(e.Index.N, clusterN)
-			if sc.qTerms == nil {
-				sc.qTerms = make(map[uint64]Term, 64)
-			} else {
-				clear(sc.qTerms)
-			}
-			if sc.posMap == nil {
-				sc.posMap = make(map[uint64][]TermPosition, 64)
-			} else {
-				clear(sc.posMap)
-			}
-			if cap(sc.posPool) < 128 {
-				sc.posPool = make([]TermPosition, 0, 128)
-			} else {
-				sc.posPool = sc.posPool[:0]
-			}
-			sc.posPool = rq.ExtractQueryInto(e.Index, text, sc.qTerms, sc.posMap, sc.posPool)
-			return e.SearchWithPositions(sc.qTerms, sc.posMap, topK)
+	if e == nil || az == nil {
+		return nil
+	}
+	if !e.HasDelta() {
+		return e.queryBase(az, text, topK)
+	}
+	baseTopK := topK
+	if topK > 0 && len(e.deltaMasked) > 0 {
+		baseTopK = topK + len(e.deltaMasked)
+	}
+	baseHits := e.queryBase(az, text, baseTopK)
+	var deltaHits []Hit
+	if e.deltaEngine != nil {
+		deltaHits = e.deltaEngine.queryBase(az, text, topK)
+	}
+	return mergeOverlayHits(baseHits, deltaHits, e.deltaMasked, topK)
+}
+
+func (e *Engine) queryBase(az QueryExtractor, text string, topK int) []Hit {
+	if e == nil || e.Index == nil || e.Index.N == 0 {
+		return nil
+	}
+	if rq, ok := az.(reusableQueryExtractor); ok {
+		st := e.ensureClusterState()
+		clusterN := 0
+		if st != nil {
+			clusterN = st.clusterN
 		}
+		sc := e.ensureQueryScratch(e.Index.N, clusterN)
+		if sc.qTerms == nil {
+			sc.qTerms = make(map[uint64]Term, 64)
+		} else {
+			clear(sc.qTerms)
+		}
+		if sc.posMap == nil {
+			sc.posMap = make(map[uint64][]TermPosition, 64)
+		} else {
+			clear(sc.posMap)
+		}
+		if cap(sc.posPool) < 128 {
+			sc.posPool = make([]TermPosition, 0, 128)
+		} else {
+			sc.posPool = sc.posPool[:0]
+		}
+		sc.posPool = rq.ExtractQueryInto(e.Index, text, sc.qTerms, sc.posMap, sc.posPool)
+		return e.searchBaseWithPositions(sc.qTerms, sc.posMap, topK)
 	}
 	qTerms, _, qPositions := az.ExtractQueryWithPositions(e.Index, text)
-	return e.SearchWithPositions(qTerms, qPositions, topK)
+	return e.searchBaseWithPositions(qTerms, qPositions, topK)
+}
+
+// mergeOverlayHits 将基线命中与增量微簇命中按物理信息能量 Hit.Energy（Nats）降序统一归并
+// （名次盲 Rank-Index Blind），自动剔除已被 deltaMasked 遮蔽的已删除或已覆写旧基线单元。
+func mergeOverlayHits(baseHits, deltaHits []Hit, masked map[string]struct{}, topK int) []Hit {
+	if len(deltaHits) == 0 {
+		if len(masked) == 0 {
+			if topK > 0 && len(baseHits) > topK {
+				return baseHits[:topK]
+			}
+			return baseHits
+		}
+		kept := baseHits[:0]
+		for _, h := range baseHits {
+			if _, drop := masked[h.UnitID]; drop {
+				continue
+			}
+			kept = append(kept, h)
+			if topK > 0 && len(kept) >= topK {
+				break
+			}
+		}
+		return kept
+	}
+	byID := make(map[string]Hit, len(baseHits)+len(deltaHits))
+	for _, h := range deltaHits {
+		if h.UnitID == "" || h.Energy <= 0 || math.IsNaN(h.Energy) {
+			continue
+		}
+		byID[h.UnitID] = h
+	}
+	for _, h := range baseHits {
+		if h.UnitID == "" || h.Energy <= 0 || math.IsNaN(h.Energy) {
+			continue
+		}
+		if len(masked) > 0 {
+			if _, drop := masked[h.UnitID]; drop {
+				continue
+			}
+		}
+		if _, exists := byID[h.UnitID]; !exists {
+			byID[h.UnitID] = h
+		}
+	}
+	merged := make([]Hit, 0, len(byID))
+	for _, h := range byID {
+		merged = append(merged, h)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		a, b := merged[i], merged[j]
+		if a.Energy != b.Energy {
+			return a.Energy > b.Energy
+		}
+		return a.UnitID < b.UnitID
+	})
+	if topK > 0 && len(merged) > topK {
+		merged = merged[:topK]
+	}
+	return merged
 }
 
 // Rank calls Engine.Search and returns the ranked UnitID slice.

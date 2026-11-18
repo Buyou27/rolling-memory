@@ -54,7 +54,10 @@ func TestInstallCheckHandshakeAndRegistration(t *testing.T) {
 	if status := actionStatus(t, failedReport, "*", "server"); status != "error" {
 		t.Fatalf("failed handshake action = %q", status)
 	}
-	if status := actionStatus(t, failedReport, "zcode", "mcp"); status != "ok" {
+	// The registration row is still present, but the check now resolves the registered
+	// launcher too: an unresolvable launcher is reported as an error on the mcp action
+	// instead of passing as a static "configured" registration.
+	if status := actionStatus(t, failedReport, "zcode", "mcp"); status != "error" {
 		t.Fatalf("failed handshake registration = %q", status)
 	}
 
@@ -187,6 +190,11 @@ func TestInstallCheckAcrossHarnesses(t *testing.T) {
 		action, ok := item.(map[string]any)
 		if !ok {
 			t.Fatalf("action is not an object: %#v", item)
+		}
+		if stringField(t, action, "component") == "server" {
+			// The server-level action rides every report under harness "*"; it is not a
+			// harness installation and must not count towards the detected set.
+			continue
 		}
 		selected[stringField(t, action, "harness")] = true
 	}

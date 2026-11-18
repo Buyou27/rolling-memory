@@ -61,7 +61,7 @@ func (a *application) printReplay(result map[string]any) {
 		pyStr(getOr(result, "processed", 0)), pyStr(getOr(result, "written", 0)),
 		pyStr(getOr(result, "skipped", 0)), pyStr(getOr(result, "anchor_failed", 0)),
 		pyStr(getOr(result, "llm_calls", 0)))
-	for _, warning := range limitAny(anyList(result["warnings"]), 5) {
+	for _, warning := range limitSlice(anyList(result["warnings"]), 5) {
 		a.printf("  warning: %s\n", pyStr(warning))
 	}
 }
@@ -71,6 +71,16 @@ func (a *application) printImport(result map[string]any) {
 	// map[string]int), whereas a transcript carries the inserted trace count.
 	if inserted := asMap(result["inserted"]); inserted != nil {
 		a.printf("import (json export): scope %s  inserted %s\n", pyStr(result["scope"]), pyRepr(inserted))
+	} else if _, canonicalJSONL := result["skipped_incomplete_tail"]; canonicalJSONL {
+		// The canonical JSONL pipeline writes content-addressed vault units, not
+		// trace rows; the counter key marks that receipt shape.
+		a.printf("import: %s messages · %s new units · session %s · offset %s/%s\n",
+			pyStr(getOr(result, "messages", 0)), pyStr(getOr(result, "inserted", 0)),
+			pyStr(result["session"]), pyStr(getOr(result, "offset", 0)),
+			pyStr(getOr(result, "total_lines", 0)))
+		if skipped := pyInt(result["skipped_incomplete_tail"]); skipped > 0 {
+			a.printf("  skipped %d incomplete tail turn(s)\n", skipped)
+		}
 	} else {
 		a.printf("import: %s messages · %s new traces · session %s · offset %s/%s\n",
 			pyStr(getOr(result, "messages", 0)), pyStr(getOr(result, "inserted", 0)),
@@ -143,7 +153,7 @@ func (a *application) printDoctor(result map[string]any) {
 	} else {
 		a.printLine("integrity: FAILED")
 	}
-	for _, issue := range limitList(childList(integrity, "issues"), 10) {
+	for _, issue := range limitSlice(childList(integrity, "issues"), 10) {
 		a.printf("  %s: %s: %s\n", pyStr(issue["severity"]), pyStr(issue["code"]), pyStr(issue["detail"]))
 	}
 }
@@ -206,7 +216,7 @@ func (a *application) printEfficacy(m map[string]any) {
 	sessions := childList(m, "sessions")
 	if len(sessions) > 0 {
 		a.printLine("recent evaluations:")
-		for _, s := range limitList(sessions, 12) {
+		for _, s := range limitSlice(sessions, 12) {
 			a.printf("  [%s · %s · %s] outcome=%s round_cost=%s saved_rounds=%s net_tokens=%s :: %s\n",
 				pyStr(s["time_text"]), pyStr(s["harness"]), pyStr(s["workspace"]),
 				pyStr(s["outcome"]), pyStr(getOr(s, "round_cost_tokens", 0)),
@@ -259,14 +269,7 @@ func anyList(value any) []any {
 	return items
 }
 
-func limitAny(values []any, limit int) []any {
-	if len(values) > limit {
-		return values[:limit]
-	}
-	return values
-}
-
-func limitList(values []map[string]any, limit int) []map[string]any {
+func limitSlice[T any](values []T, limit int) []T {
 	if len(values) > limit {
 		return values[:limit]
 	}

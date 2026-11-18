@@ -18,12 +18,10 @@ refreshNow: Refresh
 dbSize: DB Size
 conflicts: Stale Noetic
 modeLabel: Mode
-cloudPulse: Cloud Pulse
 localPlain: Local Plain (local_plain)
-cloudPulseTip: Cloud Pulse Mode active.
 localPlainTip: Local Plaintext Vault (local_plain) — 100% on-device SQLite FTS5 + BM25 + Shannon continuous gain, zero cloud requests.
-pulsePreviewTip: Cloud service modes are not included in this release.
-previewDetails: Preview details
+pulsePreviewTip: Cloud memory service preview — ciphertext-only, stronger operators, application-based.
+previewDetails: Preview & apply
 
 # KPI cards
 totalUsers: Active Memory Units

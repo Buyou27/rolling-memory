@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -37,7 +38,8 @@ func startWarmEvalRecallSession(ctx context.Context, bin, storePath, scope strin
 		return nil, errors.New("warm recall session requires bin/storePath/scope")
 	}
 	cmd := exec.CommandContext(ctx, bin, "recall", "--stdin-batch", "--db", storePath, "--scope", scope)
-	cmd.Env, _ = brainChildEnv(ctx)
+	// 子进程零云端覆盖变量：评测 recall 全程本地明文通道（零远端端点/凭据注入）。
+	cmd.Env = stripCloudBrainEnv(os.Environ())
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -116,7 +118,7 @@ func (s *warmEvalRecallSession) Close() {
 type warmEvalRecallSessionKey struct{}
 
 // withWarmEvalRecallSession 把 worker 专属热会话注入 ctx：执行器签名不变，
-// runStrictCloudEvalRecall 自行探测并优先走热腿。
+// runLocalEvalRecall 自行探测并优先走热腿。
 func withWarmEvalRecallSession(ctx context.Context, s *warmEvalRecallSession) context.Context {
 	return context.WithValue(ctx, warmEvalRecallSessionKey{}, s)
 }

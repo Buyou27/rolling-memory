@@ -37,7 +37,7 @@ type recallSourceCounts struct {
 
 // merged 返回去重后的真實 MCP 召回触发次数：MCP 直写与回填互为同一批调用的两腿，取大。
 func (c recallSourceCounts) merged() int {
-	return maxInt(c.direct, c.telemetry)
+	return max(c.direct, c.telemetry)
 }
 
 // recallLedgerStat 账本召回行按 5 分钟槽 / 自然小时 / 自然日三个粒度的来源计数及全局 KPI 汇总。
@@ -208,10 +208,10 @@ func loadRecallLedgerStat(home, dbPath, scope string, sinceUnix int64) *recallLe
 			dayHit[dy] = ph
 		}
 		for _, p := range dayTot {
-			stat.totalMCPRecalls += maxInt(p.d, p.t)
+			stat.totalMCPRecalls += max(p.d, p.t)
 		}
 		for _, p := range dayHit {
-			stat.hitMCPRecalls += maxInt(p.d, p.t)
+			stat.hitMCPRecalls += max(p.d, p.t)
 		}
 	}
 
@@ -287,7 +287,7 @@ func loadRecallLedgerStat(home, dbPath, scope string, sinceUnix int64) *recallLe
 				Event:     "recall",
 				Injected:  isHit,
 				Absent:    1 - isHit,
-				Bands:     maxInt(isHit, 0),
+				Bands:     max(isHit, 0),
 				Chars:     chars,
 				ElapsedMS: ms,
 			}

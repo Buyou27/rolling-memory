@@ -12,8 +12,14 @@ import (
 	"unicode/utf8"
 )
 
-func isVariationSelector(r rune) bool {
+// IsVariationSelector reports whether r is a Unicode glyph variation selector
+// (U+FE00..U+FE0F or U+E0100..U+E01EF).
+func IsVariationSelector(r rune) bool {
 	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF)
+}
+
+func isVariationSelector(r rune) bool {
+	return IsVariationSelector(r)
 }
 
 // CanonicalizeApostrophe normalizes curly apostrophes, backticks, and fullwidth

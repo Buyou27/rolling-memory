@@ -1,14 +1,14 @@
 // Copyright 2026 Rocareer & Rolling & PsychologyLake.org.cn
 // Author: Albert <albert@rocareer.com>
 
-// Package eval implements the isolated cloud-SDK benchmark harness.
+// Package eval implements the isolated local benchmark harness.
 package eval
 
 import "sync"
 
 const (
-	// Scope is the LoCoMo cloud-evaluation scope for the default development tenant.
-	// Other tenants derive their own isolated scope with ScopeForSuite.
+	// Scope 是默认开发租户的历史 LoCoMo 评测作用域（旧固定 scope 形态，只用于读取旧制品）。
+	// 现役新运行一律经 ScopeForSuite 派生 <user>-mem-eval-<suite>-local-plain[-<世代>] 独立 scope。
 	Scope = "u10-mem-eval-locomo"
 )
 

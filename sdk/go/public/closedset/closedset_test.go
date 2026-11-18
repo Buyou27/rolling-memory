@@ -32,6 +32,9 @@ func TestClosedSetTablesIntegrityAndBijection(t *testing.T) {
 			if tok == "" {
 				continue
 			}
+			if tok != strings.ToLower(tok) {
+				t.Fatalf("token %q in row %s is not lowercase; lowercase-normalizing lookups can never reach it", tok, head)
+			}
 			if prevHead, exists := seenTokenRow[tok]; exists {
 				t.Fatalf("token %q mapped to multiple closed-set rows (%s vs %s): violates single-valued quotient map", tok, prevHead, head)
 			}
@@ -117,5 +120,20 @@ func TestEverydayTimeClosedSetLookups(t *testing.T) {
 	// Ordinal polarity stays a separate query-side table, not merged here.
 	if got := LookupEverydayTimeClass("first"); got != "" {
 		t.Fatalf("LookupEverydayTimeClass(first) = %q, want empty", got)
+	}
+}
+
+// TestTrailingDotPairLookupParity：词元组查询（LookupGeoPair / LookupUnitPair）与
+// 装饰闭集通道（LookupFirstTag / LookupHarmonics）保持同一末尾点号归一化口径。
+func TestTrailingDotPairLookupParity(t *testing.T) {
+	g1a, g1b := LookupGeoPair("u.s.")
+	g2a, g2b := LookupGeoPair("u.s")
+	if g1a != g2a || g1b != g2b || g1a == "" {
+		t.Fatalf("LookupGeoPair trailing-dot parity: (%q,%q) vs (%q,%q)", g1a, g1b, g2a, g2b)
+	}
+	u1a, u1b := LookupUnitPair("kg.")
+	u2a, u2b := LookupUnitPair("kg")
+	if u1a != u2a || u1b != u2b || u1a == "" {
+		t.Fatalf("LookupUnitPair trailing-dot parity: (%q,%q) vs (%q,%q)", u1a, u1b, u2a, u2b)
 	}
 }

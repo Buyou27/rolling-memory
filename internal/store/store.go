@@ -29,6 +29,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memcore"
+	"github.com/rocareer/rolling-memory/internal/speech"
 )
 
 // Seed is one nominated node in the lexical/vector seed leg.
@@ -811,22 +812,11 @@ func pyRound(value float64, digits int) float64 {
 
 // pyStrip mirrors str.strip() for the whitespace set used by ids.
 func pyStrip(value string) string {
-	return strings.TrimFunc(value, isPySpace)
+	return speech.TrimSpace(value)
 }
 
 func isPySpace(char rune) bool {
-	switch char {
-	case '\t', '\n', '\v', '\f', '\r', ' ', '\u0085', '\u00a0', '\u1680',
-		'\u2028', '\u2029', '\u202f', '\u205f', '\u3000':
-		return true
-	}
-	if char >= '\u001c' && char <= '\u001f' {
-		return true
-	}
-	if char >= '\u2000' && char <= '\u200a' {
-		return true
-	}
-	return false
+	return speech.IsPySpace(char)
 }
 
 // pyRepr mirrors a simple repr() for error messages.
@@ -861,27 +851,7 @@ func sliceRunes(value string, start, end int) string {
 // the candidate scoring loops. Out-of-range ends yield "" (strict), matching the original
 // inline range check instead of sliceRunes' clamp.
 func sliceRunesBounded(value string, start, end int) string {
-	if start < 0 || end <= start {
-		return ""
-	}
-	runeIdx := 0
-	byteStart := -1
-	for byteIdx := range value {
-		if runeIdx == start {
-			byteStart = byteIdx
-		}
-		if runeIdx == end {
-			if byteStart < 0 {
-				return ""
-			}
-			return value[byteStart:byteIdx]
-		}
-		runeIdx++
-	}
-	if byteStart < 0 || runeIdx != end {
-		return ""
-	}
-	return value[byteStart:]
+	return memcore.SliceRunesBounded(value, start, end)
 }
 
 func firstChars(value string, limit int) string {

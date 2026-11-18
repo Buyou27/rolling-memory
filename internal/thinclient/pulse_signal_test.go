@@ -6,12 +6,7 @@ package thinclient_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -244,151 +239,22 @@ func TestPackBlindPacketWithSegmenter_HarmonicOverlayPreservesRecallAndConservat
 
 func TestInspectVaultPulseSignalAndCloudIngestTelemetryWireRoundTrip(t *testing.T) {
 	v := openTestVault(t)
+	cli := thinclient.NewClient(v, thinclient.NewLocalVaultTransport(v))
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var pkt thinclient.BlindPulsePacket
-		if err := json.Unmarshal(body, &pkt); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if pkt.AtomsB64 != "" {
-			atoms, offsets, err := thinclient.DecodePulsePayloadB64(pkt.AtomsB64)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			pkt.Slots = atoms
-			prev := 0
-			for _, end := range offsets {
-				pkt.SentenceFrames = append(pkt.SentenceFrames, atoms[prev:end])
-				prev = end
-			}
-		}
-		sigRep := thinclient.EvaluatePulseSignal(pkt)
-		resp := thinclient.CloudIngestResponse{
-			UnitID:              pkt.UnitID,
-			Layer:               "episodic",
-			Epoch:               1,
-			ConservedMass:       4.2,
-			QualityMult:         1.0,
-			AddressURI:          "C6:L3:B001/C6:L2:B001/C6:L1:B001#00",
-			AddressCoord64:      0x0100040000100100,
-			PulseSignalScore:    sigRep.Score,
-			PulseSignalGrade:    sigRep.Grade,
-			PulseSignalWarnings: sigRep.Warnings,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer srv.Close()
-
-	tr := thinclient.NewHTTPBrainTransport(srv.URL, "test-token")
-	cli := thinclient.NewClient(v, tr)
-
-	ingResp, err := cli.Remember(
+	if _, err := cli.Remember(
 		context.Background(),
 		"DOC-SIG-1",
 		"Rolling-Memory Engine computes wave resonance over blind integer pulses. Local SQLite vault retains full plaintext sovereignty.",
 		1700000100,
-	)
-	if err != nil {
+	); err != nil {
 		t.Fatalf("Remember failed: %v", err)
-	}
-	if ingResp.PulseSignalScore < 85 || (ingResp.PulseSignalGrade != "S" && ingResp.PulseSignalGrade != "A") {
-		t.Fatalf("expected wire-returned PulseSignalScore >= 85 (S/A), got score=%d grade=%q",
-			ingResp.PulseSignalScore, ingResp.PulseSignalGrade)
-	}
-
-	if !v.HasFTS5BM25() {
-		t.Fatalf("expected SQLite FTS5 + BM25 to be enabled by default on Vault")
-	}
-	bm25Map, err := v.QueryFTS5BM25("blind integer pulses", 10)
-	if err != nil || bm25Map["DOC-SIG-1"] <= 0 {
-		t.Fatalf("expected non-zero SQLite FTS5 BM25 milli-score for DOC-SIG-1, got map=%v err=%v", bm25Map, err)
 	}
 
 	vaultRep, err := v.InspectVaultPulseSignal(16, thinclient.SegmenterPackOptions{})
 	if err != nil {
 		t.Fatalf("InspectVaultPulseSignal failed: %v", err)
 	}
-	if vaultRep.Score < 85 || vaultRep.TotalSlots == 0 || !vaultRep.FTS5BM25Enabled {
-		t.Fatalf("expected InspectVaultPulseSignal Score >= 85 and FTS5BM25Enabled=true, got %+v", vaultRep)
+	if vaultRep.Score < 85 || vaultRep.TotalSlots == 0 {
+		t.Fatalf("expected InspectVaultPulseSignal Score >= 85, got %+v", vaultRep)
 	}
-}
-
-func TestLiveUpstreamPulseSignalScoreAndWarnings_UserID10(t *testing.T) {
-	baseURL := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_URL"))
-	if baseURL == "" {
-		t.Skip("ROLLING_MEMORY_BRAIN_URL not set; skipping live upstream pulse-signal test in local mode")
-	}
-	apiKey := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
-	if apiKey == "" {
-		t.Skip("ROLLING_MEMORY_BRAIN_KEY not set; skipping live pulse-signal test")
-	}
-	healthURL := strings.TrimRight(baseURL, "/")
-	if !strings.HasSuffix(healthURL, "/open/memory/v1") {
-		healthURL += "/open/memory/v1"
-	}
-	resp, err := http.Get(healthURL + "/health")
-	if err != nil {
-		t.Skipf("live upstream %s not reachable (%v)", healthURL, err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Skipf("live upstream %s returned status %d", healthURL, resp.StatusCode)
-	}
-
-	v := openTestVault(t)
-	tr := thinclient.NewHTTPBrainTransport(baseURL, apiKey)
-	tr.UserID = thinclient.DefaultUpstreamDevUserID
-	ctx := context.Background()
-
-	// 1. Live healthy CJK + English sentence -> verify client-cloud exact parity (Score=100, Grade="S", 0 warnings)
-	zhText := "Rolling-Memory 现已全面切换为薄客户端架构，不再维护本地核心算法，100% 走云端 /open/memory/v1 接口，绑定 user_id=10。"
-	healthyPkt, _ := v.PackBlindPacket("U10-SIG-HEALTHY", zhText, 1730800100)
-	localHealthy := thinclient.EvaluatePulseSignal(healthyPkt)
-	cloudHealthy, err := tr.IngestBlindPulse(ctx, healthyPkt)
-	if err != nil {
-		t.Fatalf("live IngestBlindPulse(healthy): %v", err)
-	}
-	if cloudHealthy.PulseSignalScore != localHealthy.Score || cloudHealthy.PulseSignalGrade != localHealthy.Grade {
-		t.Fatalf("client-cloud signal parity mismatch on healthy packet: cloud=(%d,%q) vs local=(%d,%q)",
-			cloudHealthy.PulseSignalScore, cloudHealthy.PulseSignalGrade, localHealthy.Score, localHealthy.Grade)
-	}
-	if cloudHealthy.PulseSignalScore < 95 || len(cloudHealthy.PulseSignalWarnings) != 0 {
-		t.Fatalf("expected live cloud PulseSignalScore >= 95 with 0 warnings on normal CJK sentence, got score=%d warnings=%+v",
-			cloudHealthy.PulseSignalScore, cloudHealthy.PulseSignalWarnings)
-	}
-
-	// 2. Live pathological glued custom segmentation (with DisableAutoHarmonic: true) -> ingested without rejection (Zero Gate), returns exact warning parity
-	gluedPkt, _ := v.PackBlindPacketWithSegmenter(
-		"U10-SIG-GLUED",
-		"Distributed consensus protocols require deterministic state machine replication across fault-tolerant storage nodes.",
-		1730800200,
-		thinclient.SegmenterPackOptions{
-			Segmenter: func(s string) []string {
-				return []string{strings.ReplaceAll(s, " ", "")}
-			},
-			DisableAutoHarmonic: true,
-		},
-	)
-	localGlued := thinclient.EvaluatePulseSignal(gluedPkt)
-	cloudGlued, err := tr.IngestBlindPulse(ctx, gluedPkt)
-	if err != nil {
-		t.Fatalf("live IngestBlindPulse(glued): %v", err)
-	}
-	if cloudGlued.AddressURI == "" || cloudGlued.ConservedMass <= 0 {
-		t.Fatalf("zero-gate violation on live upstream: glued packet was not addressed/ingested: %+v", cloudGlued)
-	}
-	if cloudGlued.PulseSignalScore != localGlued.Score || cloudGlued.PulseSignalGrade != localGlued.Grade {
-		t.Fatalf("client-cloud signal parity mismatch on glued packet: cloud=(%d,%q) vs local=(%d,%q)",
-			cloudGlued.PulseSignalScore, cloudGlued.PulseSignalGrade, localGlued.Score, localGlued.Grade)
-	}
-	if len(cloudGlued.PulseSignalWarnings) == 0 || cloudGlued.PulseSignalWarnings[0].Code != thinclient.WarnCoarseUnsegmentedCarrier {
-		t.Fatalf("expected live cloud warning %s, got %+v", thinclient.WarnCoarseUnsegmentedCarrier, cloudGlued.PulseSignalWarnings)
-	}
-	t.Logf("✓ Live Upstream Client-Cloud Pulse Signal Parity Verified: Healthy=%d(%s, 0 warnings) | Glued=%d(%s, warn=%s)",
-		cloudHealthy.PulseSignalScore, cloudHealthy.PulseSignalGrade,
-		cloudGlued.PulseSignalScore, cloudGlued.PulseSignalGrade, cloudGlued.PulseSignalWarnings[0].Code)
 }

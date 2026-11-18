@@ -267,7 +267,7 @@ func (s *Store) Candidates(seedIDs []string, o CandidateOptions) ([]Candidate, m
 	ORDER BY a.t_source DESC, a.node_id
 	LIMIT ?`,
 					o.Scope, nullableSession(o.Session), nullableSession(o.Session),
-					spLocus, ids.EscapeLike(spLocus)+"/%", maxInt(32, o.Limit/2))
+					spLocus, ids.EscapeLike(spLocus)+"/%", max(32, o.Limit/2))
 				if lErr != nil || len(spRows) == 0 {
 					continue
 				}
@@ -314,7 +314,7 @@ func (s *Store) Candidates(seedIDs []string, o CandidateOptions) ([]Candidate, m
 			ORDER BY a.t_source DESC, a.node_id
 			LIMIT ?`,
 					o.Scope, nullableSession(o.Session), nullableSession(o.Session),
-					incLabel, ids.EscapeLike(incLabel)+"/%", maxInt(32, o.Limit/2))
+					incLabel, ids.EscapeLike(incLabel)+"/%", max(32, o.Limit/2))
 				if iErr != nil || len(incRows) == 0 {
 					continue
 				}
@@ -1145,7 +1145,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 							 ORDER BY f.rank LIMIT ?`,
 							ftsMatch(ftsTerms), o.Scope,
 							nullableSession(o.Session), nullableSession(o.Session),
-							qStart, qEnd, o.AsOf, o.AsOf, maxInt(10, o.Limit*2))
+							qStart, qEnd, o.AsOf, o.AsOf, max(10, o.Limit*2))
 						if werr == nil {
 							for _, wr := range winRows {
 								h := mapString(wr, "hash")
@@ -1186,7 +1186,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 							 ORDER BY f.rank LIMIT ?`,
 							ftsMatch(ftsTerms), o.Scope,
 							nullableSession(o.Session), nullableSession(o.Session),
-							qMonth, o.AsOf, o.AsOf, maxInt(10, o.Limit*2))
+							qMonth, o.AsOf, o.AsOf, max(10, o.Limit*2))
 						if merr == nil {
 							for _, mr := range monRows {
 								h := mapString(mr, "hash")
@@ -1305,7 +1305,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 		if effLim > 20 {
 			effLim = 20
 		}
-		quotaCap := maxInt(2, effLim/2)
+		quotaCap := max(2, effLim/2)
 		if !strings.HasPrefix(o.Scope, "mem:golden:") && qStart != 0 && qEnd != 0 && qEnd-qStart <= 7*86400 && quotaCap > 3 {
 			quotaCap = 3
 		}

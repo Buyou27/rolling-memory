@@ -1,10 +1,11 @@
 {
-  "inserted": 3,
-  "messages": 3,
+  "inserted": 2,
+  "messages": 2,
   "offset": 3,
   "ok": true,
   "path": "<CASE>/input/transcript.jsonl",
   "session": "cm1",
-  "size": 505,
+  "size": 532,
+  "skipped_incomplete_tail": 1,
   "total_lines": 3
 }

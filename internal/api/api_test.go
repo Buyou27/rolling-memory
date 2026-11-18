@@ -14,6 +14,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/thinclient"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
@@ -54,6 +55,11 @@ func newMemory(t *testing.T) *api.Memory {
 	memory, err := api.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
+	}
+	// Fresh production databases bootstrap thin; this suite exercises the
+	// legacy assertion-graph surfaces, so apply its schema on the test database.
+	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
 	return memory
@@ -319,14 +325,18 @@ func TestReindexAndStatus(t *testing.T) {
 	}
 }
 
-// TestLocalImportMirrorsTracesIntoVaultRecall locks the local-mode bridge:
-// transcript import must populate the thin plaintext vault so `local` recall is
-// not an empty assertion graph. The cloud path is untouched.
-func TestLocalImportMirrorsTracesIntoVaultRecall(t *testing.T) {
+// TestLocalImportIngestsCanonicalUnitsIntoVaultRecall locks the local-mode
+// canonical bridge: a JSONL transcript import must populate the thin plaintext
+// vault with content-addressed units (addressed by `@ref:jsonl:` pointers), so
+// `local` recall is not an empty assertion graph. The cloud path is untouched.
+func TestLocalImportIngestsCanonicalUnitsIntoVaultRecall(t *testing.T) {
 	memory := newMemory(t)
 	scope := "mem:test"
 	session := "transcript"
-	path := filepath.Join("..", "..", "testdata", "golden", "cli", "208-cli-matrix", "input", "transcript.jsonl")
+	path := writeTranscript(t, "transcript.jsonl", strings.Join([]string{
+		`{"type":"user","sessionId":"cm1","timestamp":"2026-03-02T08:00:00Z","message":{"role":"user","content":"老张搬到了上海。"}}`,
+		`{"type":"assistant","sessionId":"cm1","timestamp":"2026-03-02T08:01:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"记住了。"}]}}`,
+	}, "\n")+"\n")
 	if _, err := memory.ImportFile(path, &scope, &session, "shared", false); err != nil {
 		t.Fatalf("import: %v", err)
 	}

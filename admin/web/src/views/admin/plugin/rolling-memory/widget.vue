@@ -1,7 +1,7 @@
 <!-- plugin: rolling-memory v0.0.58 -->
 <!--
     Rolling-Memory 记忆系统开发调试实时监控浮标（布局级插件组件）。
-    源：plugins/rolling-memory/web/views/widget.vue；落位副本：web/src/views/admin/plugin/rolling-memory/widget.vue。
+    正本：admin/web/src/views/admin/plugin/rolling-memory/widget.vue（单一正本，无镜像拷贝）。
     由宿主布局 web/src/layouts/admin/components/pluginWidgets.vue 自动扫描挂载（与左侧 DEV 环境浮标同行紧邻并排）。
     当插件停用/未装或用户在监控面板关闭 widget_enabled 时自动隐藏（fail-closed）。
 -->
@@ -19,13 +19,13 @@
             <div class="rm-widget-tip">
                 <div class="rm-widget-tip-title">
                     <span>Rolling Memory v{{ info.version }}</span>
-                    <span class="mode-indicator">{{ info.mode.toUpperCase() }}</span>
+                    <span class="mode-indicator">LOCAL</span>
                     <span class="ecg-bpm-tag" :class="{ offline: !info.upstream_online }">
-                        ♥ 1Hz {{ isLocalMode ? 'LOCAL VAULT' : 'UPSTREAM' }} ·
+                        ♥ 1Hz LOCAL VAULT ·
                         {{ info.upstream_online ? `${info.upstream_rtt_ms}ms RTT` : 'OFFLINE' }}
                     </span>
                 </div>
-                <!-- 浮窗内联 264×54 采样滚动心电监护屏 (24 秒环形缓冲区)：本地模式采样本地 SQLite 明文金库，云端模式采样 /open/memory/v1 接口 -->
+                <!-- 浮窗内联 264×54 采样滚动心电监护屏 (24 秒环形缓冲区)：每秒真实采样本机 SQLite 明文金库往返 -->
                 <div class="rm-widget-ecg-screen" :class="{ offline: !info.upstream_online }">
                     <svg class="rm-tip-ecg-svg" viewBox="0 0 264 54" preserveAspectRatio="none">
                         <defs>
@@ -48,8 +48,8 @@
                         />
                     </svg>
                     <div class="ecg-lead-label">
-                        {{ isLocalMode ? 'LOCAL VAULT' : 'UPSTREAM' }}
-                        {{ info.upstream_endpoint || (isLocalMode ? 'local://vault' : '/open/memory/v1') }} · {{ lastTickLabel }}
+                        LOCAL VAULT
+                        {{ info.upstream_endpoint || 'local://vault' }} · {{ lastTickLabel }}
                     </div>
                 </div>
                 <div>
@@ -59,7 +59,7 @@
                 </div>
                 <div>
                     {{ t('plugin.rolling-memory.widget.assertions') }}: {{ info.active_assertions }} ·
-                    {{ isLocalMode ? 'Local Vault' : 'Upstream' }} RTT: {{ info.upstream_rtt_ms }}ms
+                    Local Vault RTT: {{ info.upstream_rtt_ms }}ms
                 </div>
                 <div>
                     {{ t('plugin.rolling-memory.widget.lastEvent') }}: {{ info.last_event }} · {{ t('plugin.rolling-memory.widget.latency') }}:
@@ -83,7 +83,7 @@
             @keydown.enter="openTerminal"
         >
             <span class="rm-widget-dot" :class="{ beating: lastTickFired }"></span>
-            <!-- 胶囊内联 60×16 上游接口每秒真实采样滚动心电监视窗 (最近 8 秒) -->
+            <!-- 胶囊内联 60×16 本地金库每秒真实采样滚动心电监视窗 (最近 8 秒) -->
             <span class="rm-mini-ecg-box">
                 <svg class="rm-widget-mini-ecg" viewBox="0 0 60 16" preserveAspectRatio="none">
                     <line x1="0" y1="10.5" x2="60" y2="10.5" class="mini-ecg-axis" />
@@ -97,7 +97,7 @@
                     />
                 </svg>
             </span>
-            <span class="rm-widget-mode-chip">{{ (info.mode || 'local').toUpperCase() }}</span>
+            <span class="rm-widget-mode-chip">LOCAL</span>
             <span class="rm-widget-label">
                 RM {{ info.active_assertions }}<template v-if="info.bg_task"> · {{ info.bg_task }}</template>
             </span>
@@ -113,8 +113,6 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
-// 本地模式（local_plain）：浮标 1Hz 采样本地明文金库往返，零云端请求；由状态面 mode 字段判定。
-const isLocalMode = computed(() => String(info.value?.mode || 'local') !== 'cloud')
 const terminalModules: Record<string, any> = import.meta.glob('@/stores/terminal.ts', { eager: true })
 const useTerminalFn = Object.values(terminalModules)[0]?.useTerminal
 
@@ -148,8 +146,8 @@ interface WidgetInfo {
     sampled_at_ms?: number
 }
 
-// 单秒上游接口真实采样点：
-// 每一秒直接反映上游 `/open/memory/v1/health` 实测往返延迟 `rttMS` 与记忆/事件变化
+// 单秒本地金库真实采样点：
+// 每一秒直接反映本机金库往返延迟 `rttMS` 与记忆/事件变化
 interface SecondUpstreamTick {
     sec: number
     online: boolean
@@ -196,7 +194,7 @@ const applyProbeSample = (d: WidgetInfo | null) => {
 
     if (!d || !d.upstream_online) {
         lastTickFired.value = false
-        lastTickLabel.value = isLocalMode.value ? 'LOCAL VAULT OFFLINE' : 'UPSTREAM OFFLINE'
+        lastTickLabel.value = 'LOCAL VAULT OFFLINE'
         pushTick({
             sec: nowSec,
             online: false,
@@ -219,8 +217,8 @@ const applyProbeSample = (d: WidgetInfo | null) => {
     prevEventTS = evTS
 
     const rtt = Number(d.upstream_rtt_ms) || 1.0
-    // 将上游真实 RTT (ms) 与当秒事件增量映射为真实心电 R 峰脉冲高度：
-    // - 正常在线每秒一次上游心跳基准脉冲 (0.38 ~ 0.65，随真实 RTT 细微起伏)；
+    // 将本地金库真实 RTT (ms) 与当秒事件增量映射为真实心电 R 峰脉冲高度：
+    // - 正常在线每秒一次本地心跳基准脉冲 (0.38 ~ 0.65，随真实 RTT 细微起伏)；
     // - 若该秒伴随新检索/新记忆写入/后台任务，则激发高耸尖峰 (0.78 ~ 1.00)！
     let intensity = Math.min(0.68, 0.36 + (rtt % 12) * 0.025)
     let label = `RTT ${rtt.toFixed(1)}ms`

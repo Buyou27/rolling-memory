@@ -937,13 +937,13 @@ func ProbeSubjectsBySpecificity(subjects []SubjectCandidate, prompt, workspace s
 			continue
 		}
 
-		// Sublinear BM25-style specificity score applies when >= 2 disjoint spans
+		// Sublinear weighted-hit specificity score applies when >= 2 disjoint spans
 		// (`spanCount >= 2`) co-occur, or when a >= 46-bit contiguous phrase / rare terminal hits.
 		specRecall := matchedW / totalW
 		if (spanCount >= 2 && covBits >= 24.0 && (ideoTotBits < 40.0 || ideoSpans >= 2 || ideoCovBits >= 36.0)) || covBits >= 46.0 || (rareMatches >= 1 && covBits >= 24.0 && (qBits < 240.0 || minMatchedDF == 1 || spanCount >= 2)) {
-			bm25Spec := matchedW / (1.4 + 0.35*totalW)
-			if bm25Spec > specRecall {
-				specRecall = bm25Spec
+			saturatingSpec := matchedW / (1.4 + 0.35*totalW)
+			if saturatingSpec > specRecall {
+				specRecall = saturatingSpec
 			}
 		} else if spanCount <= 1 && totBits >= 56.0 && bitCov < 0.45 && !hasIDMatch && !bodyIDHit {
 			continue
@@ -1223,8 +1223,8 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 			}
 		}
 		if (spanCount >= 2 && covBits >= 24.0 && (ideoTotBits < 40.0 || ideoSpans >= 2 || ideoCovBits >= 36.0)) || covBits >= 46.0 || (rareMatches >= 1 && covBits >= 24.0) {
-			if bm25 := specRecall * 1.45; bm25 > specRecall {
-				specRecall = math.Min(1.0, bm25)
+			if boosted := specRecall * 1.45; boosted > specRecall {
+				specRecall = math.Min(1.0, boosted)
 			}
 		}
 

@@ -417,7 +417,6 @@ type rmFocalCandDist struct {
 
 type rmQueryScratch struct {
 	candidates       []rmCandidate
-	matchPool        []rmFeatureMatch
 	unitStructGate   []float64
 	coreLex          []float64
 	phraseWitness    []float64
@@ -545,11 +544,6 @@ func (e *Engine) ensureQueryScratch(n, clusterN int) *rmQueryScratch {
 		sc.clusterSum = make([]float64, clusterN)
 		sc.clusterHits = make([]int, clusterN)
 		sc.clusterAnchorGen = make([]uint32, clusterN)
-	}
-	if cap(sc.matchPool) < n*2 {
-		sc.matchPool = make([]rmFeatureMatch, 0, n*2)
-	} else {
-		sc.matchPool = sc.matchPool[:0]
 	}
 	if cap(sc.focalPool) < 256 {
 		sc.focalPool = make([]rmFocalTermWeight, 0, 256)
@@ -1455,6 +1449,8 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	// Shared derivation with the disk-hydration path (csr_disk.go) so both
 	// state builders agree bit-exactly without serializing a derived column.
 	st.episodeOf, st.episodeCount = buildEpisodeComponents(st.bucketTimes, st.ordPos, idx.N, st.meanGap, st.muLogGap, st.sigLogGap)
+	// neighborSpan 是桶时间线上的局部近邻窗口（±2 桶）：工程局部性边界（相邻桶的
+	// 同情节证据），无分布假设推导；机制由全池配对回归保持（见 docs/CHANGELOG.md）。
 	const neighborSpan = 2
 	bucketNeighbors := make([][]int32, len(buckets))
 	var totalNeighborLinks int
@@ -1654,6 +1650,7 @@ func (st *rmClusterState) rebuildOrthogonalTransparentNeighbors(idx *Index) {
 	if st.clusterN <= 0 || len(st.bucketTimes) == 0 {
 		return
 	}
+	// neighborSpan 是桶时间线上的局部近邻窗口（±2 桶）：工程局部性边界，无分布假设推导。
 	const neighborSpan = 2
 	const orthoFloor = invE * invE
 	subFloor := 1.0 - invE
@@ -1893,30 +1890,7 @@ func (st *rmClusterState) computeDocSubjectCos(idx *Index, a, b int32) float64 {
 		}
 		floor = invE * gain
 	}
-	fa, fb := &st.fastDocs[a], &st.fastDocs[b]
-	if fa.subjNormSq <= 0 || fb.subjNormSq <= 0 {
-		return floor
-	}
-	sA, eA := st.subjRowPtr[a], st.subjRowPtr[a+1]
-	sB, eB := st.subjRowPtr[b], st.subjRowPtr[b+1]
-	ia, ib := st.subjIDsPool[sA:eA], st.subjIDsPool[sB:eB]
-	wa := st.subjWeightsPool[sA:eA]
-	var dot float64
-	for x, y := 0, 0; x < len(ia) && y < len(ib); {
-		if ia[x] < ib[y] {
-			x++
-		} else if ia[x] > ib[y] {
-			y++
-		} else {
-			dot += wa[x]
-			x++
-			y++
-		}
-	}
-	if dot <= 0 {
-		return floor
-	}
-	return math.Max(floor, math.Min(1.0, dot/math.Sqrt(fa.subjNormSq*fb.subjNormSq)))
+	return st.subjRowView(a).CosineWithFloor(st.subjRowView(b), floor)
 }
 
 type rmOccurrence struct {
@@ -1995,41 +1969,9 @@ func (st *rmClusterState) entrySentExactAt(e rmDocEntry, i int) int {
 }
 
 // closestExactSlot 与 closestPackedSlot 同构（输入按 (句, 槽) 升序），
-// 以精确坐标工作；仅宽语料分支调用。
+// 以精确坐标工作；仅宽语料分支调用，直接委托同包 closestTermSlot。
 func closestExactSlot(left, right []TermPosition) int {
-	nL, nR := len(left), len(right)
-	if nL == 0 || nR == 0 {
-		return -1
-	}
-	if left[nL-1].Sentence < right[0].Sentence || right[nR-1].Sentence < left[0].Sentence {
-		return -1
-	}
-	closest := -1
-	for x, y := 0, 0; x < nL && y < nR; {
-		switch {
-		case left[x].Sentence < right[y].Sentence:
-			x++
-		case left[x].Sentence > right[y].Sentence:
-			y++
-		default:
-			diff := left[x].Slot - right[y].Slot
-			if diff < 0 {
-				diff = -diff
-			}
-			if closest < 0 || diff < closest {
-				closest = diff
-				if closest == 0 {
-					return 0
-				}
-			}
-			if left[x].Slot < right[y].Slot {
-				x++
-			} else {
-				y++
-			}
-		}
-	}
-	return closest
+	return closestTermSlot(left, right)
 }
 
 func (st *rmClusterState) extractDocDyadsInto(entries []rmDocEntry, occs []rmPackedOccurrence, out []rmDyad) ([]rmDyad, []rmPackedOccurrence) {

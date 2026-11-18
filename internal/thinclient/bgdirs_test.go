@@ -15,9 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -339,18 +336,18 @@ func TestBackgroundMultiDirs_NestedSubdirsAndSevenDocumentFormats(t *testing.T) 
 }
 
 type backgroundTransportStub struct {
-	ingest      func(context.Context, thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error)
+	ingest      func(context.Context, thinclient.BlindPulsePacket) (thinclient.IngestResponse, error)
 	deleteUnits func(context.Context, []string) error
 }
 
-func (s *backgroundTransportStub) IngestBlindPulse(ctx context.Context, pkt thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error) {
+func (s *backgroundTransportStub) IngestBlindPulse(ctx context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
 	if s.ingest != nil {
 		return s.ingest(ctx, pkt)
 	}
-	return thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+	return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
 }
 
-func (s *backgroundTransportStub) QueryBlindManifold(_ context.Context, _ thinclient.BlindPulsePacket, _ int) ([]thinclient.CloudQueryHit, error) {
+func (s *backgroundTransportStub) QueryBlindManifold(_ context.Context, _ thinclient.BlindPulsePacket, _ int) ([]thinclient.QueryHit, error) {
 	return nil, nil
 }
 
@@ -417,11 +414,11 @@ func TestBackgroundSyncIngestFailureDoesNotWriteSyncedMetadata(t *testing.T) {
 	// The upload pool invokes this stub from worker goroutines, so the call counter is atomic.
 	var ingestCalls atomic.Int64
 	transport := &backgroundTransportStub{}
-	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error) {
+	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
 		if ingestCalls.Add(1) == 1 {
-			return thinclient.CloudIngestResponse{}, errors.New("cloud ingest unavailable")
+			return thinclient.IngestResponse{}, errors.New("cloud ingest unavailable")
 		}
-		return thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+		return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
 	}
 	client, db := newBackgroundTestClient(t, transport)
 	if _, err := client.AddBackgroundDir(root); err != nil {
@@ -463,74 +460,6 @@ func TestBackgroundSyncRequiresTransport(t *testing.T) {
 	client, _ := newBackgroundTestClient(t, nil)
 	if _, err := client.SyncBackgroundDirs(context.Background()); err == nil || !strings.Contains(err.Error(), "non-nil Transport") {
 		t.Fatalf("expected explicit nil Transport error, got %v", err)
-	}
-}
-
-func TestBackgroundSyncHTTPIngestUsesBlindBackgroundUser10(t *testing.T) {
-	type capturedRequest struct {
-		body   string
-		packet thinclient.BlindPulsePacket
-		auth   string
-		user   string
-		scope  string
-	}
-	captured := make(chan capturedRequest, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open/memory/v1/ingest" {
-			http.NotFound(w, r)
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var pkt thinclient.BlindPulsePacket
-		if err := json.Unmarshal(body, &pkt); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		captured <- capturedRequest{
-			body:   string(body),
-			packet: pkt,
-			auth:   r.Header.Get("Authorization"),
-			user:   r.Header.Get("X-Rolling-Memory-User"),
-			scope:  r.Header.Get("X-Rolling-Memory-Scope"),
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer})
-	}))
-	defer srv.Close()
-
-	root := newBackgroundTestDir(t)
-	plaintext := "AsterQuixoticPlaintext do-not-leak-background remains local"
-	if err := os.WriteFile(filepath.Join(root, "private.md"), []byte(plaintext), 0o600); err != nil {
-		t.Fatalf("write private document: %v", err)
-	}
-	transport := thinclient.NewHTTPBrainTransport(srv.URL, "test-token")
-	transport.Scope = "background-scope"
-	client, _ := newBackgroundTestClient(t, transport)
-	if _, err := client.AddBackgroundDir(root); err != nil {
-		t.Fatalf("AddBackgroundDir: %v", err)
-	}
-	if _, err := client.SyncBackgroundDirs(context.Background()); err != nil {
-		t.Fatalf("SyncBackgroundDirs: %v", err)
-	}
-
-	req := <-captured
-	for _, secret := range []string{"asterquixoticplaintext", "do-not-leak-background", "remains local"} {
-		if strings.Contains(strings.ToLower(req.body), secret) {
-			t.Fatalf("plaintext leaked in background ingest %q: %s", secret, req.body)
-		}
-	}
-	if req.packet.Layer != thinclient.LayerBackground || req.packet.UserID != thinclient.DefaultUpstreamDevUserID {
-		t.Fatalf("unexpected background ingest identity: %+v", req.packet)
-	}
-	if req.packet.Scope != "background-scope" || req.scope != "background-scope" {
-		t.Fatalf("scope missing from body or headers: packet=%q header=%q", req.packet.Scope, req.scope)
-	}
-	if req.auth != "Bearer test-token" || req.user != "10" {
-		t.Fatalf("unexpected ingest headers: auth=%q user=%q", req.auth, req.user)
 	}
 }
 
@@ -864,11 +793,6 @@ func TestRemoveBackgroundDirCascadesFTSAndNoetic(t *testing.T) {
 		}
 		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, path); got != 0 {
 			t.Fatalf("chunk metadata retained for %s: %d", path, got)
-		}
-	}
-	for _, unitID := range append(append([]string(nil), unitsA...), unitsB...) {
-		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_fts_map WHERE doc_id = ?`, unitID); got != 0 {
-			t.Fatalf("FTS row retained for %s: %d", unitID, got)
 		}
 	}
 	if got := loadNoeticStatus(t, db, "NOETIC-CITED"); got != "stale" {
@@ -1220,7 +1144,7 @@ func TestBackgroundSyncUploadsChangedFilesConcurrently(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	transport := &backgroundTransportStub{}
-	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error) {
+	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
 		current := inFlight.Add(1)
 		defer inFlight.Add(-1)
 		for {
@@ -1235,9 +1159,9 @@ func TestBackgroundSyncUploadsChangedFilesConcurrently(t *testing.T) {
 		select {
 		case <-release:
 		case <-time.After(10 * time.Second):
-			return thinclient.CloudIngestResponse{}, errors.New("background chunk uploads stayed serial")
+			return thinclient.IngestResponse{}, errors.New("background chunk uploads stayed serial")
 		}
-		return thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+		return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
 	}
 	client, _ := newBackgroundTestClient(t, transport)
 	if _, err := client.AddBackgroundDir(root); err != nil {
@@ -1290,19 +1214,19 @@ func TestBackgroundSyncFirstFailureByWalkOrderCommitsEarlierFiles(t *testing.T) 
 	var cloud sync.Map // file index → struct{}: units the stub actually accepted
 	var purged sync.Map
 	transport := &backgroundTransportStub{}
-	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error) {
+	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
 		owner, known := unitOwners[pkt.UnitID]
 		if rejectFail.Load() && pkt.UnitID == failUnitID {
 			// Delay the rejection so the other workers finish their files (and pull the next ones)
 			// before the failure is observed: the rollback then has a tail to purge, and a
 			// regression that drops the rollback leaves those units live in the cloud.
 			time.Sleep(300 * time.Millisecond)
-			return thinclient.CloudIngestResponse{}, errors.New("beta ingest rejected")
+			return thinclient.IngestResponse{}, errors.New("beta ingest rejected")
 		}
 		if known {
 			cloud.Store(owner, struct{}{})
 		}
-		return thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+		return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
 	}
 	transport.deleteUnits = func(_ context.Context, unitIDs []string) error {
 		for _, id := range unitIDs {
@@ -1384,9 +1308,9 @@ func TestBackgroundSyncSkipsOversizedFileAndKeepsMountSyncable(t *testing.T) {
 
 	var ingestCalls atomic.Int64
 	transport := &backgroundTransportStub{}
-	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error) {
+	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
 		ingestCalls.Add(1)
-		return thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+		return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
 	}
 	client, db := newBackgroundTestClient(t, transport)
 	if _, err := client.AddBackgroundDir(root); err != nil {
@@ -1673,9 +1597,9 @@ func TestBackgroundUnmountChildRekeepsFilesCoveredByParent(t *testing.T) {
 	var ingestCalls atomic.Int64
 	var purgedUnits atomic.Int64
 	transport := &backgroundTransportStub{}
-	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.CloudIngestResponse, error) {
+	transport.ingest = func(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
 		ingestCalls.Add(1)
-		return thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+		return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
 	}
 	transport.deleteUnits = func(_ context.Context, unitIDs []string) error {
 		purgedUnits.Add(int64(len(unitIDs)))

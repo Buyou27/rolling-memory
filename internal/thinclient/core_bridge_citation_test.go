@@ -21,10 +21,10 @@ import (
 //     carrier itself above lexical candidates (carriers must not steal seats).
 func TestCoreFusionNoeticCitationCarrier(t *testing.T) {
 	// 1. Projection contract.
-	if _, ok := noeticFusionDoc(CloudQueryHit{UnitID: "no_1", Layer: LayerNoetic}); ok {
+	if _, ok := noeticFusionDoc(QueryHit{UnitID: "no_1", Layer: LayerNoetic}); ok {
 		t.Fatal("consolidation without citations must not become a carrier")
 	}
-	nd, ok := noeticFusionDoc(CloudQueryHit{
+	nd, ok := noeticFusionDoc(QueryHit{
 		UnitID:       "no_1",
 		Layer:        LayerNoetic,
 		OccurredAt:   1760000500,

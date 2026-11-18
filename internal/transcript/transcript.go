@@ -123,6 +123,12 @@ func ReadMessages(path string, session *string, offset, maxLines int) ([]Message
 // ImportTranscript inserts the next transcript slice and stores the cursor in
 // the standard working-memory state.
 func ImportTranscript(st *store.Store, path, scope string, session *string, audience string, offset, maxLines int) (map[string]any, error) {
+	if st == nil || !st.HasLegacyGraph() {
+		// Fresh databases bootstrap thin (vault-only): this reader lands rows in
+		// the legacy assertion graph, which the database does not carry. The
+		// plaintext-vault JSONL path (api.ImportFile) is the vault-era importer.
+		return nil, fmt.Errorf("transcript import requires the legacy assertion graph, which this plaintext-vault database does not carry; import a JSONL transcript through the vault path instead")
+	}
 	target := expandUser(path)
 	effectiveSession := pyStem(target)
 	if session != nil && *session != "" {
@@ -394,6 +400,12 @@ func pyLines(text string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// SessionStem is the default session name one transcript path names (the file
+// stem): the transcript adapter and the canonical JSONL import share it.
+func SessionStem(path string) string {
+	return pyStem(path)
 }
 
 // pyStem mirrors Path(path).stem (last suffix dropped, dotfiles keep their

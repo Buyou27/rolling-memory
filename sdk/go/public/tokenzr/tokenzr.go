@@ -33,6 +33,10 @@ const (
 	maxCountPerShard   = 4096
 	maxCountCacheBytes = 32768
 	maxBPEPieceBytes   = 256
+	// maxCountShardBytes 是计数缓存单分片的键字节预算（64 分片 × 1 MiB = 64 MiB 上界）。
+	// 计数缓存键可达 32 KiB（maxCountCacheBytes），仅按条数淘汰会让总键字节上界膨胀到 8 GiB；
+	// 本预算把缓存占用压回与词片缓存同阶的工程安全上界。
+	maxCountShardBytes = 1 << 20
 )
 
 type pieceCacheShard struct {
@@ -41,8 +45,9 @@ type pieceCacheShard struct {
 }
 
 type countCacheShard struct {
-	mu sync.RWMutex
-	m  map[string]int
+	mu    sync.RWMutex
+	m     map[string]int
+	bytes int
 }
 
 type codec struct {
@@ -655,8 +660,12 @@ func (c *codec) count(text string) int {
 	}
 	if sh != nil {
 		sh.mu.Lock()
-		if len(sh.m) >= maxCountPerShard {
+		if len(sh.m) >= maxCountPerShard || sh.bytes+len(text) > maxCountShardBytes {
 			sh.m = make(map[string]int, 128)
+			sh.bytes = 0
+		}
+		if _, exists := sh.m[text]; !exists {
+			sh.bytes += len(text)
 		}
 		sh.m[text] = total
 		sh.mu.Unlock()
@@ -761,9 +770,9 @@ func SplitSubwords(text string) []string {
 	var pending []byte
 	flushPending := func() {
 		if len(pending) > 0 {
-			if utf8.Valid(pending) {
-				out = append(out, string(pending))
-			}
+			// 无语种相关的丢字节闸：拼接中的片段即使非法 UTF-8 也原样输出，
+			// 保证 strings.Join(out, "") == text（lossless 契约）。
+			out = append(out, string(pending))
 			pending = pending[:0]
 		}
 	}
@@ -1300,6 +1309,10 @@ func SplitBPEDirectPieces(word string) []string {
 // SplitSubwordConstituents segments text along the embedded 128k BPE vocabulary and unwraps
 // >=3-character CJK phrase tokens (and late accidental 2-character super-hub merges) along the
 // endogenous BPE binary merge tree (leftChild, rightChild) — zero stopword tables, zero hardcoded characters.
+//
+// 边界哨兵：多字节词叶子在子节点不可独立解码（非法 UTF-8 片段或单字边界）时以字面空格 " "
+// 占位返回，表示「此位置无独立词面子节点」——哨兵不是输入的字符，leaves 不保证为输入的字面
+// 子串切片；需要纯子串词面分解时改用 SplitBPEDirectPieces。
 func SplitSubwordConstituents(text string) (leaves []string, phrases []string) {
 	if text == "" {
 		return nil, nil

@@ -2,7 +2,7 @@
 
 **[简体中文](README.zh-CN.md) · [English](../../README.md) · [官方网站](https://rolling-memory.rocareer.com/) · [文档中心](README.md) · [省 Token 算账与边界](token-economics.md) · [常见问答](faq.md) · [评测与复现](benchmarks.md) · [立场与免责声明](DECLARATION.md)**
 
-**Rolling Memory**（中文品牌「洛灵」）是一个源码公开、本地优先的记忆工具，面向 AI 编程助手与 Agent——Claude Code、Codex、Cursor、Windsurf、Cline、ZCode 等——由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。它在本地索引受支持的对话来源与挂载文件，经唯一 MCP 工具 `recall`（回忆）提供给接入的编程助手；对话采集范围和手工导入方式见[接入指南](harness.md#45-对话采集范围与手工导入)。**无云端、无向量、无后台大模型调用**；非商业用途免费。
+**Rolling Memory**（中文品牌「洛灵」）是一个源码公开、本地优先的记忆工具，面向 AI 编程助手与 Agent——Claude Code、Codex、Cursor、Windsurf、Cline、ZCode 等——由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。它在本地索引受支持的对话来源与挂载文件，经唯一 MCP 工具 `recall`（回忆）提供给接入的编程助手；对话采集范围和手工导入方式见[接入指南](harness.md#45-对话采集范围与手工导入)。**无需云端、无向量、无后台大模型调用**；非商业用途免费。
 
 ![Rolling Memory Live Console — 本地金库遥测、MCP recall 账本与记忆资产增长](../assets/live-console-zh.webp)
 
@@ -29,7 +29,7 @@
   ```
 - **预置了 U 盘随身模式**：因为程序和记忆库都是独立的本地文件，我们还预置了一个 U 盘便携模式（见 [`usb-portable.md`](usb-portable.md)），可以把记忆工具和记忆库一起塞进 U 盘随身带走。这个模式还比较新、我们没做充分测试，它也有个很现实的前提：**你得在不同的电脑上跑同一个项目，原来的项目记忆才会有用**。欢迎感兴趣的朋友一起尝试，好用不好用都欢迎告诉我们。
 
-> **关于当前发布版**：本仓库发布的是**纯本地模式（`local_plain`）**，完全离线运行，零外部网络请求。云端记忆引擎以申请制单独提供，不属于本仓库；发布与许可边界见 [DECLARATION.md](DECLARATION.md)，获取帮助见 [SUPPORT.md](SUPPORT.md)。
+> **关于当前发布版**：本仓库发布的是**纯本地模式（`local_plain`）**：召回、存储与结晶全部在本地金库完成，不发起任何记忆面网络请求；对外请求仅三类——你自行配置的评测大模型端点、可选的上游基准语料下载、可选的更新检查。另有面向高级与企业用户的独立**云端记忆服务**（端到端密文设计）采用申请制提供，不属于本仓库；发布与许可边界见 [DECLARATION.md](DECLARATION.md)，获取帮助见 [SUPPORT.md](SUPPORT.md)。
 
 ---
 

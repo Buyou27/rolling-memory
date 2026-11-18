@@ -110,6 +110,33 @@ var enumeratedDeviations = []enumeratedDeviation{
 		Value:    map[string]any{"type": "boolean", "description": "Item-mode grouping: true (default) groups by sxo->unit->parse->block; false delivers pure relevance order. Distinct from LLM rerank."},
 		Note:     "Item-mode grouping switch (orthogonal to LLM rerank)",
 	},
+	{
+		Scenario: "220-mcp",
+		Path:     "result/tools/[name=recall]/inputSchema/properties",
+		Key:      "delivery_window",
+		Value: map[string]any{
+			"enum":        []any{"auto", "0-16", "0-32", "0-64"},
+			"description": "Smart adaptive delivery window (default `auto` uses the console setting, `0-16` by default): delivers 0 to N memories within the natural physical information energy envelope E(u_k) >= E(u_1)/e without a minimum floor. Omit or pass `auto` for normal turns; pass `0-32` or `0-64` only for cross-session history audits or broad multi-event synthesis.",
+		},
+		Note: "Smart adaptive delivery window preset (auto / 0-16 / 0-32 / 0-64)",
+	},
+	{
+		Scenario: "220-mcp",
+		Path:     "result/tools/[name=recall]/inputSchema/properties/caps/properties",
+		Key:      "delivery_window",
+		Value: map[string]any{
+			"enum":        []any{"auto", "0-16", "0-32", "0-64"},
+			"description": "Smart adaptive delivery window (default `auto` uses the console setting, `0-16` by default): delivers 0 to N memories within the natural physical information energy envelope E(u_k) >= E(u_1)/e without a minimum floor. Omit or pass `auto` for normal turns; pass `0-32` or `0-64` only for cross-session history audits or broad multi-event synthesis.",
+		},
+		Note: "Smart adaptive delivery window preset under caps",
+	},
+	{
+		Scenario: "220-mcp",
+		Path:     "result/tools/[name=recall]/inputSchema/properties/caps/properties",
+		Key:      "chars",
+		Value:    nil,
+		Note:     "Removed caps.chars from MCP recall schema in favor of smart adaptive delivery_window",
+	},
 }
 
 // compareGoldenValues is the deviation-aware comparison for a replayed MCP
@@ -143,22 +170,25 @@ func walkGoldenValue(path string, expected, actual any, extras map[string]map[st
 		if !ok {
 			return fmt.Errorf("type mismatch at %s: want object, got %T", where, actual)
 		}
+		declared := extras[path]
 		for key, expValue := range exp {
 			actValue, exists := act[key]
 			if !exists {
+				if dev, ok := declared[key]; ok && dev.Value == nil {
+					continue
+				}
 				return fmt.Errorf("missing key %q at %s", key, where)
 			}
 			if err := walkGoldenValue(path+"/"+key, expValue, actValue, extras); err != nil {
 				return err
 			}
 		}
-		declared := extras[path]
 		for key, actValue := range act {
 			if _, inExpected := exp[key]; inExpected {
 				continue
 			}
 			dev, ok := declared[key]
-			if !ok {
+			if !ok || dev.Value == nil {
 				return fmt.Errorf("undeclared extra key %q at %s (all differences must be registered in deviations.go)", key, where)
 			}
 			if err := scalarEqual(dev.Value, actValue); err != nil {
@@ -166,6 +196,9 @@ func walkGoldenValue(path string, expected, actual any, extras map[string]map[st
 			}
 		}
 		for key, dev := range declared {
+			if dev.Value == nil {
+				continue
+			}
 			if _, exists := act[key]; !exists {
 				return fmt.Errorf("declared deviation %q missing at %s (%s)", key, where, dev.Note)
 			}

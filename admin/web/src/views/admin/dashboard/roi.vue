@@ -326,57 +326,241 @@
             </div>
         </div>
 
-        <!-- ==================== 第二屏：近 14 天沉淀×结晶脉冲趋势 + 多工作区覆盖与冷热诊断矩阵 ==================== -->
+        <!-- ==================== 第二屏：近 14 天记忆沉淀 × 认知结晶 × 证据采纳三轨趋势 + 多工作区覆盖与冷热诊断矩阵 ==================== -->
         <div class="roi-mid-grid">
-            <!-- 左：近 14 天每日三层沉淀与认知结晶双轨趋势 -->
+            <!-- 左：近 14 天每日记忆沉淀、认知结晶与证据采纳率三轨趋势 -->
             <div class="roi-panel">
                 <div class="panel-head">
                     <div>
                         <span class="panel-title">
-                            {{ isEn ? '14-Day Ingestion & L3 Crystallization Pulse' : '近 14 天记忆沉淀 × L3 认知结晶脉冲趋势' }}
+                            {{ isEn ? '14-Day Memory Growth, Crystallization & Adoption' : '近 14 天记忆沉淀 × 认知结晶 × 证据采纳趋势' }}
                         </span>
                         <span class="panel-sub">
                             {{
                                 isEn
-                                    ? 'Daily L1/L2 memory growth vs active L3 recall crystallizations & citation links'
-                                    : '按自然日对比 L1/L2 记忆入库量与 Agent 主动召回产生的 L3 认知结晶及引证数'
+                                    ? 'Per natural day: new memory (docs & code / sessions) → recall crystallizations → share of evidence actually used afterwards'
+                                    : '按自然日：新增记忆（文档与代码 / 会话记录）→ Agent 召回结晶 → 证据采纳率（被后续工作真正用上的比例）'
                             }}
                         </span>
                     </div>
-                    <div class="legend-inline font-mono">
-                        <span class="lg-item"><i class="lg-dot is-ep"></i>L2 {{ isEn ? 'Episodic' : '情景' }}</span>
-                        <span class="lg-item"><i class="lg-dot is-bg"></i>L1 {{ isEn ? 'Background' : '背景' }}</span>
-                        <span class="lg-item"><i class="lg-dot is-nt"></i>L3 {{ isEn ? 'Noetic (Citations)' : '结晶 (引证)' }}</span>
+                    <div class="panel-head-actions">
+                        <el-popover trigger="click" placement="bottom-end" :width="460" popper-class="rm-help-popper">
+                            <template #reference>
+                                <button type="button" class="tip-q" :aria-label="isEn ? 'Trend metric definitions' : '趋势面板口径说明'">?</button>
+                            </template>
+                            <div class="rm-help-body">
+                                <p v-if="isEn">
+                                    <strong>Memory Growth:</strong> what was written into the memory vault that day. "Docs &amp; Code" are file chunks from mounted
+                                    directories; "Sessions" are conversation records from your agents.
+                                </p>
+                                <p v-else>
+                                    <strong>记忆沉淀：</strong>当天写入记忆库的内容 ——「文档与代码」是后台挂载目录里的文件分块，「会话记录」是你与 Agent 的对话。
+                                </p>
+                                <p v-if="isEn">
+                                    <strong>Crystallized:</strong> durable Q&amp;A conclusions kept after a recall returned evidence; each one carries its citation
+                                    links. Entries retired later are no longer counted.
+                                </p>
+                                <p v-else>
+                                    <strong>认知结晶：</strong>Agent 用 recall 召回证据后沉淀下来的问答结论，每条都带着引用的证据（引证链）；之后被清理的结晶不再计入。
+                                </p>
+                                <p v-if="isEn">
+                                    <strong>Evidence Adoption:</strong> of the settled crystallizations, the share whose evidence really got used afterwards — in a
+                                    later tool call (tool hit) or in the reply body (context hit). Audited automatically with zero model calls; ones still waiting
+                                    for later corpora show as pending and stay out of the rate.
+                                </p>
+                                <p v-else>
+                                    <strong>证据采纳率：</strong>已结算的结晶里，证据在后续工具调用（工具直达）或回复正文（事实采纳）中真正被用上的比例 —— 全自动事后审计、
+                                    零模型参与；还在等待后续语料的记为「待结算」，不计入分母。
+                                </p>
+                                <p v-if="isEn">
+                                    A hit (a recall that returned evidence) is not the same as being useful — settling needs later corpora, so today's rate is
+                                    usually lower or incomplete until the day closes. Hover any day for the exact split.
+                                </p>
+                                <p v-else>
+                                    「命中」（召回成功）不等于「有用」：结算需要等待后续语料，因此今天（进行中）的采纳率通常偏低或不完整，属正常现象。悬停任意一天可看当日完整拆分。
+                                </p>
+                            </div>
+                        </el-popover>
                     </div>
                 </div>
 
-                <div class="daily-bars">
-                    <div v-for="day in dailySeries" :key="day.date" class="day-col">
-                        <div class="day-nums font-mono">
-                            <span v-if="day.noetic_count > 0" class="dn-nt" :title="`${day.citation_links} citations`">
-                                ★{{ day.noetic_count }}
-                            </span>
-                            <span v-else class="dn-zero">·</span>
-                        </div>
-                        <div class="day-track">
+                <div class="trend-chips">
+                    <div class="stat-chip">
+                        <span class="stat-label">{{ isEn ? 'Memory Added' : '新增记忆' }}</span>
+                        <span class="stat-value font-mono">{{ formatTok(trendTotals.ingest) }}</span>
+                        <span class="stat-sub font-mono">
+                            {{ isEn ? 'Sessions' : '会话' }} {{ formatTok(trendTotals.episodic) }} · {{ isEn ? 'Docs & Code' : '文档与代码' }}
+                            {{ formatTok(trendTotals.background) }}
+                        </span>
+                    </div>
+                    <div class="stat-chip">
+                        <span class="stat-label">{{ isEn ? 'Crystallized' : '认知结晶' }}</span>
+                        <span class="stat-value font-mono">{{ formatTok(trendTotals.noetic) }}</span>
+                        <span class="stat-sub font-mono">{{ isEn ? 'citations' : '引证' }} {{ formatTok(trendTotals.citations) }}</span>
+                    </div>
+                    <div class="stat-chip">
+                        <span class="stat-label">{{ isEn ? 'Evidence Adoption' : '证据采纳率' }}</span>
+                        <span class="stat-value font-mono">{{ trendTotals.audited > 0 ? trendTotals.ratePct + '%' : '—' }}</span>
+                        <span class="stat-sub font-mono">
+                            {{ isEn ? 'settled' : '已结算' }} {{ formatTok(trendTotals.audited) }} · {{ isEn ? 'pending' : '待结算' }}
+                            {{ formatTok(trendTotals.pending) }}
+                        </span>
+                    </div>
+                </div>
+
+                <div v-if="!trendHasData" class="trend-empty">
+                    <Icon name="lucide-info" :size="15" />
+                    <span>
+                        {{
+                            isEn
+                                ? 'No memory activity in the last 14 days yet. Start a conversation or mount a directory and this panel fills in day by day.'
+                                : '近 14 天还没有记忆沉淀数据 —— 开始对话或挂载目录后，这里会逐日显示沉淀、结晶与采纳趋势。'
+                        }}
+                    </span>
+                </div>
+
+                <div v-else class="trend-body">
+                    <div class="track-head is-ingest">
+                        <span class="th-name">{{ isEn ? 'Memory Growth' : '记忆沉淀' }}</span>
+                        <span class="th-legend font-mono">
+                            <span class="lg-item"><i class="lg-dot is-ep"></i>{{ isEn ? 'Sessions' : '会话记录' }}</span>
+                            <span class="lg-item"><i class="lg-dot is-bg"></i>{{ isEn ? 'Docs & Code' : '文档与代码' }}</span>
+                        </span>
+                    </div>
+                    <div class="y-gutter is-ingest font-mono">
+                        <span>{{ axisLabel(trendScale.ingestMax) }}</span>
+                        <span>{{ axisLabel(trendScale.ingestMax / 2) }}</span>
+                        <span>0</span>
+                    </div>
+                    <div class="gline is-ingest"></div>
+                    <div v-for="(day, i) in dailySeries" :key="'ing-' + day.date" class="plot-cell is-ingest" :style="{ gridColumn: String(i + 2) }">
+                        <div class="bar-col">
                             <div
-                                class="bar-seg is-nt"
-                                :style="{ height: dayBarHeight(day.noetic_count * 12, maxDailyScale) + '%' }"
-                                :title="`${day.date}: L3 Noetic ${day.noetic_count} (${day.citation_links} citations)`"
-                            ></div>
-                            <div
+                                v-if="(day.background_count ?? 0) > 0"
                                 class="bar-seg is-bg"
-                                :style="{ height: dayBarHeight(day.background_count, maxDailyScale) + '%' }"
-                                :title="`${day.date}: L1 Background ${day.background_count}`"
+                                :class="{ 'is-hover': hoverIdx === i }"
+                                :style="{ height: barPct(day.background_count, trendScale.ingestMax) }"
                             ></div>
                             <div
+                                v-if="(day.episodic_count ?? 0) > 0"
                                 class="bar-seg is-ep"
-                                :style="{ height: dayBarHeight(day.episodic_count, maxDailyScale) + '%' }"
-                                :title="`${day.date}: L2 Episodic ${day.episodic_count}`"
+                                :class="{ 'is-hover': hoverIdx === i }"
+                                :style="{ height: barPct(day.episodic_count, trendScale.ingestMax) }"
                             ></div>
                         </div>
-                        <div class="day-total font-mono">{{ day.episodic_count + day.background_count }}</div>
-                        <div class="day-label font-mono">{{ day.date.slice(5) }}</div>
+                    </div>
+
+                    <div class="track-head is-noetic">
+                        <span class="th-name">{{ isEn ? 'Crystallized' : '认知结晶' }}</span>
+                        <span class="th-hint">{{ isEn ? 'recall results kept as durable entries (still active)' : 'Agent 召回证据后沉淀的问答结论（仍活跃）' }}</span>
+                    </div>
+                    <div class="y-gutter is-noetic font-mono">
+                        <span>{{ axisLabel(trendScale.noeticMax) }}</span>
+                        <span>{{ axisLabel(trendScale.noeticMax / 2) }}</span>
+                        <span>0</span>
+                    </div>
+                    <div class="gline is-noetic"></div>
+                    <div class="line-layer is-noetic">
+                        <svg class="line-svg is-noetic" viewBox="0 0 14 100" preserveAspectRatio="none" aria-hidden="true">
+                            <polyline v-for="(seg, si) in trendLines.noetic.solid" :key="'ns-' + si" :points="seg" />
+                            <polyline v-if="trendLines.noetic.dashed" class="is-dashed" :points="trendLines.noetic.dashed" />
+                        </svg>
+                        <span
+                            v-for="dot in trendLines.noetic.dots"
+                            :key="'nd-' + dot.i"
+                            class="trend-dot is-nt"
+                            :class="{ 'is-hover': hoverIdx === dot.i, 'is-hollow': dot.hollow }"
+                            :style="{ left: dot.xPct + '%', bottom: dot.yPct + '%' }"
+                        ></span>
+                    </div>
+
+                    <div class="track-head is-adopt">
+                        <span class="th-name">{{ isEn ? 'Evidence Adoption' : '证据采纳率' }}</span>
+                        <span class="th-hint">
+                            {{ isEn ? 'of settled crystallizations, evidence actually used afterwards' : '已结算的结晶中，证据之后真被用上的比例' }}
+                        </span>
+                    </div>
+                    <div class="y-gutter is-adopt font-mono">
+                        <span>100%</span>
+                        <span>50%</span>
+                        <span>0</span>
+                    </div>
+                    <div class="gline is-adopt"></div>
+                    <div class="line-layer is-adopt">
+                        <svg class="line-svg is-adopt" viewBox="0 0 14 100" preserveAspectRatio="none" aria-hidden="true">
+                            <polyline v-for="(seg, si) in trendLines.adoption.solid" :key="'as-' + si" :points="seg" />
+                            <polyline v-if="trendLines.adoption.dashed" class="is-dashed" :points="trendLines.adoption.dashed" />
+                        </svg>
+                        <span
+                            v-for="dot in trendLines.adoption.dots"
+                            :key="'ad-' + dot.i"
+                            class="trend-dot is-ad"
+                            :class="{ 'is-hover': hoverIdx === dot.i, 'is-hollow': dot.hollow }"
+                            :style="{ left: dot.xPct + '%', bottom: dot.yPct + '%' }"
+                        ></span>
+                    </div>
+
+                    <div
+                        v-for="(day, i) in dailySeries"
+                        :key="'x-' + day.date"
+                        class="x-cell font-mono"
+                        :class="{ 'is-hover': hoverIdx === i, 'is-today': day.date === trendToday }"
+                        :style="{ gridColumn: String(i + 2) }"
+                    >
+                        {{ day.date === trendToday ? (isEn ? 'Today' : '今天') : day.date.slice(5) }}
+                    </div>
+
+                    <div v-if="hoverIdx >= 0" class="col-highlight is-ingest" :style="{ gridColumn: String(hoverIdx + 2) }"></div>
+                    <div v-if="hoverIdx >= 0" class="col-highlight is-noetic" :style="{ gridColumn: String(hoverIdx + 2) }"></div>
+                    <div v-if="hoverIdx >= 0" class="col-highlight is-adopt" :style="{ gridColumn: String(hoverIdx + 2) }"></div>
+
+                    <div class="hover-grid" @mouseleave="hoverIdx = -1">
+                        <div class="hover-gutter"></div>
+                        <el-tooltip
+                            v-for="(day, i) in dailySeries"
+                            :key="'hv-' + day.date"
+                            placement="top"
+                            effect="light"
+                            :show-after="80"
+                            :hide-after="0"
+                            popper-class="rm-day-tip-popper"
+                        >
+                            <template #content>
+                                <div class="rm-day-tip">
+                                    <div class="rdt-head">
+                                        {{ day.date.slice(5) }} {{ weekdayShort(day.date) }}
+                                        <span v-if="day.date === trendToday">· {{ isEn ? 'in progress' : '进行中' }}</span>
+                                    </div>
+                                    <div class="rdt-row">
+                                        <span class="rdt-k">{{ isEn ? 'Memory' : '记忆沉淀' }}</span>
+                                        <span class="rdt-v">
+                                            {{ (day.episodic_count ?? 0) + (day.background_count ?? 0) }}
+                                            <em class="rdt-dim">({{ isEn ? 'sess' : '会话' }} {{ day.episodic_count }} · {{ isEn ? 'docs' : '文档' }} {{ day.background_count }})</em>
+                                        </span>
+                                    </div>
+                                    <div class="rdt-row">
+                                        <span class="rdt-k">{{ isEn ? 'Crystals' : '认知结晶' }}</span>
+                                        <span class="rdt-v">
+                                            {{ day.noetic_count }}
+                                            <em class="rdt-dim">· {{ isEn ? 'cites' : '引证' }} {{ day.citation_links }}</em>
+                                        </span>
+                                    </div>
+                                    <div class="rdt-row">
+                                        <span class="rdt-k">{{ isEn ? 'Adoption' : '证据采纳' }}</span>
+                                        <span v-if="(day.adopted_count ?? 0) + (day.unadopted_count ?? 0) > 0" class="rdt-v">
+                                            {{ day.adopted_count ?? 0 }}/{{ (day.adopted_count ?? 0) + (day.unadopted_count ?? 0) }} = {{ day.adoption_rate_pct ?? 0 }}%
+                                            <em class="rdt-dim">({{ isEn ? 'tool' : '工具直达' }} {{ day.adopted_tool_count ?? 0 }} · {{ isEn ? 'ctx' : '事实采纳' }} {{ day.adopted_context_count ?? 0 }})</em>
+                                        </span>
+                                        <span v-else class="rdt-v rdt-dim">{{ isEn ? 'not settled yet' : '尚无已结算' }}</span>
+                                    </div>
+                                    <div v-if="(day.pending_count ?? 0) > 0" class="rdt-row">
+                                        <span class="rdt-k">{{ isEn ? 'Pending' : '待结算' }}</span>
+                                        <span class="rdt-v">{{ day.pending_count }}</span>
+                                    </div>
+                                </div>
+                            </template>
+                            <div class="hover-cell" @mouseenter="hoverIdx = i"></div>
+                        </el-tooltip>
                     </div>
                 </div>
             </div>
@@ -515,8 +699,12 @@
                             <div class="unit-cell">
                                 <span class="font-mono unit-id">{{ row.unit_id }}</span>
                                 <div class="unit-tags">
-                                    <el-tag size="small" :type="row.layer === 'background' ? 'warning' : 'primary'" effect="plain">
-                                        {{ row.layer === 'background' ? 'L1' : 'L2' }}
+                                    <el-tag
+                                        size="small"
+                                        :type="row.layer === 'background' ? 'warning' : row.layer === 'noetic' ? 'success' : 'primary'"
+                                        effect="plain"
+                                    >
+                                        {{ row.layer === 'background' ? 'L1' : row.layer === 'noetic' ? 'L3' : 'L2' }}
                                     </el-tag>
                                     <span v-if="row.locus" class="unit-locus font-mono">{{ row.locus }}</span>
                                 </div>
@@ -843,8 +1031,12 @@
                     </div>
                     <div v-for="unit in selectedNoetic.cited_units" :key="unit.unit_id" class="cite-record">
                         <div class="cite-head font-mono">
-                            <el-tag size="small" :type="unit.layer === 'background' ? 'warning' : 'primary'" effect="plain">
-                                {{ unit.layer === 'background' ? 'L1' : 'L2' }}
+                            <el-tag
+                                size="small"
+                                :type="unit.layer === 'background' ? 'warning' : unit.layer === 'noetic' ? 'success' : 'primary'"
+                                effect="plain"
+                            >
+                                {{ unit.layer === 'background' ? 'L1' : unit.layer === 'noetic' ? 'L3' : 'L2' }}
                             </el-tag>
                             <span class="unit-id">{{ unit.unit_id }}</span>
                             <span v-if="unit.locus" class="text-secondary">{{ unit.locus }}</span>
@@ -943,6 +1135,12 @@ interface RoiDailyBucket {
     noetic_count: number
     citation_links: number
     delivered_tokens: number
+    adopted_count?: number
+    adopted_tool_count?: number
+    adopted_context_count?: number
+    unadopted_count?: number
+    pending_count?: number
+    adoption_rate_pct?: number
 }
 
 interface RoiUnitCitation {
@@ -1181,14 +1379,64 @@ const windowAdoptedTools = computed(() => activeWindow.value?.adopted_tool_count
 const windowAdoptedContexts = computed(() => activeWindow.value?.adopted_context_count ?? 0)
 const windowAdoptionRatePct = computed(() => activeWindow.value?.adoption_rate_pct ?? 0)
 
-const maxDailyScale = computed(() => {
-    let maxVal = 10
+// 三轨趋势（近 14 天）：沉淀柱与结晶线各用独立刻度；采纳率只画已结算日，今天按「进行中」标注。
+const hoverIdx = ref(-1)
+
+const trendToday = computed(() => localYmd(new Date((lastLoadedAt.value || Math.floor(Date.now() / 1000)) * 1000)))
+
+const trendTotals = computed(() => {
+    let episodic = 0
+    let background = 0
+    let noetic = 0
+    let citations = 0
+    let adopted = 0
+    let unadopted = 0
+    let pending = 0
     for (const d of dailySeries.value) {
-        const v = d.episodic_count + d.background_count + d.noetic_count * 12
-        if (v > maxVal) maxVal = v
+        episodic += d.episodic_count ?? 0
+        background += d.background_count ?? 0
+        noetic += d.noetic_count ?? 0
+        citations += d.citation_links ?? 0
+        adopted += d.adopted_count ?? 0
+        unadopted += d.unadopted_count ?? 0
+        pending += d.pending_count ?? 0
     }
-    return maxVal
+    const audited = adopted + unadopted
+    return {
+        ingest: episodic + background,
+        episodic,
+        background,
+        noetic,
+        citations,
+        adopted,
+        pending,
+        audited,
+        ratePct: audited > 0 ? Math.round((adopted * 1000) / audited) / 10 : 0,
+    }
 })
+
+const trendHasData = computed(() => trendTotals.value.ingest + trendTotals.value.noetic > 0)
+
+const trendScale = computed(() => {
+    let ingestMax = 0
+    let noeticMax = 0
+    for (const d of dailySeries.value) {
+        ingestMax = Math.max(ingestMax, (d.episodic_count ?? 0) + (d.background_count ?? 0))
+        noeticMax = Math.max(noeticMax, d.noetic_count ?? 0)
+    }
+    return { ingestMax: niceMax(ingestMax), noeticMax: niceMax(noeticMax) }
+})
+
+const trendLines = computed(() => ({
+    noetic: buildTrendLine(
+        dailySeries.value.map((d) => d.noetic_count ?? 0),
+        trendScale.value.noeticMax
+    ),
+    adoption: buildTrendLine(
+        dailySeries.value.map((d) => ((d.adopted_count ?? 0) + (d.unadopted_count ?? 0) > 0 ? (d.adoption_rate_pct ?? 0) : null)),
+        100
+    ),
+}))
 
 const filteredTopUnits = computed(() => {
     const list = facts.value.top_cited_units || []
@@ -1234,9 +1482,86 @@ function windowMetaOf(key: string): { label: string; span: string } {
     }
 }
 
-function dayBarHeight(val: number, maxVal: number): number {
-    if (!val || maxVal <= 0) return 0
-    return Math.min(100, Math.max(4, Math.round((val * 100) / maxVal)))
+// 轴峰值取整：向上取到 1 / 2 / 2.5 / 3 / 4 / 5 / 10 的整十次幂档。
+function niceMax(value: number): number {
+    if (!(value > 0)) return 1
+    const magnitude = 10 ** Math.floor(Math.log10(value))
+    const normalized = value / magnitude
+    for (const step of [1, 2, 2.5, 3, 4, 5, 10]) {
+        if (normalized <= step) return step * magnitude
+    }
+    return 10 * magnitude
+}
+
+function axisLabel(value: number): string {
+    const trim = (n: number) => n.toFixed(1).replace(/\.0$/, '')
+    if (value >= 1_000_000) return `${trim(value / 1_000_000)}M`
+    if (value >= 1_000) return `${trim(value / 1_000)}K`
+    if (value < 10) return String(Math.round(value * 10) / 10)
+    return String(Math.round(value))
+}
+
+function barPct(value: number, max: number): string {
+    if (!(value > 0) || !(max > 0)) return '0%'
+    return `${Math.min(100, (value * 100) / max).toFixed(2)}%`
+}
+
+function localYmd(date: Date): string {
+    const pad = (v: number) => String(v).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function weekdayShort(date: string): string {
+    const d = new Date(`${date}T00:00:00`)
+    if (Number.isNaN(d.getTime())) return ''
+    return isEn.value
+        ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]
+        : ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+}
+
+interface TrendLineResult {
+    solid: string[]
+    dashed: string | null
+    dots: { i: number; xPct: number; yPct: number; hollow: boolean }[]
+}
+
+// 折线分段：无数据日断线；最后一天（今天）用虚线连接并画空心点，表示当日仍在累积/结算。
+function buildTrendLine(values: Array<number | null>, max: number): TrendLineResult {
+    const safeMax = max > 0 ? max : 1
+    const dots: TrendLineResult['dots'] = []
+    const runs: number[][] = []
+    let current: number[] = []
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i]
+        if (v === null || v === undefined) {
+            if (current.length) runs.push(current)
+            current = []
+            continue
+        }
+        current.push(i)
+        dots.push({ i, xPct: ((i + 0.5) * 100) / values.length, yPct: Math.min(100, (v * 100) / safeMax), hollow: false })
+    }
+    if (current.length) runs.push(current)
+    const pointStr = (idx: number[]): string =>
+        idx
+            .map((i) => `${(i + 0.5).toFixed(2)},${(100 - Math.min(100, ((values[i] as number) * 100) / safeMax)).toFixed(2)}`)
+            .join(' ')
+    const solid: string[] = []
+    let dashed: string | null = null
+    runs.forEach((run, runIdx) => {
+        const endsToday = runIdx === runs.length - 1 && run[run.length - 1] === values.length - 1
+        if (endsToday) {
+            const todayDot = dots[dots.length - 1]
+            if (todayDot) todayDot.hollow = true
+            if (run.length >= 2) {
+                if (run.length > 2) solid.push(pointStr(run.slice(0, -1)))
+                dashed = pointStr(run.slice(-2))
+                return
+            }
+        }
+        if (run.length >= 2) solid.push(pointStr(run))
+    })
+    return { solid, dashed, dots }
 }
 
 function toggleLocusFilter(row: RoiLocusRow) {
@@ -1785,14 +2110,6 @@ onBeforeUnmount(() => {
     color: var(--el-text-color-secondary);
 }
 
-.legend-inline {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 11px;
-    color: var(--el-text-color-secondary);
-}
-
 .lg-item {
     display: inline-flex;
     align-items: center;
@@ -1814,58 +2131,177 @@ onBeforeUnmount(() => {
     background: var(--el-color-warning);
 }
 
-.lg-dot.is-nt {
-    background: var(--el-color-success);
+.trend-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.daily-bars {
-    display: grid;
-    grid-template-columns: repeat(14, minmax(0, 1fr));
-    gap: 6px;
-    align-items: end;
-    height: 196px;
-    padding: 10px 6px 4px;
+.stat-chip {
+    flex: 1 1 0;
+    min-width: 118px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 7px 10px;
+    background: var(--el-fill-color-lighter);
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 8px;
+}
+
+.stat-label {
+    font-size: 11px;
+    color: var(--el-text-color-secondary);
+}
+
+.stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--el-text-color-primary);
+}
+
+.stat-sub {
+    font-size: 10px;
+    color: var(--el-text-color-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.trend-empty {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 20px 12px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
     background: var(--el-fill-color-lighter);
     border-radius: 8px;
 }
 
-.day-col {
+.trend-body {
+    --trend-gutter: 40px;
+    display: grid;
+    grid-template-columns: var(--trend-gutter) repeat(14, minmax(0, 1fr));
+    grid-template-rows: 22px 88px 22px 56px 22px 56px 20px;
+}
+
+.track-head {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding-bottom: 2px;
+}
+
+.track-head.is-ingest {
+    grid-row: 1;
+}
+
+.track-head.is-noetic {
+    grid-row: 3;
+}
+
+.track-head.is-adopt {
+    grid-row: 5;
+}
+
+.th-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--el-text-color-regular);
+}
+
+.th-legend,
+.th-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 10px;
+    color: var(--el-text-color-secondary);
+}
+
+.th-hint {
+    gap: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.y-gutter {
+    grid-column: 1;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    height: 100%;
-}
-
-.day-nums {
+    justify-content: space-between;
+    align-items: flex-end;
+    padding-right: 6px;
     font-size: 10px;
     line-height: 1;
+    color: var(--el-text-color-secondary);
 }
 
-.dn-nt {
-    color: var(--el-color-success);
-    font-weight: 700;
+.y-gutter.is-ingest {
+    grid-row: 2;
 }
 
-.dn-zero {
-    color: var(--el-text-color-placeholder);
+.y-gutter.is-noetic {
+    grid-row: 4;
 }
 
-.day-track {
-    flex: 1;
+.y-gutter.is-adopt {
+    grid-row: 6;
+}
+
+.gline {
+    grid-column: 2 / -1;
+    pointer-events: none;
+    background-image:
+        linear-gradient(var(--el-border-color-lighter), var(--el-border-color-lighter)),
+        linear-gradient(var(--el-border-color-lighter), var(--el-border-color-lighter)),
+        linear-gradient(var(--el-border-color-lighter), var(--el-border-color-lighter));
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    background-position: 0 0, 0 50%, 0 100%;
+}
+
+.gline.is-ingest {
+    grid-row: 2;
+}
+
+.gline.is-noetic {
+    grid-row: 4;
+}
+
+.gline.is-adopt {
+    grid-row: 6;
+}
+
+.plot-cell {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+}
+
+.plot-cell.is-ingest {
+    grid-row: 2;
+}
+
+.bar-col {
     width: 100%;
-    max-width: 22px;
+    max-width: 16px;
+    height: 100%;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
     gap: 1px;
-    background: var(--el-fill-color);
-    border-radius: 4px;
-    overflow: hidden;
 }
 
 .bar-seg {
     width: 100%;
+    min-height: 2px;
     transition: height 0.25s ease;
 }
 
@@ -1877,18 +2313,140 @@ onBeforeUnmount(() => {
     background: var(--el-color-warning);
 }
 
-.bar-seg.is-nt {
+.bar-seg.is-hover,
+.trend-dot.is-hover {
+    filter: brightness(1.12) saturate(1.15);
+}
+
+.line-layer {
+    grid-column: 2 / -1;
+    position: relative;
+    z-index: 1;
+}
+
+.line-layer.is-noetic {
+    grid-row: 4;
+}
+
+.line-layer.is-adopt {
+    grid-row: 6;
+}
+
+.line-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.line-svg polyline {
+    fill: none;
+    stroke-width: 2px;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.line-svg.is-noetic polyline {
+    stroke: var(--el-color-success);
+}
+
+.line-svg.is-adopt polyline {
+    stroke: var(--el-text-color-primary);
+}
+
+.line-svg polyline.is-dashed {
+    stroke-dasharray: 3 3;
+    opacity: 0.7;
+}
+
+.trend-dot {
+    position: absolute;
+    box-sizing: border-box;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    transform: translate(-50%, 50%);
+    z-index: 1;
+    transition:
+        left 0.25s ease,
+        bottom 0.25s ease;
+}
+
+.trend-dot.is-nt {
     background: var(--el-color-success);
 }
 
-.day-total {
-    font-size: 10px;
-    color: var(--el-text-color-regular);
+.trend-dot.is-ad {
+    background: var(--el-text-color-primary);
 }
 
-.day-label {
+.trend-dot.is-hollow {
+    width: 9px;
+    height: 9px;
+    background: var(--el-bg-color-overlay);
+}
+
+.trend-dot.is-nt.is-hollow {
+    border: 2px solid var(--el-color-success);
+}
+
+.trend-dot.is-ad.is-hollow {
+    border: 2px solid var(--el-text-color-primary);
+}
+
+.x-cell {
+    grid-row: 7;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 10px;
     color: var(--el-text-color-secondary);
+}
+
+.x-cell.is-hover {
+    color: var(--el-text-color-primary);
+    font-weight: 700;
+}
+
+.x-cell.is-today {
+    color: var(--el-color-primary);
+    font-weight: 700;
+}
+
+.col-highlight {
+    z-index: 0;
+    pointer-events: none;
+    border-radius: 6px;
+    background: var(--el-fill-color);
+    opacity: 0.55;
+}
+
+.col-highlight.is-ingest {
+    grid-row: 2;
+}
+
+.col-highlight.is-noetic {
+    grid-row: 4;
+}
+
+.col-highlight.is-adopt {
+    grid-row: 6;
+}
+
+.hover-grid {
+    grid-column: 1 / -1;
+    grid-row: 2 / 8;
+    position: relative;
+    z-index: 3;
+    pointer-events: none;
+    display: grid;
+    grid-template-columns: var(--trend-gutter) repeat(14, minmax(0, 1fr));
+}
+
+.hover-cell {
+    pointer-events: auto;
 }
 
 .roi-table {
@@ -2203,5 +2761,48 @@ onBeforeUnmount(() => {
 
 .rm-help-popper .rm-help-body p {
     margin: 0;
+}
+
+.el-popper.rm-day-tip-popper {
+    max-width: 92vw;
+}
+
+.rm-day-tip-popper .rm-day-tip {
+    min-width: 232px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-family: var(--ag-font-mono, 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--el-text-color-regular);
+}
+
+.rm-day-tip-popper .rdt-head {
+    margin-bottom: 2px;
+    padding-bottom: 3px;
+    font-weight: 700;
+    color: var(--el-text-color-primary);
+    border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.rm-day-tip-popper .rdt-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.rm-day-tip-popper .rdt-k {
+    flex-shrink: 0;
+    color: var(--el-text-color-secondary);
+}
+
+.rm-day-tip-popper .rdt-v {
+    text-align: right;
+}
+
+.rm-day-tip-popper .rdt-dim {
+    font-style: normal;
+    color: var(--el-text-color-secondary);
 }
 </style>

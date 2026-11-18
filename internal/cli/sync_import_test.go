@@ -54,9 +54,12 @@ func TestSyncWatchOnceCommand(t *testing.T) {
 // TestImportTranscriptCommand verifies the `import` CLI subcommand on a JSONL transcript.
 func TestImportTranscriptCommand(t *testing.T) {
 	env := newEnv(t)
+	ensureLegacyGraphEnv(t, env)
+	// The assistant row carries the completion evidence the canonical pipeline
+	// shares with the background scanner; the meta row must stay skipped.
 	transcript := writeFile(t, filepath.Join(env.base, "chat.jsonl"), strings.Join([]string{
 		`{"type":"user","message":{"role":"user","content":"老张养了一只猫。"}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好的，记下了。"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"好的，记下了。"}]}}`,
 		`{"type":"user","isMeta":true,"message":{"role":"user","content":"meta row must be skipped"}}`,
 	}, "\n")+"\n")
 
@@ -110,6 +113,35 @@ func TestImportTranscriptCommand(t *testing.T) {
 	if !strings.Contains(human.stdout, "\nreplay: ") {
 		t.Fatalf("human import misses the replay block: %q", human.stdout)
 	}
+
+	// The canonical JSONL path reports content-addressed units, not traces.
+	humanJSONL := run(t, "import", transcript)
+	if humanJSONL.code != 0 {
+		t.Fatalf("human jsonl import exit %d: %s", humanJSONL.code, humanJSONL.stderr)
+	}
+	if !strings.HasPrefix(humanJSONL.stdout, "import: 2 messages · 0 new units · session chat · offset 3/3\n") {
+		t.Fatalf("human jsonl import = %q", humanJSONL.stdout)
+	}
+}
+
+// TestImportAudienceChoicesNarrowed locks the shared/public-only audience gate:
+// the file-level private policy was withdrawn, so restricted audiences are a
+// usage error before any file is touched.
+func TestImportAudienceChoicesNarrowed(t *testing.T) {
+	env := newEnv(t)
+	path := writeFile(t, filepath.Join(env.base, "chat.jsonl"), `{"type":"user","message":{"role":"user","content":"老张养了一只猫。"}}`+"\n")
+	for _, audience := range []string{"private", "group"} {
+		result := run(t, "import", path, "--audience", audience, "--json")
+		if result.code != 2 || !strings.Contains(result.stderr, "invalid choice: '"+audience+"'") {
+			t.Fatalf("import --audience %s = %d %q %q", audience, result.code, result.stdout, result.stderr)
+		}
+	}
+	for _, audience := range []string{"shared", "public"} {
+		result := run(t, "import", path, "--audience", audience, "--json")
+		if result.code != 0 {
+			t.Fatalf("import --audience %s = %d %q %q", audience, result.code, result.stdout, result.stderr)
+		}
+	}
 }
 
 func TestExportRejectsBeforeOpeningDatabase(t *testing.T) {
@@ -144,7 +176,7 @@ func TestImportJSONExportHumanLine(t *testing.T) {
 	exportPath := writeFile(t, filepath.Join(env.base, "export.json"),
 		`{"format":"rolling-memory-export","version":1,"scope":"mem:test","traces":[],"nodes":[],"aliases":[],"assertions":[],"mentions":[],"meta_edges":[],"events":[]}`)
 
-	newEnv(t)
+	ensureLegacyGraphEnv(t, env)
 	imported := run(t, "import", exportPath)
 	if imported.code != 0 {
 		t.Fatalf("import exit %d: %s", imported.code, imported.stderr)

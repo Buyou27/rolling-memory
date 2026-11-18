@@ -31,27 +31,18 @@
       "relative_tag": false,
       "token_correct": false
     },
-    "scope": "mem:golden:208",
-    "sync": {
-      "auto": false,
-      "base_url": "",
-      "enabled": false,
-      "key": {
-        "configured": false,
-        "source": "none"
-      }
-    }
+    "scope": "mem:golden:208"
   },
   "conflicts_proposed": 0,
   "counts": {
     "assertion": 0,
-    "event": 3,
+    "event": 0,
     "mention": 0,
     "meta_edge": 0,
     "node": 0,
     "node_alias": 0,
     "schema_version": 1,
-    "trace": 3,
+    "trace": 0,
     "vector": 0
   },
   "db": "<DB>",
@@ -60,12 +51,12 @@
   "last_replay": null,
   "llm_warning": null,
   "mode": "local",
-  "pending_traces": 3,
+  "pending_traces": 0,
   "private_assertions": 0,
   "retracted_assertions": 0,
   "schema_version": 1,
   "scope": "mem:golden:208",
-  "sessions": 1,
+  "sessions": 0,
   "superseded_assertions": 0,
   "vector_warning": null,
   "version": "0.0.1"

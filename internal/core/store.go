@@ -630,11 +630,6 @@ func (s *Store) LoadIndex() (*Index, error) {
 		return nil, err
 	}
 
-	for u := 0; u < idx.N; u++ {
-		for _, h := range idx.DocTerms[u] {
-			idx.Postings[h] = append(idx.Postings[h], Posting{Unit: int32(u), Occ: 1})
-		}
-	}
 	idx.FinalizeMasses()
 	return idx, nil
 }

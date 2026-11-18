@@ -27,6 +27,10 @@ Call `recall` with a concrete `cue` — five rules:
 - **For troubleshooting, use error fingerprints**: verbatim error text, exception types, status codes, route/module literals (e.g. `Failed to fetch dynamically imported module`, `504`, `/admin/loading`) instead of "stuck / won't open / slow".
 - **Vet the hits yourself**: read entries containing fix recipes and pitfall records first and treat generic descriptions as background only; actively drop hits that contradict your stated exclusions (e.g. "exclude evaluation / leaderboards"); when hits are flooded by an unrelated topic, **drop that word and re-query with a smaller word set** instead of adding more words to the `cue`.
 - **`absent: true` is not an error**: it only means that exact phrasing matched nothing. Rephrase once; if still absent, say plainly that no prior memory was found and switch to physical verification (`Read` / `Grep` / `git log`). Never fabricate past memories.
+- **Smart Adaptive Delivery Window (`delivery_window`, default `auto` = `0-16`; never cap character count manually)**: the engine uses a zero-floor natural physical information energy envelope ($E(u_k) \ge E(u_1)/e$) — delivering `0` items when nothing matches, `1–5` items on sharp single-fact hits, and automatically expanding along the energy plateau for multi-event queries. **In normal turns, omit `delivery_window` (or pass `"auto"`, which follows the console setting, `0-16` by default) and do not pass conservative item caps that truncate evidence**. Specify an explicit tier only when:
+  - **`"0-32"` (balanced span)**: cross-session or multi-module troubleshooting, or when an initial `0-16` recall indicates additional companion units in the same event cluster;
+  - **`"0-64"` (deep synthesis)**: architectural evolution audits, multi-period inventories, or comprehensive post-mortem reviews requiring a wide horizon;
+  - **`"0-16"` (focused)**: main context is nearly full or you only need a single known coordinate's latest state.
 
 ## 3. How to Use What You Recalled
 

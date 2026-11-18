@@ -15,7 +15,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	ramesdk "github.com/rocareer/rolling-memory/sdk/go"
+	local "github.com/rocareer/rolling-memory/sdk/go/local"
 )
 
 // Options 是一次评测运行的完整参数（命令行 flag 覆盖 [eval] 段）。
@@ -52,13 +52,12 @@ type Options struct {
 	NoVerify        bool
 	// DenoiseRatio 是分形干句降噪比例（--denoise-ratio：0.0=零损，0.25=安全，0.50=推荐，0.75=激进）。
 	DenoiseRatio float64
-	// PulseTokenizer 选择盲态脉冲切词臂：standard（默认，SDK 原生表面词 + 子词/谐波切词）
-	// 或 fts5-bm25 / fts5-trigram（对照臂）。Cloud 三臂都只消费云端结果，不融合本地检索。
+	// PulseTokenizer 选择盲态脉冲切词臂：standard（SDK 原生表面词 + 子词/谐波切词）
+	// 或 fts5-bm25 / fts5-trigram（对照臂）。各臂都只消费本臂结果，不融合其它检索。
 	PulseTokenizer string
-	// PulseMode 选择评测脉冲运行模式（三种独立注册的评测模式，各自独立 scope 与 store，互不清库）：
-	//   - "pulse_cipher"（默认）：脉冲密文云端检索
-	//   - "pulse_plain"：脉冲明文云端检索（独立 scope *-mem-eval-<suite>-pulse-plain[-<世代>]）
-	//   - "local_plain"：本地明文离线检索（独立 scope *-mem-eval-<suite>-local-plain[-<世代>]）
+	// PulseMode 选择评测脉冲运行模式。现役唯一合法值 = "local_plain"（本地明文离线检索，
+	// 独立 scope *-mem-eval-<suite>-local-plain[-<世代>]，零云端请求）。
+	// 空值默认 local_plain；历史脉冲模式名（pulse_cipher / pulse_plain）一律 fail-closed 拒绝。
 	PulseMode string
 	Log       func(format string, args ...any)
 }
@@ -114,7 +113,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 	opts.Suite = SuiteLoCoMo
 	opts.PulseMode = NormalizePulseMode(opts.PulseMode)
-	opts.Scope = ScopeForSuiteAndMode(SuiteLoCoMo, cloudUserID(), opts.PulseMode)
+	opts.Scope = ScopeForSuiteAndMode(SuiteLoCoMo, evalUserID(), opts.PulseMode)
 	if opts.RawLimit <= 0 {
 		opts.RawLimit = 96
 	}
@@ -131,9 +130,9 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 
 	ingestMeta := map[string]any{"corpus_rows": 0, "inserted": 0}
-	var engine *CloudEngine
+	var engine *LocalEngine
 	if !opts.Oracle {
-		engine, err = NewCloudEngine(cfg, SuiteLoCoMo, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
+		engine, err = NewLocalEngine(cfg, SuiteLoCoMo, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +178,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 				Author:     author,
 				OccurredAt: occurred,
 				NarratedAt: occurred,
-				Layer:      ramesdk.LayerEpisodic,
+				Layer:      local.LayerEpisodic,
 				DocKey:     session,
 				FileURL:    session,
 				BlockKey:   blockID,
@@ -235,6 +234,11 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 		return nil, err
 	}
 	summary := Aggregate(results, arm)
+	if IsLoCoMoAdversarialTier(opts.Tier) {
+		// cat5 对抗档：主指标是答案侧三态，通用 judge 统计保留为辅助面。
+		summary["score"] = AggregateAdversarial(results)
+		summary["metric"] = "locomo-adversarial-tristate-v1"
+	}
 	summary["ingest"] = ingestMeta
 	summary["elapsed_seconds"] = PyRound(time.Since(started).Seconds(), 1)
 	summary["oracle"] = opts.Oracle
@@ -295,15 +299,15 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 //
 // 纯形式切分：固定字段名 + 方括号边界，无语义词表、无字符数门控。
 // 这些块与轮次同属一个父单元句帧，不另发子 UnitID（/units 与 corpus 仍一一相等）。
-func locomoTurnSubUnits(docID, text string, row map[string]any, lineStart, lineEnd int) []ramesdk.SubUnit {
-	var subs []ramesdk.SubUnit
+func locomoTurnSubUnits(docID, text string, row map[string]any, lineStart, lineEnd int) []local.SubUnit {
+	var subs []local.SubUnit
 	add := func(kind, raw string) {
 		body := strings.TrimSpace(raw)
 		if body == "" {
 			return
 		}
 		id := fmt.Sprintf("%s#%s:%d", docID, kind, len(subs))
-		subs = append(subs, ramesdk.SubUnit{
+		subs = append(subs, local.SubUnit{
 			Kind:      kind,
 			ID:        id,
 			BlockID:   id,
@@ -345,11 +349,11 @@ type contextRow struct {
 	err      error
 }
 
-func runQuestions(engine *CloudEngine, opts Options,
+func runQuestions(engine *LocalEngine, opts Options,
 	questions []map[string]any, answerer Answerer, judge Judge,
 	logf func(string, ...any)) ([]map[string]any, error) {
 	results := make([]map[string]any, 0, len(questions))
-	workers := maxInt(1, opts.Workers)
+	workers := max(1, opts.Workers)
 	for start := 0; start < len(questions); start += workers {
 		end := start + workers
 		if end > len(questions) {
@@ -383,6 +387,7 @@ func runQuestions(engine *CloudEngine, opts Options,
 		}
 		verdicts := make([]any, len(contexts))
 		reasons := make([]any, len(contexts))
+		labels := make([]string, len(contexts))
 		judgeSeconds := make([]float64, len(contexts))
 		if judge != nil {
 			_ = ParallelMap(len(contexts), workers, func(index int) string {
@@ -399,14 +404,22 @@ func runQuestions(engine *CloudEngine, opts Options,
 					return ""
 				}
 				begin := time.Now()
-				verdict, err := judge.Judge(questionText(row.question), goldAnswer(row.question), answer)
+				// 对抗档：`gold` 位传上游对抗诱饵答案（三态判官据它判定是否编造）。
+				gold := goldAnswer(row.question)
+				if IsLoCoMoAdversarialTier(opts.Tier) {
+					gold = AdversarialAnswer(row.question)
+				}
+				verdict, err := judge.Judge(questionText(row.question), gold, answer)
 				judgeSeconds[index] = time.Since(begin).Seconds()
 				if err != nil {
 					verdicts[index] = "unparsed"
 					reasons[index] = err.Error()
 					return ""
 				}
-				if verdict.Correct {
+				if verdict.Label != "" {
+					labels[index] = strings.ToUpper(verdict.Label)
+					verdicts[index] = strings.ToLower(verdict.Label)
+				} else if verdict.Correct {
 					verdicts[index] = "correct"
 				} else {
 					verdicts[index] = "wrong"
@@ -434,7 +447,7 @@ func runQuestions(engine *CloudEngine, opts Options,
 			if opts.Oracle {
 				transport = "oracle-gold"
 			}
-			results = append(results, map[string]any{
+			resultRow := map[string]any{
 				"id": row.question["id"], "sample_id": row.question["sample_id"],
 				"category": row.question["category"], "question": row.question["question"],
 				"gold": gold, "prediction": predictions[index], "context": row.context,
@@ -446,13 +459,19 @@ func runQuestions(engine *CloudEngine, opts Options,
 				"answer_token_recall":  PyRound(fullGoldRecall, 4),
 				"failure_bucket":       failureBucket, "judge": verdicts[index], "judge_reason": reasons[index],
 				"context_chars": row.counts["context_chars"], "bands": 0, "nodes": 0,
+				// "cloud_hits" 与 "engine_transport" 为跨版本数据兼容保留的历史键名（现值为本地命中数）。
 				"raw": row.counts["raw"], "cloud_hits": row.counts["cloud_hits"],
 				"retrieval_unit_ids": row.unitIDs, "engine_transport": transport,
 				"engine_scope": opts.Scope, "local_fallback": false,
 				"recall_seconds": PyRound(row.seconds, 4),
 				"answer_seconds": PyRound(answerSeconds[index], 4),
 				"judge_seconds":  PyRound(judgeSeconds[index], 4),
-			})
+			}
+			if labels[index] != "" {
+				resultRow["adversarial_label"] = labels[index]
+				resultRow["adversarial_stale"] = AdversarialAnswer(row.question)
+			}
+			results = append(results, resultRow)
 		}
 		done := start + len(batch)
 		if opts.ProgressEach > 0 && (done%opts.ProgressEach < workers || done == len(questions)) {
@@ -464,7 +483,7 @@ func runQuestions(engine *CloudEngine, opts Options,
 	return results, nil
 }
 
-func buildContext(opts Options, engine *CloudEngine, question map[string]any, started time.Time) contextRow {
+func buildContext(opts Options, engine *LocalEngine, question map[string]any, started time.Time) contextRow {
 	row := contextRow{question: question, counts: map[string]int{}}
 	if opts.Oracle {
 		evidence := evidenceTexts(question)
@@ -475,7 +494,7 @@ func buildContext(opts Options, engine *CloudEngine, question map[string]any, st
 		return row
 	}
 	if engine == nil {
-		row.err = errors.New("cloud evaluation requires an initialized SDK engine")
+		row.err = errors.New("evaluation requires an initialized engine")
 		return row
 	}
 	hits, err := engine.Recall(context.Background(), questionText(question), opts.RawLimit)
@@ -505,15 +524,9 @@ func buildContext(opts Options, engine *CloudEngine, question map[string]any, st
 func buildProtocols(cfg *config.Config, opts Options) (Answerer, Judge, error) {
 	var ansClient, jdgClient *ChatClient
 	if opts.Answerer == "llm" || opts.Judge == "llm" {
-		// Allow the evaluation grader harness itself to reach the configured [eval] endpoint
-		// even when the memory engine under test is running in "zero" (0-egress) mode.
-		evalCfg := *cfg
-		if opts.BaseURL != "" || cfg.Eval.BaseURL != "" {
-			evalCfg.Mode = "cloud"
-		}
 		var err error
 		if opts.Answerer == "llm" {
-			ansClient, err = NewChatClient(&evalCfg, ChatOptions{
+			ansClient, err = NewChatClient(cfg, ChatOptions{
 				BaseURL: opts.BaseURL, Model: opts.Model, APIKey: opts.APIKey,
 				Temperature: opts.Temperature, MaxTokens: opts.MaxTokens, TimeoutSec: opts.TimeoutSec,
 				Thinking: opts.Thinking, ReasoningEffort: opts.ReasoningEffort,
@@ -523,7 +536,7 @@ func buildProtocols(cfg *config.Config, opts Options) (Answerer, Judge, error) {
 			}
 		}
 		if opts.Judge == "llm" {
-			jdgClient, err = NewChatClient(&evalCfg, ChatOptions{
+			jdgClient, err = NewChatClient(cfg, ChatOptions{
 				BaseURL: opts.BaseURL, Model: opts.Model, APIKey: opts.APIKey,
 				Temperature: opts.JudgeTemp, MaxTokens: opts.MaxTokens, TimeoutSec: opts.TimeoutSec,
 			})
@@ -535,6 +548,14 @@ func buildProtocols(cfg *config.Config, opts Options) (Answerer, Judge, error) {
 	answerer, err := NewAnswerer(cfg, opts.Answerer, ansClient)
 	if err != nil {
 		return nil, nil, err
+	}
+	// cat5 对抗档的评分面是答案侧三态，判官换成同构的对抗判官（闭集不同、钉不同）。
+	if IsLoCoMoAdversarialTier(opts.Tier) && opts.Judge == "llm" {
+		judge, advErr := NewAdversarialJudge(cfg, jdgClient)
+		if advErr != nil {
+			return nil, nil, advErr
+		}
+		return answerer, judge, nil
 	}
 	judge, err := NewJudge(cfg, opts.Judge, jdgClient)
 	if err != nil {
@@ -600,16 +621,11 @@ func progressLine(done, total int, results []map[string]any) string {
 	return line
 }
 
-// ArmModeForPulseMode 将脉冲模式映射为唯一合法检索臂标签。
+// ArmModeForPulseMode 将脉冲模式映射为唯一合法检索臂标签。现役唯一臂 = 本地明文
+// （sdk-local-plain），对任何输入都返回它（脉冲云端臂已随「评测层去云端」移除）。
 func ArmModeForPulseMode(pulseMode string) string {
-	switch NormalizePulseMode(pulseMode) {
-	case PulseModePulsePlain:
-		return "sdk-pulse-plain"
-	case PulseModeLocalPlain:
-		return "sdk-local-plain"
-	default:
-		return "sdk-pulse-cipher"
-	}
+	_ = pulseMode
+	return "sdk-local-plain"
 }
 
 // BuildArm 给一次运行起个可读的臂名（写盘文件名与报告用）。

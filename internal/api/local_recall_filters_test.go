@@ -18,7 +18,7 @@ func TestLocalVaultRecallRejectsUnsupportedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("thinclient: %v", err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("ep_filter", testNow, "filter witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("ep_filter", testNow, "filter witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
 
@@ -62,7 +62,7 @@ func TestLocalGraphSessionFilterDoesNotFallBackToVault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("thinclient: %v", err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("ep_filter_fallback", testNow, "fallback witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("ep_filter_fallback", testNow, "fallback witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
 	if !memory.Store.HasLegacyGraph() {

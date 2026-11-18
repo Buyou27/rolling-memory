@@ -18,7 +18,7 @@
       "path": "<HOME>/.claude/settings.json"
     },
     {
-      "content": "dc6161984e208052e79b877cbce10001627747eb9813861bc8f393806d169f67\n",
+      "content": "f118aaa0d8c1e7d3f6da57d3769f5a835e93b700dd9f2d63ee0a1429c5d47657\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.claude/skills/rolling-memory/.rolling-memory-owner"
@@ -48,7 +48,7 @@
       "path": "<HOME>/.codebuddy/mcp.json"
     },
     {
-      "content": "dc6161984e208052e79b877cbce10001627747eb9813861bc8f393806d169f67\n",
+      "content": "f118aaa0d8c1e7d3f6da57d3769f5a835e93b700dd9f2d63ee0a1429c5d47657\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.codebuddy/skills/rolling-memory/.rolling-memory-owner"
@@ -78,7 +78,7 @@
       "path": "<HOME>/.codex/hooks.json"
     },
     {
-      "content": "dc6161984e208052e79b877cbce10001627747eb9813861bc8f393806d169f67\n",
+      "content": "f118aaa0d8c1e7d3f6da57d3769f5a835e93b700dd9f2d63ee0a1429c5d47657\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.codex/skills/rolling-memory/.rolling-memory-owner"
@@ -102,7 +102,7 @@
       "path": "<HOME>/.dsh/profiles/web/cordis.patch.yml"
     },
     {
-      "content": "dc6161984e208052e79b877cbce10001627747eb9813861bc8f393806d169f67\n",
+      "content": "f118aaa0d8c1e7d3f6da57d3769f5a835e93b700dd9f2d63ee0a1429c5d47657\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.dsh/skills/rolling-memory/.rolling-memory-owner"
@@ -126,7 +126,7 @@
       "path": "<HOME>/.zcode/cli/config.json"
     },
     {
-      "content": "dc6161984e208052e79b877cbce10001627747eb9813861bc8f393806d169f67\n",
+      "content": "f118aaa0d8c1e7d3f6da57d3769f5a835e93b700dd9f2d63ee0a1429c5d47657\n",
       "executable": false,
       "kind": "text",
       "path": "<HOME>/.zcode/skills/rolling-memory/.rolling-memory-owner"

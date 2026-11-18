@@ -49,7 +49,7 @@ func TestEpisodicSaveHonorsTombstones(t *testing.T) {
 				}
 			}
 			pkt, _ := v.PackBlindPacket(tc.id, text, 1)
-			err := v.SaveLocalEpisodicPointerIndexed(tc.id, 1, ref, "", text, pkt, CloudIngestResponse{})
+			err := v.SaveLocalEpisodicPointerIndexed(tc.id, 1, ref, "", text, pkt, IngestResponse{})
 			if tc.deleted {
 				if !errors.Is(err, ErrEpisodicUnitDeleted) {
 					t.Fatalf("tombstoned unit error = %v", err)
@@ -81,7 +81,7 @@ func TestEpisodicSaveFailsClosedWhenTombstoneUnavailable(t *testing.T) {
 	}
 	ref, text := "@ref:jsonl:"+path+":0#0", "[user] read failure"
 	pkt, _ := v.PackBlindPacket("doc", text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, CloudIngestResponse{}); err == nil || errors.Is(err, ErrEpisodicUnitDeleted) {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); err == nil || errors.Is(err, ErrEpisodicUnitDeleted) {
 		t.Fatalf("tombstone lookup failure = %v", err)
 	}
 	var count int
@@ -99,7 +99,7 @@ func TestEpisodicLegacyPointerHonorsTombstone(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointer("doc", 1, "@ref:jsonl:/synthetic:0#0", "@ref:jsonl:/synthetic:0", CloudIngestResponse{}); !errors.Is(err, ErrEpisodicUnitDeleted) {
+	if err := v.SaveLocalEpisodicPointer("doc", 1, "@ref:jsonl:/synthetic:0#0", "@ref:jsonl:/synthetic:0", IngestResponse{}); !errors.Is(err, ErrEpisodicUnitDeleted) {
 		t.Fatalf("legacy pointer error = %v", err)
 	}
 	var docs, lineage int
@@ -213,7 +213,7 @@ func TestEpisodicBackfillAndLineageHonorTombstone(t *testing.T) {
 	id := episodicunit.DocID("mem:backfill-tombstone", text)
 	turn := "@ref:jsonl:" + path + ":0"
 	ref := turn + "#0"
-	if err := v.SaveLocalEpisodicPointer(id, 1, ref, "", CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointer(id, 1, ref, "", IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id); err != nil {
@@ -249,7 +249,7 @@ func TestEpisodicLineageAndDeleteSerialize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalPlaintext("doc", 1, "fixture", []string{"fixture"}, CloudIngestResponse{Layer: LayerEpisodic}); err != nil {
+	if err := v.SaveLocalPlaintext("doc", 1, "fixture", []string{"fixture"}, IngestResponse{Layer: LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := db.Begin()
@@ -285,7 +285,7 @@ func TestEpisodicLineageAndDeleteSerialize(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM thin_vault_deleted_units WHERE unit_id='doc'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalPlaintext("doc", 1, "fixture", []string{"fixture"}, CloudIngestResponse{Layer: LayerEpisodic}); err != nil {
+	if err := v.SaveLocalPlaintext("doc", 1, "fixture", []string{"fixture"}, IngestResponse{Layer: LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.RecordEpisodicLineage("@ref:jsonl:/fixture:0", "doc", 1); err != nil {
@@ -318,7 +318,7 @@ func TestEpisodicTombstoneSeparatesScopes(t *testing.T) {
 		deleted bool
 	}{{deletedID, true}, {otherID, false}} {
 		pkt, _ := v.PackBlindPacket(tc.id, text, 1)
-		err := v.SaveLocalEpisodicPointerIndexed(tc.id, 1, ref, "", text, pkt, CloudIngestResponse{})
+		err := v.SaveLocalEpisodicPointerIndexed(tc.id, 1, ref, "", text, pkt, IngestResponse{})
 		if tc.deleted && !errors.Is(err, ErrEpisodicUnitDeleted) || !tc.deleted && err != nil {
 			t.Fatalf("scope id %s: %v", tc.id, err)
 		}
@@ -334,10 +334,10 @@ func TestEpisodicPlaintextTombstoneLayerIsolation(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalPlaintext("doc", 1, "background", []string{"background"}, CloudIngestResponse{Layer: LayerBackground}); err != nil {
+	if err := v.SaveLocalPlaintext("doc", 1, "background", []string{"background"}, IngestResponse{Layer: LayerBackground}); err != nil {
 		t.Fatalf("episodic tombstone blocked background: %v", err)
 	}
-	if err := v.SaveLocalPlaintext("doc", 1, "episodic", []string{"episodic"}, CloudIngestResponse{Layer: LayerEpisodic}); !errors.Is(err, ErrEpisodicUnitDeleted) {
+	if err := v.SaveLocalPlaintext("doc", 1, "episodic", []string{"episodic"}, IngestResponse{Layer: LayerEpisodic}); !errors.Is(err, ErrEpisodicUnitDeleted) {
 		t.Fatalf("episodic tombstone error = %v", err)
 	}
 	var raw string
@@ -360,7 +360,7 @@ func TestEpisodicDeleteAndSaveSerialize(t *testing.T) {
 	ref, text := "@ref:jsonl:"+path+":0#0", "[user] serialization"
 	id := episodicunit.DocID("mem:serialize", text)
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	deleteTx, err := db.Begin()
@@ -377,7 +377,7 @@ func TestEpisodicDeleteAndSaveSerialize(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		close(started)
-		result <- v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{})
+		result <- v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{})
 	}()
 	<-started
 	if err := deleteTx.Commit(); err != nil {
@@ -393,7 +393,7 @@ func TestEpisodicDeleteAndSaveSerialize(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM thin_vault_deleted_units WHERE unit_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatalf("save after explicit tombstone removal: %v", err)
 	}
 	deleteTx, err = db.Begin()
@@ -634,7 +634,7 @@ func TestEpisodicIndexEnsureAndCrossInstance(t *testing.T) {
 			t.Fatal(err)
 		}
 		pkt, _ := v1.PackBlindPacket("doc", text, 1)
-		if err := v1.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+		if err := v1.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 		hits, err := v2.SearchClientSDKDefault(text, 10)
@@ -654,7 +654,7 @@ func TestEpisodicIndexEnsureAndCrossInstance(t *testing.T) {
 	}
 	const scope = "ensure-test"
 	docID := episodicunit.DocID(scope, text)
-	if err := v1.SaveLocalEpisodicPointer(docID, 1, ref, "", CloudIngestResponse{}); err != nil {
+	if err := v1.SaveLocalEpisodicPointer(docID, 1, ref, "", IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	created, err := v1.EnsureLocalEpisodicIndex(scope, docID, ref, text)
@@ -725,7 +725,7 @@ func TestEpisodicIndexContentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkt, _ := v.PackBlindPacket("doc", original, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", original, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", original, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	var digest, payload []byte
@@ -747,14 +747,14 @@ func TestEpisodicIndexContentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	changedPkt, _ := v.PackBlindPacket("doc", changed, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", changed, changedPkt, CloudIngestResponse{}); err == nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", changed, changedPkt, IngestResponse{}); err == nil {
 		t.Fatal("changed source overwrote established identity")
 	}
 	if _, err := v.EnsureLocalEpisodicIndex("identity-test", "doc", ref, changed); err == nil {
 		t.Fatal("backfill overwrote established identity")
 	}
 	wrongPkt, _ := v.PackBlindPacket("new", original, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("new", 1, ref, "", original, wrongPkt, CloudIngestResponse{}); err == nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("new", 1, ref, "", original, wrongPkt, IngestResponse{}); err == nil {
 		t.Fatal("mismatched supplied text accepted")
 	}
 	if err := os.Remove(path); err != nil {
@@ -803,7 +803,7 @@ func TestEpisodicEnsureAndRecentIdentity(t *testing.T) {
 	}
 	const scope = "mem:recent-identity"
 	id := episodicunit.DocID(scope, original)
-	if err := v.SaveLocalEpisodicPointer(id, 1, ref, "", CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointer(id, 1, ref, "", IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	checkRecent := func(want string) {
@@ -875,7 +875,7 @@ func TestEpisodicIndexAtomicMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkt, _ := v.PackBlindPacket("doc", "different", 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, CloudIngestResponse{}); err == nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); err == nil {
 		t.Fatal("mismatched packet accepted")
 	}
 	var count int
@@ -886,7 +886,7 @@ func TestEpisodicIndexAtomicMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkt, _ = v.PackBlindPacket("doc", text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, CloudIngestResponse{}); err == nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); err == nil {
 		t.Fatal("write failure ignored")
 	}
 	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 0 {
@@ -1011,7 +1011,7 @@ func TestEpisodicPointerRelocatesByContentDigest(t *testing.T) {
 		t.Fatalf("legacy reader attributed relocated content to stale position: %q %v", got, err)
 	}
 	pkt, _ := v.PackBlindPacket("kept", keptText, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("kept", 1, droppedRef, turnRef, keptText, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("kept", 1, droppedRef, turnRef, keptText, pkt, IngestResponse{}); err != nil {
 		t.Fatalf("record relocated source: %v", err)
 	}
 	if got, err := v.LoadVerifiedEpisodicPointer("kept", droppedRef); err != nil || got != keptText {
@@ -1055,7 +1055,7 @@ func TestZCodePointerReflectsSourceEdits(t *testing.T) {
 	const scope = "mem:source-edit"
 	oldID := episodicunit.DocID(scope, oldText)
 	pkt, _ := v.PackBlindPacket(oldID, oldText, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(oldID, 1, ref, turn, oldText, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(oldID, 1, ref, turn, oldText, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := v.LoadVerifiedEpisodicPointer(oldID, ref); err != nil || got != oldText {
@@ -1073,7 +1073,7 @@ func TestZCodePointerReflectsSourceEdits(t *testing.T) {
 	}
 	newID := episodicunit.DocID(scope, newText)
 	pkt, _ = v.PackBlindPacket(newID, newText, 2)
-	if err := v.SaveLocalEpisodicPointerIndexed(newID, 2, ref, turn, newText, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(newID, 2, ref, turn, newText, pkt, IngestResponse{}); err != nil {
 		t.Fatalf("import updated source: %v", err)
 	}
 	if got, err := v.LoadVerifiedEpisodicPointer(newID, ref); err != nil || got != newText {
@@ -1136,7 +1136,7 @@ func TestJSONLPointerSameMetadataEditFailsClosed(t *testing.T) {
 	text := "[user] alpha"
 	id := episodicunit.DocID("mem:jsonl-edit", text)
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := v.LoadVerifiedEpisodicPointer(id, ref); err != nil || got != text {
@@ -1174,11 +1174,11 @@ func TestEpisodicCrossSourceRecoveryAndLineage(t *testing.T) {
 	ref1, ref2 := turn1+"#0", turn2+"#0"
 	pkt, _ := v.PackBlindPacket(id, text, 1)
 	v.SetIdentity(VaultIdentity{AssistantID: "first", IncarnationID: "s1", Locus: "one"})
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref1, turn1, text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref1, turn1, text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	v.SetIdentity(VaultIdentity{AssistantID: "second", IncarnationID: "s2", Locus: "two"})
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, ref2, turn2, text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, ref2, turn2, text, pkt, IngestResponse{}); err != nil {
 		t.Fatalf("record second source: %v", err)
 	}
 	var raw, assistant, incarnation, locus string
@@ -1188,7 +1188,7 @@ func TestEpisodicCrossSourceRecoveryAndLineage(t *testing.T) {
 	if raw != ref1 || assistant != "first" || incarnation != "s1" || locus != "one" {
 		t.Fatalf("primary source attribution changed: %q %q %q %q", raw, assistant, incarnation, locus)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 3, ref1, turn1, text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 3, ref1, turn1, text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`SELECT assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&assistant, &incarnation, &locus); err != nil {
@@ -1275,24 +1275,24 @@ func TestEpisodicSaveItemErrorsAndInfrastructureFailures(t *testing.T) {
 		{ref: ref, text: "[user] different"},
 		{ref: "@ref:jsonl:" + filepath.Join(dir, "missing.jsonl") + ":0#0", text: text},
 	} {
-		if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, tc.ref, tc.turn, tc.text, pkt, CloudIngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
+		if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, tc.ref, tc.turn, tc.text, pkt, IngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
 			t.Fatalf("item failure not classified: %v", err)
 		}
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = x'00' WHERE doc_id = 'doc'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, CloudIngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
+	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
 		t.Fatalf("index integrity failure not classified: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	newPkt, _ := v.PackBlindPacket("new", text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed("new", 1, ref, "", text, newPkt, CloudIngestResponse{}); err == nil || errors.Is(err, ErrEpisodicIndexItem) {
+	if err := v.SaveLocalEpisodicPointerIndexed("new", 1, ref, "", text, newPkt, IngestResponse{}); err == nil || errors.Is(err, ErrEpisodicIndexItem) {
 		t.Fatalf("database failure classified as item: %v", err)
 	}
 }
@@ -1316,7 +1316,7 @@ func TestEpisodicDeleteRetainsConcurrentAlternateSource(t *testing.T) {
 	ref1 := "@ref:jsonl:" + paths[0] + ":0#0"
 	ref2 := "@ref:jsonl:" + paths[1] + ":0#0"
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref1, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref1, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(paths[0], []byte(`{"type":"user","message":{"role":"user","content":"changed"}}`+"\n"), 0o600); err != nil {
@@ -1325,7 +1325,7 @@ func TestEpisodicDeleteRetainsConcurrentAlternateSource(t *testing.T) {
 	if status := v.ClassifyAndHealEpisodicUnit("mem:delete-source", id, ref1, 1, false); status != EpisodicContentAbsent {
 		t.Fatalf("initial status = %v", status)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref2, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref2, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if deleted, err := v.DeleteLocalEpisodicUnit(id, ref1); err != nil || deleted {
@@ -1355,7 +1355,7 @@ func TestEpisodicRepointKeepsCodecGenerations(t *testing.T) {
 	text := "[assistant] later"
 	id := episodicunit.DocID("mem:codec", text)
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, oldRef, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, oldRef, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if created, err := other.EnsureLocalEpisodicIndex("mem:codec", id, oldRef, text); err != nil || !created {
@@ -1366,7 +1366,7 @@ func TestEpisodicRepointKeepsCodecGenerations(t *testing.T) {
 		`{"type":"assistant","message":{"role":"assistant","content":"other"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, newRef, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, newRef, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatalf("repoint: %v", err)
 	}
 	var mismatched int
@@ -1374,7 +1374,7 @@ func TestEpisodicRepointKeepsCodecGenerations(t *testing.T) {
 		t.Fatalf("codec generation retained stale pointer: %d %v", mismatched, err)
 	}
 	pktOther, _ := other.PackBlindPacket(id, text, 1)
-	if err := other.SaveLocalEpisodicPointerIndexed(id, 1, newRef, "", text, pktOther, CloudIngestResponse{}); err != nil {
+	if err := other.SaveLocalEpisodicPointerIndexed(id, 1, newRef, "", text, pktOther, IngestResponse{}); err != nil {
 		t.Fatalf("save under second codec after repoint: %v", err)
 	}
 	if got, err := other.LoadVerifiedEpisodicPointer(id, newRef); err != nil || got != text {
@@ -1409,7 +1409,7 @@ func TestEpisodicRepointRejectsCorruptHistoricalCodec(t *testing.T) {
 	text := "[assistant] keep"
 	id := episodicunit.DocID("mem:corrupt-codec", text)
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, oldRef, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, oldRef, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if created, err := other.EnsureLocalEpisodicIndex("mem:corrupt-codec", id, oldRef, text); err != nil || !created {
@@ -1420,7 +1420,7 @@ func TestEpisodicRepointRejectsCorruptHistoricalCodec(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(false)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, newRef, "", text, pkt, CloudIngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, newRef, "", text, pkt, IngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
 		t.Fatalf("corrupt codec did not reject repoint: %v", err)
 	}
 	var raw string
@@ -1452,7 +1452,7 @@ func TestEpisodicAlternateSourceIdempotent(t *testing.T) {
 	pkt, _ := v.PackBlindPacket(id, text, 1)
 	refs := []string{"@ref:jsonl:" + paths[0] + ":0#0", "@ref:jsonl:" + paths[1] + ":0#0"}
 	for _, ref := range refs {
-		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1460,7 +1460,7 @@ func TestEpisodicAlternateSourceIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT total_changes()`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, refs[1], "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, refs[1], "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`SELECT total_changes()`).Scan(&after); err != nil || after != before {
@@ -1469,7 +1469,7 @@ func TestEpisodicAlternateSourceIdempotent(t *testing.T) {
 	if _, err := db.Exec(`UPDATE thin_vault_episodic_sources SET source_mac = x'00' WHERE doc_id = ? AND ref_pointer = ?`, id, refs[1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, refs[1], "", text, pkt, CloudIngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, refs[1], "", text, pkt, IngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
 		t.Fatalf("tampered source silently re-signed: %v", err)
 	}
 }
@@ -1492,13 +1492,13 @@ func TestEpisodicDeletedSourceCannotAuthorizeReusedID(t *testing.T) {
 	oldRef := "@ref:jsonl:" + paths[0] + ":0#0"
 	newRef := "@ref:jsonl:" + paths[1] + ":0#0"
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, oldRef, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, oldRef, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, newRef, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, newRef, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := v.LoadVerifiedEpisodicPointer(id, oldRef); err == nil || got != "" {
@@ -1523,7 +1523,7 @@ func TestEpisodicRepeatedFirstSegmentAndAttribution(t *testing.T) {
 	id := episodicunit.DocID("mem:repeat", text)
 	pkt, _ := v.PackBlindPacket(id, text, 1)
 	for _, ref := range []string{turn + "#0", turn + "#1"} {
-		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, turn, text, pkt, CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, turn, text, pkt, IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1535,7 +1535,7 @@ func TestEpisodicRepeatedFirstSegmentAndAttribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherTurn := "@ref:jsonl:" + otherPath + ":0"
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, otherTurn+"#0", otherTurn, text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, otherTurn+"#0", otherTurn, text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":"changed"}}`+"\n"), 0o600); err != nil {
@@ -1545,7 +1545,7 @@ func TestEpisodicRepeatedFirstSegmentAndAttribution(t *testing.T) {
 		t.Fatalf("foreign source substituted for turn head: %q %t", got, ok)
 	}
 	other := "@ref:jsonl:" + path + ":1"
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, otherTurn+"#0", other, text, pkt, CloudIngestResponse{}); err == nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, otherTurn+"#0", other, text, pkt, IngestResponse{}); err == nil {
 		t.Fatal("pointer accepted with an unrelated turn provenance")
 	}
 	if docs, err := v.EpisodicTurnDocuments(other); err != nil || len(docs) != 0 {

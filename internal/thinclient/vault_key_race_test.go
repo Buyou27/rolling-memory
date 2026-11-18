@@ -140,7 +140,7 @@ func TestCorpusSnapshotIncrementalAppendConcurrentRead(t *testing.T) {
 		if _, err := db.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json) VALUES (?, 'episodic', ?, ?, ?, '[]', '', 0, '', '', '[]')`, docID, occ, occ, ref); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := vault.ensureLocalEpisodicIndex("default", docID, ref, text, true); err != nil {
+		if _, err := vault.ensureLocalEpisodicIndex("default", docID, ref, text, true, nil); err != nil {
 			t.Fatal(err)
 		}
 		return docID

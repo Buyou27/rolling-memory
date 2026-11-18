@@ -199,7 +199,7 @@ const (
 // and the 60s cooldown window has elapsed. Unchanged files are skipped in O(1) via
 // `os.Stat(mtime_ns, size)` inside `SyncBackgroundDirs`.
 func maybeSyncBackgroundOnHook(memory *api.Memory) {
-	if memory == nil || !memory.IsThinBrainProxy() || memory.Store == nil || memory.Store.DB() == nil {
+	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return
 	}
 	db := memory.Store.DB()

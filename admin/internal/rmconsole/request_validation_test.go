@@ -120,7 +120,7 @@ func TestEvalExportDeltaMissingAndMeasuredZero(t *testing.T) {
 	if got := exportDeltaRows(&run, &baseline)[0].DeltaPP; got != nil {
 		t.Fatalf("partial failed run must not produce a delta: %v", *got)
 	}
-	markdown := renderEvalReproMarkdown(SuiteATM, &run, nil, EvalCloudManifest{}, "", 0)
+	markdown := renderEvalReproMarkdown(SuiteATM, &run, nil, EvalManifest{}, "", 0)
 	if !strings.Contains(markdown, "| R@20 | — | — | — |") || strings.Contains(markdown, "delta column reads as absolute") {
 		t.Fatalf("markdown must show missing measurements: %s", markdown)
 	}

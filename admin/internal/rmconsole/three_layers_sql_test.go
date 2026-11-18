@@ -120,10 +120,20 @@ func TestLayerListHydratedPointerKeywordSearchAndCorruptedDBError(t *testing.T) 
 		t.Fatalf("write jsonl: %v", err)
 	}
 	jsonlRef := "@ref:jsonl:" + jsonlPath + ":0#0"
-	sockPath, _, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		return map[string]string{ref: "fix quantum entanglement bug in router", jsonlRef: "superconductor phase transition witness"}
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		textByRef := map[string]string{ref: "fix quantum entanglement bug in router", jsonlRef: "superconductor phase transition witness"}
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			text, ok := textByRef[asString(item["ref"])]
+			if !ok {
+				texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "unavailable"})
+				continue
+			}
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": asString(item["ref"]), "text": text, "verified": true})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	seedVault(t, dbPath,
 		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-ref', 'episodic', 1762380000, %q, 'C6:L1:B001#00')`, ref),
@@ -298,13 +308,23 @@ func TestLayerListSortOnlyAvoidsFullHydration(t *testing.T) {
 		t.Fatalf("close zdb: %v", err)
 	}
 
-	sockPath, _, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		return map[string]string{
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		textByRef := map[string]string{
 			"@ref:zcode:sess-old:msg-old": "[assistant] aaa pointer body",
 			"@ref:zcode:sess-new:msg-new": "[assistant] zzz pointer body",
 		}
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			text, ok := textByRef[asString(item["ref"])]
+			if !ok {
+				texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "unavailable"})
+				continue
+			}
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": asString(item["ref"]), "text": text, "verified": true})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	dayA := time.Date(2026, 11, 10, 12, 0, 0, 0, time.Local).Unix()
 	dayB := time.Date(2026, 11, 11, 12, 0, 0, 0, time.Local).Unix()
 	seedVault(t, dbPath,

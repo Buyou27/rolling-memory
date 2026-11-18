@@ -19,10 +19,18 @@ const (
 	Tier100  = "100"
 	Tier200  = "200"
 	Tier1540 = "1540"
+	// TierLoCoMoAdversarial = 上游官方 cat5 对抗题全集（446 题，随附对抗诱饵答案）。
+	// 该档没有金标答案与金标证据，评分面是答案侧三态（NOT_FABRICATED / FABRICATED / NEUTRAL）。
+	TierLoCoMoAdversarial = "adversarial-446"
 )
 
 // TierNames 是当前可用档位的固定顺序（报告与帮助文本用）。
-var TierNames = []string{Tier1540}
+var TierNames = []string{Tier1540, TierLoCoMoAdversarial}
+
+// IsLoCoMoAdversarialTier 报告档位是否为 cat5 对抗题全集。
+func IsLoCoMoAdversarialTier(tier string) bool {
+	return strings.TrimSpace(tier) == TierLoCoMoAdversarial
+}
 
 // ErrRetiredLoCoMoTier 表示请求的是不再提供的 LoCoMo 便捷档。
 var ErrRetiredLoCoMoTier = errors.New("LoCoMo 便捷档 100/200 不再提供：题集以上游官方为准（cat1-4 全集），请使用 --tier 1540")

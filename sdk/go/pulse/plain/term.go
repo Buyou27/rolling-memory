@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/sdk/go/public/closedset"
+	"github.com/rocareer/rolling-memory/sdk/go/public/termdoc"
 )
 
 // DemoSecret 是单测与基准评测共用的标准键控哈希密钥：文档侧与查询侧共用同一字节串，非评分参数。
@@ -720,8 +721,10 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeaconsInto(idx QueryIndexView, sen
 		sentU16 := clampPosU16(polSent)
 		slotU16 := clampPosU16(polSlot)
 		if idx.TermDFOf(h) == 0 && dStar > 0 && dStar <= 0xFFFFFFFF {
-			sentU16 = uint16((uint64(dStar) >> 16) & 0xFFFF)
-			slotU16 = uint16(uint64(dStar) & 0xFFFF)
+			// The bare ISO surface has no postings (df=0): the inferred day travels in
+			// the explicit (Sent, Slot) inferred-day composite until the cluster
+			// pipeline activates day-matching units.
+			sentU16, slotU16 = termdoc.PackInferredOrdinalDay(dStar)
 		}
 		qTerms[h] = Term{
 			Hash:     h,

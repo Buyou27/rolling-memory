@@ -32,18 +32,19 @@ raw_when_sparse = true
 boot_context = true
 ledger = false
 
-[cloud.sync]
+[sync]
 auto_watch = false
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	sw := parseConfigSwitches(cfgPath, true)
-	if !sw.BootContext || sw.Ledger || !sw.RawWhenSparse || sw.Mode != "cloud" || !sw.WidgetEnabled {
+	// 控制台恒本地：配置里残留的 [mode] name = "cloud" 不得改变控制台的运行模式读数。
+	if !sw.BootContext || sw.Ledger || !sw.RawWhenSparse || sw.Mode != modeLocal || !sw.WidgetEnabled {
 		t.Fatalf("unexpected switches: %#v", sw)
 	}
-	if sw.CloudAutoSync {
-		t.Fatal("cloud.sync.auto_watch = false must disable CloudAutoSync")
+	if sw.SyncAutoWatch {
+		t.Fatal("sync.auto_watch = false must disable the auto sync watch toggle")
 	}
 
 	logPath := filepath.Join(dir, "rolling-memory.log")
@@ -93,17 +94,19 @@ func TestHookOutcomesDistinguishImportReplayAndFailure(t *testing.T) {
 	}
 }
 
-func TestParseConfigSwitchesModeFollowsConfig(t *testing.T) {
+// TestParseConfigSwitchesModeStaysLocal 锁定控制台的运行模式读数恒为 local：
+// 引擎配置里残留的 [mode] name 取值（local / cloud / 未知）一律不得改变控制台读数
+// （控制台只读写本地明文金库，不存在云端路径）。
+func TestParseConfigSwitchesModeStaysLocal(t *testing.T) {
 	cases := []struct {
 		name    string
 		content string
-		want    string
 	}{
-		{"local_explicit", "[mode]\nname = \"local\"\n", "local"},
-		{"cloud_explicit", "[mode]\nname = \"cloud\"\n", "cloud"},
-		{"local_uppercase", "[mode]\nname = \"Local\"\n", "local"},
-		{"missing_section_defaults_local", "[recall]\nraw_when_sparse = true\n", "local"},
-		{"invalid_value_keeps_default", "[mode]\nname = \"weird\"\n", "local"},
+		{"local_explicit", "[mode]\nname = \"local\"\n"},
+		{"cloud_explicit", "[mode]\nname = \"cloud\"\n"},
+		{"local_uppercase", "[mode]\nname = \"Local\"\n"},
+		{"missing_section_defaults_local", "[recall]\nraw_when_sparse = true\n"},
+		{"invalid_value_keeps_default", "[mode]\nname = \"weird\"\n"},
 	}
 	for _, tc := range cases {
 		dir := t.TempDir()
@@ -111,8 +114,8 @@ func TestParseConfigSwitchesModeFollowsConfig(t *testing.T) {
 		if err := os.WriteFile(cfgPath, []byte(tc.content), 0o644); err != nil {
 			t.Fatalf("%s: write config: %v", tc.name, err)
 		}
-		if sw := parseConfigSwitches(cfgPath, true); sw.Mode != tc.want {
-			t.Fatalf("%s: mode=%q want %q", tc.name, sw.Mode, tc.want)
+		if sw := parseConfigSwitches(cfgPath, true); sw.Mode != modeLocal {
+			t.Fatalf("%s: mode=%q want %q", tc.name, sw.Mode, modeLocal)
 		}
 	}
 }
@@ -678,77 +681,6 @@ func TestBackgroundAddHandlerDelegatesToCanonicalCLI(t *testing.T) {
 	}
 }
 
-func TestCloudAccountLogoutDoesNotRestoreDevelopmentKey(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if err := saveCloudAccountState(CloudAccountState{BaseURL: defaultCloudServerURL, Namespace: defaultUpstreamDevUserID}); err != nil {
-		t.Fatalf("save logged-out account: %v", err)
-	}
-	state := loadCloudAccountState()
-	if state.APIKey != "" {
-		t.Fatal("logged-out account unexpectedly restored the development API key")
-	}
-	if state.BaseURL != defaultCloudServerURL || state.Namespace != defaultUpstreamDevUserID {
-		t.Fatalf("unexpected account fallback state: %+v", state)
-	}
-}
-
-func TestLiveAdminBackgroundSync_UserID10(t *testing.T) {
-	if os.Getenv("ROLLING_MEMORY_LIVE_TEST") != "1" {
-		t.Skip("set ROLLING_MEMORY_LIVE_TEST=1 to run the local userid=10 integration")
-	}
-	if strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BIN")) == "" {
-		t.Fatal("ROLLING_MEMORY_BIN must point to a freshly built rolling-memory binary")
-	}
-	// 端侧唯一凭据 = 数据面签名钥（`mem2.*`）：取本机已登录的账户态并临期续签；无凭据即跳过。
-	account := loadCloudAccountState()
-	if err := ensureSignedKey(context.Background(), &account); err != nil {
-		t.Skipf("live data-plane credentials not configured (%v); skipping live background integration", err)
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := saveCloudAccountState(account); err != nil {
-		t.Fatalf("save live account state: %v", err)
-	}
-	bgRoot := filepath.Join(home, "synthetic-background")
-	if err := os.MkdirAll(bgRoot, 0o755); err != nil {
-		t.Fatalf("mkdir synthetic background: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bgRoot, "integration.md"), []byte(
-		"# Synthetic Background Integration\nThis disposable document verifies blind background ingest and purge.\n",
-	), 0o600); err != nil {
-		t.Fatalf("write synthetic document: %v", err)
-	}
-	dbPath := filepath.Join(home, "memory.db")
-	t.Setenv("ROLLING_MEMORY_DB", dbPath)
-	t.Cleanup(func() {
-		if _, err := runAdminBackgroundDirRemove(context.Background(), dbPath, bgRoot); err != nil {
-			t.Logf("cleanup background purge: %v", err)
-		}
-	})
-
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/admin/plugin/rolling-memory/background/add", strings.NewReader(`{"path":`+strconv.Quote(bgRoot)+`}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-	backgroundAddHandler(c)
-	if !strings.Contains(recorder.Body.String(), `"code":0`) || !strings.Contains(recorder.Body.String(), `"ingested_files":1`) {
-		t.Fatalf("live background add failed: %s", recorder.Body.String())
-	}
-
-	db, err := openWritableVaultDB(dbPath)
-	if err != nil {
-		t.Fatalf("open live vault: %v", err)
-	}
-	defer db.Close()
-	var cloudChunks int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE address_uri != '' AND slots_json != '[]'`).Scan(&cloudChunks); err != nil {
-		t.Fatalf("count live cloud chunks: %v", err)
-	}
-	if cloudChunks != 1 {
-		t.Fatalf("live cloud chunks=%d, want 1", cloudChunks)
-	}
-}
-
 // TestGraphProductManagerAudit 产品经理视角的真实图谱数据契约审计：
 // 1) 256 截断时不得产生「断边孤儿节点」（任何入选 Cell 必有可见成员，任何入选 Unit 必有归属父 Cell）；
 // 2) EventTotal 必须等于域内真实总节点数（不受 limit 截断影响），NodeShown 才随 limit 变化；
@@ -849,39 +781,31 @@ func TestNativeRoutesMountWithoutPluginRegistry(t *testing.T) {
 	mountPublic(engine.Group(""))
 
 	want := map[string]bool{
-		"/admin/plugin/rolling-memory/status":                   false,
-		"/admin/plugin/rolling-memory/widget":                   false,
-		"/admin/plugin/rolling-memory/dashboard":                false,
-		"/admin/plugin/rolling-memory/efficacy":                 false,
-		"/admin/plugin/rolling-memory/roi/facts":                false,
-		"/admin/plugin/rolling-memory/graph":                    false,
-		"/admin/plugin/rolling-memory/graph/expand":             false,
-		"/admin/plugin/rolling-memory/terminal":                 false,
-		"/admin/plugin/rolling-memory/memories/query":           false,
-		"/admin/plugin/rolling-memory/recall/query":             false,
-		"/admin/plugin/rolling-memory/layers/stats":             false,
-		"/admin/plugin/rolling-memory/layers/list":              false,
-		"/admin/plugin/rolling-memory/layers/get/:pk":           false,
-		"/admin/plugin/rolling-memory/layers/get":               false,
-		"/admin/plugin/rolling-memory/layers/delete":            false,
-		"/admin/plugin/rolling-memory/env/health":               false,
-		"/admin/plugin/rolling-memory/sync/reconcile":           false,
-		"/admin/plugin/rolling-memory/background/sync":          false,
-		"/admin/plugin/rolling-memory/system/version":           false,
-		"/admin/plugin/rolling-memory/system/update/check":      false,
-		"/admin/plugin/rolling-memory/system/update/apply":      false,
-		"/admin/plugin/rolling-memory/eval/leaderboard":         false,
-		"/admin/plugin/rolling-memory/cloud/account/state":      false,
-		"/admin/plugin/rolling-memory/cloud/account/register":   false,
-		"/admin/plugin/rolling-memory/cloud/account/login":      false,
-		"/admin/plugin/rolling-memory/cloud/account/logout":     false,
-		"/admin/plugin/rolling-memory/cloud/account/rotate-key": false,
-		"/admin/plugin/rolling-memory/cloud/account/sign-key":   false,
-		"/admin/plugin/rolling-memory/cloud/account/devices":    false,
-		"/admin/plugin/rolling-memory/cloud/account/memory":     false,
-		"/plugin/rolling-memory/locomo/graph":                   false,
-		"/plugin/rolling-memory/locomo/recall":                  false,
-		"/ws":                                                   false,
+		"/admin/plugin/rolling-memory/status":              false,
+		"/admin/plugin/rolling-memory/widget":              false,
+		"/admin/plugin/rolling-memory/dashboard":           false,
+		"/admin/plugin/rolling-memory/efficacy":            false,
+		"/admin/plugin/rolling-memory/roi/facts":           false,
+		"/admin/plugin/rolling-memory/graph":               false,
+		"/admin/plugin/rolling-memory/graph/expand":        false,
+		"/admin/plugin/rolling-memory/terminal":            false,
+		"/admin/plugin/rolling-memory/memories/query":      false,
+		"/admin/plugin/rolling-memory/recall/query":        false,
+		"/admin/plugin/rolling-memory/layers/stats":        false,
+		"/admin/plugin/rolling-memory/layers/list":         false,
+		"/admin/plugin/rolling-memory/layers/get/:pk":      false,
+		"/admin/plugin/rolling-memory/layers/get":          false,
+		"/admin/plugin/rolling-memory/layers/delete":       false,
+		"/admin/plugin/rolling-memory/env/health":          false,
+		"/admin/plugin/rolling-memory/sync/reconcile":      false,
+		"/admin/plugin/rolling-memory/background/sync":     false,
+		"/admin/plugin/rolling-memory/system/version":      false,
+		"/admin/plugin/rolling-memory/system/update/check": false,
+		"/admin/plugin/rolling-memory/system/update/apply": false,
+		"/admin/plugin/rolling-memory/eval/leaderboard":    false,
+		"/plugin/rolling-memory/locomo/graph":              false,
+		"/plugin/rolling-memory/locomo/recall":             false,
+		"/ws":                                              false,
 	}
 	for _, r := range engine.Routes() {
 		if strings.HasSuffix(r.Path, "/stream") {
@@ -897,8 +821,8 @@ func TestNativeRoutesMountWithoutPluginRegistry(t *testing.T) {
 		}
 	}
 
-	// 验证 routes.go / cloud_account.go 中全部后台路由均已显式挂载 middleware.AdminPermission()
-	for _, srcFile := range []string{"routes.go", "cloud_account.go"} {
+	// 验证 routes.go 中全部后台路由均已显式挂载 middleware.AdminPermission()
+	for _, srcFile := range []string{"routes.go"} {
 		raw, err := os.ReadFile(srcFile)
 		if err != nil {
 			t.Fatalf("read %s: %v", srcFile, err)

@@ -33,6 +33,11 @@ func TestHistoricalOrphanTablesSurviveRepeatedMigration(t *testing.T) {
 
 func TestHistoricalMetaEdgeSurvivesRepeatedMigration(t *testing.T) {
 	connection, _ := connectMigrated(t, LocalProfile())
+	// Historical databases carry the legacy graph; fresh databases bootstrap
+	// thin, so apply the canonical schema before exercising the migration.
+	if err := EnsureLegacyGraphSchema(connection); err != nil {
+		t.Fatal(err)
+	}
 	execSQL(t, connection, `DROP TABLE meta_edge`)
 	ddl := `CREATE TABLE meta_edge (id INTEGER PRIMARY KEY, meta_kind TEXT CHECK(meta_kind IN ('same-as')), payload TEXT)`
 	execSQL(t, connection, ddl)

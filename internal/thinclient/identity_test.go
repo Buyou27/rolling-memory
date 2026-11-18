@@ -6,10 +6,6 @@ package thinclient_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/thinclient"
@@ -17,22 +13,9 @@ import (
 )
 
 // TestClientStampsPersonaIdentity verifies the persona coordinate contract for unlimited
-// parallel incarnations: whatever the caller sets on the client reaches BOTH the wire pulse
-// (assistant_id / incarnation_id / locus, plus matching headers) and the locally saved row,
+// parallel incarnations: whatever the caller sets on the client reaches the locally saved row,
 // so any incarnation can later answer when / where / what without a wider envelope.
 func TestClientStampsPersonaIdentity(t *testing.T) {
-	var mu sync.Mutex
-	var body map[string]any
-	var headers http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		headers = r.Header.Clone()
-		mu.Unlock()
-		_, _ = w.Write([]byte(`{"id":"ep_idtest","layer":"episodic","epoch":1,"address_uri":"C6:#1"}`))
-	}))
-	defer srv.Close()
-
 	db, err := sql.Open("sqlite", "file:identity_test?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -42,31 +25,13 @@ func TestClientStampsPersonaIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVault: %v", err)
 	}
-	tr := thinclient.NewHTTPBrainTransport(srv.URL, "mem_test")
-	tr.WireGzip = thinclient.WireGzipOff
-	client := thinclient.NewClient(vault, tr)
+	client := thinclient.NewClient(vault, thinclient.NewLocalVaultTransport(vault))
 	client.SetIdentity("reviewer", "inc-07", "Rolling-Memory")
 
 	if _, err := client.RememberWithLayer(
 		context.Background(), "ep_idtest", "并行分身身份坐标写入验证。", 1793102400, thinclient.LayerEpisodic, nil,
 	); err != nil {
 		t.Fatalf("RememberWithLayer: %v", err)
-	}
-
-	mu.Lock()
-	gotAssistant, _ := body["assistant_id"].(string)
-	gotIncarnation, _ := body["incarnation_id"].(string)
-	gotLocus, _ := body["locus"].(string)
-	hAssistant := headers.Get("X-Rolling-Memory-Assistant")
-	hIncarnation := headers.Get("X-Rolling-Memory-Incarnation")
-	hLocus := headers.Get("X-Rolling-Memory-Locus")
-	mu.Unlock()
-
-	if gotAssistant != "reviewer" || gotIncarnation != "inc-07" || gotLocus != "Rolling-Memory" {
-		t.Fatalf("wire persona = assistant=%q incarnation=%q locus=%q", gotAssistant, gotIncarnation, gotLocus)
-	}
-	if hAssistant != "reviewer" || hIncarnation != "inc-07" || hLocus != "Rolling-Memory" {
-		t.Fatalf("header persona = assistant=%q incarnation=%q locus=%q", hAssistant, hIncarnation, hLocus)
 	}
 
 	var storedAssistant, storedIncarnation, storedLocus string

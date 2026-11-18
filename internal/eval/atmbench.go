@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,7 +22,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	ramesdk "github.com/rocareer/rolling-memory/sdk/go"
+	local "github.com/rocareer/rolling-memory/sdk/go/local"
 )
 
 const (
@@ -30,7 +31,8 @@ const (
 	// SuiteATM 是第二套官方评测体系（剑桥大学 ATM-Bench 多模态个人指称记忆基准）。
 	SuiteATM = "atm"
 
-	// ATMScope 是默认开发租户的 ATM-Bench 云端专属评测作用域，与真实用户数据物理隔离。
+	// ATMScope 是默认开发租户的历史 ATM-Bench 评测作用域（旧固定 scope 形态，只用于读取旧制品），
+	// 与真实用户数据物理隔离。
 	ATMScope = "u10-mem-eval-atmbench"
 
 	// TierATMHard 是 ATM-Bench-Hard 31 道高难度跨年/多跳/冲突/拒答题档位。
@@ -572,17 +574,17 @@ func atmFullTextLineIndex(fullText, prefix string) int {
 // 全部为纯形式切分（固定字段名与空行边界，无语义词表、无字符数硬截断）。
 // 这些块并入同一父单元的句帧，不另发子 UnitID；其 BlockID/LineStart/LineEnd 仅端侧
 // 使用（本地金库与高分辨率交付定位），不进入上行脉冲。
-func atmHighResolutionSubUnits(item *ATMSGMItem) []ramesdk.SubUnit {
+func atmHighResolutionSubUnits(item *ATMSGMItem) []local.SubUnit {
 	if item == nil {
 		return nil
 	}
-	var subs []ramesdk.SubUnit
+	var subs []local.SubUnit
 	add := func(kind, text string, lineStart, lineEnd int) {
 		text = strings.TrimSpace(text)
 		if text == "" {
 			return
 		}
-		subs = append(subs, ramesdk.SubUnit{
+		subs = append(subs, local.SubUnit{
 			Kind:      kind,
 			ID:        item.ItemID + "#" + kind,
 			BlockID:   item.ItemID + "#" + kind,
@@ -705,7 +707,7 @@ func atmCloudDocuments(items []*ATMSGMItem) []CloudDocument {
 			Text:       item.FullText,
 			OccurredAt: item.OccurredAt,
 			NarratedAt: item.OccurredAt,
-			Layer:      ramesdk.LayerEpisodic,
+			Layer:      local.LayerEpisodic,
 			DocKey:     session,
 			FileURL:    session,
 			BlockKey:   item.ItemID,
@@ -718,17 +720,17 @@ func atmCloudDocuments(items []*ATMSGMItem) []CloudDocument {
 	return documents
 }
 
-// IngestATMCorpus writes source-faithful SGM units through the strict cloud SDK.
-func IngestATMCorpus(engine *CloudEngine, items []*ATMSGMItem, forceRebuild, reuse bool, logf func(string, ...any)) (CloudManifest, float64, error) {
+// IngestATMCorpus writes source-faithful SGM units through the strict local store.
+func IngestATMCorpus(engine *LocalEngine, items []*ATMSGMItem, forceRebuild, reuse bool, logf func(string, ...any)) (CloudManifest, float64, error) {
 	start := time.Now()
 	documents := atmCloudDocuments(items)
 	manifest, err := engine.Prepare(context.Background(), documents, forceRebuild, reuse, 8, logf)
 	return manifest, time.Since(start).Seconds(), err
 }
 
-// RecallATMQuestion maps remote unit IDs directly back to the official SGM identifiers.
+// RecallATMQuestion maps recalled unit IDs directly back to the official SGM identifiers.
 // Unknown or duplicate IDs are protocol errors, never silently discarded.
-func RecallATMQuestion(engine *CloudEngine, byID map[string]*ATMSGMItem, question string, rawLimit int) ([]string, []ramesdk.ResolvedHit, error) {
+func RecallATMQuestion(engine *LocalEngine, byID map[string]*ATMSGMItem, question string, rawLimit int) ([]string, []local.ResolvedHit, error) {
 	if rawLimit <= 0 {
 		rawLimit = 50
 	}
@@ -740,10 +742,10 @@ func RecallATMQuestion(engine *CloudEngine, byID map[string]*ATMSGMItem, questio
 	seen := make(map[string]bool, len(hits))
 	for _, hit := range hits {
 		if byID[hit.UnitID] == nil {
-			return nil, nil, fmt.Errorf("cloud evaluation returned foreign ATM unit %q in scope %s", hit.UnitID, engine.Scope)
+			return nil, nil, fmt.Errorf("evaluation returned foreign ATM unit %q in scope %s", hit.UnitID, engine.Scope)
 		}
 		if seen[hit.UnitID] {
-			return nil, nil, fmt.Errorf("cloud evaluation returned duplicate ATM unit %q", hit.UnitID)
+			return nil, nil, fmt.Errorf("evaluation returned duplicate ATM unit %q", hit.UnitID)
 		}
 		seen[hit.UnitID] = true
 		retIDs = append(retIDs, hit.UnitID)
@@ -798,6 +800,48 @@ func ComputeATMRecallMap(gtIDs, retIDs []string) map[string]float64 {
 // Binary Any-Hit@10 is strictly excluded from the optimization objective.
 func ComputeATMOfficialCompositeBps(main1013R10, hard31R10 float64) float64 {
 	return PyRound(10000.0*(0.70*main1013R10+0.30*hard31R10), 2)
+}
+
+// SelectATMAdaptiveDelivery selects the 0-64 smart adaptive delivery prefix from ranked hits
+// using the parameter-free natural energy decay envelope E(u_k) >= E(u_1)/e within maxChars.
+// When hits carry no energy gradient (e.g. unweighted test stubs), it falls back to min(10, len(retIDs)).
+func SelectATMAdaptiveDelivery(hits []local.ResolvedHit, retIDs []string, byID map[string]*ATMSGMItem, maxItems, maxChars int) int {
+	if len(retIDs) == 0 {
+		return 0
+	}
+	if maxItems <= 0 {
+		maxItems = 64
+	}
+	if maxChars <= 0 {
+		maxChars = 64000
+	}
+	hasGradient := len(hits) == len(retIDs) && len(hits) > 1 && hits[0].FinalWeight > 0 && hits[len(hits)-1].FinalWeight < hits[0].FinalWeight
+	if !hasGradient {
+		if len(retIDs) < 10 {
+			return len(retIDs)
+		}
+		return 10
+	}
+	e1 := hits[0].FinalWeight
+	k := 0
+	chars := 0
+	lim := len(retIDs)
+	if lim > maxItems {
+		lim = maxItems
+	}
+	for idx := 0; idx < lim; idx++ {
+		cLen := 0
+		if it := byID[retIDs[idx]]; it != nil {
+			cLen = len(it.FullText)
+		}
+		if hits[idx].FinalWeight >= e1/math.E && chars+cLen <= maxChars {
+			k = idx + 1
+			chars += cLen
+		} else {
+			break
+		}
+	}
+	return k
 }
 
 // FormatATMEvidencePayload 按 ATM-Bench 官方 MMRag 规范将 Top-K 证据格式化为答题输入。
@@ -952,7 +996,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 	started := time.Now()
 	if !IsValidPulseMode(opts.PulseMode) {
-		return nil, fmt.Errorf("invalid pulse_mode %q (must be %q, %q, or %q)", opts.PulseMode, PulseModeLocalPlain, PulseModePulsePlain, PulseModePulseCipher)
+		return nil, fmt.Errorf("invalid pulse_mode %q (only %q is supported)", opts.PulseMode, PulseModeLocalPlain)
 	}
 	if err := VerifyATMOfficialProtocol(); err != nil {
 		return nil, err
@@ -974,11 +1018,11 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 		return nil, ErrATMTierRetired
 	}
 	opts.PulseMode = NormalizePulseMode(opts.PulseMode)
-	scope := ScopeForSuiteAndMode(SuiteATM, cloudUserID(), opts.PulseMode)
+	scope := ScopeForSuiteAndMode(SuiteATM, evalUserID(), opts.PulseMode)
 	opts.Scope = scope
-	var engine *CloudEngine
+	var engine *LocalEngine
 	if !opts.Oracle {
-		engine, err = NewCloudEngine(cfg, SuiteATM, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
+		engine, err = NewLocalEngine(cfg, SuiteATM, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
 		if err != nil {
 			return nil, err
 		}
@@ -1040,18 +1084,14 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 
 	rawLimit := opts.RawLimit
 	if rawLimit <= 0 {
-		rawLimit = 50
+		rawLimit = 64
 	}
-	retrieveK := 10
+	retrieveK := 64
 
 	var ansClient, jdgClient *ChatClient
 	if opts.Answerer == "llm" || opts.Judge == "llm" {
-		evalCfg := *cfg
-		if opts.BaseURL != "" || cfg.Eval.BaseURL != "" {
-			evalCfg.Mode = "cloud"
-		}
 		if opts.Answerer == "llm" {
-			ansClient, err = NewChatClient(&evalCfg, ChatOptions{
+			ansClient, err = NewChatClient(cfg, ChatOptions{
 				BaseURL:         opts.BaseURL,
 				Model:           opts.Model,
 				APIKey:          opts.APIKey,
@@ -1066,7 +1106,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 			}
 		}
 		if opts.Judge == "llm" {
-			jdgClient, err = NewChatClient(&evalCfg, ChatOptions{
+			jdgClient, err = NewChatClient(cfg, ChatOptions{
 				BaseURL:     opts.BaseURL,
 				Model:       opts.Model,
 				APIKey:      opts.APIKey,
@@ -1106,12 +1146,13 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 				q := qas[idx]
 				t0 := time.Now()
 				var retIDs []string
+				var rawHits []local.ResolvedHit
 				cloudHits := 0
 				if opts.Oracle {
 					retIDs = append([]string{}, q.EvidenceIDs...)
 				} else {
 					var recallErr error
-					retIDs, _, recallErr = RecallATMQuestion(engine, byID, q.Question, rawLimit)
+					retIDs, rawHits, recallErr = RecallATMQuestion(engine, byID, q.Question, rawLimit)
 					if recallErr != nil {
 						recallErrs[idx] = recallErr
 						continue
@@ -1126,7 +1167,11 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 				evHit := len(q.EvidenceIDs) > 0 && r10 > 0
 				allHit10 := len(q.EvidenceIDs) > 0 && r10 >= 1.0-1e-9
 
-				userPayload, formattedLines := FormatATMEvidencePayload(q.Question, retIDs, byID, retrieveK)
+				qRetrieveK := SelectATMAdaptiveDelivery(rawHits, retIDs, byID, retrieveK, 64000)
+				if opts.Oracle {
+					qRetrieveK = len(retIDs)
+				}
+				userPayload, formattedLines := FormatATMEvidencePayload(q.Question, retIDs, byID, qRetrieveK)
 				contextText := strings.Join(formattedLines, "\n")
 				aic := TokenRecall(q.Answer, contextText) >= 0.8
 
@@ -1218,6 +1263,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 					rowTransport = "oracle-gold"
 				}
 
+				// "cloud_hits" / "engine_transport" 为跨版本数据兼容保留的历史键名（现值为本地命中数/本地通道）。
 				results[idx] = map[string]any{
 					"id":                   q.ID,
 					"sample_id":            q.QType,

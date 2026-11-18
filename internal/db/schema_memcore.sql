@@ -1,6 +1,7 @@
 -- Rolling-Memory 1:1 Isomorphic Extension Schema for the SQLite store.
--- Applied idempotently on both fresh and existing SQLite databases while keeping
--- schema.sql v1 digest and the 15 base DumpTables column layout untouched.
+-- Applied idempotently to databases that carry the legacy graph (guarded on the
+-- `node` table) while keeping schema.sql v1 digest and the 15 base DumpTables
+-- column layout untouched.
 
 -- 1:1 extended node attributes (incarnation_id, ext_ref, origin).
 CREATE TABLE IF NOT EXISTS node_ext (

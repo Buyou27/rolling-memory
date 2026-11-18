@@ -219,7 +219,7 @@ func TestEpisodicIndexReconcilePreservesUnverifiedSources(t *testing.T) {
 		{matchingID, missingPointer},
 		{"ep_unknown_old_id", missingPointer},
 	} {
-		if err := vault.SaveLocalEpisodicPointer(row.id, 1767668400, row.pointer, "", thinclient.CloudIngestResponse{}); err != nil {
+		if err := vault.SaveLocalEpisodicPointer(row.id, 1767668400, row.pointer, "", thinclient.IngestResponse{}); err != nil {
 			t.Fatalf("seed pointer %s: %v", row.id, err)
 		}
 	}

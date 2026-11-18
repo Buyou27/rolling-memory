@@ -188,35 +188,43 @@ func (e *Engine) buildUnitGroupProfile(st *rmClusterState, u int32, highDFThresh
 	return st.buildUnitGroupProfileWithPos(e.Index, sc, u, highDFThresh, true)
 }
 
+func resolveProfileEntryGroupAndWeight(idx *Index, st *rmClusterState, entry rmDocEntry, highDFThresh int) (g uint64, w float64, core bool, ok bool) {
+	const rmRigidMask uint8 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 7)
+	w, ok = st.effWeightOf(entry.id)
+	if !ok || w <= 0 {
+		w, _ = idx.TermMass(entry.id)
+	}
+	if math.IsNaN(w) || math.IsInf(w, 0) || w <= 0 {
+		return 0, 0, false, false
+	}
+	df := idx.TermDF(entry.id)
+	g = entry.group
+	if g == 0 {
+		g = entry.id
+	}
+	core = df <= highDFThresh || (entry.flags&rmRigidMask != 0)
+	if entry.id != g && df > highDFThresh {
+		if entry.flags&rmFlagCompanion != 0 {
+			return 0, 0, false, false
+		}
+		g = entry.id
+	}
+	return g, w, core, true
+}
+
 func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQueryScratch, u int32, highDFThresh int, withPos bool) unitGroupProfile {
 	entries := st.docEntriesOf(u)
 	if len(entries) == 0 {
 		return unitGroupProfile{}
 	}
-	const rmRigidMask uint8 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 7)
 	wide := st.hasWidePos()
 
 	if sc == nil {
 		items := make([]unitGroupItem, 0, len(entries))
 		for _, entry := range entries {
-			w, ok := st.effWeightOf(entry.id)
-			if !ok || w <= 0 {
-				w, _ = idx.TermMass(entry.id)
-			}
-			if math.IsNaN(w) || math.IsInf(w, 0) || w <= 0 {
+			g, w, core, ok := resolveProfileEntryGroupAndWeight(idx, st, entry, highDFThresh)
+			if !ok {
 				continue
-			}
-			df := idx.TermDF(entry.id)
-			g := entry.group
-			if g == 0 {
-				g = entry.id
-			}
-			core := df <= highDFThresh || (entry.flags&rmRigidMask != 0)
-			if entry.id != g && df > highDFThresh {
-				if entry.flags&rmFlagCompanion != 0 {
-					continue
-				}
-				g = entry.id
 			}
 			var cp []uint32
 			var cpx []TermPosition
@@ -271,24 +279,9 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 
 	baseItem := len(sc.profileItemPool)
 	for _, entry := range entries {
-		w, ok := st.effWeightOf(entry.id)
-		if !ok || w <= 0 {
-			w, _ = idx.TermMass(entry.id)
-		}
-		if math.IsNaN(w) || math.IsInf(w, 0) || w <= 0 {
+		g, w, core, ok := resolveProfileEntryGroupAndWeight(idx, st, entry, highDFThresh)
+		if !ok {
 			continue
-		}
-		df := idx.TermDF(entry.id)
-		g := entry.group
-		if g == 0 {
-			g = entry.id
-		}
-		core := df <= highDFThresh || (entry.flags&rmRigidMask != 0)
-		if entry.id != g && df > highDFThresh {
-			if entry.flags&rmFlagCompanion != 0 {
-				continue
-			}
-			g = entry.id
 		}
 		var cp []uint32
 		var cpx []TermPosition

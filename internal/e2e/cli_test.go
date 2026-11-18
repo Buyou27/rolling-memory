@@ -4,6 +4,7 @@
 package e2e_test
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,7 +107,23 @@ func TestCLISmoke(t *testing.T) {
 	status := sb.run("status", "--json")
 	assertExit(t, status, 0, "status")
 	summary := jsonObject(t, status.stdout)
-	if numberField(t, summary, "active_assertions") != 0 || summary["db"] != sb.db || summary["scope"] != "mem:e2e" {
+	// 薄库（vault-only）：active_assertions 映射为活体记忆单元数（docs + active noetic），
+	// 库里不再有任何断言图表。
+	connection, err := sql.Open("sqlite", "file:"+sb.db)
+	if err != nil {
+		t.Fatalf("open sandbox db: %v", err)
+	}
+	defer connection.Close()
+	var vaultUnits int
+	if err := connection.QueryRow(
+		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active')`,
+	).Scan(&vaultUnits); err != nil {
+		t.Fatalf("count vault units: %v", err)
+	}
+	if vaultUnits == 0 {
+		t.Fatal("expected imported vault units in the smoke database")
+	}
+	if numberField(t, summary, "active_assertions") != float64(vaultUnits) || summary["db"] != sb.db || summary["scope"] != "mem:e2e" {
 		t.Fatalf("status = %s", status.stdout)
 	}
 

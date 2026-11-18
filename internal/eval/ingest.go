@@ -39,8 +39,15 @@ func LoadCorpus(path string, limit int) ([]map[string]any, error) {
 		}
 		rowID := pyStr(firstTruthy(row["id"], ""))
 		if rowID != "" {
-			if _, ok := seen[rowID]; !ok {
-				seen[rowID] = struct{}{}
+			// 去重键 = 行 id +（存在时）locator：部分语料（如 LoCoMo 会话轮次）的行 id 只在
+			// 会话内唯一、跨会话会重复；仅按 id 去重会静默折叠大量行。locator 是行级唯一
+			// 定位串，二者合并后既保留真重复去重，又不误伤合法行。
+			rowKey := rowID
+			if locator := pyStr(firstTruthy(row["locator"], "")); locator != "" {
+				rowKey = rowID + "\x00" + locator
+			}
+			if _, ok := seen[rowKey]; !ok {
+				seen[rowKey] = struct{}{}
 				rows = append(rows, row)
 			}
 		}

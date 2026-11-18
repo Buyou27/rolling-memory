@@ -2,7 +2,7 @@
 
 **[简体中文](benchmarks.md) · [English](../benchmarks.md) · [常见问答](faq.md) · [返回文档中心](README.md)**
 
-Rolling Memory 提供一条命令、协议冻结的评测运行器（`rmem eval`），覆盖剑桥大学 ATM-Bench（第一主基准）与 ACL 2024 LoCoMo（长程对话对照参照）。**基准语料本身不随本仓库分发**——请自行从上游项目获取，并用下文公布的 `SHA-256` 摘要钉住。默认评测臂为 **`local_plain`**：在本地明文金库上完成端侧检索，全程 0 网络请求。云端脉冲臂属于申请制的云端能力预览（见 [privacy.md](privacy.md)），不在本发布版文档范围内。
+Rolling Memory 提供一条命令、协议冻结的评测运行器（`rmem eval`），覆盖剑桥大学 ATM-Bench（第一主基准）与 ACL 2024 LoCoMo（长程对话对照参照）。**基准语料本身不随本仓库分发**——请自行从上游项目获取，并用下文公布的 `SHA-256` 摘要钉住。本发布版评测本地臂 **`local_plain`**：在本地明文金库上完成端侧检索，全程 0 网络请求。云端面评测属于申请制的云端能力预览（见 [privacy.md](privacy.md)），不在本发布版的复现范围内。
 
 > **读数证据要求**：所有公开展示的成绩必须携带实际溯源（`transport / scope / corpus_sha256 / commit / 逐题检索 ID`）。Oracle 只是人工参考标注上限对照，不是引擎召回成绩。
 

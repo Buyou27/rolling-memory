@@ -190,3 +190,22 @@ func isRetryableChatError(err error) bool {
 	}
 	return isRetryableUpstreamError(err)
 }
+
+// isRetryableUpstreamError 只识别瞬时传输类故障（限流/暂时不可用/连接级错误）；
+// 鉴权、参数、契约类错误不得重试（fail-closed 快速失败）。模型通道（答题/判官）专用。
+func isRetryableUpstreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"HTTP 429", "HTTP 503", "请求频繁",
+		"connection refused", "connection reset", "unexpected EOF", "EOF",
+		"Client.Timeout exceeded",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}

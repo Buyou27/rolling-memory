@@ -198,7 +198,7 @@ func ShouldSkipBackgroundDir(dirName string) bool {
 	switch strings.ToLower(dirName) {
 	case "node_modules", "vendor", "dist", "build", "target", "out", "bin", "obj",
 		"__pycache__", ".venv", "venv", ".git", ".svn", ".hg", ".idea", ".vscode", ".zcode",
-		"coverage", "tmp", "temp", "logs":
+		"coverage", "tmp", "temp", "logs", "receipts":
 		return true
 	default:
 		return false

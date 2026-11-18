@@ -36,26 +36,24 @@ func TestIntegrityCheckAfterWrites(t *testing.T) {
 		t.Fatalf("PRAGMA integrity_check = %q", integrity)
 	}
 
-	// The import landed in the sandbox file: two traces / two events, no assertions
-	//（写侧停用后 CLI 不再生成断言）。
-	var traces, events, assertions int
-	if err := connection.QueryRow("SELECT count(*) FROM trace").Scan(&traces); err != nil {
-		t.Fatalf("count trace: %v", err)
+	// The import landed in the sandbox file: two content-addressed vault units
+	// and no legacy graph at all — fresh databases bootstrap thin, so the
+	// canonical JSONL import never creates trace/event/assertion tables and
+	// the CLI writes no assertions.
+	var units, legacyTables int
+	if err := connection.QueryRow("SELECT count(*) FROM thin_vault_docs").Scan(&units); err != nil {
+		t.Fatalf("count thin_vault_docs: %v", err)
 	}
-	if traces != 2 {
-		t.Fatalf("trace rows = %d, want 2", traces)
+	if units != 2 {
+		t.Fatalf("vault units = %d, want 2", units)
 	}
-	if err := connection.QueryRow("SELECT count(*) FROM event").Scan(&events); err != nil {
-		t.Fatalf("count event: %v", err)
+	if err := connection.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('trace','event','assertion','node','node_fts','trace_fts')",
+	).Scan(&legacyTables); err != nil {
+		t.Fatalf("count legacy tables: %v", err)
 	}
-	if events != 2 {
-		t.Fatalf("event rows = %d, want 2", events)
-	}
-	if err := connection.QueryRow("SELECT count(*) FROM assertion").Scan(&assertions); err != nil {
-		t.Fatalf("count assertion: %v", err)
-	}
-	if assertions != 0 {
-		t.Fatalf("assertion rows = %d, want 0", assertions)
+	if legacyTables != 0 {
+		t.Fatalf("thin import must not create legacy graph tables: found %d", legacyTables)
 	}
 
 	check := sb.run("check", "--json")

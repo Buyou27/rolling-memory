@@ -5,13 +5,9 @@ package memcore
 
 import (
 	"context"
-	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/text"
 )
-
-type ctxPresenceCoordsKey struct{}
-type ctxAudiencePeersKey struct{}
 
 // PresenceCoordinates is a type alias to text.PresenceCoordinates to maintain
 // backward compatibility while we refactor core primitives to the new package.
@@ -19,19 +15,12 @@ type PresenceCoordinates = text.PresenceCoordinates
 
 // IsEmpty reports whether all coordinates are unset.
 func IsEmpty(p PresenceCoordinates) bool {
-	return p.World == "" && p.Carrier == "" && p.Locus == "" && p.Incarnation == "" && p.SelfLabel == "" && p.PeerLabel == ""
+	return p.IsEmpty()
 }
 
 // Normalized returns a copy with normalized hierarchical paths and trimmed fields.
 func Normalized(p PresenceCoordinates) PresenceCoordinates {
-	return text.PresenceCoordinates{
-		World:       strings.TrimSpace(p.World),
-		Carrier:     strings.TrimSpace(p.Carrier),
-		Locus:       NormalizeHierarchicalPath(p.Locus),
-		Incarnation: NormalizeHierarchicalPath(p.Incarnation),
-		SelfLabel:   strings.TrimSpace(p.SelfLabel),
-		PeerLabel:   strings.TrimSpace(p.PeerLabel),
-	}
+	return p.Normalized()
 }
 
 // WithPresenceCoordinates binds PresenceCoordinates onto ctx.

@@ -134,13 +134,15 @@ func hookCommandsFromConfig(t *testing.T, path string) map[string]string {
 }
 
 // writeTranscript writes the two synthetic turns one coding session imports.
+// The assistant row carries the completion evidence the canonical pipeline
+// shares with the background scanner (an unfinished tail turn is not ingested).
 func writeTranscript(t *testing.T, path string) string {
 	t.Helper()
 	content := strings.Join([]string{
 		`{"type":"user","sessionId":"e2e","timestamp":"2026-10-20T10:00:00",` +
 			`"message":{"role":"user","content":[{"type":"text","text":"我喜欢猫。我的猫叫小白。"}]}}`,
 		`{"type":"assistant","sessionId":"e2e","timestamp":"2026-10-20T10:00:10",` +
-			`"message":{"role":"assistant","content":[{"type":"text","text":"记住了。"}]}}`,
+			`"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"记住了。"}]}}`,
 		"",
 	}, "\n")
 	writeFile(t, path, content)

@@ -7,7 +7,7 @@
 - **Official website**: <https://rolling-memory.rocareer.com/>.
 - **Documentation**: [docs/](docs/README.md) and the in-app help center.
 - **Email support**: `support@psychologylake.org.cn` (organization mailbox).
-- **Cloud trial application, partnership & investment**: `pick@psychologylake.org.cn`.
+- **Cloud capability application (advanced & enterprise), partnership & investment**: `pick@psychologylake.org.cn`.
 - **Bug reports and feature requests**: open an issue at
   <https://github.com/rocareer/rolling-memory/issues>.
 - **Security reports**: follow [SECURITY.md](SECURITY.md); do not open a public
@@ -30,9 +30,10 @@ Other languages are welcome but may receive a slower response.
 ## Supported versions
 
 The latest released minor version receives fixes. Older minor versions may be
-asked to upgrade before a fix is provided. The local mode has no account or
-subscription requirement; cloud trial modes are invitation-only and are not
-covered by this support policy.
+asked to upgrade before a fix is provided. The local product needs no account or
+subscription and makes no memory-plane network requests. The separate cloud
+memory service is application-based ([preview](docs/privacy.md)) and is not
+covered by this community support policy.
 
 ## Scope
 
@@ -53,7 +54,7 @@ We do not provide:
 
 1. Run `rolling-memory doctor --json` and include the output with secrets
    removed.
-2. State the version (`rolling-memory --version`), operating system, host
-   integration, and storage mode (`local` or `cloud`).
+2. State the version (`rolling-memory --version`), operating system, and host
+   integration.
 3. Provide a minimal reproduction and the exact command you ran.
 4. Remove API keys, tokens, personal data, and vault contents from logs.

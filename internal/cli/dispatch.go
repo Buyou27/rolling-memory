@@ -169,14 +169,16 @@ func (a *application) dispatch() int {
 		return a.runUpdate()
 	case "export":
 		return a.fail(api.ExportUnavailable())
+	case "engine":
+		return a.runEngine()
 	case "eval":
 		return a.runEval()
 	case "wave":
 		return a.runWave()
 	case "recall":
 		scope := a.args.String("scope")
-		if eval.IsCloudEvalScope(scope) {
-			return a.runCloudEvalRecall()
+		if eval.IsEvalScope(scope) {
+			return a.runLocalEvalRecall()
 		}
 		if err := rejectRetiredEvalScope(scope); err != nil {
 			return a.fail(err)
@@ -271,6 +273,8 @@ func (a *application) runWithMemory(memory *api.Memory) (int, error) {
 			return 1, err
 		}
 		return 0, a.emit(result, func() { a.printReindex(result) })
+	case "maintain":
+		return a.runMaintainCommand(memory)
 	case "eject":
 		result, err := memory.Eject()
 		if err != nil {
@@ -713,7 +717,14 @@ func (a *application) runMCP() int {
 		return a.fail(errors.New("mcp requires local mode and local_plain"))
 	}
 	if a.args.Flag("daemon") {
-		if err := mcp.ServeUnix(mcp.DefaultUnixSocketPath(), nil, a.backgroundMCPAutoWatch); err != nil {
+		mem, err := a.openMemory()
+		if err != nil {
+			return a.fail(err)
+		}
+		defer func() { _ = mem.Close() }()
+		if err := mcp.ServeUnix(mcp.DefaultUnixSocketPath(), mem, func(ctx context.Context) {
+			a.backgroundMCPAutoWatchWithMemory(ctx, mem)
+		}); err != nil {
 			a.errorf("error: %s\n", ids.Redact(err.Error()))
 			return 1
 		}

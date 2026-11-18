@@ -8,7 +8,9 @@
 
 **Rolling Memory** is a local-first memory tool for AI coding agents, built on the **Rolling Autonoetic Memory Engine**. This repository ships **pure local mode (`local_plain`)** and contains the complete, auditable client side of the system: the CLI and multi-harness plugin, the local SQLite plaintext vault, the client SDK, the transport-layer egress gate, and the `rmem eval` evaluation runner.
 
-The high-order **cloud memory services** and **proprietary enterprise extensions** are closed-source and are **not** open or included in this repository. Nothing shipped here requires them: this release runs 100% in local plaintext mode (`local_plain`) fully offline with zero external network requests.
+**This repository ships the complete local plane of Rolling Memory**: adaptive recall, storage, and consolidation all happen in the local vault, and the shipped build makes **no memory-plane network requests**. The only outbound calls a user can trigger are: the evaluation LLM endpoint you configure yourself (`rmem eval --answerer llm --judge llm`), the optional download of an upstream benchmark corpus, and the optional update check.
+
+Beyond the local plane, a separate **cloud memory service** is offered on an **application basis** for advanced and enterprise users. It is closed-source and is **not** included in this repository; nothing shipped here requires it. At product level: everything sent to it is **ciphertext-only** (irreversibly encoded on your device first — plaintext never leaves the local vault), and it adds stronger retrieval operators and cross-device continuity. See [`docs/privacy.md`](docs/privacy.md) for the preview; implementation details are not published.
 
 As cryptography and trustworthy-AI researchers, we reject disingenuous excuses — **we never claim "security through obscurity"** (hiding code to protect user data). Under **Kerckhoffs's Principle**, true data privacy relies on a verifiable trust boundary and user-visible data paths, never on hiding client-side code. The boundary above rests on three objective engineering principles:
 
@@ -17,7 +19,7 @@ As cryptography and trustworthy-AI researchers, we reject disingenuous excuses �
    - The local client, the SQLite plaintext vault, the standard SDKs, and the transport-layer egress gate are deliberately small, so that a security engineer can audit them directly and confirm that **raw text and the local master key never leave the local database** in the shipped local mode.
    - All plaintext and keys reside in a single local SQLite file with `0700/0600` OS permission isolation (inheriting FileVault / LUKS / BitLocker full-disk encryption); L1 `Background` uses Source-in-Place Live Read (zero full-text duplication); the built-in local FTS5 fallback plus open SQLite / pluggable local-store formats keep the vault 100% offline-usable and free of vendor lock-in (see [`docs/privacy.md`](docs/privacy.md)).
 2. **Zero local compute overhead for the on-device plane**:
-   - Heavy server-side indexing, cross-tenant storage, and cross-device synchronization are cloud-plane concerns. The on-device plane therefore stays at **millisecond latency with near-zero memory overhead**, with no background model calls and no embedding API bills.
+   - There is no server-side plane at all: no cross-tenant storage and no cross-device synchronization. The on-device plane therefore stays at **millisecond latency with near-zero memory overhead**, with no background model calls and no embedding API bills.
 3. **Adversarial anti-poisoning defense & no vendor lock-in**:
    - Agents operating in open environments face **Adversarial Memory Poisoning** — malicious web pages or untrusted tool outputs attempting to hijack Top-1 recall via keyword stuffing or repetition loops;
    - Your plaintext lives in your own local SQLite file and can be exported at any time; nothing in the local plane depends on a service account.

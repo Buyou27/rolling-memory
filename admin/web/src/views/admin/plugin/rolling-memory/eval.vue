@@ -503,13 +503,13 @@
                                             <el-select v-model="evalConfig.top_k" disabled>
                                                 <el-option
                                                     v-if="query.suite === 'atm'"
-                                                    :value="50"
-                                                    :label="isEn ? 'Top 50 (compute R@10/20/50 · answer always Top 10)' : 'Top 50（官方检索池 · 算 R@10/20/50 · 答题恒交 Top 10）'"
+                                                    :value="64"
+                                                    :label="isEn ? '0-64 (ATM-Bench smart adaptive delivery window · R@10/50/64)' : '0-64（ATM-Bench 智能自适应交付窗口 · R@10/50/64）'"
                                                 />
                                                 <el-option
                                                     v-else
                                                     :value="96"
-                                                    :label="isEn ? 'Top 96 (LoCoMo 1,540 adaptive delivery window)' : 'Top 96（LoCoMo 1,540 官方自适应交付窗口）'"
+                                                    :label="isEn ? '0-96 (LoCoMo 1,540 smart adaptive delivery window)' : '0-96（LoCoMo 1,540 智能自适应交付窗口）'"
                                                 />
                                             </el-select>
                                         </label>

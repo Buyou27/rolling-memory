@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/memcore"
 )
 
@@ -35,6 +36,12 @@ func TestSQLiteMemcoreBackendCompliance(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	defer st.Close()
+	// This suite exercises the relationship backend on top of the legacy
+	// assertion graph; fresh production databases bootstrap thin, so apply
+	// the graph schema on the test database.
+	if err := db.EnsureLegacyGraphSchema(st.DB()); err != nil {
+		t.Fatalf("EnsureLegacyGraphSchema: %v", err)
+	}
 
 	memcore.RunStoreBackendComplianceSuite(t, st.MemcoreBackend())
 

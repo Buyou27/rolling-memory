@@ -6,12 +6,11 @@
 //
 // The policy is deliberately small and enforced at every network call:
 //
-//   - local  -- only loopback (localhost / 127.0.0.1 / ::1) is reachable.
-//   - cloud  -- remote endpoints are allowed, but private rows are still
-//     never sent to an LLM or the sync backend (hard-coded, not a toggle).
+//   - local  -- only loopback (localhost / 127.0.0.1 / ::1) is reachable; the
+//     single explicitly configured non-loopback exception is the evaluation
+//     model endpoint (see CheckEgress).
 //
-// No telemetry, no background uploads. Cloud sync also requires both
-// mode = "cloud" and cloud.sync.enabled = true.
+// No telemetry, no background uploads.
 package config
 
 import (
@@ -45,11 +44,12 @@ func IsDefaultScope(scope string) bool {
 	return clean == "" || clean == DefaultScope || clean == LegacyDefaultScope
 }
 
-// WorkspaceScopeName derives the per-workspace scope name used when
-// [cloud.sync] scope_from_workspace is enabled: the ROLLING_MEMORY_LOCUS
-// override wins, otherwise the working directory basename (the same rule the
-// persona locus uses, so scope and locus never disagree). Returns "" when
-// nothing usable is derivable (callers keep their existing scope).
+// WorkspaceScopeName derives the per-workspace scope name used when the
+// cross-version `[cloud.sync] scope_from_workspace` compatibility key is
+// enabled: the ROLLING_MEMORY_LOCUS override wins, otherwise the working
+// directory basename (the same rule the persona locus uses, so scope and locus
+// never disagree). Returns "" when nothing usable is derivable (callers keep
+// their existing scope).
 func WorkspaceScopeName(override string, wd string) string {
 	name := strings.TrimSpace(override)
 	if name == "" {
@@ -76,8 +76,7 @@ reader = "deliverable"
 log = "~/.local/state/rolling-memory/rolling-memory.log"
 
 [mode]
-# local = no non-loopback network request at all (default)
-# cloud = remote LLM / embedding / sync allowed; private rows still stay local
+# local = no non-loopback network request at all (the only supported mode)
 name = "local"
 allow_loopback_llm = true
 
@@ -125,18 +124,6 @@ ledger = true
 owner = ""
 assistant = ""
 
-[cloud.sync]
-enabled = false
-base_url = ""
-api_key_env = "ROLLING_MEMORY_CLOUD_KEY"
-api_key_file = ""
-auto = false
-batch_size = 100
-timeout_sec = 30
-include_anchor = false
-# 默认 scope 按当前工作区派生（每工作区独立分区；显式 scope 优先）
-scope_from_workspace = false
-
 [eval]
 # Bundled self-evaluation (rmem eval): tiers 100 / 200 / 1540 ship under evaldata/.
 # answerer: none = retrieval metrics only (no model call) | llm = frozen answer protocol
@@ -164,7 +151,7 @@ workers = 8
 
 var (
 	scopeRE     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._\-]{0,127}$`)
-	validModes  = []string{"local", "cloud"}
+	validModes  = []string{"local"}
 	validReader = []string{"owner", "deliverable"}
 )
 
@@ -226,6 +213,7 @@ type EvalConfig struct {
 
 // RecallConfig holds read-chain caps and leg toggles.
 type RecallConfig struct {
+	DeliveryWindow   string
 	Bands            int
 	Nodes            int
 	Chars            int
@@ -253,6 +241,38 @@ type RecallConfig struct {
 	PreprobeLimit    int
 }
 
+// NormalizeDeliveryWindow normalizes an adaptive delivery window preset ("auto", "0-16",
+// "0-32", "0-64") into its canonical label and item ceiling. Empty or "auto" resolves to
+// fallback (or "0-16" when fallback is empty).
+func NormalizeDeliveryWindow(raw, fallback string) (string, int, bool) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" || v == "auto" {
+		v = strings.ToLower(strings.TrimSpace(fallback))
+		if v == "" || v == "auto" {
+			v = "0-16"
+		}
+	}
+	switch v {
+	case "0-16", "16":
+		return "0-16", 16, true
+	case "0-32", "32":
+		return "0-32", 32, true
+	case "0-64", "64":
+		return "0-64", 64, true
+	default:
+		return "", 0, false
+	}
+}
+
+// DeliveryWindowCap returns the configured adaptive delivery window ceiling (16, 32, or 64; default 16).
+func (r RecallConfig) DeliveryWindowCap() int {
+	_, capN, ok := NormalizeDeliveryWindow(r.DeliveryWindow, "0-16")
+	if !ok || capN <= 0 {
+		return 16
+	}
+	return capN
+}
+
 // HooksConfig holds hook budgets.
 type HooksConfig struct {
 	BootContext bool
@@ -269,22 +289,6 @@ type IdentityConfig struct {
 	AssistantID string
 	Owner       string
 	Assistant   string
-}
-
-// CloudSyncConfig configures the optional sync backend.
-type CloudSyncConfig struct {
-	Enabled       bool
-	BaseURL       string
-	APIKeyEnv     string
-	APIKeyFile    string
-	Auto          bool
-	BatchSize     int
-	TimeoutSec    float64
-	IncludeAnchor bool
-	// ScopeFromWorkspace derives a default scope from the current workspace name
-	// (ROLLING_MEMORY_LOCUS override, else the working directory basename) so each
-	// workspace keeps its own cloud partition; explicit scopes win unchanged.
-	ScopeFromWorkspace bool
 }
 
 // StorageConfig is reserved for the USB design; the default is local.
@@ -304,7 +308,6 @@ type Config struct {
 	LLM              LLMConfig
 	Recall           RecallConfig
 	Hooks            HooksConfig
-	Cloud            CloudSyncConfig
 	Storage          StorageConfig
 	Identity         IdentityConfig
 	Eval             EvalConfig
@@ -356,6 +359,8 @@ func Load(opts LoadOptions) (*Config, error) {
 	hooksTable := table(data, "hooks")
 	identityTable := table(data, "identity")
 	evalTable := table(data, "eval")
+	// 跨版本兼容键：`[cloud.sync] scope_from_workspace` 仍是控制台判定的输入，
+	// 这里只保留其本地 scope 派生语义；其余云端同步配置已回收。
 	cloudRoot := table(data, "cloud")
 	syncTable := map[string]any{}
 	if value, ok := cloudRoot["sync"].(map[string]any); ok {
@@ -367,9 +372,9 @@ func Load(opts LoadOptions) (*Config, error) {
 	logValue := firstTruthy(envValue(env, "ROLLING_MEMORY_LOG"), core["log"], filepath.Join(DefaultStateDir(), "rolling-memory.log"))
 	modeValue := firstTruthy(deref(opts.Mode), envValue(env, "ROLLING_MEMORY_MODE"), modeTable["name"], "local")
 	scopeValue := firstTruthy(deref(opts.Scope), envValue(env, "ROLLING_MEMORY_SCOPE"), core["scope"], DefaultScope)
-	// [cloud.sync] scope_from_workspace：默认 scope（空 / "default" / 旧 "mem:self"）派生为
-	// 当前工作区名（ROLLING_MEMORY_LOCUS 覆盖，否则工作目录 basename），使每个工作区落在
-	// 独立分区；显式 scope（--scope / ROLLING_MEMORY_SCOPE / 自定义 [core] scope）优先。
+	// 兼容键 `[cloud.sync] scope_from_workspace`：默认 scope（空 / "default" / 旧 "mem:self"）
+	// 派生为当前工作区名（ROLLING_MEMORY_LOCUS 覆盖，否则工作目录 basename），使每个工作区
+	// 落在独立分区；显式 scope（--scope / ROLLING_MEMORY_SCOPE / 自定义 [core] scope）优先。
 	if asBool(syncTable["scope_from_workspace"], false) && IsDefaultScope(pyString(scopeValue)) {
 		if wd, err := os.Getwd(); err == nil {
 			locusOverride, _ := env("ROLLING_MEMORY_LOCUS")
@@ -389,7 +394,13 @@ func Load(opts LoadOptions) (*Config, error) {
 		TimeoutSec: asFloat(llmTable["timeout_sec"], 30.0),
 		MaxTokens:  asInt(llmTable["max_tokens"], 1200),
 	}
+	recallWindowRaw := pyString(envOr(env, "ROLLING_MEMORY_DELIVERY_WINDOW", getDefault(recallTable, "delivery_window", "0-16")))
+	recallWindowNorm, _, recallWindowOK := NormalizeDeliveryWindow(recallWindowRaw, "0-16")
+	if !recallWindowOK {
+		recallWindowNorm = strings.TrimSpace(recallWindowRaw)
+	}
 	recallConfig := RecallConfig{
+		DeliveryWindow:   recallWindowNorm,
 		Bands:            asInt(recallTable["bands"], 8),
 		Nodes:            asInt(recallTable["nodes"], 50),
 		Chars:            asInt(recallTable["chars"], 16000),
@@ -446,18 +457,6 @@ func Load(opts LoadOptions) (*Config, error) {
 			getDefault(evalTable, "reasoning_effort", "low"))),
 		Workers: asInt(evalTable["workers"], 8),
 	}
-	syncConfig := CloudSyncConfig{
-		Enabled:            asBool(syncTable["enabled"], false),
-		BaseURL:            pyString(envOr(env, "ROLLING_MEMORY_SYNC_BASE_URL", getDefault(syncTable, "base_url", ""))),
-		APIKeyEnv:          pyString(envOr(env, "ROLLING_MEMORY_SYNC_API_KEY_ENV", getDefault(syncTable, "api_key_env", "ROLLING_MEMORY_CLOUD_KEY"))),
-		APIKeyFile:         pyString(envOr(env, "ROLLING_MEMORY_SYNC_API_KEY_FILE", getDefault(syncTable, "api_key_file", ""))),
-		Auto:               asBool(syncTable["auto"], false),
-		BatchSize:          asInt(syncTable["batch_size"], 100),
-		TimeoutSec:         asFloat(syncTable["timeout_sec"], 30.0),
-		IncludeAnchor:      asBool(syncTable["include_anchor"], false),
-		ScopeFromWorkspace: asBool(syncTable["scope_from_workspace"], false),
-	}
-
 	storageProfile := "local"
 	portableRoot := PortableRoot()
 	if portableRoot != "" {
@@ -484,7 +483,6 @@ func Load(opts LoadOptions) (*Config, error) {
 		LLM:              llmConfig,
 		Recall:           recallConfig,
 		Hooks:            hooksConfig,
-		Cloud:            syncConfig,
 		Storage:          StorageConfig{Profile: storageProfile},
 		Identity:         identityConfig,
 		Eval:             evalConfig,
@@ -498,10 +496,10 @@ func Load(opts LoadOptions) (*Config, error) {
 // Validate enforces the closed sets and positive caps.
 func (c *Config) Validate() error {
 	if !contains(validModes, c.Mode) {
-		return newConfigError("mode must be one of ('local', 'cloud'), got %s", pyRepr(c.Mode))
+		return newConfigError("mode must be one of ('local'), got %s", pyRepr(c.Mode))
 	}
 	if c.Mode == "local" && c.Recall.AdvancedOps {
-		return newConfigError("advanced operators (recall.advanced_ops) are not allowed in local mode; switch to cloud mode first")
+		return newConfigError("advanced operators (recall.advanced_ops) are not allowed in local mode")
 	}
 	if !contains(validReader, c.Reader) {
 		return newConfigError("reader must be one of ('owner', 'deliverable'), got %s", pyRepr(c.Reader))
@@ -518,6 +516,9 @@ func (c *Config) Validate() error {
 	if c.Recall.BudgetMS <= 0 {
 		return newConfigError("recall.budget_ms must be positive")
 	}
+	if _, _, ok := NormalizeDeliveryWindow(c.Recall.DeliveryWindow, "0-16"); !ok {
+		return newConfigError("recall.delivery_window must be one of ('auto', '0-16', '0-32', '0-64'), got %s", pyRepr(c.Recall.DeliveryWindow))
+	}
 	for _, value := range []int{
 		c.Recall.Bands,
 		c.Recall.Nodes,
@@ -529,7 +530,6 @@ func (c *Config) Validate() error {
 		c.Recall.HookChars,
 		c.Hooks.MaxTraces,
 		c.Hooks.MaxLLMCalls,
-		c.Cloud.BatchSize,
 		c.Eval.Workers,
 	} {
 		if value <= 0 {
@@ -564,7 +564,12 @@ func (c *Config) Ensure() error {
 	return nil
 }
 
-// CheckEgress enforces the local/cloud network policy.
+// CheckEgress enforces the local-only network boundary: only loopback
+// (localhost / 127.0.0.1 / ::1) is reachable through this gate. The one
+// explicitly configured non-loopback exception is the evaluation model
+// endpoint — the frozen benchmark answerer/judge leg — and it passes only when
+// the checked host equals the user's configured `[eval] base_url` host and an
+// evaluation API key is present. Every other non-loopback target is refused.
 func (c *Config) CheckEgress(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -573,24 +578,14 @@ func (c *Config) CheckEgress(rawURL string) error {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return newEgressError("unsupported scheme for %s", pyRepr(rawURL))
 	}
-	if c.Mode == "cloud" {
-		return nil
-	}
 	host, ok := ids.URLHost(rawURL)
 	if c.AllowLoopbackLLM && ok && ids.IsLoopbackHost(host) {
 		return nil
 	}
-	// In local mode, if the user explicitly enabled a legacy limb — the rerank
-	// limb (retired "max" preset), the embedding limb (retired "pro") or a
-	// model-driven producer — and configured their own API key and endpoint,
-	// allow calls to that user-configured endpoint
-	// while still blocking all cloud memory sync and unconfigured external hosts.
 	if ok && host != "" {
-		if c.LLM.Provider == "openai" {
-			if lHost, lOK := ids.URLHost(c.LLM.BaseURL); lOK && lHost == host {
-				if key, err := c.LLMKey(); err == nil && strings.TrimSpace(key) != "" {
-					return nil
-				}
+		if eHost, eOK := ids.URLHost(c.Eval.BaseURL); eOK && eHost == host {
+			if key, err := c.EvalKey(); err == nil && strings.TrimSpace(key) != "" {
+				return nil
 			}
 		}
 	}
@@ -599,7 +594,7 @@ func (c *Config) CheckEgress(rawURL string) error {
 		display = "unknown host"
 	}
 	return newEgressError(
-		"local mode blocks non-loopback egress to %s; switch to cloud mode explicitly if this is intended",
+		"local mode blocks non-loopback egress to %s; only the configured evaluation model endpoint may leave the machine",
 		display,
 	)
 }
@@ -651,11 +646,6 @@ func (c *Config) EvalKey() (string, error) {
 	return c.ResolveSecret(c.Eval.APIKeyEnv, c.Eval.APIKeyFile)
 }
 
-// SyncKey resolves the configured cloud sync API key.
-func (c *Config) SyncKey() (string, error) {
-	return c.ResolveSecret(c.Cloud.APIKeyEnv, c.Cloud.APIKeyFile)
-}
-
 // SecretStatus reports key presence without exposing values.
 func (c *Config) SecretStatus() map[string]map[string]any {
 	result := map[string]map[string]any{}
@@ -665,7 +655,6 @@ func (c *Config) SecretStatus() map[string]map[string]any {
 		file    string
 	}{
 		{"llm", c.LLM.APIKeyEnv, c.LLM.APIKeyFile},
-		{"sync", c.Cloud.APIKeyEnv, c.Cloud.APIKeyFile},
 	}
 	for _, entry := range entries {
 		key, err := c.ResolveSecret(entry.envName, entry.file)
@@ -728,12 +717,6 @@ func (c *Config) PublicDict() map[string]any {
 			"mention_backfill":  c.Recall.MentionBackfill,
 			"activation_record": c.Recall.ActivationRecord,
 			"activation_rank":   c.Recall.ActivationRank,
-		},
-		"sync": map[string]any{
-			"enabled":  c.Cloud.Enabled,
-			"base_url": c.Cloud.BaseURL,
-			"auto":     c.Cloud.Auto,
-			"key":      secrets["sync"],
 		},
 	}
 }

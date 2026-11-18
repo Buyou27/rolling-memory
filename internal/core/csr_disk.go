@@ -756,6 +756,22 @@ func AttachDiskClusterCSR(path string, eng *Engine, releaseHeapDuplicates bool) 
 	return nil
 }
 
+// widePosMaxCoordinate 是 Sentence/Slot 宽坐标的读者安全上限：下游以 maxSent 长度做
+// make/切片（nextSentGen/sentTotals），本上限把单段可触发的分配钳在 128 MiB 级
+// （[]float64 × 1<<24）；真实文档句/槽坐标由单文档句数与槽位计数派生，比该上限低多个
+// 数量级（宽坐标压测夹具量级 ~7×10^4，生产 .zcsr 宽坐标保真测试钉住 70000/70001）。
+const widePosMaxCoordinate = 1 << 24
+
+// validateWidePosRecord 校验 widePosPool 记录的幅值可被下游 make/切片安全消费
+// （与「段头计数先于一切尺寸算术做可代表上界校验」同一读者纪律；Sentence/Slot 的
+// -1 为哨兵值，坐标上界见 widePosMaxCoordinate，位置下标必须落在位置总数内）。
+func validateWidePosRecord(pIdx uint32, sent, slot, numPos int) error {
+	if sent < -1 || sent > widePosMaxCoordinate || slot < -1 || slot > widePosMaxCoordinate || uint64(pIdx) >= uint64(numPos) {
+		return fmt.Errorf("%w: widePos record out of range (pos=%d sent=%d slot=%d numPos=%d)", ErrInvalidZCSR, pIdx, sent, slot, numPos)
+	}
+	return nil
+}
+
 func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClusterState, error) {
 	if len(data) < zcsrRMHeaderSize {
 		return nil, fmt.Errorf("%w: file shorter than header", ErrInvalidZCSR)
@@ -1070,6 +1086,11 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 			if e > s {
 				unitIDs[u] = unsafe.String(&idBytes[s], int(e-s))
 			}
+			// LookupUnit 的二分查找依赖严格升序：与 termKeys/phraseKeys/dayCosKeys
+			// 同口径在读者侧复验，拒绝乱序段（写入端恒有序）。
+			if u > 0 && unitIDs[u] <= unitIDs[u-1] {
+				return nil, fmt.Errorf("%w: unitIDs not strictly ascending at %d", ErrInvalidZCSR, u)
+			}
 		}
 		parsedUnitIDs = unitIDs
 	}
@@ -1224,6 +1245,9 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 				pIdx := uint32(binary.LittleEndian.Uint64(idBytes[wpOff : wpOff+8]))
 				sent := int(int64(binary.LittleEndian.Uint64(idBytes[wpOff+8 : wpOff+16])))
 				slot := int(int64(binary.LittleEndian.Uint64(idBytes[wpOff+16 : wpOff+24])))
+				if err := validateWidePosRecord(pIdx, sent, slot, numPos); err != nil {
+					return nil, err
+				}
 				parsedWidePos[pIdx] = TermPosition{Sentence: sent, Slot: slot}
 				wpOff += 24
 			}

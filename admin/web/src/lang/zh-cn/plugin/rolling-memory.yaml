@@ -162,6 +162,42 @@ overview:
     pendingTag: 待同步
     unknownStatus: 状态未知
     healthUnavailable: 健康状态不可用，请重新检测
+    maintenanceTitle: 清理与自愈
+    maintenanceSub: 只清「确证过时」的单元并修复坐标位移的指针；源不可读的单元默认保留
+    maintenancePreviewBtn: 预演扫描
+    maintenanceApplyBtn: 执行清理与自愈
+    maintenanceVerifiedLbl: 内容完好
+    maintenanceReanchorLbl: 可重锚
+    maintenanceReanchoredLbl: 已重锚
+    maintenanceAbsentLbl: 可清理
+    maintenanceRemovedLbl: 已清理
+    maintenanceUnreadableLbl: 保留（源不可读）
+    maintenanceNoeticLbl: 孤儿沉淀清理
+    maintenanceReceiptLbl: 回执
+    maintenancePreviewHint: 预演为只读分类，不写任何数据
+    maintenancePreviewToast: 预演完成
+    maintenanceDoneToast: 清理与自愈完成
+    maintenanceApplyConfirm: 将删除「确证过时」的单元、重锚坐标位移的指针并清理孤儿沉淀，操作写入回执文件；确认执行？
+    maintenanceConfirmOk: 执行
+    maintenanceConfirmCancel: 取消
+    spaceMaintenanceTitle: 磁盘空间维护
+    spaceMaintenanceSub: 旧版本备份、可再生成缓存与金库空闲页的一站式维护；扫描为只读，清理与瘦身必须确认
+    spaceMaintenanceScanBtn: 扫描可回收空间
+    spaceMaintenanceCleanBtn: 清理旧副本与缓存
+    spaceMaintenanceCompactBtn: 金库瘦身
+    spaceMaintenanceHint: 旧副本按「每目录每族保留最新 2 份」清理；瘦身期间共享引擎守护进程短暂暂停并自动复位
+    spaceMaintenanceTotalLbl: 可回收合计
+    spaceMaintenanceBackupsLbl: 旧版本备份
+    spaceMaintenanceCachesLbl: 可再生成缓存
+    spaceMaintenanceCompactLbl: 金库空闲页
+    spaceMaintenanceFreedLbl: 本次已释放
+    spaceMaintenanceReceiptLbl: 回执
+    spaceMaintenanceScanToast: 空间体检完成
+    spaceMaintenanceDoneToast: 空间维护完成
+    spaceMaintenanceCleanConfirm: 将删除超出保留份数的历史备份副本（活跃程序不受影响）并清除可再生成缓存（缓存会在下次使用时自动重建）；确认执行？
+    spaceMaintenanceCompactConfirm: 将短暂暂停共享引擎守护进程并对本地金库执行 VACUUM 瘦身（完成后自动复位，进行中的召回会短暂等待）；确认执行？
+    spaceMaintenanceConfirmOk: 执行
+    spaceMaintenanceConfirmCancel: 取消
     progressTitle: 正在检测环境与记忆健康
     progressHint: 检测结果就绪后自动呈现，无需停留本页
     progressElapsed: 已用 {s}s

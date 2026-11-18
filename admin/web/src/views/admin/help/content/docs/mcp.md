@@ -58,7 +58,8 @@ The server opens SQLite lazily on the first `tools/call` so `initialize` and `to
 | `rank` | bool | Item-mode grouping switch: `true` (default) groups by memory unit → source block; `false` delivers pure relevance order |
 | `asof` | string \| int | Reserved; do not use (requests specifying this filter fail closed) |
 | `window` | object | Reserved; do not use (requests specifying a boundary fail closed) |
-| `caps` | object | `{bands, nodes, chars, chains, rows, raw}` delivery budget overrides. `raw` defaults to 10 and supports up to 64; `bands` supports up to 64. The default text budget is 16,000 characters unless configured otherwise. |
+| `delivery_window` | `auto` \| `0-16` \| `0-32` \| `0-64` | **Smart Adaptive Delivery Window** (default `auto` uses the console setting, `0-16` by default): delivers `0` to `N` memories within the natural physical information energy envelope $E(u_k) \ge E(u_1)/e$ with no minimum floor. Omit or pass `auto` for normal turns; pass `0-32` (balanced span) or `0-64` (deep synthesis) only for cross-session history audits or broad multi-event synthesis. (In benchmark evaluations, ATM-Bench defaults to `0-64` and LoCoMo defaults to `0-96`.) |
+| `caps` | object | `{delivery_window, bands, nodes, chains, rows, raw}` delivery budget overrides. Character-count truncation (`chars`) is intentionally omitted from the MCP schema so agents do not conservatively truncate multi-event evidence; delivery is governed by `delivery_window` (`0-16`, `0-32`, or `0-64`). |
 | `session` | string | Reserved; do not use (requests specifying this filter fail closed) |
 | `offset` | int | Band pagination offset |
 | `deep` | bool | Optional query-hint expansion; skipped automatically in zero-LLM local mode |

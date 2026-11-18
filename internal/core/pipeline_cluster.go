@@ -666,7 +666,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			if !isInferredOrdDay {
 				continue
 			}
-			ordDay := int64((uint64(qTerm.Sent) << 16) | uint64(qTerm.Slot))
+			ordDay := UnpackInferredOrdinalDay(qTerm.Sent, qTerm.Slot)
 			if ordDay <= 0 {
 				continue
 			}
@@ -686,9 +686,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			dfDay := float64(len(dayUnits))
 			baseline = math.Log1p((float64(idx.N) - dfDay + 0.5) / (dfDay + 0.5))
 			if len(dayUnits) > 1 && totalDaysM > 0 {
-				eNull := totalDaysM * (1.0 - math.Exp(-dfDay/totalDaysM))
-				denom := math.Max(1.0, eNull-1.0)
-				kOcc := ((dfDay - 1.0) / (dfDay + 2.0)) * math.Max(0, 1.0-0.0/denom)
+				kOcc := (dfDay - 1.0) / (dfDay + 2.0)
 				baseline *= 1.0 + kOcc*invE
 			}
 			weight := baseline
@@ -724,10 +722,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 					activateUnit(u)
 					sc.lexUnits = append(sc.lexUnits, u)
 				}
-				matchedMass := weight * 2.0
-				if meanBits > 0 && qTerm.Bits > 0 {
-					matchedMass *= bitsGainSqrt(float64(qTerm.Bits) / meanBits)
-				}
+				matchedMass := weight
 				if e.FlagsGain > 0 {
 					matchedMass *= 1.0 + e.FlagsGain/math.E
 				}

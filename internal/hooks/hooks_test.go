@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +23,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/recall"
@@ -110,6 +110,12 @@ func openMemory(t *testing.T) *api.Memory {
 	memory, err := api.New(loadConfig(t))
 	if err != nil {
 		t.Fatalf("api: %v", err)
+	}
+	// Fresh production databases bootstrap thin; this suite exercises the
+	// legacy assertion-graph surfaces (structured seeds, historical tables),
+	// so apply its schema on the test database.
+	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
 	return memory
@@ -551,86 +557,11 @@ func TestCloseReplaysPendingTracesAndStaysSilent(t *testing.T) {
 // never fork a duplicate unit.
 func TestCloseUploadsCurrentTurnToEpisodicLayer(t *testing.T) {
 	env := newTestEnv(t)
-	var mu sync.Mutex
-	var packets []thinclient.BlindPulsePacket
-	var wireBodies []string
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/open/memory/v1/ingest" {
-			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
-			return
-		}
-		raw, _ := io.ReadAll(request.Body)
-		var pkt thinclient.BlindPulsePacket
-		if err := json.Unmarshal(raw, &pkt); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if _, _, err := thinclient.DecodePulsePayloadB64(pkt.AtomsB64); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		mu.Lock()
-		packets = append(packets, pkt)
-		wireBodies = append(wireBodies, string(raw))
-		epoch := len(packets)
-		mu.Unlock()
-		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(thinclient.CloudIngestResponse{
-			UnitID: pkt.UnitID, Layer: pkt.Layer, Epoch: epoch,
-			AddressURI:  "C6:L3:B001/C6:L2:B001/C6:L1:B001#00",
-			WaveformBar: "▂▇▂▂▇█▁▆▆█▁█", KeptSentenceIndices: []int{0, 1},
-		})
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
-	// A data-plane credential is required for the HTTP transport to be selected;
-	// the fake server never verifies it (without one the client silently falls
-	// back to the local vault transport).
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "mem_test_fake_key")
-
 	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
 	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q}`, path)
 	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
 	if code != 0 || stdout != "" {
 		t.Fatalf("thin close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-
-	mu.Lock()
-	if len(packets) != 2 {
-		mu.Unlock()
-		if raw, err := os.ReadFile(env.log); err == nil {
-			t.Logf("hook log: %s", strings.TrimSpace(string(raw)))
-		}
-		t.Fatalf("expected two segment ingests (user + assistant), got %d", len(packets))
-	}
-	first, second := packets[0], packets[1]
-	wires := append([]string(nil), wireBodies...)
-	mu.Unlock()
-	for _, pulse := range []thinclient.BlindPulsePacket{first, second} {
-		if pulse.Layer != thinclient.LayerEpisodic {
-			t.Fatalf("ingest layer = %q", pulse.Layer)
-		}
-		if !strings.HasPrefix(pulse.UnitID, "ep_") {
-			t.Fatalf("ingest pulse unit id = %q", pulse.UnitID)
-		}
-		atoms, offsets, err := thinclient.DecodePulsePayloadB64(pulse.AtomsB64)
-		if err != nil {
-			t.Fatalf("DecodePulsePayloadB64: %v", err)
-		}
-		if len(atoms) == 0 || len(offsets) == 0 {
-			t.Fatalf("ingest pulse carried no atoms/offsets: atoms=%d offsets=%d", len(atoms), len(offsets))
-		}
-	}
-	if first.UnitID == second.UnitID {
-		t.Fatalf("user and assistant segments must be distinct units, both = %q", first.UnitID)
-	}
-	for _, wire := range wires {
-		for _, plaintext := range []string{"我喜欢猫", "记住了"} {
-			if strings.Contains(wire, plaintext) {
-				t.Fatalf("plaintext %q left the vault on the wire: %s", plaintext, wire)
-			}
-		}
 	}
 
 	cfg := loadConfig(t)
@@ -679,8 +610,8 @@ func TestCloseUploadsCurrentTurnToEpisodicLayer(t *testing.T) {
 	).Scan(&legacyTableCount); err != nil {
 		t.Fatalf("check legacy tables: %v", err)
 	}
-	if legacyTableCount != 5 {
-		t.Fatalf("expected all 5 legacy tables to be preserved, found %d", legacyTableCount)
+	if legacyTableCount != 0 {
+		t.Fatalf("thin close/upload path must not create legacy tables, found %d", legacyTableCount)
 	}
 
 	lines := logLines(t, env.log)
@@ -688,41 +619,23 @@ func TestCloseUploadsCurrentTurnToEpisodicLayer(t *testing.T) {
 	if line["event"] != "close" || line["messages"].(float64) != 2 || line["imported"].(float64) != 2 {
 		t.Fatalf("thin close log line = %#v", line)
 	}
-	if line["uploaded"].(float64) != 2 || line["units"].(float64) != 2 {
-		t.Fatalf("thin close upload receipt = %#v", line)
-	}
 
 	// A repeated Stop re-reads the same closed turn; content addressing keeps it two units.
 	code, stdout, stderr = runHookMain(t, []string{"close"}, payload)
 	if code != 0 || stdout != "" {
 		t.Fatalf("repeat thin close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	seen := map[string]bool{}
-	for _, packet := range packets {
-		seen[packet.UnitID] = true
+	var afterRepeat int
+	if err := connection.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&afterRepeat); err != nil {
+		t.Fatalf("count episodic after repeat: %v", err)
 	}
-	if len(packets) != 4 || len(seen) != 2 {
-		t.Fatalf("repeated Stop must reuse the content-addressed units, got %+v", packets)
+	if afterRepeat != 2 {
+		t.Fatalf("repeated Stop must reuse the content-addressed units, got %d", afterRepeat)
 	}
 }
 
 func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
 	env := newTestEnv(t)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var pkt thinclient.BlindPulsePacket
-		if err := json.NewDecoder(request.Body).Decode(&pkt); err != nil {
-			http.Error(writer, "bad request", http.StatusBadRequest)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(thinclient.CloudIngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer})
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "mem_test_fake_key")
 	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
 	memory := openMemory(t)
 	tc, err := memory.ThinClient()
@@ -755,9 +668,6 @@ func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
 	found := false
 	for _, line := range logLines(t, env.log) {
 		if message, _ := line["vault_write_error"].(string); message != "" {
-			if strings.Contains(message, "mem_test_fake_key") {
-				t.Fatalf("diagnostic leaked credential: %q", message)
-			}
 			found = true
 		}
 	}
@@ -769,32 +679,6 @@ func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
 // TestCloseStripsThinkingAndToolEnvelopes checks that only conversation survives.
 func TestCloseStripsThinkingAndToolEnvelopes(t *testing.T) {
 	env := newTestEnv(t)
-	var mu sync.Mutex
-	ingests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/open/memory/v1/ingest" {
-			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
-			return
-		}
-		var pkt thinclient.BlindPulsePacket
-		if err := json.NewDecoder(request.Body).Decode(&pkt); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		mu.Lock()
-		ingests++
-		mu.Unlock()
-		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(thinclient.CloudIngestResponse{
-			UnitID: pkt.UnitID, Layer: pkt.Layer, Epoch: 1,
-			AddressURI: "C6:L3:B001/C6:L2:B001/C6:L1:B001#00", WaveformBar: "▂▇▂",
-			KeptSentenceIndices: []int{0},
-		})
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "mem_test_fake_key")
 
 	path := filepath.Join(env.base, "noisy.jsonl")
 	content := strings.Join([]string{
@@ -817,12 +701,6 @@ func TestCloseStripsThinkingAndToolEnvelopes(t *testing.T) {
 	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
 	if code != 0 || stdout != "" {
 		t.Fatalf("thin close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-	mu.Lock()
-	got := ingests
-	mu.Unlock()
-	if got != 2 {
-		t.Fatalf("expected two segment ingests (user + assistant), got %d", got)
 	}
 
 	cfg := loadConfig(t)
@@ -1263,75 +1141,6 @@ func TestCurrentTurnUnitsAreSegments(t *testing.T) {
 	}
 }
 
-// TestLiveUpstreamStopHookEpisodicUpload_UserID10 drives the real Stop hook against the live
-// Autonoetic Engine (`/open/memory/v1`, user_id=10): the closed turn is ingested as `episodic` in
-// real time and the next blind query returns that unit with the plaintext resolved from the local
-// vault. Skips when the local engine is not reachable.
-func TestLiveUpstreamStopHookEpisodicUpload_UserID10(t *testing.T) {
-	baseURL := thinclient.DefaultUpstreamBaseURL
-	health, err := http.Get(baseURL + "/health")
-	if err != nil {
-		t.Skipf("live engine %s not reachable (%v); skipping live Stop hook test", baseURL, err)
-	}
-	_ = health.Body.Close()
-	if health.StatusCode != http.StatusOK {
-		t.Skipf("live engine %s returned %d; skipping live Stop hook test", baseURL, health.StatusCode)
-	}
-
-	env := newTestEnv(t)
-	marker := "LIVE-STOP-" + ids.SHA256Hex(fmt.Sprintf("%d", time.Now().UnixNano()))[:10]
-	// The live Stop hook needs a real data-plane credential from the host
-	// environment; the environment carries the signed key the CLI itself uses.
-	liveKey := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
-	if liveKey == "" {
-		t.Skip("ROLLING_MEMORY_BRAIN_KEY is not set; skipping live Stop hook test")
-	}
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", baseURL)
-	t.Setenv("ROLLING_MEMORY_USER_ID", thinclient.DefaultUpstreamDevUserID)
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", liveKey)
-	t.Setenv("ROLLING_MEMORY_SCOPE", "mem:live-hooks")
-
-	path := filepath.Join(env.base, "live-stop.jsonl")
-	transcriptText := strings.Join([]string{
-		fmt.Sprintf(`{"type":"user","timestamp":"2026-11-06T03:00:00","message":{"role":"user","content":[{"type":"text","text":"%s 洛灵自知记忆引擎 Stop 钩子需要把当前轮会话实时上传为 episodic 内容。"}]}}`, marker),
-		`{"type":"assistant","timestamp":"2026-11-06T03:00:20","message":{"role":"assistant","content":[{"type":"text","text":"已确认：Stop 钩子调用 /open/memory/v1/ingest，layer=episodic，明文锁本地金库。"}]}}`,
-		"",
-	}, "\n")
-	if err := os.WriteFile(path, []byte(transcriptText), 0o644); err != nil {
-		t.Fatalf("transcript: %v", err)
-	}
-	payload := fmt.Sprintf(`{"session_id":"live-stop","transcript_path":%q}`, path)
-	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
-	if code != 0 || stdout != "" {
-		t.Fatalf("live close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-	lines := logLines(t, env.log)
-	line := lines[len(lines)-1]
-	unit, _ := line["unit"].(string)
-	if line["uploaded"].(float64) != 1 || !strings.HasPrefix(unit, "ep_") || line["address"] == "" {
-		t.Fatalf("live Stop receipt = %#v", line)
-	}
-
-	memory := openMemory(t)
-	client, err := memory.ThinClient()
-	if err != nil {
-		t.Fatalf("thin client: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	hits, err := client.Recall(ctx, marker+" 洛灵自知记忆引擎 Stop 钩子 episodic 会话", 5)
-	if err != nil {
-		t.Fatalf("live blind recall: %v", err)
-	}
-	for _, hit := range hits {
-		if hit.UnitID == unit && strings.Contains(hit.RawPlaintext, marker) {
-			return
-		}
-	}
-	t.Fatalf("live engine did not return the uploaded unit %s; hits = %+v", unit, hits)
-}
-
 // Missing transcript keeps the hook fail-open -- exit 0, nothing on stdout.
 func TestCloseMissingTranscriptFailsOpen(t *testing.T) {
 	env := newTestEnv(t)
@@ -1659,40 +1468,6 @@ func TestLogRotation(t *testing.T) {
 // 自动增量触发 SyncBackgroundDirs，而在 60s 冷却期内不重复扫描。
 func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	env := newTestEnv(t)
-	var mu sync.Mutex
-	var bgIngests []thinclient.BlindPulsePacket
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/open/memory/v1/ingest":
-			raw, _ := io.ReadAll(request.Body)
-			var pkt thinclient.BlindPulsePacket
-			_ = json.Unmarshal(raw, &pkt)
-			mu.Lock()
-			if pkt.Layer == thinclient.LayerBackground {
-				bgIngests = append(bgIngests, pkt)
-			}
-			epoch := len(bgIngests)
-			mu.Unlock()
-			_ = json.NewEncoder(writer).Encode(thinclient.CloudIngestResponse{
-				UnitID: pkt.UnitID, Layer: pkt.Layer, Epoch: epoch,
-				AddressURI: "C6:L1:B001#00", WaveformBar: "▂▇█", KeptSentenceIndices: []int{0},
-			})
-		case "/open/memory/v1/query":
-			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"epistemic_state": "non_existent",
-				"hits":            []any{},
-			})
-		case "/open/memory/v1/purge":
-			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true})
-		default:
-			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "mem_test_fake_key")
 
 	// 1. 挂载一个含初始文件的 L1 Background 目录。
 	bgDir := filepath.Join(env.base, "mounted-docs")
@@ -1714,11 +1489,9 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	if _, err := tc.SyncBackgroundDirs(context.Background()); err != nil {
 		t.Fatalf("initial SyncBackgroundDirs: %v", err)
 	}
-	mu.Lock()
-	initialIngests := len(bgIngests)
-	mu.Unlock()
-	if initialIngests == 0 {
-		t.Fatal("expected initial AddBackgroundDir to ingest at least 1 background chunk")
+	var initialSHA string
+	if err := mem.Store.DB().QueryRow(`SELECT content_sha256 FROM thin_vault_bg_files LIMIT 1`).Scan(&initialSHA); err != nil || initialSHA == "" {
+		t.Fatalf("expected initial AddBackgroundDir to ingest v1 background file, got %q err=%v", initialSHA, err)
 	}
 
 	// 2. 修改挂载目录下的文件（大小和 mtime 改变）。
@@ -1728,7 +1501,7 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	futureTime := time.Now().Add(5 * time.Second)
 	_ = os.Chtimes(notePath, futureTime, futureTime)
 
-	// 3. 冷却期内（距上次 10s < 60s）：触发 recall 钩子不应扫描或上行。
+	// 3. 冷却期内（距上次 10s < 60s）：触发 recall 钩子不应扫描或更新。
 	nowTS := ids.UTCNow()
 	_, err = mem.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
 		backgroundHookMetaKey, []byte(fmt.Sprintf("%d", nowTS-10)))
@@ -1741,11 +1514,12 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("recall within cooldown failed: code=%d stderr=%s", code, stderr)
 	}
-	mu.Lock()
-	afterCooldownIngests := len(bgIngests)
-	mu.Unlock()
-	if afterCooldownIngests != initialIngests {
-		t.Fatalf("cooldown violated: ingests grew from %d to %d inside 60s window", initialIngests, afterCooldownIngests)
+	memCheck := openMemory(t)
+	var afterCooldownSHA string
+	_ = memCheck.Store.DB().QueryRow(`SELECT content_sha256 FROM thin_vault_bg_files LIMIT 1`).Scan(&afterCooldownSHA)
+	_ = memCheck.Close()
+	if afterCooldownSHA != initialSHA {
+		t.Fatalf("cooldown violated: file sha256 changed from %q to %q inside 60s window", initialSHA, afterCooldownSHA)
 	}
 
 	// 4. 冷却期已过（距上次 65s >= 60s）：触发 recall 钩子必须自动增量同步 v2 文件。
@@ -1761,26 +1535,15 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("recall after cooldown failed: code=%d stderr=%s", code, stderr)
 	}
-	mu.Lock()
-	finalIngests := len(bgIngests)
-	mu.Unlock()
-	if finalIngests <= initialIngests {
-		t.Fatalf("expected recall hook after cooldown to auto-sync modified L1 file: initial=%d final=%d", initialIngests, finalIngests)
-	}
 
-	// 验证本地 `thin_vault_bg_chunks` 已更新为最新上行的 unit_id。
-	mu.Lock()
-	latestUnitID := bgIngests[len(bgIngests)-1].UnitID
-	mu.Unlock()
 	mem3 := openMemory(t)
-	var chunkCount int
-	if err := mem3.Store.DB().QueryRow(
-		`SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE unit_id = ?`, latestUnitID,
-	).Scan(&chunkCount); err != nil {
-		t.Fatalf("query thin_vault_bg_chunks: %v", err)
+	defer mem3.Close()
+	var updatedSHA string
+	if err := mem3.Store.DB().QueryRow(`SELECT content_sha256 FROM thin_vault_bg_files LIMIT 1`).Scan(&updatedSHA); err != nil {
+		t.Fatalf("query thin_vault_bg_files: %v", err)
 	}
-	if chunkCount != 1 {
-		t.Fatalf("expected updated unit %s in thin_vault_bg_chunks, got %d", latestUnitID, chunkCount)
+	if updatedSHA == "" || updatedSHA == initialSHA {
+		t.Fatalf("expected recall hook after cooldown to auto-sync modified L1 file: initial=%s updated=%s", initialSHA, updatedSHA)
 	}
 	var noeticCount int
 	if err := mem3.Store.DB().QueryRow(
@@ -1789,7 +1552,7 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 		t.Fatalf("query thin_vault_noetic: %v", err)
 	}
 	if noeticCount != 0 {
-		t.Fatalf("RAME recall hook must never crystallize user prompts into thin_vault_noetic, got %d", noeticCount)
+		t.Fatalf("recall hook must never crystallize user prompts into thin_vault_noetic, got %d", noeticCount)
 	}
 }
 
@@ -2084,10 +1847,10 @@ func TestBootContextUsesThinVaultAtlasAndEpisodicTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	tc.SetIdentity("zcode", "sess_boot_1", "Rolling-Memory")
-	if err := tc.Vault.SaveLocalPlaintext("ep_boot_u", 100, "[user] 检查 SessionStart 唤醒路标", []string{"[user] 检查 SessionStart 唤醒路标"}, thinclient.CloudIngestResponse{}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("ep_boot_u", 100, "[user] 检查 SessionStart 唤醒路标", []string{"[user] 检查 SessionStart 唤醒路标"}, thinclient.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tc.Vault.SaveLocalPlaintext("ep_boot_a", 101, "[assistant] 已修复 internal/hooks/hooks.go 的薄库回退。", []string{"[assistant] 已修复 internal/hooks/hooks.go 的薄库回退。"}, thinclient.CloudIngestResponse{}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("ep_boot_a", 101, "[assistant] 已修复 internal/hooks/hooks.go 的薄库回退。", []string{"[assistant] 已修复 internal/hooks/hooks.go 的薄库回退。"}, thinclient.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tc.RememberNoetic("nt_boot_1", "SessionStart 唤醒路标入口", []string{"ep_boot_a"}, []string{"internal/hooks/hooks.go"}, "入口在 internal/hooks/hooks.go", 102); err != nil {

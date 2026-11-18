@@ -9,6 +9,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -34,6 +35,11 @@ func TestEvaluateCrossHarnessEfficacy(t *testing.T) {
 		t.Fatalf("new memory: %v", err)
 	}
 	defer mem.Close()
+	// Fresh production databases bootstrap thin; this suite replays the legacy
+	// assertion-graph surfaces, so apply its schema on the test database.
+	if err := db.EnsureLegacyGraphSchema(mem.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
+	}
 
 	// Seed a high-value assertion with a code coordinate.
 	_, err = mem.Remember(api.RememberRequest{

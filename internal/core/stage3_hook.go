@@ -37,6 +37,24 @@ type stage3EngineSyncer interface {
 	SyncRMEngine(eng *Engine)
 }
 
+type stage3CandidateSort []Stage3Candidate
+
+func (s stage3CandidateSort) Len() int { return len(s) }
+func (s stage3CandidateSort) Less(i, j int) bool {
+	if s[i].Stage2Nats != s[j].Stage2Nats {
+		return s[i].Stage2Nats > s[j].Stage2Nats
+	}
+	return s[i].Unit < s[j].Unit
+}
+func (s stage3CandidateSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+func sortStage3Candidates(stage2 []Stage3Candidate) {
+	if len(stage2) < 2 {
+		return
+	}
+	sort.Sort(stage3CandidateSort(stage2))
+}
+
 // SetStage3Plugin 挂载或卸载可选的 Phase-3 关系簇外挂，并同步设置启用开关。
 // 传入 plugin == nil 或 enabled == false 即可安全关闭外挂，恢复纯双簇内核运行。
 func (e *Engine) SetStage3Plugin(plugin Stage3Plugin, enabled bool) {
@@ -80,12 +98,7 @@ func (e *Engine) applyStage3FallbackHook(idx *Index, qTerms map[uint64]Term, mas
 			})
 		}
 	}
-	sort.Slice(stage2, func(i, j int) bool {
-		if stage2[i].Stage2Nats != stage2[j].Stage2Nats {
-			return stage2[i].Stage2Nats > stage2[j].Stage2Nats
-		}
-		return stage2[i].Unit < stage2[j].Unit
-	})
+	sortStage3Candidates(stage2)
 	for _, delta := range e.Stage3Plugin.AugmentRMStage2(idx, qTerms, masses, totalQueryMass, stage2) {
 		if delta.Unit < 0 || int(delta.Unit) >= idx.N {
 			continue
@@ -134,12 +147,7 @@ func (e *Engine) applyStage3ClusterHook(idx *Index, st *rmClusterState, sc *rmQu
 	if len(stage2) == 0 {
 		return
 	}
-	sort.Slice(stage2, func(i, j int) bool {
-		if stage2[i].Stage2Nats != stage2[j].Stage2Nats {
-			return stage2[i].Stage2Nats > stage2[j].Stage2Nats
-		}
-		return stage2[i].Unit < stage2[j].Unit
-	})
+	sortStage3Candidates(stage2)
 	addedNew := false
 	dGen := sc.dirtyGen
 	for _, delta := range e.Stage3Plugin.AugmentRMStage2(idx, qTerms, groups, total, stage2) {

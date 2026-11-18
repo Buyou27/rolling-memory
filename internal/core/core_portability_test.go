@@ -36,6 +36,7 @@ func TestPortableCoreTypechecksWithoutAdapters(t *testing.T) {
 		"pipeline_state.go",
 		"pipeline_cluster.go",
 		"pipeline_select.go",
+		"sparse_vec.go",
 		"stage3_hook.go",
 		"unit_relations.go",
 	}

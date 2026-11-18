@@ -16,9 +16,9 @@ import (
 	"github.com/rocareer/rolling-memory/internal/eval"
 )
 
-// runCloudEvalRecall serves the Admin per-question workbench through the same
-// strict SDK data plane as rmem eval, without opening the legacy graph store.
-func (a *application) runCloudEvalRecall() int {
+// runLocalEvalRecall serves the Admin per-question workbench through the same
+// strict local data plane as rmem eval, without opening the legacy graph store.
+func (a *application) runLocalEvalRecall() int {
 	cfg, err := config.Load(config.LoadOptions{
 		Path:  a.args.StringPtr("config"),
 		DB:    a.args.StringPtr("db"),
@@ -27,22 +27,22 @@ func (a *application) runCloudEvalRecall() int {
 	if err != nil {
 		return a.fail(err)
 	}
-	engine, err := eval.NewCloudEngineForScope(cfg, a.args.String("scope"), cfg.DB)
+	engine, err := eval.NewLocalEngineForScope(cfg, a.args.String("scope"), cfg.DB)
 	if err != nil {
 		return a.fail(err)
 	}
 	if a.args.Flag("stdin_batch") {
-		return a.runCloudEvalRecallBatch(engine)
+		return a.runLocalEvalRecallBatch(engine)
 	}
 	cue := strings.TrimSpace(a.args.String("cue"))
 	if cue == "" {
-		return a.fail(errors.New("cloud evaluation recall requires --q"))
+		return a.fail(errors.New("local evaluation recall requires --q"))
 	}
 	topK := a.args.Int("raw_limit")
 	if topK <= 0 {
 		topK = 20
 	}
-	payload, err := cloudEvalRecallPayload(engine, cue, topK)
+	payload, err := localEvalRecallPayload(engine, cue, topK)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -58,10 +58,10 @@ func (a *application) runCloudEvalRecall() int {
 	return 0
 }
 
-// runCloudEvalRecallBatch 在同一个 CloudEngine 上按 stdin JSONL 服务批量评测 recall：
+// runLocalEvalRecallBatch 在同一个 LocalEngine 上按 stdin JSONL 服务批量评测 recall：
 // 引擎（含 .zcsr 零拷贝索引）只打开一次，免去批量跑分逐题 fork 子进程的冷启动重付。
 // 行协议与 `recall --stdin-batch`（非评测 scope）一致：每行一请求/一响应、行级容错。
-func (a *application) runCloudEvalRecallBatch(engine *eval.CloudEngine) int {
+func (a *application) runLocalEvalRecallBatch(engine *eval.LocalEngine) int {
 	reader := bufio.NewReaderSize(a.stdin, 1<<20)
 	writer := bufio.NewWriter(a.stdout)
 	defer writer.Flush()
@@ -88,8 +88,8 @@ func (a *application) runCloudEvalRecallBatch(engine *eval.CloudEngine) int {
 					topK = defaultTopK
 				}
 				if strings.TrimSpace(req.Q) == "" {
-					out["error"] = "cloud evaluation recall requires q"
-				} else if payload, err := cloudEvalRecallPayload(engine, req.Q, topK); err != nil {
+					out["error"] = "local evaluation recall requires q"
+				} else if payload, err := localEvalRecallPayload(engine, req.Q, topK); err != nil {
 					out["error"] = err.Error()
 				} else {
 					for key, value := range payload {
@@ -113,8 +113,8 @@ func (a *application) runCloudEvalRecallBatch(engine *eval.CloudEngine) int {
 	}
 }
 
-// cloudEvalRecallPayload 执行一次严格评测 recall 并组装与单发 --json 完全同构的响应体。
-func cloudEvalRecallPayload(engine *eval.CloudEngine, cue string, topK int) (map[string]any, error) {
+// localEvalRecallPayload 执行一次严格评测 recall 并组装与单发 --json 完全同构的响应体。
+func localEvalRecallPayload(engine *eval.LocalEngine, cue string, topK int) (map[string]any, error) {
 	hits, err := engine.Recall(context.Background(), cue, topK)
 	if err != nil {
 		return nil, err
@@ -130,6 +130,7 @@ func cloudEvalRecallPayload(engine *eval.CloudEngine, cue string, topK int) (map
 		}
 		rawHits = append(rawHits, map[string]any{
 			"trace": hit.UnitID, "session": hit.UnitID, "unit_id": hit.UnitID,
+			// "author" 的取值是 admin 工作台消费的展示标签（历史值 "ramesdk" 为跨版本兼容保持不变）。
 			"turn": int64(index + 1), "author": "ramesdk", "occurred_at": hit.OccurredAt,
 			"text": text, "score": hit.FinalWeight, "layer": hit.Layer,
 		})
@@ -144,6 +145,7 @@ func cloudEvalRecallPayload(engine *eval.CloudEngine, cue string, topK int) (map
 		unitIDs = append(unitIDs, hit.UnitID)
 	}
 	meta := engine.Metadata()
+	// "engine_transport" / "cloud_hits" 为跨版本数据兼容保留的历史键名（现值为本地通道/本地命中数）。
 	meta["engine_transport"] = eval.TransportForPulseMode(engine.PulseMode)
 	meta["engine_scope"] = engine.Scope
 	meta["engine_upstream"] = engine.Endpoint

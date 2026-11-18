@@ -441,12 +441,12 @@ func (s *Store) closureCapped(
 		}
 		seen[current.node] = struct{}{}
 		result = append(result, current.node)
-		if current.depth >= maxInt(0, maxHops) {
+		if current.depth >= max(0, maxHops) {
 			continue
 		}
 		neighbours := sortedUnique(adjacency[current.node])
-		if len(neighbours) > maxInt(0, fanout) {
-			neighbours = neighbours[:maxInt(0, fanout)]
+		if len(neighbours) > max(0, fanout) {
+			neighbours = neighbours[:max(0, fanout)]
 		}
 		for _, neighbour := range neighbours {
 			if _, ok := seen[neighbour]; ok {
@@ -476,13 +476,6 @@ func sortedUnique(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
-}
-
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }
 
 // SameAsClosure is closure limited to same-as identity edges.

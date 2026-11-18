@@ -15,6 +15,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
@@ -58,6 +59,15 @@ func newMemory(t *testing.T) *api.Memory {
 	memory, err := api.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
+	}
+	// Fresh production databases bootstrap thin; this suite exercises the
+	// legacy assertion-graph recall surfaces, so apply its schema on the
+	// test database and re-sample the FTS probe (the raw leg keys off it).
+	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
+	}
+	if err := memory.Store.RefreshFTS(); err != nil {
+		t.Fatalf("refresh fts: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
 	return memory

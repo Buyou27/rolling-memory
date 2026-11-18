@@ -1,14 +1,5 @@
 {
-  "allow_loopback_llm": true,
-  "cases": [
-    {
-      "denied": false,
-      "url": "https://api.example.com/v1/chat/completions"
-    },
-    {
-      "denied": false,
-      "url": "http://203.0.113.10:9/v1"
-    }
-  ],
-  "mode": "cloud"
+  "error": "ConfigError",
+  "message": "mode must be one of ('local'), got 'cloud'",
+  "ok": false
 }

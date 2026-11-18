@@ -116,38 +116,20 @@ func visitJSONLTurns(ctx context.Context, path string, codexCompleted map[string
 		return err
 	}
 	defer file.Close()
-	reader := bufio.NewReader(file)
-	var current *JSONLTurn
-	var pendingAssist []Segment
-	complete := false
-	codexTurnID := ""
-	codexTurn := false
-	var dshActive, dshTurn int64
-	dshActiveSet, dshTurnSet, dshMessage := false, false, false
-	nextIndex := 0
-	isComplete := func() bool {
-		if codexTurn {
-			return codexTurnID != "" && codexCompleted[codexTurnID]
-		}
-		if dshMessage {
-			return dshTurnSet && dshCompleted[dshTurn]
-		}
-		return complete
+	scan := &jsonlTurnScan{visit: func(turn JSONLTurn, completion jsonlTurnCompletion) error {
+		return visit(turn, completion.completed(codexCompleted, dshCompleted))
+	}}
+	if err := walkJSONLLines(ctx, bufio.NewReader(file), scan.feed); err != nil {
+		return err
 	}
-	flushPending := func() {
-		if current == nil || len(pendingAssist) == 0 {
-			pendingAssist = pendingAssist[:0]
-			return
-		}
-		for _, seg := range pendingAssist {
-			seg.Index = len(current.Segments)
-			current.Segments = append(current.Segments, seg)
-			if seg.OccurredAt > current.OccurredAt {
-				current.OccurredAt = seg.OccurredAt
-			}
-		}
-		pendingAssist = pendingAssist[:0]
-	}
+	return scan.finish()
+}
+
+// walkJSONLLines streams one transcript row by row. A final row without a trailing
+// newline is handed over with unterminated=true — a turn scan folds its activity
+// but never its completion, and a completion index ignores it entirely — while a
+// tail row that is not valid JSON is dropped: a partial write is not evidence.
+func walkJSONLLines(ctx context.Context, reader *bufio.Reader, consume func(line string, unterminated bool) error) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -158,62 +140,145 @@ func visitJSONLTurns(ctx context.Context, path string, codexCompleted map[string
 		}
 		unterminated := errors.Is(readErr, io.EOF)
 		if unterminated && !json.Valid([]byte(strings.TrimSpace(line))) {
-			break
+			return nil
 		}
-		if event, turn, ok := dshJSONLTurnEvent(line); !unterminated && event == "turn/start" {
-			dshActive, dshActiveSet = turn, ok
-		} else if !unterminated && event == "turn/end" {
-			dshActiveSet = false
-		}
-		if isJSONLToolCallLine(line) {
-			pendingAssist = pendingAssist[:0]
-			complete = false
-		} else {
-			if current != nil && isJSONLActivityLine(line) {
-				complete = false
-			}
-			role, texts, occurredAt := parseJSONLLine(line)
-			if role != "" && len(texts) != 0 {
-				if role == RoleUser {
-					flushPending()
-					if current != nil && len(current.Segments) > 0 {
-						if err := visit(*current, isComplete()); err != nil {
-							return err
-						}
-					}
-					current = &JSONLTurn{Index: nextIndex}
-					codexTurnID, codexTurn = codexJSONLMessageTurnID(line)
-					dshMessage = isDSHJSONLUser(line)
-					dshTurn, dshTurnSet = dshActive, dshActiveSet
-					nextIndex++
-				}
-				if current != nil {
-					complete = false
-					if role == RoleAssistant {
-						for _, text := range texts {
-							pendingAssist = append(pendingAssist, Segment{Role: role, Text: text, OccurredAt: occurredAt})
-						}
-					} else {
-						for _, text := range texts {
-							current.Segments = append(current.Segments, Segment{Role: role, Text: text, OccurredAt: occurredAt, Index: len(current.Segments)})
-						}
-						if occurredAt > current.OccurredAt {
-							current.OccurredAt = occurredAt
-						}
-					}
-				}
-			}
-			if current != nil && !unterminated && !codexTurn && !dshMessage && isJSONLCompletionLine(line) {
-				complete = true
-			}
+		if err := consume(line, unterminated); err != nil {
+			return err
 		}
 		if unterminated {
-			break
+			return nil
 		}
 	}
-	flushPending()
-	if current != nil && len(current.Segments) > 0 {
-		return visit(*current, isComplete())
+}
+
+// jsonlTurnCompletion carries the inputs of one turn's completion verdict. The
+// verdict itself is resolved against the evidence index (a Codex or DSH turn is
+// judged only by its correlated completion event, a plain turn by the streaming
+// completion row that no later activity contradicted), so a single-pass reader can
+// record the inputs while it streams and decide once the pass is over.
+type jsonlTurnCompletion struct {
+	codexTurn   bool
+	codexTurnID string
+	dshMessage  bool
+	dshTurn     int64
+	dshTurnSet  bool
+	plain       bool
+}
+
+// completed resolves the verdict against the evidence maps of a finished pass.
+func (c jsonlTurnCompletion) completed(codexCompleted map[string]bool, dshCompleted map[int64]bool) bool {
+	if c.codexTurn {
+		return c.codexTurnID != "" && codexCompleted[c.codexTurnID]
+	}
+	if c.dshMessage {
+		return c.dshTurnSet && dshCompleted[c.dshTurn]
+	}
+	return c.plain
+}
+
+// jsonlTurnScan is the turn boundary machine of one transcript pass: it folds rows,
+// flushes a closed turn at the next user message, and reports each turn together
+// with the inputs of its completion verdict. `VisitJSONLTurns` and
+// `SourceSnapshot` both drive it, so `#<k>` keeps naming the same segment on every
+// path.
+type jsonlTurnScan struct {
+	visit         func(JSONLTurn, jsonlTurnCompletion) error
+	current       *JSONLTurn
+	pendingAssist []Segment
+	complete      bool
+	codexTurnID   string
+	codexTurn     bool
+	dshActive     int64
+	dshTurn       int64
+	dshActiveSet  bool
+	dshTurnSet    bool
+	dshMessage    bool
+	nextIndex     int
+}
+
+func (scan *jsonlTurnScan) flushPending() {
+	if scan.current == nil || len(scan.pendingAssist) == 0 {
+		scan.pendingAssist = scan.pendingAssist[:0]
+		return
+	}
+	for _, seg := range scan.pendingAssist {
+		seg.Index = len(scan.current.Segments)
+		scan.current.Segments = append(scan.current.Segments, seg)
+		if seg.OccurredAt > scan.current.OccurredAt {
+			scan.current.OccurredAt = seg.OccurredAt
+		}
+	}
+	scan.pendingAssist = scan.pendingAssist[:0]
+}
+
+func (scan *jsonlTurnScan) completion() jsonlTurnCompletion {
+	return jsonlTurnCompletion{
+		codexTurn:   scan.codexTurn,
+		codexTurnID: scan.codexTurnID,
+		dshMessage:  scan.dshMessage,
+		dshTurn:     scan.dshTurn,
+		dshTurnSet:  scan.dshTurnSet,
+		plain:       scan.complete,
+	}
+}
+
+// feed folds one transcript row into the open turn.
+func (scan *jsonlTurnScan) feed(line string, unterminated bool) error {
+	if event, turn, ok := dshJSONLTurnEvent(line); !unterminated && event == "turn/start" {
+		scan.dshActive, scan.dshActiveSet = turn, ok
+	} else if !unterminated && event == "turn/end" {
+		scan.dshActiveSet = false
+	}
+	if isJSONLToolCallLine(line) {
+		scan.pendingAssist = scan.pendingAssist[:0]
+		scan.complete = false
+	} else {
+		if scan.current != nil && isJSONLActivityLine(line) {
+			scan.complete = false
+		}
+		role, texts, occurredAt := parseJSONLLine(line)
+		if role != "" && len(texts) != 0 {
+			if role == RoleUser {
+				scan.flushPending()
+				if scan.current != nil && len(scan.current.Segments) > 0 {
+					if err := scan.visit(*scan.current, scan.completion()); err != nil {
+						return err
+					}
+				}
+				scan.current = &JSONLTurn{Index: scan.nextIndex}
+				scan.codexTurnID, scan.codexTurn = codexJSONLMessageTurnID(line)
+				scan.dshMessage = isDSHJSONLUser(line)
+				scan.dshTurn, scan.dshTurnSet = scan.dshActive, scan.dshActiveSet
+				scan.nextIndex++
+			}
+			if scan.current != nil {
+				scan.complete = false
+				if role == RoleAssistant {
+					for _, text := range texts {
+						scan.pendingAssist = append(scan.pendingAssist, Segment{Role: role, Text: text, OccurredAt: occurredAt})
+					}
+				} else {
+					for _, text := range texts {
+						scan.current.Segments = append(scan.current.Segments, Segment{Role: role, Text: text, OccurredAt: occurredAt, Index: len(scan.current.Segments)})
+					}
+					if occurredAt > scan.current.OccurredAt {
+						scan.current.OccurredAt = occurredAt
+					}
+				}
+			}
+		}
+		if scan.current != nil && !unterminated && !scan.codexTurn && !scan.dshMessage && isJSONLCompletionLine(line) {
+			scan.complete = true
+		}
+	}
+	return nil
+}
+
+// finish flushes the tail turn.
+func (scan *jsonlTurnScan) finish() error {
+	scan.flushPending()
+	if scan.current != nil && len(scan.current.Segments) > 0 {
+		return scan.visit(*scan.current, scan.completion())
 	}
 	return nil
 }
@@ -229,159 +294,192 @@ type codexCompletionState struct {
 	completed bool
 }
 
+// jsonlCompletionIndex accumulates the per-turn completion evidence of one
+// transcript pass: for Codex and DSH rows, the id-keyed correlation between a turn
+// start and its explicit successful completion event, invalidated by any later
+// activity of the same turn. The evidence scan and the snapshot's single pass fold
+// their lines into the same index, so their verdicts cannot drift apart.
+type jsonlCompletionIndex struct {
+	states          map[string]codexCompletionState
+	dshStates       map[int64]codexCompletionState
+	active          string
+	lastEnded       string
+	dshActive       int64
+	dshLastEnded    int64
+	dshActiveSet    bool
+	dshLastEndedSet bool
+}
+
+func newJSONLCompletionIndex() *jsonlCompletionIndex {
+	return &jsonlCompletionIndex{
+		states:    make(map[string]codexCompletionState),
+		dshStates: make(map[int64]codexCompletionState),
+	}
+}
+
+// observe folds one transcript row into the completion state. Rows carrying no
+// completion or activity signal leave the state untouched.
+func (index *jsonlCompletionIndex) observe(line string) error {
+	if event, turn, ok := dshJSONLTurnEvent(line); event != "" {
+		if event == "turn/start" {
+			index.dshLastEndedSet = false
+			if index.dshActiveSet {
+				old := index.dshStates[index.dshActive]
+				old.valid = false
+				index.dshStates[index.dshActive] = old
+			}
+			index.dshActive, index.dshActiveSet = turn, ok
+			if ok {
+				state, exists := index.dshStates[turn]
+				if !exists && len(index.dshStates) >= maxCodexCompletionRecords {
+					return fmt.Errorf("episodic: DSH completion index exceeds %d turns", maxCodexCompletionRecords)
+				}
+				if exists {
+					state.valid = false
+				} else {
+					state = codexCompletionState{started: true, valid: true}
+				}
+				index.dshStates[turn] = state
+			}
+		} else if ok {
+			state, exists := index.dshStates[turn]
+			if !exists && len(index.dshStates) >= maxCodexCompletionRecords {
+				return fmt.Errorf("episodic: DSH completion index exceeds %d turns", maxCodexCompletionRecords)
+			}
+			if !exists || state.ended || !index.dshActiveSet || index.dshActive != turn {
+				state.valid = false
+			}
+			state.ended = true
+			state.completed = isJSONLCompletionLine(line)
+			index.dshStates[turn] = state
+			index.dshActiveSet = false
+			index.dshLastEnded, index.dshLastEndedSet = turn, true
+		}
+		return nil
+	}
+	if index.dshLastEndedSet && isDSHJSONLActivity(line) {
+		state := index.dshStates[index.dshLastEnded]
+		state.valid = false
+		index.dshStates[index.dshLastEnded] = state
+	}
+	if index.lastEnded != "" && isCodexJSONLActivity(line) {
+		state := index.states[index.lastEnded]
+		state.valid = false
+		index.states[index.lastEnded] = state
+	}
+	if id, ok := codexJSONLMessageTurnID(line); ok {
+		if id != "" && id != index.active {
+			state, exists := index.states[id]
+			if !exists && len(index.states) >= maxCodexCompletionRecords {
+				return fmt.Errorf("episodic: Codex completion index exceeds %d turns", maxCodexCompletionRecords)
+			}
+			state.valid = false
+			index.states[id] = state
+		}
+		return nil
+	}
+	if !strings.Contains(line, `"event_msg"`) {
+		return nil
+	}
+	var obj struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type   string `json:"type"`
+			TurnID string `json:"turn_id"`
+			Error  any    `json:"error"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal([]byte(line), &obj) != nil || obj.Type != "event_msg" {
+		return nil
+	}
+	id := strings.TrimSpace(obj.Payload.TurnID)
+	switch obj.Payload.Type {
+	case "task_started":
+		index.lastEnded = ""
+		if index.active != "" {
+			old := index.states[index.active]
+			old.valid = false
+			index.states[index.active] = old
+		}
+		index.active = id
+		if id == "" {
+			return nil
+		}
+		state, exists := index.states[id]
+		if !exists && len(index.states) >= maxCodexCompletionRecords {
+			return fmt.Errorf("episodic: Codex completion index exceeds %d turns", maxCodexCompletionRecords)
+		}
+		if exists {
+			state.valid = false
+		} else {
+			state = codexCompletionState{started: true, valid: true}
+		}
+		index.states[id] = state
+	case "task_complete", "turn_aborted":
+		if id == "" {
+			return nil
+		}
+		state, exists := index.states[id]
+		if !exists && len(index.states) >= maxCodexCompletionRecords {
+			return fmt.Errorf("episodic: Codex completion index exceeds %d turns", maxCodexCompletionRecords)
+		}
+		if !exists || state.ended || index.active != id {
+			state.valid = false
+		}
+		state.ended = true
+		state.completed = obj.Payload.Type == "task_complete" && !truthy(obj.Payload.Error)
+		index.states[id] = state
+		index.lastEnded = id
+		if index.active == id {
+			index.active = ""
+		}
+	}
+	return nil
+}
+
+// completedTurns selects the Codex turn ids whose start and successful completion
+// correlate and that no later activity invalidated.
+func (index *jsonlCompletionIndex) completedTurns() map[string]bool {
+	completed := make(map[string]bool, len(index.states))
+	for id, state := range index.states {
+		if state.started && state.ended && state.valid && state.completed {
+			completed[id] = true
+		}
+	}
+	return completed
+}
+
+// completedDSHTurns selects the DSH turn numbers whose start and successful
+// completion correlate and that no later activity invalidated.
+func (index *jsonlCompletionIndex) completedDSHTurns() map[int64]bool {
+	completed := make(map[int64]bool, len(index.dshStates))
+	for turn, state := range index.dshStates {
+		if state.started && state.ended && state.valid && state.completed {
+			completed[turn] = true
+		}
+	}
+	return completed
+}
+
 func jsonlCompletionEvidence(ctx context.Context, path string) (map[string]bool, map[int64]bool, [32]byte, error) {
 	file, err := openJSONL(path)
 	if err != nil {
 		return nil, nil, [32]byte{}, err
 	}
 	defer file.Close()
-	reader := bufio.NewReader(file)
-	states := make(map[string]codexCompletionState)
-	dshStates := make(map[int64]codexCompletionState)
-	var dshActive, dshLastEnded int64
-	dshActiveSet, dshLastEndedSet := false, false
-	active, lastEnded := "", ""
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, [32]byte{}, err
+	index := newJSONLCompletionIndex()
+	err = walkJSONLLines(ctx, bufio.NewReader(file), func(line string, unterminated bool) error {
+		if unterminated {
+			return nil
 		}
-		line, readErr := readJSONLLine(reader)
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			return nil, nil, [32]byte{}, readErr
-		}
-		if event, turn, ok := dshJSONLTurnEvent(line); event != "" {
-			if event == "turn/start" {
-				dshLastEndedSet = false
-				if dshActiveSet {
-					old := dshStates[dshActive]
-					old.valid = false
-					dshStates[dshActive] = old
-				}
-				dshActive, dshActiveSet = turn, ok
-				if ok {
-					state, exists := dshStates[turn]
-					if !exists && len(dshStates) >= maxCodexCompletionRecords {
-						return nil, nil, [32]byte{}, fmt.Errorf("episodic: DSH completion index exceeds %d turns", maxCodexCompletionRecords)
-					}
-					if exists {
-						state.valid = false
-					} else {
-						state = codexCompletionState{started: true, valid: true}
-					}
-					dshStates[turn] = state
-				}
-			} else if ok {
-				state, exists := dshStates[turn]
-				if !exists && len(dshStates) >= maxCodexCompletionRecords {
-					return nil, nil, [32]byte{}, fmt.Errorf("episodic: DSH completion index exceeds %d turns", maxCodexCompletionRecords)
-				}
-				if !exists || state.ended || !dshActiveSet || dshActive != turn {
-					state.valid = false
-				}
-				state.ended = true
-				state.completed = isJSONLCompletionLine(line)
-				dshStates[turn] = state
-				dshActiveSet = false
-				dshLastEnded, dshLastEndedSet = turn, true
-			}
-			continue
-		}
-		if dshLastEndedSet && isDSHJSONLActivity(line) {
-			state := dshStates[dshLastEnded]
-			state.valid = false
-			dshStates[dshLastEnded] = state
-		}
-		if lastEnded != "" && isCodexJSONLActivity(line) {
-			state := states[lastEnded]
-			state.valid = false
-			states[lastEnded] = state
-		}
-		if id, ok := codexJSONLMessageTurnID(line); ok {
-			if id != "" && id != active {
-				state, exists := states[id]
-				if !exists && len(states) >= maxCodexCompletionRecords {
-					return nil, nil, [32]byte{}, fmt.Errorf("episodic: Codex completion index exceeds %d turns", maxCodexCompletionRecords)
-				}
-				state.valid = false
-				states[id] = state
-			}
-			continue
-		}
-		if !strings.Contains(line, `"event_msg"`) {
-			continue
-		}
-		var obj struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type   string `json:"type"`
-				TurnID string `json:"turn_id"`
-				Error  any    `json:"error"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal([]byte(line), &obj) != nil || obj.Type != "event_msg" {
-			continue
-		}
-		id := strings.TrimSpace(obj.Payload.TurnID)
-		switch obj.Payload.Type {
-		case "task_started":
-			lastEnded = ""
-			if active != "" {
-				old := states[active]
-				old.valid = false
-				states[active] = old
-			}
-			active = id
-			if id == "" {
-				continue
-			}
-			state, exists := states[id]
-			if !exists && len(states) >= maxCodexCompletionRecords {
-				return nil, nil, [32]byte{}, fmt.Errorf("episodic: Codex completion index exceeds %d turns", maxCodexCompletionRecords)
-			}
-			if exists {
-				state.valid = false
-			} else {
-				state = codexCompletionState{started: true, valid: true}
-			}
-			states[id] = state
-		case "task_complete", "turn_aborted":
-			if id == "" {
-				continue
-			}
-			state, exists := states[id]
-			if !exists && len(states) >= maxCodexCompletionRecords {
-				return nil, nil, [32]byte{}, fmt.Errorf("episodic: Codex completion index exceeds %d turns", maxCodexCompletionRecords)
-			}
-			if !exists || state.ended || active != id {
-				state.valid = false
-			}
-			state.ended = true
-			state.completed = obj.Payload.Type == "task_complete" && !truthy(obj.Payload.Error)
-			states[id] = state
-			lastEnded = id
-			if active == id {
-				active = ""
-			}
-		}
-	}
-	completed := make(map[string]bool, len(states))
-	for id, state := range states {
-		if state.started && state.ended && state.valid && state.completed {
-			completed[id] = true
-		}
-	}
-	dshCompleted := make(map[int64]bool, len(dshStates))
-	for turn, state := range dshStates {
-		if state.started && state.ended && state.valid && state.completed {
-			dshCompleted[turn] = true
-		}
+		return index.observe(line)
+	})
+	if err != nil {
+		return nil, nil, [32]byte{}, err
 	}
 	var digest [32]byte
 	copy(digest[:], file.digest.Sum(nil))
-	return completed, dshCompleted, digest, nil
+	return index.completedTurns(), index.completedDSHTurns(), digest, nil
 }
 
 func hashJSONLSource(ctx context.Context, path string) ([32]byte, error) {

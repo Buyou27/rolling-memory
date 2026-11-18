@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -134,6 +135,39 @@ func waitForFrames(t *testing.T, client *streamTestClient, event string, want in
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d %s frame(s); body=%q", want, event, client.body())
+}
+
+func TestStreamHubDoesNotReplayEpisodicContent(t *testing.T) {
+	var value atomic.Value
+	value.Store("verified-old")
+	hub := newStreamHub(streamKey{kind: "test_evidence"}, time.Hour, streamFrameProducer{
+		event: "roi",
+		produce: func(context.Context) (string, any, bool) {
+			text := value.Load().(string)
+			return text, map[string]string{"text": text}, true
+		},
+	})
+	first := hub.subscribe(map[string]bool{"roi": true})
+	defer hub.unsubscribe(first)
+	select {
+	case frame := <-first.ch:
+		if !strings.Contains(frame, "verified-old") {
+			t.Fatalf("first frame = %q", frame)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first frame unavailable")
+	}
+	value.Store("source unavailable")
+	second := hub.subscribe(map[string]bool{"roi": true})
+	defer hub.unsubscribe(second)
+	select {
+	case frame := <-second.ch:
+		if !strings.Contains(frame, "source unavailable") || strings.Contains(frame, "verified-old") {
+			t.Fatalf("replayed stale frame: %q", frame)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fresh frame unavailable")
+	}
 }
 
 // TestStreamHubSharesOneWatcherAcrossSubscribers 锁定共享流的成本模型：

@@ -32,6 +32,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/speech"
 )
 
 const (
@@ -778,15 +779,7 @@ func pySplitLines(text string) []string {
 // isPySpace mirrors standard str.isspace for the whitespace set in the data we
 // touch (rstrip/strip defaults).
 func isPySpace(char rune) bool {
-	switch char {
-	case '\t', '\n', '\v', '\f', '\r', ' ', '\u0085', '\u00a0', '\u1680',
-		'\u2028', '\u2029', '\u202f', '\u205f', '\u3000':
-		return true
-	}
-	if char >= '\u001c' && char <= '\u001f' {
-		return true
-	}
-	return char >= '\u2000' && char <= '\u200a'
+	return speech.IsPySpace(char)
 }
 
 func pyStripRight(text string) string {

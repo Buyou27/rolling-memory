@@ -724,26 +724,38 @@ func recallRequest(arguments map[string]any) (api.RecallRequest, error) {
 	}
 	scope := optionalText(arguments["scope"])
 	reader := optionalText(arguments["reader"])
+	deliveryWindow := strings.TrimSpace(textOrEmpty(arguments["delivery_window"]))
+	if deliveryWindow == "" {
+		deliveryWindow = strings.TrimSpace(textOrEmpty(caps["delivery_window"]))
+	}
+	if deliveryWindow != "" {
+		if _, _, ok := config.NormalizeDeliveryWindow(deliveryWindow, "0-16"); !ok {
+			return api.RecallRequest{}, fmt.Errorf("delivery_window must be one of ('auto', '0-16', '0-32', '0-64')")
+		}
+	} else if caps["bands"] == nil && caps["raw"] == nil {
+		deliveryWindow = "auto"
+	}
 	return api.RecallRequest{
-		Cue:         cue,
-		Scope:       scope,
-		Reader:      reader,
-		Mode:        mode,
-		AsOf:        arguments["asof"],
-		WindowStart: window["start"],
-		WindowEnd:   window["end"],
-		CapsBands:   intOrNil(caps["bands"]),
-		CapsNodes:   intOrNil(caps["nodes"]),
-		CapsChars:   intOrNil(caps["chars"]),
-		CapsChains:  intOrNil(caps["chains"]),
-		CapsRows:    intOrNil(caps["rows"]),
-		ResultUnit:  strings.ToLower(textOrEmpty(arguments["result_unit"])),
-		Rank:        boolOrNil(arguments["rank"]),
-		Offset:      offset,
-		Depth:       2,
-		RawLimit:    rawLimit,
-		Session:     sessionPtr,
-		Deep:        pyTruthy(arguments["deep"]),
+		Cue:            cue,
+		Scope:          scope,
+		Reader:         reader,
+		Mode:           mode,
+		AsOf:           arguments["asof"],
+		WindowStart:    window["start"],
+		WindowEnd:      window["end"],
+		CapsBands:      intOrNil(caps["bands"]),
+		CapsNodes:      intOrNil(caps["nodes"]),
+		CapsChars:      intOrNil(caps["chars"]),
+		DeliveryWindow: deliveryWindow,
+		CapsChains:     intOrNil(caps["chains"]),
+		CapsRows:       intOrNil(caps["rows"]),
+		ResultUnit:     strings.ToLower(textOrEmpty(arguments["result_unit"])),
+		Rank:           boolOrNil(arguments["rank"]),
+		Offset:         offset,
+		Depth:          2,
+		RawLimit:       rawLimit,
+		Session:        sessionPtr,
+		Deep:           pyTruthy(arguments["deep"]),
 	}, nil
 }
 

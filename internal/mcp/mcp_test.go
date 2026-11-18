@@ -21,6 +21,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -196,6 +197,12 @@ func newMemory(t *testing.T) *api.Memory {
 	memory, err := api.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
+	}
+	// Fresh production databases bootstrap thin; the graph-path tests below
+	// deliberately exercise the legacy assertion-graph surfaces, so apply its
+	// schema on the test database.
+	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
 	return memory
@@ -458,7 +465,7 @@ func assertRecallSchema(t *testing.T, schema map[string]any) {
 	t.Helper()
 	properties := asMap(t, schema["properties"])
 	assertKeys(t, "recall properties", properties, []string{
-		"cue", "scope", "reader", "mode", "asof", "window", "caps",
+		"cue", "scope", "reader", "mode", "asof", "window", "caps", "delivery_window",
 		"result_unit", "rank", "offset", "session", "deep",
 	})
 	if keys := stringList(t, asMap(t, properties["mode"])["enum"]); strings.Join(keys, ",") != "full,probe,recent" {
@@ -471,7 +478,7 @@ func assertRecallSchema(t *testing.T, schema map[string]any) {
 		t.Fatalf("result_unit enum: %v", keys)
 	}
 	assertKeys(t, "window properties", asMap(t, asMap(t, properties["window"])["properties"]), []string{"start", "end"})
-	assertKeys(t, "caps properties", asMap(t, asMap(t, properties["caps"])["properties"]), []string{"bands", "nodes", "chars", "chains", "rows", "raw"})
+	assertKeys(t, "caps properties", asMap(t, asMap(t, properties["caps"])["properties"]), []string{"delivery_window", "bands", "nodes", "chains", "rows", "raw"})
 }
 
 func assertKeys(t *testing.T, label string, values map[string]any, want []string) {
@@ -1188,6 +1195,11 @@ func TestLiveDaemonRecallFullOmitsDuplicateStructuredContent(t *testing.T) {
 	memory, err := lazy.Get()
 	if err != nil {
 		t.Fatalf("lazy get: %v", err)
+	}
+	// Fresh production databases bootstrap thin; this test exercises the
+	// legacy assertion-graph surfaces, so apply its schema.
+	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
 	}
 	content := "老张养了一只猫。"
 	anchor := "老张养了一只猫"

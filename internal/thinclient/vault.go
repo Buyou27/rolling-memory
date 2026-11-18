@@ -95,7 +95,7 @@ type BlindPulsePacket struct {
 	AtomsB64 string `json:"atoms_b64,omitempty"`
 }
 
-// BlindQueryOptions defines the explicit control parameters for `/open/memory/v1/query`.
+// BlindQueryOptions defines the explicit control parameters for the local plaintext query.
 type BlindQueryOptions struct {
 	DeliveryBudget   string             `json:"delivery_budget,omitempty"`    // Default "auto" (adaptive 0-96); if TopK is set, TopK (1-256) takes precedence
 	TopK             int                `json:"top_k,omitempty"`              // Explicit cap [1, 256]; when 0, uses delivery_budget="auto" (0-96)
@@ -111,11 +111,10 @@ type BlindQueryOptions struct {
 	ClusterGroups    bool               `json:"cluster_groups,omitempty"`     // Request the cognitive-cluster delivery view (read-only regrouping; hits unchanged)
 }
 
-// CloudHitClusterGroup is one cognitive-cluster delivery group returned by the
-// Cloud Blind Brain when BlindQueryOptions.ClusterGroups is set: a read-only
+// HitClusterGroup is one cognitive-cluster delivery group: a read-only
 // regrouping of the ranked hits for downstream LLM consumption (protocol
 // noetic-cluster-delivery-protocol-v1; hits themselves stay untouched).
-type CloudHitClusterGroup struct {
+type HitClusterGroup struct {
 	GroupID         int      `json:"group_id"`
 	Day             string   `json:"day,omitempty"`
 	UnitIDs         []string `json:"unit_ids"`
@@ -123,10 +122,10 @@ type CloudHitClusterGroup struct {
 	JointEnergyNats float64  `json:"joint_energy_nats"`
 }
 
-// CloudOrdinalAnnotation is the delivery-layer ordinal span day fact statement
+// OrdinalAnnotation is the delivery-layer ordinal span day fact statement
 // (first/last family) resolved from corpus time geometry under the single-run
 // high-confidence gate. Informational only; it never alters ranking.
-type CloudOrdinalAnnotation struct {
+type OrdinalAnnotation struct {
 	Polarity    string `json:"polarity"`
 	ResolvedDay string `json:"resolved_day"`
 	SingleRun   bool   `json:"single_run"`
@@ -134,11 +133,11 @@ type CloudOrdinalAnnotation struct {
 	AnchorDF    int    `json:"anchor_df"`
 }
 
-// CloudDeliveryView bundles the optional cluster delivery artifacts of the most
-// recent envelope-mode cloud query (empty when the view was not requested).
-type CloudDeliveryView struct {
-	ClusterGroups     []CloudHitClusterGroup  `json:"cluster_groups,omitempty"`
-	OrdinalAnnotation *CloudOrdinalAnnotation `json:"ordinal_annotation,omitempty"`
+// DeliveryView bundles the optional cluster delivery artifacts of the most
+// recent envelope-mode query (empty when the view was not requested).
+type DeliveryView struct {
+	ClusterGroups     []HitClusterGroup  `json:"cluster_groups,omitempty"`
+	OrdinalAnnotation *OrdinalAnnotation `json:"ordinal_annotation,omitempty"`
 }
 
 // BlindDistillRequest is the wire request for L1 Background document dry-sentence distillation.
@@ -154,22 +153,22 @@ type BlindDistillRequest struct {
 	MinKeepSentences int               `json:"min_keep_sentences,omitempty"`
 }
 
-// CloudSlotWeight is a per-slot weight returned by the Cloud Blind Brain.
-type CloudSlotWeight struct {
+// SlotWeight is a per-slot weight of one packed pulse frame.
+type SlotWeight struct {
 	SlotIndex int     `json:"slot_index"`
 	Weight    float64 `json:"weight"`
 	Nibble    uint8   `json:"nibble"`
 }
 
-// CloudIngestResponse is the numerical metadata returned by the Cloud Blind Brain upon ingest/distill.
-type CloudIngestResponse struct {
+// IngestResponse is the numerical metadata accompanying one ingested document.
+type IngestResponse struct {
 	TenantID            string               `json:"tenant_id,omitempty"`
 	Scope               string               `json:"scope,omitempty"`
 	UnitID              string               `json:"id"`
 	Layer               string               `json:"layer,omitempty"`
 	CitedUnitIDs        []string             `json:"cited_unit_ids,omitempty"`
 	Epoch               int                  `json:"epoch"`
-	SlotWeights         []CloudSlotWeight    `json:"slot_weights,omitempty"`
+	SlotWeights         []SlotWeight         `json:"slot_weights,omitempty"`
 	WaveformHex         string               `json:"waveform_hex"`
 	WaveformBar         string               `json:"waveform_bar"`
 	ConservedMass       float64              `json:"conserved_mass"`
@@ -188,8 +187,8 @@ type CloudIngestResponse struct {
 	PulseSignalWarnings []PulseSignalWarning `json:"pulse_signal_warnings,omitempty"`
 }
 
-// CloudQueryHit is a single ranked document ID and weight breakdown returned by the Cloud Blind Brain.
-type CloudQueryHit struct {
+// QueryHit is a single ranked document ID and weight breakdown.
+type QueryHit struct {
 	UnitID              string   `json:"id"`
 	Layer               string   `json:"layer,omitempty"`
 	CitedUnitIDs        []string `json:"cited_unit_ids,omitempty"`
@@ -214,7 +213,7 @@ type CloudQueryHit struct {
 	CompressionRatio    float64  `json:"compression_ratio,omitempty"`
 }
 
-// BlindGraphRequest is the wire request for source-agnostic unified graph topology (`POST /open/memory/v1/graph`).
+// BlindGraphRequest describes the source-agnostic unified graph topology request.
 type BlindGraphRequest struct {
 	TenantID     string             `json:"tenant_id,omitempty"`
 	Scope        string             `json:"scope,omitempty"`
@@ -228,8 +227,8 @@ type BlindGraphRequest struct {
 	MaxEdges     int                `json:"max_edges,omitempty"`
 }
 
-// CloudGraphNode is a single topology node returned by `/open/memory/v1/graph`.
-type CloudGraphNode struct {
+// GraphNode is a single topology node of the resolved graph.
+type GraphNode struct {
 	ID           string   `json:"id"`
 	RawID        string   `json:"raw_id"`
 	NodeType     string   `json:"node_type"` // "super_cell" | "cell" | "unit"
@@ -245,8 +244,8 @@ type CloudGraphNode struct {
 	Degree       int      `json:"degree"`
 }
 
-// CloudGraphEdge is a directed topology edge returned by `/open/memory/v1/graph`.
-type CloudGraphEdge struct {
+// GraphEdge is a directed topology edge of the resolved graph.
+type GraphEdge struct {
 	Source string  `json:"source"`
 	Target string  `json:"target"`
 	Kind   string  `json:"kind"` // "hierarchy" | "member_of" | "weak_edge" | "cooccur_bridge" | "cites"
@@ -254,8 +253,8 @@ type CloudGraphEdge struct {
 	Weight float64 `json:"weight"`
 }
 
-// CloudGraphStats holds node and edge distribution statistics across the three layers.
-type CloudGraphStats struct {
+// GraphStats holds node and edge distribution statistics across the three layers.
+type GraphStats struct {
 	TotalNodes      int            `json:"total_nodes"`
 	TotalEdges      int            `json:"total_edges"`
 	CellCount       int            `json:"cell_count"`
@@ -263,8 +262,8 @@ type CloudGraphStats struct {
 	LayerNodeCounts map[string]int `json:"layer_node_counts"`
 }
 
-// CloudGraphResponse is the topology envelope returned by `/open/memory/v1/graph`.
-type CloudGraphResponse struct {
+// GraphResponse is the topology envelope.
+type GraphResponse struct {
 	Success      bool               `json:"success"`
 	Version      string             `json:"version"`
 	TenantID     string             `json:"tenant_id,omitempty"`
@@ -272,14 +271,14 @@ type CloudGraphResponse struct {
 	UserID       string             `json:"user_id,omitempty"`
 	Layers       []string           `json:"layers"`
 	LayerWeights map[string]float64 `json:"layer_weights"`
-	Nodes        []CloudGraphNode   `json:"nodes"`
-	Edges        []CloudGraphEdge   `json:"edges"`
-	Stats        CloudGraphStats    `json:"stats"`
+	Nodes        []GraphNode        `json:"nodes"`
+	Edges        []GraphEdge        `json:"edges"`
+	Stats        GraphStats         `json:"stats"`
 }
 
-// LocalResolvedGraphNode pairs a CloudGraphNode with locally resolved plaintext from the client's SQLite Vault.
+// LocalResolvedGraphNode pairs a GraphNode with locally resolved plaintext from the client's SQLite Vault.
 type LocalResolvedGraphNode struct {
-	CloudGraphNode
+	GraphNode
 	Summary            string `json:"summary"`
 	RawPlaintext       string `json:"raw_plaintext,omitempty"`
 	DistilledPlaintext string `json:"distilled_plaintext,omitempty"`
@@ -290,8 +289,8 @@ type LocalResolvedGraph struct {
 	Layers       []string                 `json:"layers"`
 	LayerWeights map[string]float64       `json:"layer_weights"`
 	Nodes        []LocalResolvedGraphNode `json:"nodes"`
-	Edges        []CloudGraphEdge         `json:"edges"`
-	Stats        CloudGraphStats          `json:"stats"`
+	Edges        []GraphEdge              `json:"edges"`
+	Stats        GraphStats               `json:"stats"`
 }
 
 // LocalNoeticRecord represents a downstream-maintained L3 Noetic memory record (Query + Retrieved Sentences + Answer)
@@ -299,12 +298,14 @@ type LocalResolvedGraph struct {
 type LocalNoeticRecord struct {
 	NoeticID       string   `json:"noetic_id"`
 	OccurredAt     int64    `json:"occurred_at"`
+	InsertedAt     int64    `json:"inserted_at,omitempty"`
 	Status         string   `json:"status"` // "active" | "stale"
 	QueryText      string   `json:"query_text"`
 	AnswerText     string   `json:"answer_text"`
 	CitedUnitIDs   []string `json:"cited_unit_ids"`
 	CitedSentences []string `json:"cited_sentences"`
 	MatchScore     float64  `json:"match_score,omitempty"`
+	ReuseCount     int      `json:"reuse_count,omitempty"`
 	AddressURI     string   `json:"address_uri,omitempty"`
 	Coord64        int64    `json:"coord64,omitempty"`
 	WaveformBar    string   `json:"waveform_bar,omitempty"`
@@ -314,9 +315,15 @@ type LocalNoeticRecord struct {
 	IncarnationID string `json:"incarnation_id,omitempty"`
 }
 
-// LocalResolvedHit pairs the Cloud Blind Brain's numerical ranking with the locally resolved plaintext!
+// VerificationGain delegates the continuous logarithmic reinforcement multiplier
+// (1 + ln(1 + ReuseCount)) to the canonical kernel implementation in internal/core.
+func (r LocalNoeticRecord) VerificationGain() float64 {
+	return core.VerificationGain(r.ReuseCount)
+}
+
+// LocalResolvedHit pairs a transport's numerical ranking with the locally resolved plaintext.
 type LocalResolvedHit struct {
-	CloudQueryHit
+	QueryHit
 	RawPlaintext       string   `json:"raw_plaintext"`
 	DistilledPlaintext string   `json:"distilled_plaintext"`
 	KeptSentences      []string `json:"kept_sentences"`
@@ -353,13 +360,13 @@ func RoleTaggedAuthors(text string) []string {
 }
 
 type vaultCachedDocSlots struct {
-	rawText    string
-	termMeta   map[uint64]core.Term
-	termCounts map[uint64]int
-	sentHashes [][]uint64
-	docLen     int
-	// allHashes keeps every packed atom hash (unfiltered) so the local transport can
-	// score a document without re-running the segmenter on each query.
+	rawText       string
+	termMeta      map[uint64]core.Term
+	termCounts    map[uint64]int
+	termPositions map[uint64][]core.TermPosition
+	docLen        int
+	// allHashes keeps every packed atom hash (unfiltered) so post-recall coverage
+	// checks never re-run the segmenter on each query.
 	allHashes []uint64
 	// pktSlots caches packed BlindTokenAtom slices for L3 Noetic handles.
 	pktSlots []BlindTokenAtom
@@ -375,9 +382,13 @@ type vaultDocEntry struct {
 	locus         string
 	refPointer    string
 	contentDigest []byte
+	docHash       uint64
+	blockHash     uint64
+	lineStart     int
+	lineEnd       int
 	termMeta      map[uint64]core.Term
 	termCounts    map[uint64]int
-	sentHashes    [][]uint64
+	termPositions map[uint64][]core.TermPosition
 	allHashes     []uint64
 	docLen        int
 }
@@ -389,149 +400,21 @@ type vaultCorpusSnapshot struct {
 	docTextLen       int64
 	episodicRevision int64
 	episodicCodecKey string
+	docsRev          int64
+	bgRev            int64
+	epiCnt           int64
 	bgCnt            int64
 	bgMaxRowID       int64
 	bgOccSum         int64
 	bgSlotsLen       int64
 	inlineCount      int
-	totalDocLen      int
 	docs             []vaultDocEntry
 	episodicDocs     []vaultDocEntry
 	validEpisodicIDs map[string]struct{}
 	docIdxByID       map[string]int
-	ftsRowIDToDocID  map[int64]string
-	globalDF         map[uint64]int
-	postingsMu       sync.Mutex
-	postings         map[uint64][]int
-	// postingsComplete marks postings as the full inverted index built at
-	// snapshot assembly (every hash with df>0 has its ascending-doc-index list).
-	// Lookups then skip the lazy O(N·|terms|) corpus scan; a missing hash means
-	// df==0. When false, queryPostings falls back to the lazy scan fill.
-	postingsComplete bool
-	effDF            map[uint64]int
 	coreOnce         sync.Once
 	coreMu           sync.Mutex
 	coreEngine       *core.Engine
-}
-
-func (s *vaultCorpusSnapshot) queryEffDF(h uint64, posting []int, totalDocs int, occAt func(int) int64, termsAt func(int) map[uint64]int) int {
-	if s == nil {
-		return len(posting)
-	}
-	s.postingsMu.Lock()
-	if s.effDF == nil {
-		s.effDF = make(map[uint64]int, 256)
-	}
-	if val, ok := s.effDF[h]; ok {
-		s.postingsMu.Unlock()
-		return val
-	}
-	s.postingsMu.Unlock()
-
-	computed := SubmodularCloneFoldedDF(posting, len(posting), totalDocs, occAt, termsAt)
-
-	s.postingsMu.Lock()
-	s.effDF[h] = computed
-	s.postingsMu.Unlock()
-	return computed
-}
-
-func (s *vaultCorpusSnapshot) queryPostings(qHashes map[uint64]uint16) map[uint64][]int {
-	if s == nil || len(qHashes) == 0 {
-		return nil
-	}
-	s.postingsMu.Lock()
-	defer s.postingsMu.Unlock()
-	if s.postingsComplete {
-		// Full inverted index: direct lookups, absent hash truly has df==0.
-		out := make(map[uint64][]int, len(qHashes))
-		for h := range qHashes {
-			if list, ok := s.postings[h]; ok {
-				out[h] = list
-			}
-		}
-		return out
-	}
-	if s.postings == nil {
-		s.postings = make(map[uint64][]int, 256)
-	}
-	var missing []uint64
-	for h := range qHashes {
-		if s.globalDF[h] <= 0 {
-			continue
-		}
-		if _, ok := s.postings[h]; !ok {
-			missing = append(missing, h)
-			s.postings[h] = make([]int, 0, s.globalDF[h])
-		}
-	}
-	if len(missing) > 0 {
-		if len(s.docs) >= 2048 {
-			const workers = 8
-			type partHits struct {
-				lists [][]int
-			}
-			var parts [workers]partHits
-			step := (len(s.docs) + workers - 1) / workers
-			var wg sync.WaitGroup
-			for w := 0; w < workers; w++ {
-				start := w * step
-				if start >= len(s.docs) {
-					break
-				}
-				end := start + step
-				if end > len(s.docs) {
-					end = len(s.docs)
-				}
-				wg.Add(1)
-				go func(wIdx, st, en int) {
-					defer wg.Done()
-					localLists := make([][]int, len(missing))
-					for idx := st; idx < en; idx++ {
-						tc := s.docs[idx].termCounts
-						if len(tc) == 0 {
-							continue
-						}
-						for mIdx, h := range missing {
-							if tc[h] > 0 {
-								localLists[mIdx] = append(localLists[mIdx], idx)
-							}
-						}
-					}
-					parts[wIdx].lists = localLists
-				}(w, start, end)
-			}
-			wg.Wait()
-			for mIdx, h := range missing {
-				dst := s.postings[h]
-				for w := 0; w < workers; w++ {
-					if len(parts[w].lists) > mIdx && len(parts[w].lists[mIdx]) > 0 {
-						dst = append(dst, parts[w].lists[mIdx]...)
-					}
-				}
-				s.postings[h] = dst
-			}
-		} else {
-			for idx, d := range s.docs {
-				tc := d.termCounts
-				if len(tc) == 0 {
-					continue
-				}
-				for _, h := range missing {
-					if tc[h] > 0 {
-						s.postings[h] = append(s.postings[h], idx)
-					}
-				}
-			}
-		}
-	}
-	out := make(map[uint64][]int, len(qHashes))
-	for h := range qHashes {
-		if list := s.postings[h]; len(list) > 0 {
-			out[h] = list
-		}
-	}
-	return out
 }
 
 // CorpusSize returns the number of documents in the current cached corpus snapshot (0 if unloaded).
@@ -547,19 +430,19 @@ func (v *Vault) CorpusSize() int {
 	return len(v.snapRef.snap.docs)
 }
 
-// Vault manages the local SQLite plaintext table, the built-in FTS5 trigram lexical-temporal index
-// (Client SDK Default Recall), and the user's local secret HMAC key.
+// Vault manages the local SQLite plaintext tables, the cursor-free dual-cluster
+// retrieval kernel (internal/core) and the user's local secret HMAC key.
 type Vault struct {
 	db        *sql.DB
 	secretKey [32]byte
-	hasFTS5   bool
 	// identity is the local persona coordinate stamped onto every saved row: the answering
 	// assistant, its concrete lifetime incarnation, and the workspace locus. Set once by the
 	// caller (`SetIdentity`); empty values are stored as '' and never block a write.
 	identity VaultIdentity
 	// segOpts holds the optional custom word segmenter and adaptive harmonic configuration.
-	segOpts  SegmenterPackOptions
-	harmOpts plain.CanonicalHarmonicOptions
+	segOpts          SegmenterPackOptions
+	harmOpts         plain.CanonicalHarmonicOptions
+	harmOptsExplicit bool
 
 	slotCacheMu *sync.RWMutex
 	slotCache   map[string]vaultCachedDocSlots
@@ -567,9 +450,10 @@ type Vault struct {
 	// (persona identity must stay independent), so the corpus snapshot has to live behind a
 	// shared handle or each request would re-pack the whole vault.
 	snapRef *vaultSnapshotRef
-	// bgRef is the same idea for the pre-packed L1 background chunks: their atoms are
-	// stored once and matched in place, so a query must not re-read the blobs.
-	bgRef *vaultBgSlotsRef
+	// dbPath/dbPathOnce 记忆化主库文件路径（`PRAGMA database_list`），供 .zcsr 磁盘簇缓存
+	// 定位；内存库或查询失败时为空串（此时不做磁盘簇缓存，行为与历史一致）。
+	dbPath     string
+	dbPathOnce sync.Once
 }
 
 // vaultSnapshotRef holds the corpus snapshot behind a pointer shared across clones.
@@ -583,9 +467,7 @@ type vaultSnapshotRef struct {
 	// the write generation the published snapshot was last fingerprint-verified
 	// against. A gap between the two sends the next load through
 	// buildCorpusSnapshot's exact fingerprint re-check without discarding the
-	// snapshot itself, so the pure-INSERT episodic delta path and the @ref:-only
-	// inline fast path stay reachable after same-process writes (a nil snap would
-	// force the full table rescan instead).
+	// snapshot itself (a nil snap would force the full table rescan instead).
 	snapWriteGen    uint64
 	snapVerifiedGen uint64
 	// bgRevReliable reports that the thin_vault_corpus_revision bg triggers are
@@ -593,42 +475,23 @@ type vaultSnapshotRef struct {
 	// aggregate. docs_rev needs no flag: its triggers install with the table.
 	bgRevReliable bool
 	// lastDocsRev / lastBgRev are the revision counters the current snapshot's
-	// fingerprints were computed against; inlineDocsRev / bgCachedRev anchor the
-	// component caches the same way. The four-value aggregate fingerprints are
+	// fingerprints were computed against. The four-value aggregate fingerprints are
 	// blind to length-preserving UPDATEs (COUNT, SUM(rowid), MAX(rowid) and
 	// SUM(LENGTH) all unchanged), so when the trigger-backed counters are
 	// readable they are the primary identity and the aggregates only confirm.
-	lastDocsRev      int64
-	lastBgRev        int64
-	inlineDocsRev    int64
-	bgCachedRev      int64
-	lastSnapTime     time.Time
-	inlineLoaded     bool
-	inlineDocCnt     int64
-	inlineDocRowSum  int64
-	inlineMaxRowID   int64
-	inlineDocTextLen int64
-	inlineCodecKey   string
-	inlineTotalLen   int
-	inlineDocs       []vaultDocEntry
-	epiLoaded        bool
-	epiCodecKey      string
-	epiLastRev       int64
-	epiLastCnt       int64
-	epiLastMaxRowID  int64
-	epiDocCnt        int64
-	epiDocMaxRowID   int64
-	epiTotalLen      int
-	epiDocs          []vaultDocEntry
-	epiByMAC         map[string]vaultDocEntry
-	bgLoaded         bool
-	bgCachedCnt      int64
-	bgCachedMaxRowID int64
-	bgCachedOccSum   int64
-	bgCachedSlotsLen int64
-	bgTotalLen       int
-	bgDocs           []vaultDocEntry
-	bgBaseDF         map[uint64]int
+	lastDocsRev  int64
+	lastBgRev    int64
+	lastSnapTime time.Time
+	// csrEngine caches the mmap .zcsr baseline engine opened for a freshness-checked
+	// corpus state (file identity = .zcsr mtime+size); csrFileMTimeNS / csrFileSize
+	// anchor that identity so incremental writes never force a re-mmap. csrUnits /
+	// csrUnitsGen cache the unit-fingerprint sidecar that must match the cached
+	// baseline's freshness line.
+	csrEngine        *core.Engine
+	csrFileMTimeNS   int64
+	csrFileSize      int64
+	csrUnits         map[string]uint64
+	csrUnitsGen      string
 	faultReady       bool
 	lastFaultTime    time.Time
 	faultDocCnt      int64
@@ -651,67 +514,19 @@ type vaultSnapshotRef struct {
 	lastDataVerCheck time.Time
 }
 
-// vaultBgSlotsRef caches the background chunk atoms so a local query scans one resident
-// copy instead of re-reading and re-decoding `thin_vault_bg_chunks` on every call.
-type vaultBgSlotsRef struct {
-	loaded     bool
-	cnt        int64
-	maxRowID   int64
-	totalBytes int64
-	rows       []vaultBgSlotRow
-}
-
-// vaultBgSlotRow is one background chunk in its stored, still-packed form.
-type vaultBgSlotRow struct {
-	unitID  string
-	occ     int64
-	addrURI string
-	waveBar string
-	coord64 uint64
-	slots   []byte
-}
-
-// scheduleSnapshotRefresh re-validates the corpus snapshot in the background
-// right after a same-process vault write, so the next foreground recall finds a
-// freshly fingerprint-verified snapshot instead of paying the re-check (and, for
-// non-append writes, the full rebuild) inline. Single-flight via snapRef.refreshing;
-// a short debounce coalesces bursts of consecutive writes into one rebuild.
-func (v *Vault) scheduleSnapshotRefresh() {
-	if v == nil || v.db == nil || v.slotCacheMu == nil || v.snapRef == nil {
-		return
-	}
-	v.slotCacheMu.Lock()
-	if v.snapRef.refreshing {
-		v.slotCacheMu.Unlock()
-		return
-	}
-	v.snapRef.refreshing = true
-	v.slotCacheMu.Unlock()
-	go func() {
-		defer func() {
-			v.slotCacheMu.Lock()
-			v.snapRef.refreshing = false
-			v.slotCacheMu.Unlock()
-		}()
-		time.Sleep(120 * time.Millisecond)
-		_, _ = v.buildCorpusSnapshot(context.Background())
-	}()
-}
-
 func (v *Vault) clearSlotCache() {
 	if v != nil && v.slotCacheMu != nil {
 		v.slotCacheMu.Lock()
 		v.slotCache = make(map[string]vaultCachedDocSlots, 256)
 		if v.snapRef != nil {
 			v.snapRef.snap = nil
-			v.snapRef.inlineLoaded = false
-			v.snapRef.epiLoaded = false
-			v.snapRef.bgLoaded = false
+			v.snapRef.csrEngine = nil
+			v.snapRef.csrFileMTimeNS = 0
+			v.snapRef.csrFileSize = 0
+			v.snapRef.csrUnits = nil
+			v.snapRef.csrUnitsGen = ""
 			v.snapRef.faultReady = false
 			v.snapRef.noeticReady = false
-		}
-		if v.bgRef != nil {
-			*v.bgRef = vaultBgSlotsRef{}
 		}
 		v.slotCacheMu.Unlock()
 	}
@@ -735,9 +550,6 @@ func (v *Vault) InvalidateRuntimeCaches() {
 			v.snapRef.lastSnapTime = time.Time{}
 			v.snapRef.faultReady = false
 			v.snapRef.noeticReady = false
-		}
-		if v.bgRef != nil {
-			*v.bgRef = vaultBgSlotsRef{}
 		}
 		v.slotCacheMu.Unlock()
 	}
@@ -855,9 +667,9 @@ func (v *Vault) noeticBlindPacket(noeticID, queryText string, occurredAt int64) 
 }
 
 // DocAtomCoverageWithCueHashes computes the fraction of uniqueCueHashes present in docID,
-// reusing the in-memory corpus snapshot's `termCounts` / `allHashes` (or `slotCache`) so
-// post-recall coverage and Noetic citation selection never re-run BPE harmonic packing
-// across 30 hydrated long documents on the foreground thread.
+// reusing the in-memory corpus snapshot's `termCounts` / `allHashes`, `core.Engine` CSR
+// entries, or `slotCache` so post-recall coverage and Noetic citation selection never
+// re-run BPE harmonic packing across 30 hydrated long documents on the foreground thread.
 func (v *Vault) DocAtomCoverageWithCueHashes(docID, fallbackText string, uniqueCueHashes []uint64) float64 {
 	if v == nil || len(uniqueCueHashes) == 0 {
 		return 0
@@ -869,20 +681,37 @@ func (v *Vault) DocAtomCoverageWithCueHashes(docID, fallbackText string, uniqueC
 		if snap != nil {
 			if idx, ok := snap.docIdxByID[docID]; ok && idx >= 0 && idx < len(snap.docs) {
 				doc := snap.docs[idx]
-				var allSet map[uint64]bool
-				if len(doc.allHashes) > 0 {
-					allSet = make(map[uint64]bool, len(doc.allHashes))
-					for _, h := range doc.allHashes {
-						allSet[h] = true
+				if len(doc.termCounts) > 0 || len(doc.allHashes) > 0 {
+					var allSet map[uint64]bool
+					if len(doc.allHashes) > 0 {
+						allSet = make(map[uint64]bool, len(doc.allHashes))
+						for _, h := range doc.allHashes {
+							allSet[h] = true
+						}
+					}
+					matched := 0
+					for _, h := range uniqueCueHashes {
+						if doc.termCounts[h] > 0 || (allSet != nil && allSet[h]) {
+							matched++
+						}
+					}
+					return float64(matched) / float64(len(uniqueCueHashes))
+				}
+				if eng := snap.coreEngine; eng != nil {
+					cueSet := make(map[uint64]bool, len(uniqueCueHashes))
+					for _, h := range uniqueCueHashes {
+						cueSet[h] = true
+					}
+					matched := 0
+					if eng.ForEachUnitDocEntry(docID, func(ev core.DocEntryView) {
+						if cueSet[ev.ID] {
+							delete(cueSet, ev.ID)
+							matched++
+						}
+					}) {
+						return float64(matched) / float64(len(uniqueCueHashes))
 					}
 				}
-				matched := 0
-				for _, h := range uniqueCueHashes {
-					if doc.termCounts[h] > 0 || (allSet != nil && allSet[h]) {
-						matched++
-					}
-				}
-				return float64(matched) / float64(len(uniqueCueHashes))
 			}
 		}
 	}
@@ -906,51 +735,6 @@ func (v *Vault) DocAtomCoverageWithCueHashes(docID, fallbackText string, uniqueC
 	return float64(matched) / float64(len(uniqueCueHashes))
 }
 
-// backgroundSlotRows returns the stored background chunks, loaded once per fingerprint.
-// The fingerprint covers inserts, deletes and slot rewrites of the chunk table only, so
-// unrelated writes (episodic imports, Noetic crystallization) keep the cache hot.
-func (v *Vault) backgroundSlotRows() []vaultBgSlotRow {
-	if v == nil || v.db == nil {
-		return nil
-	}
-	var cnt, maxRowID, totalBytes int64
-	if err := v.db.QueryRow(
-		`SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(SUM(LENGTH(slots_json)), 0) FROM thin_vault_bg_chunks`,
-	).Scan(&cnt, &maxRowID, &totalBytes); err != nil {
-		return nil
-	}
-	if v.slotCacheMu != nil && v.bgRef != nil {
-		v.slotCacheMu.RLock()
-		if v.bgRef.loaded && v.bgRef.cnt == cnt && v.bgRef.maxRowID == maxRowID && v.bgRef.totalBytes == totalBytes {
-			rows := v.bgRef.rows
-			v.slotCacheMu.RUnlock()
-			return rows
-		}
-		v.slotCacheMu.RUnlock()
-	}
-	rows, err := v.db.Query(`SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, slots_json FROM thin_vault_bg_chunks`)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	stored := make([]vaultBgSlotRow, 0, cnt)
-	for rows.Next() {
-		var row vaultBgSlotRow
-		var coord64 int64
-		if err := rows.Scan(&row.unitID, &row.occ, &row.addrURI, &coord64, &row.waveBar, &row.slots); err != nil {
-			continue
-		}
-		row.coord64 = uint64(coord64)
-		stored = append(stored, row)
-	}
-	if v.slotCacheMu != nil && v.bgRef != nil {
-		v.slotCacheMu.Lock()
-		*v.bgRef = vaultBgSlotsRef{loaded: true, cnt: cnt, maxRowID: maxRowID, totalBytes: totalBytes, rows: stored}
-		v.slotCacheMu.Unlock()
-	}
-	return stored
-}
-
 // CloneWithSharedSlotCache forks a request-local Vault: plaintext storage,
 // key material and the synchronized blind-slot cache are shared, while the
 // persona identity starts empty and remains independent on every clone.
@@ -959,8 +743,9 @@ func (v *Vault) CloneWithSharedSlotCache() *Vault {
 		return nil
 	}
 	return &Vault{
-		db: v.db, secretKey: v.secretKey, hasFTS5: v.hasFTS5, segOpts: v.segOpts, harmOpts: v.harmOpts,
-		slotCacheMu: v.slotCacheMu, slotCache: v.slotCache, snapRef: v.snapRef, bgRef: v.bgRef,
+		db: v.db, secretKey: v.secretKey,
+		segOpts: v.segOpts, harmOpts: v.harmOpts, harmOptsExplicit: v.harmOptsExplicit,
+		slotCacheMu: v.slotCacheMu, slotCache: v.slotCache, snapRef: v.snapRef,
 	}
 }
 
@@ -1121,8 +906,8 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		var storageType string
 		if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err == nil && storageType == "blob" && len(stored) == 32 {
 			var readyCnt int
-			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_docs', 'thin_vault_noetic', 'thin_vault_docs_fts')`).Scan(&readyCnt)
-			if readyCnt == 3 {
+			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_docs', 'thin_vault_noetic')`).Scan(&readyCnt)
+			if readyCnt == 2 {
 				var hasLineage int
 				if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name IN ('thin_vault_episodic_lineage', 'thin_vault_episodic_sources', 'thin_vault_deleted_units')) OR (type = 'trigger' AND name = 'thin_episodic_sources_delete')`).Scan(&hasLineage); err != nil || hasLineage < 4 {
 					if _, err := db.Exec(episodicLineageDDL); err != nil {
@@ -1138,11 +923,10 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 				CoreSchemaContracts()
 				bgRevReliable := ensureCorpusRevisionSchema(db)
 				v := &Vault{
-					db: db, hasFTS5: ensureFTS(db),
+					db:          db,
 					slotCacheMu: &sync.RWMutex{},
 					slotCache:   make(map[string]vaultCachedDocSlots, 256),
 					snapRef:     &vaultSnapshotRef{bgRevReliable: bgRevReliable},
-					bgRef:       &vaultBgSlotsRef{},
 				}
 				copy(v.secretKey[:], stored)
 				return v, nil
@@ -1213,19 +997,16 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		_, _ = db.Exec(stmt)
 	}
 	ensureInsertedAtColumns(db)
-	// Contentless FTS5 index (postings only) + rowid↔doc_id map: the local lexical
-	// cache never keeps a second readable copy of any background/episodic text.
-	hasFTS := ensureFTS(db)
 	// Legacy JSON slot rows are rewritten into the packed form once (idempotent).
 	_ = migrateBackgroundSlotBlobs(db)
 	bgRevReliable := ensureCorpusRevisionSchema(db)
+	reclaimDeadVaultIndexes(db)
 
 	v := &Vault{
-		db: db, hasFTS5: hasFTS,
+		db:          db,
 		slotCacheMu: &sync.RWMutex{},
 		slotCache:   make(map[string]vaultCachedDocSlots, 256),
 		snapRef:     &vaultSnapshotRef{bgRevReliable: bgRevReliable},
-		bgRef:       &vaultBgSlotsRef{},
 	}
 	if len(explicitSecret) > 0 {
 		h := sha256.Sum256(explicitSecret)
@@ -1364,14 +1145,34 @@ var LegacyRetiredTables = []string{
 // PurgeLegacyTables preserves historical tables. Automatic deletion is unsafe.
 func PurgeLegacyTables(_ *sql.DB) {}
 
+// reclaimDeadVaultIndexes drops the retired local FTS5 lexical index
+// (`thin_vault_docs_fts` + its rowid map `thin_vault_fts_map`) and, on
+// databases without the legacy assertion graph, the legacy trace bookkeeping
+// table (`session_cursor`). All three are derived with no readers left (the
+// dual-cluster kernel ranks the vault directly; the legacy scoped traces live
+// in `trace`, absent here) and are removed best-effort on every open, which
+// lands their pages on the freelist for the next maintenance compaction. A
+// rolling restart with an older build stays safe: that build recreates the FTS
+// tables on its own open.
+func reclaimDeadVaultIndexes(db *sql.DB) {
+	if db == nil {
+		return
+	}
+	var hasLegacyTrace int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'trace'`).Scan(&hasLegacyTrace); err == nil && hasLegacyTrace == 0 {
+		_, _ = db.Exec(`DROP TABLE IF EXISTS session_cursor`)
+	}
+	var present int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('thin_vault_docs_fts', 'thin_vault_fts_map')`).Scan(&present); err != nil || present == 0 {
+		return
+	}
+	_, _ = db.Exec(`DROP TABLE IF EXISTS thin_vault_docs_fts`)
+	_, _ = db.Exec(`DROP TABLE IF EXISTS thin_vault_fts_map`)
+}
+
 // KeyedHash64 computes a cryptographic HMAC-SHA256 truncated to 64 bits using the vault's private key via sdk/go/pulse/plain.
 func (v *Vault) KeyedHash64(token string) uint64 {
 	return plain.NewBlindEncoderFromRawKey(v.secretKey).KeyedHash64(token)
-}
-
-// mechanicalCarrierUnits delegates character carrier width measurement to plain.CarrierUnits.
-func mechanicalCarrierUnits(r rune) uint16 {
-	return plain.CarrierUnits(r)
 }
 
 // SplitSentences delegates sentence boundary segmentation to plain.SplitSentences.
@@ -1414,7 +1215,7 @@ func (v *Vault) packBlindPacketWithKey(key [32]byte, docID, text string, occurre
 }
 
 // SaveLocalPlaintext persists the document's plaintext and cloud-assigned metadata in local SQLite.
-func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp CloudIngestResponse) error {
+func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error {
 	sentsJSON, err := json.Marshal(sents)
 	if err != nil {
 		return err
@@ -1463,11 +1264,6 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 	if err != nil {
 		return err
 	}
-	if v.hasFTS5 {
-		if ftsErr := ftsReplaceRow(tx, docID, rawText); ftsErr != nil {
-			return fmt.Errorf("thinclient: FTS mirror write for %s: %w", docID, ftsErr)
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -1478,7 +1274,6 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 			v.snapRef.snapWriteGen++
 		}
 		v.slotCacheMu.Unlock()
-		v.scheduleSnapshotRefresh()
 	}
 	return nil
 }
@@ -1488,7 +1283,7 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 // Harness's conversation plaintext into SQLite. `turnRef` records the provenance of the unit (a
 // content-addressed unit can be said in several turns; the row keeps one pointer, the lineage
 // table keeps every occurrence).
-func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPointer, turnRef string, resp CloudIngestResponse) error {
+func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPointer, turnRef string, resp IngestResponse) error {
 	keptJSON, err := json.Marshal(resp.KeptSentenceIndices)
 	if err != nil {
 		return err
@@ -1527,11 +1322,6 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 	if err != nil {
 		return err
 	}
-	if v.hasFTS5 {
-		if ftsErr := ftsDeleteRow(tx, docID); ftsErr != nil {
-			return fmt.Errorf("thinclient: FTS mirror delete for %s: %w", docID, ftsErr)
-		}
-	}
 	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
 			return err
@@ -1547,7 +1337,6 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 			v.snapRef.snapWriteGen++
 		}
 		v.slotCacheMu.Unlock()
-		v.scheduleSnapshotRefresh()
 	}
 	return nil
 }
@@ -2303,25 +2092,33 @@ func (v *Vault) SaveLocalNoetic(rec LocalNoeticRecord) error {
 	if err != nil {
 		return err
 	}
+	insertAt := rec.InsertedAt
+	if insertAt <= 0 {
+		insertAt = rec.OccurredAt
+	}
 	_, err = v.db.Exec(`
-			INSERT INTO thin_vault_noetic(
-				noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json,
-				address_uri, coord64, waveform_bar, assistant_id, incarnation_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(noetic_id) DO UPDATE SET
-				occurred_at = excluded.occurred_at,
-				inserted_at = CASE WHEN thin_vault_noetic.inserted_at > 0 THEN thin_vault_noetic.inserted_at ELSE excluded.inserted_at END,
-				status = excluded.status,
-				query_text = excluded.query_text,
-				answer_text = excluded.answer_text,
-				cited_unit_ids_json = excluded.cited_unit_ids_json,
-				cited_sentences_json = excluded.cited_sentences_json,
-				address_uri = excluded.address_uri,
-				coord64 = excluded.coord64,
-				waveform_bar = excluded.waveform_bar,
-				assistant_id = excluded.assistant_id,
-				incarnation_id = excluded.incarnation_id`,
-		rec.NoeticID, rec.OccurredAt, rec.OccurredAt, status, rec.QueryText, rec.AnswerText, string(unitIDsJSON), string(sentsJSON),
+				INSERT INTO thin_vault_noetic(
+					noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json,
+					address_uri, coord64, waveform_bar, assistant_id, incarnation_id
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(noetic_id) DO UPDATE SET
+					occurred_at = CASE
+						WHEN excluded.occurred_at > thin_vault_noetic.occurred_at THEN excluded.occurred_at
+						WHEN thin_vault_noetic.occurred_at > 0 THEN thin_vault_noetic.occurred_at + 1
+						ELSE excluded.occurred_at
+					END,
+					inserted_at = CASE WHEN thin_vault_noetic.inserted_at > 0 THEN thin_vault_noetic.inserted_at ELSE excluded.inserted_at END,
+					status = excluded.status,
+					query_text = excluded.query_text,
+					answer_text = excluded.answer_text,
+					cited_unit_ids_json = excluded.cited_unit_ids_json,
+					cited_sentences_json = excluded.cited_sentences_json,
+					address_uri = excluded.address_uri,
+					coord64 = excluded.coord64,
+					waveform_bar = excluded.waveform_bar,
+					assistant_id = excluded.assistant_id,
+					incarnation_id = excluded.incarnation_id`,
+		rec.NoeticID, rec.OccurredAt, insertAt, status, rec.QueryText, rec.AnswerText, string(unitIDsJSON), string(sentsJSON),
 		rec.AddressURI, rec.Coord64, rec.WaveformBar,
 		firstNonEmpty(rec.AssistantID, v.identity.AssistantID), firstNonEmpty(rec.IncarnationID, v.identity.IncarnationID),
 	)
@@ -2446,78 +2243,11 @@ func (v *Vault) InvalidateLocalNoeticByCitedDoc(docID string) ([]string, error) 
 	return affected, err
 }
 
-func indexHashUint64(s []uint64, target uint64) int {
-	for i, x := range s {
-		if x == target {
-			return i
-		}
-	}
-	return -1
-}
-
-func containsHashUint64(s []uint64, target uint64) bool {
-	return indexHashUint64(s, target) >= 0
-}
-
-func cloudHitLess(a, b CloudQueryHit) bool {
+func cloudHitLess(a, b QueryHit) bool {
 	if a.FinalWeight != b.FinalWeight {
 		return a.FinalWeight > b.FinalWeight
 	}
 	return a.UnitID < b.UnitID
-}
-
-// sortTopCloudHits orders the top k elements of hits in exact (FinalWeight DESC, UnitID ASC)
-// order and truncates hits to at most k*2 elements when len(hits) is large, avoiding O(N log N)
-// full sorts over tens of thousands of low-weight tail hits that are discarded before fusion.
-func sortTopCloudHits(hits []CloudQueryHit, k int) {
-	if len(hits) <= k*2 || k <= 0 {
-		sort.Slice(hits, func(i, j int) bool {
-			return cloudHitLess(hits[i], hits[j])
-		})
-		return
-	}
-	left, right := 0, len(hits)-1
-	target := k
-	for left < right {
-		pivotIdx := left + (right-left)/2
-		pivot := hits[pivotIdx]
-		hits[pivotIdx], hits[right] = hits[right], hits[pivotIdx]
-		store := left
-		for i := left; i < right; i++ {
-			if cloudHitLess(hits[i], pivot) {
-				hits[store], hits[i] = hits[i], hits[store]
-				store++
-			}
-		}
-		hits[store], hits[right] = hits[right], hits[store]
-		if store == target {
-			break
-		} else if store < target {
-			left = store + 1
-		} else {
-			right = store - 1
-		}
-	}
-	sort.Slice(hits[:k], func(i, j int) bool {
-		return cloudHitLess(hits[i], hits[j])
-	})
-}
-
-// fixedLog2Millibits computes log2(x) * 1024 in pure 64-bit integer arithmetic
-// with second-order rational concavity correction (log2(1+m) ≈ m + m*(1-m)/3),
-// achieving <0.001 bit resolution with zero floating-point transcendental calls.
-func fixedLog2Millibits(x uint64) int64 {
-	if x <= 1 {
-		return 0
-	}
-	var k uint
-	for tmp := x >> 1; tmp > 0; tmp >>= 1 {
-		k++
-	}
-	base := uint64(1) << k
-	frac := int64(((x - base) << 10) >> k)
-	concavity := (frac * (1024 - frac)) / 3072
-	return int64(k)*1024 + frac + concavity
 }
 
 // WarmupCorpusSnapshot eagerly populates the fingerprint-keyed in-memory corpus
@@ -2527,6 +2257,9 @@ func (v *Vault) WarmupCorpusSnapshot(ctx context.Context) error {
 	snap, err := v.buildCorpusSnapshot(ctx)
 	if err != nil {
 		return err
+	}
+	if snap != nil && len(snap.docs) > 0 {
+		_ = snap.ensureSnapshotCoreEngine(v)
 	}
 	noetics, _ := v.loadActiveNoeticRecords()
 	_, _ = v.EpisodicIndexFaultDiagnostics()
@@ -2639,179 +2372,35 @@ func (v *Vault) loadCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, e
 	return v.buildCorpusSnapshot(context.WithoutCancel(ctx))
 }
 
-// inlineDocScanRow is one freshly inserted non-@ref document row picked up by
-// the incremental inline component path.
-type inlineDocScanRow struct {
-	docID   string
-	layer   string
-	occ     int64
-	rawText string
-	addrURI string
-	coord64 uint64
-	waveBar string
-	locus   string
-}
-
-// scanInlineDocsSince returns the non-@ref document rows inserted after rowid
-// prevMax in rowid order, matching the tail position they would occupy in a
-// full inline rescan.
-func (v *Vault) scanInlineDocsSince(ctx context.Context, prevMax int64) ([]inlineDocScanRow, error) {
-	rows, err := v.db.QueryContext(ctx, `SELECT doc_id, layer, occurred_at, raw_text, address_uri, coord64, waveform_bar, COALESCE(locus, '') FROM thin_vault_docs WHERE rowid > ? AND substr(trim(raw_text), 1, 5) != '@ref:' ORDER BY rowid`, prevMax)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []inlineDocScanRow
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		var r inlineDocScanRow
-		var coord int64
-		if err := rows.Scan(&r.docID, &r.layer, &r.occ, &r.rawText, &r.addrURI, &coord, &r.waveBar, &r.locus); err != nil {
-			continue
-		}
-		if strings.HasPrefix(strings.TrimSpace(r.rawText), "@ref:") {
-			continue
-		}
-		r.coord64 = uint64(coord)
-		r.locus = strings.TrimSpace(r.locus)
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// packDocCacheEntry packs one document into its cached slot form. It must stay
-// semantically identical to the full-rescan packing in buildCorpusSnapshot so
-// incrementally appended entries are indistinguishable from cold-built ones.
+// packDocCacheEntry packs one document into its cached canonical core.Doc slot
+// form. It must stay semantically identical to the full-rescan packing in
+// buildCorpusSnapshot so incrementally appended entries are indistinguishable
+// from cold-built ones.
 func (v *Vault) packDocCacheEntry(docID, rawText string, occ int64) vaultCachedDocSlots {
-	pkt, _ := v.PackBlindPacket(docID, rawText, occ)
-	allHashes := make([]uint64, 0, len(pkt.Slots))
-	tMeta := make(map[uint64]core.Term, len(pkt.Slots)/2+4)
-	for _, ds := range pkt.Slots {
-		allHashes = append(allHashes, ds.H)
-		if ds.H == 0 {
-			continue
-		}
-		bits := ds.RawBitsX10
-		if bits == 0 {
-			bits = 32
-		}
-		role := core.RolePrimary
-		ext := core.ExtFlagSeenPrimary
-		if (ds.RawBitsX10&1) == 1 && (ds.ClassFlags&FlagHasConn) != 0 {
-			role = core.RoleMorphStem
-			ext = core.ExtFlagSeenMorphOrClos
-		}
-		if cur, ok := tMeta[ds.H]; !ok || bits > cur.Bits {
-			tMeta[ds.H] = core.Term{
-				Hash:     ds.H,
-				Bits:     bits,
-				Flags:    ds.ClassFlags,
-				Role:     role,
-				ExtFlags: ext,
-				Group:    ds.H,
-			}
-		}
-	}
-	tCounts := make(map[uint64]int, len(pkt.Slots))
+	return v.packDocCacheEntryWithExtractor(nil, docID, rawText, occ)
+}
+
+func (v *Vault) packDocCacheEntryWithExtractor(te *plain.TermExtractor, docID, rawText string, occ int64) vaultCachedDocSlots {
+	cDoc := v.extractVaultCoreDoc(te, docID, occ, rawText)
+	allHashes := make([]uint64, 0, len(cDoc.Terms))
 	docLen := 0
-	for _, ds := range pkt.Slots {
-		if ds.RawBitsX10 < 20 && len(pkt.Slots) > 2 {
-			continue
-		}
-		tCounts[ds.H]++
-		docLen++
-	}
-	sHashes := make([][]uint64, 0, len(pkt.SentenceFrames))
-	for _, sf := range pkt.SentenceFrames {
-		if len(sf) == 0 {
-			continue
-		}
-		sDedup := make(map[uint64]bool, len(sf))
-		var sh []uint64
-		for _, sa := range sf {
-			if sa.RawBitsX10 < 20 && len(sf) > 2 {
-				continue
-			}
-			if !sDedup[sa.H] {
-				sDedup[sa.H] = true
-				sh = append(sh, sa.H)
-			}
-		}
-		if len(sh) > 0 {
-			sHashes = append(sHashes, sh)
+	for h, c := range cDoc.Counts {
+		allHashes = append(allHashes, h)
+		if c > 0 {
+			docLen += c
 		}
 	}
 	if docLen < 1 {
 		docLen = 1
 	}
 	return vaultCachedDocSlots{
-		rawText:    rawText,
-		termMeta:   tMeta,
-		termCounts: tCounts,
-		sentHashes: sHashes,
-		docLen:     docLen,
-		allHashes:  allHashes,
+		rawText:       rawText,
+		termMeta:      cDoc.Terms,
+		termCounts:    cDoc.Counts,
+		termPositions: cDoc.Positions,
+		docLen:        docLen,
+		allHashes:     allHashes,
 	}
-}
-
-// buildFullPostings assembles the complete inverted index for docs in one pass:
-// ascending doc-index lists per hash, identical content to the lazy per-query
-// scan it replaces (both walk docs front-to-back). Costed once per snapshot
-// build, it converts every query's posting fill from O(N·|qTerms|)
-// map-iteration over all documents to direct lookups. Hash-sharded workers keep
-// the build off the critical path's dominant term: shards are hash-disjoint and
-// each walks docs in ascending index order, so every list stays ascending.
-func buildFullPostings(docs []vaultDocEntry, globalDF map[uint64]int) map[uint64][]int {
-	if len(docs) < 2048 {
-		postings := make(map[uint64][]int, len(globalDF))
-		for idx := range docs {
-			for h := range docs[idx].termCounts {
-				list, ok := postings[h]
-				if !ok {
-					list = make([]int, 0, globalDF[h])
-				}
-				postings[h] = append(list, idx)
-			}
-		}
-		return postings
-	}
-	const numShards = 8
-	var shards [numShards]map[uint64][]int
-	var wg sync.WaitGroup
-	for s := 0; s < numShards; s++ {
-		wg.Add(1)
-		go func(shard uint64) {
-			defer wg.Done()
-			local := make(map[uint64][]int, len(globalDF)/numShards+64)
-			for idx := range docs {
-				for h := range docs[idx].termCounts {
-					if (h & (numShards - 1)) != shard {
-						continue
-					}
-					list, ok := local[h]
-					if !ok {
-						list = make([]int, 0, globalDF[h])
-					}
-					local[h] = append(list, idx)
-				}
-			}
-			shards[shard] = local
-		}(uint64(s))
-	}
-	wg.Wait()
-	total := 0
-	for s := 0; s < numShards; s++ {
-		total += len(shards[s])
-	}
-	postings := make(map[uint64][]int, total)
-	for s := 0; s < numShards; s++ {
-		for h, list := range shards[s] {
-			postings[h] = list
-		}
-	}
-	return postings
 }
 
 func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, error) {
@@ -2931,129 +2520,36 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	}
 
 	useCache := v.slotCacheMu != nil
-	codecKeyStr := string(episodicCodecKey)
+
+	// Cold-start CSR fast path: when an on-disk .zcsr matches the exact table
+	// fingerprint (or differs by at most maxCSRDeltaDocs new/deleted units), open
+	// the zero-copy mmap engine and load only lightweight row headers without
+	// decoding hundreds of megabytes of wire/slot blobs into Go maps.
+	if csrSnap, ok := v.buildCorpusSnapshotFromCSR(
+		ctx,
+		docCnt, docRowSum, docMaxRowID, docTextLen, docsRev, bgRev, episodicRevision,
+		episodicCodecKey,
+		bgCnt, bgMaxRowID, bgOccSum, bgSlotsLen,
+		revGateOK,
+	); ok && csrSnap != nil {
+		if useCache && v.snapRef != nil {
+			v.slotCacheMu.Lock()
+			v.snapRef.snap = csrSnap
+			v.snapRef.lastSnapTime = time.Now()
+			if revGateOK {
+				v.snapRef.lastDocsRev = docsRev
+				v.snapRef.lastBgRev = bgRev
+			}
+			if v.snapRef.snapVerifiedGen < genAtStart {
+				v.snapRef.snapVerifiedGen = genAtStart
+			}
+			v.slotCacheMu.Unlock()
+		}
+		return csrSnap, nil
+	}
 
 	var inlineDocs []vaultDocEntry
-	inlineTotalLen := 0
-	inlineFromCache := false
-	// inlineGrew marks that the inline component cache was extended with freshly
-	// inserted rows this build: the episodic prevSnap shortcuts below must then be
-	// skipped, because they reuse prevSnap.docs verbatim and would miss the new
-	// inline entries. Full assembly from (incrementally updated) components keeps
-	// the cold-rebuild block order inline+bg+episodic, so results stay identical.
-	inlineGrew := false
-	if useCache && v.snapRef != nil {
-		v.slotCacheMu.RLock()
-		if v.snapRef.inlineLoaded && v.snapRef.inlineCodecKey == codecKeyStr {
-			// Same algebraic invariant as the episodic revision: docs_rev increments
-			// once per INSERT/UPDATE/DELETE row, so Δrev == Δcnt proves pure INSERTs
-			// and Δrev == 0 proves the table untouched. Length-preserving UPDATEs
-			// keep all four aggregates unchanged, so when the revision row is
-			// readable it is required, not optional.
-			inlineRevSame := !revGateOK || v.snapRef.inlineDocsRev == docsRev
-			inlineRevPureInsert := !revGateOK || (docsRev-v.snapRef.inlineDocsRev == docCnt-v.snapRef.inlineDocCnt)
-			if inlineRevSame &&
-				v.snapRef.inlineDocCnt == docCnt &&
-				v.snapRef.inlineDocRowSum == docRowSum &&
-				v.snapRef.inlineMaxRowID == docMaxRowID &&
-				v.snapRef.inlineDocTextLen == docTextLen {
-				inlineDocs = v.snapRef.inlineDocs
-				inlineTotalLen = v.snapRef.inlineTotalLen
-				inlineFromCache = true
-			} else if inlineRevPureInsert &&
-				docCnt > v.snapRef.inlineDocCnt &&
-				docMaxRowID > v.snapRef.inlineMaxRowID &&
-				(docCnt-v.snapRef.inlineDocCnt) == (docMaxRowID-v.snapRef.inlineMaxRowID) {
-				prevMax := v.snapRef.inlineMaxRowID
-				baseInline := v.snapRef.inlineDocs
-				baseInlineLen := v.snapRef.inlineTotalLen
-				v.slotCacheMu.RUnlock()
-				// Pure INSERTs since prevMax (Δcnt == ΔmaxRowID rules out UPDATE and
-				// DELETE on rowid tables). Load only the new non-@ref rows; rowid scan
-				// order puts them exactly where a cold rebuild would (inline block tail).
-				newRows, scanErr := v.scanInlineDocsSince(ctx, prevMax)
-				if scanErr == nil {
-					if len(newRows) == 0 {
-						inlineDocs = baseInline
-						inlineTotalLen = baseInlineLen
-						inlineFromCache = true
-						v.slotCacheMu.Lock()
-						v.snapRef.inlineDocCnt = docCnt
-						v.snapRef.inlineDocRowSum = docRowSum
-						v.snapRef.inlineMaxRowID = docMaxRowID
-						v.snapRef.inlineDocTextLen = docTextLen
-						if revGateOK {
-							v.snapRef.inlineDocsRev = docsRev
-						}
-						v.slotCacheMu.Unlock()
-					} else {
-						// The aggregate fingerprint is read before the full row scan. A concurrent
-						// INSERT can therefore leave baseInline newer than prevMax; treat the delta
-						// as a set union so the next incremental build cannot append that row again.
-						baseDocIDs := make(map[string]struct{}, len(baseInline))
-						for _, doc := range baseInline {
-							baseDocIDs[doc.docID] = struct{}{}
-						}
-						appended := make([]vaultDocEntry, 0, len(newRows))
-						addedLen := 0
-						for _, r := range newRows {
-							if _, exists := baseDocIDs[r.docID]; exists {
-								continue
-							}
-							baseDocIDs[r.docID] = struct{}{}
-							entry := v.packDocCacheEntry(r.docID, r.rawText, r.occ)
-							appended = append(appended, vaultDocEntry{
-								docID:      r.docID,
-								layer:      r.layer,
-								occ:        r.occ,
-								addrURI:    r.addrURI,
-								coord64:    r.coord64,
-								waveBar:    r.waveBar,
-								locus:      r.locus,
-								termMeta:   entry.termMeta,
-								termCounts: entry.termCounts,
-								sentHashes: entry.sentHashes,
-								allHashes:  entry.allHashes,
-								docLen:     entry.docLen,
-							})
-							addedLen += entry.docLen
-							v.slotCacheMu.Lock()
-							if v.slotCache == nil {
-								v.slotCache = make(map[string]vaultCachedDocSlots, 256)
-							}
-							v.slotCache[r.docID] = entry
-							v.slotCacheMu.Unlock()
-						}
-						// Copy-on-write: the published slice may be referenced by a live
-						// snapshot's assembly, so never append into its backing array.
-						merged := make([]vaultDocEntry, 0, len(baseInline)+len(appended))
-						merged = append(merged, baseInline...)
-						merged = append(merged, appended...)
-						inlineDocs = merged
-						inlineTotalLen = baseInlineLen + addedLen
-						inlineFromCache = true
-						inlineGrew = len(appended) > 0
-						v.slotCacheMu.Lock()
-						v.snapRef.inlineDocCnt = docCnt
-						v.snapRef.inlineDocRowSum = docRowSum
-						v.snapRef.inlineMaxRowID = docMaxRowID
-						v.snapRef.inlineDocTextLen = docTextLen
-						v.snapRef.inlineTotalLen = inlineTotalLen
-						v.snapRef.inlineDocs = merged
-						if revGateOK {
-							v.snapRef.inlineDocsRev = docsRev
-						}
-						v.slotCacheMu.Unlock()
-					}
-				}
-				goto afterInlineCacheCheck
-			}
-		}
-		v.slotCacheMu.RUnlock()
-	}
-afterInlineCacheCheck:
-
-	if !inlineFromCache {
+	{
 		rows, err := v.db.QueryContext(ctx, `SELECT doc_id, layer, occurred_at, raw_text, address_uri, coord64, waveform_bar, COALESCE(locus, '') FROM thin_vault_docs WHERE substr(trim(raw_text), 1, 5) != '@ref:'`)
 		if err != nil {
 			return nil, err
@@ -3114,8 +2610,6 @@ afterInlineCacheCheck:
 		}
 		rows.Close()
 
-		packOneDoc := v.packDocCacheEntry
-
 		if unpackedCount >= 64 {
 			workers := runtime.NumCPU()
 			if workers < 2 {
@@ -3138,18 +2632,20 @@ afterInlineCacheCheck:
 				wg.Add(1)
 				go func(s, e int) {
 					defer wg.Done()
+					localTe := v.newVaultTermExtractor()
 					for idx := s; idx < e; idx++ {
 						if !rawRows[idx].cached {
-							rawRows[idx].entry = packOneDoc(rawRows[idx].docID, rawRows[idx].rawText, rawRows[idx].occ)
+							rawRows[idx].entry = v.packDocCacheEntryWithExtractor(localTe, rawRows[idx].docID, rawRows[idx].rawText, rawRows[idx].occ)
 						}
 					}
 				}(start, end)
 			}
 			wg.Wait()
 		} else {
+			localTe := v.newVaultTermExtractor()
 			for idx := range rawRows {
 				if !rawRows[idx].cached {
-					rawRows[idx].entry = packOneDoc(rawRows[idx].docID, rawRows[idx].rawText, rawRows[idx].occ)
+					rawRows[idx].entry = v.packDocCacheEntryWithExtractor(localTe, rawRows[idx].docID, rawRows[idx].rawText, rawRows[idx].occ)
 				}
 			}
 		}
@@ -3170,63 +2666,28 @@ afterInlineCacheCheck:
 		inlineDocs = make([]vaultDocEntry, 0, len(rawRows))
 		for idx := range rawRows {
 			r := &rawRows[idx]
-			inlineTotalLen += r.entry.docLen
 			inlineDocs = append(inlineDocs, vaultDocEntry{
-				docID:      r.docID,
-				layer:      r.layer,
-				occ:        r.occ,
-				addrURI:    r.addrURI,
-				coord64:    r.coord64,
-				waveBar:    r.waveBar,
-				locus:      r.locus,
-				termMeta:   r.entry.termMeta,
-				termCounts: r.entry.termCounts,
-				sentHashes: r.entry.sentHashes,
-				allHashes:  r.entry.allHashes,
-				docLen:     r.entry.docLen,
+				docID:         r.docID,
+				layer:         r.layer,
+				occ:           r.occ,
+				addrURI:       r.addrURI,
+				coord64:       r.coord64,
+				waveBar:       r.waveBar,
+				locus:         r.locus,
+				termMeta:      r.entry.termMeta,
+				termCounts:    r.entry.termCounts,
+				termPositions: r.entry.termPositions,
+				allHashes:     r.entry.allHashes,
+				docLen:        r.entry.docLen,
 			})
-		}
-		if useCache && v.snapRef != nil {
-			v.slotCacheMu.Lock()
-			v.snapRef.inlineLoaded = true
-			v.snapRef.inlineDocCnt = docCnt
-			v.snapRef.inlineDocRowSum = docRowSum
-			v.snapRef.inlineMaxRowID = docMaxRowID
-			v.snapRef.inlineDocTextLen = docTextLen
-			v.snapRef.inlineCodecKey = codecKeyStr
-			v.snapRef.inlineTotalLen = inlineTotalLen
-			v.snapRef.inlineDocs = inlineDocs
-			if revGateOK {
-				v.snapRef.inlineDocsRev = docsRev
-			}
-			v.slotCacheMu.Unlock()
 		}
 	}
 
 	inlineCount := len(inlineDocs)
 
 	var bgDocs []vaultDocEntry
-	var bgBaseDF map[uint64]int
-	bgTotalLen := 0
-	bgFromCache := false
-	if useCache && v.snapRef != nil {
-		v.slotCacheMu.RLock()
-		bgRevSame := !revGateOK || !v.snapRef.bgRevReliable || v.snapRef.bgCachedRev == bgRev
-		if v.snapRef.bgLoaded && bgRevSame &&
-			v.snapRef.bgCachedCnt == bgCnt &&
-			v.snapRef.bgCachedMaxRowID == bgMaxRowID &&
-			v.snapRef.bgCachedOccSum == bgOccSum &&
-			v.snapRef.bgCachedSlotsLen == bgSlotsLen {
-			bgDocs = v.snapRef.bgDocs
-			bgBaseDF = v.snapRef.bgBaseDF
-			bgTotalLen = v.snapRef.bgTotalLen
-			bgFromCache = true
-		}
-		v.slotCacheMu.RUnlock()
-	}
-
-	if !bgFromCache {
-		bgRows, bgErr := v.db.QueryContext(ctx, `SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, slots_json FROM thin_vault_bg_chunks`)
+	{
+		bgRows, bgErr := v.db.QueryContext(ctx, `SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, COALESCE(rel_path, ''), COALESCE(abs_path, ''), COALESCE(anchor, ''), slots_json FROM thin_vault_bg_chunks`)
 		if bgErr == nil {
 			type rawBgRow struct {
 				unitID   string
@@ -3234,6 +2695,9 @@ afterInlineCacheCheck:
 				addrURI  string
 				coord64  uint64
 				waveBar  string
+				relPath  string
+				absPath  string
+				anchor   string
 				slotsRaw []byte
 				ok       bool
 				entry    vaultDocEntry
@@ -3242,7 +2706,7 @@ afterInlineCacheCheck:
 			for bgRows.Next() {
 				var r rawBgRow
 				var coord64 int64
-				if err := bgRows.Scan(&r.unitID, &r.occ, &r.addrURI, &coord64, &r.waveBar, &r.slotsRaw); err != nil {
+				if err := bgRows.Scan(&r.unitID, &r.occ, &r.addrURI, &coord64, &r.waveBar, &r.relPath, &r.absPath, &r.anchor, &r.slotsRaw); err != nil {
 					continue
 				}
 				r.coord64 = uint64(coord64)
@@ -3251,19 +2715,39 @@ afterInlineCacheCheck:
 			bgRows.Close()
 
 			decodeBgOne := func(r *rawBgRow) {
-				tCounts, dLen, ok := decodeAtomSlotTermCounts(r.slotsRaw)
+				tMeta, tCounts, tPos, dLen, ok := decodeAtomSlotCoreTerms(r.slotsRaw)
 				if !ok {
 					return
 				}
+				fileKey := strings.TrimSpace(r.relPath)
+				if fileKey == "" {
+					fileKey = strings.TrimSpace(r.absPath)
+				}
+				var docH, blockH uint64
+				if fileKey != "" {
+					docH = v.KeyedHash64(fileKey)
+				}
+				if anc := strings.TrimSpace(r.anchor); anc != "" && fileKey != "" {
+					blockH = v.KeyedHash64(fileKey + "#" + anc)
+				} else if r.unitID != "" {
+					blockH = v.KeyedHash64(r.unitID)
+				}
+				lStart, lEnd := parseBackgroundAnchorLines(r.anchor)
 				r.entry = vaultDocEntry{
-					docID:      r.unitID,
-					layer:      LayerBackground,
-					occ:        r.occ,
-					addrURI:    r.addrURI,
-					coord64:    r.coord64,
-					waveBar:    r.waveBar,
-					termCounts: tCounts,
-					docLen:     dLen,
+					docID:         r.unitID,
+					layer:         LayerBackground,
+					occ:           r.occ,
+					addrURI:       r.addrURI,
+					coord64:       r.coord64,
+					waveBar:       r.waveBar,
+					docHash:       docH,
+					blockHash:     blockH,
+					lineStart:     lStart,
+					lineEnd:       lEnd,
+					termMeta:      tMeta,
+					termCounts:    tCounts,
+					termPositions: tPos,
+					docLen:        dLen,
 				}
 				r.slotsRaw = nil
 				r.ok = true
@@ -3306,73 +2790,15 @@ afterInlineCacheCheck:
 			bgDocs = make([]vaultDocEntry, 0, len(rawBg))
 			for idx := range rawBg {
 				if rawBg[idx].ok {
-					bgTotalLen += rawBg[idx].entry.docLen
 					bgDocs = append(bgDocs, rawBg[idx].entry)
 				}
-			}
-			if len(bgDocs) >= 512 {
-				const numShards = 16
-				type shardMap struct {
-					m map[uint64]int
-				}
-				var shards [numShards]shardMap
-				var wgBG sync.WaitGroup
-				wgBG.Add(numShards)
-				for s := 0; s < numShards; s++ {
-					go func(shard uint64) {
-						defer wgBG.Done()
-						localM := make(map[uint64]int, len(bgDocs)/4+64)
-						for i := range bgDocs {
-							for h := range bgDocs[i].termCounts {
-								if (h & (numShards - 1)) == shard {
-									localM[h]++
-								}
-							}
-						}
-						shards[shard].m = localM
-					}(uint64(s))
-				}
-				wgBG.Wait()
-				totalUnique := 0
-				for s := 0; s < numShards; s++ {
-					totalUnique += len(shards[s].m)
-				}
-				bgBaseDF = make(map[uint64]int, totalUnique+1024)
-				for s := 0; s < numShards; s++ {
-					for h, c := range shards[s].m {
-						bgBaseDF[h] = c
-					}
-				}
-			} else {
-				bgBaseDF = make(map[uint64]int, len(bgDocs)*4)
-				for i := range bgDocs {
-					for h := range bgDocs[i].termCounts {
-						bgBaseDF[h]++
-					}
-				}
-			}
-			if useCache && v.snapRef != nil {
-				v.slotCacheMu.Lock()
-				v.snapRef.bgLoaded = true
-				v.snapRef.bgCachedCnt = bgCnt
-				v.snapRef.bgCachedMaxRowID = bgMaxRowID
-				v.snapRef.bgCachedOccSum = bgOccSum
-				v.snapRef.bgCachedSlotsLen = bgSlotsLen
-				v.snapRef.bgTotalLen = bgTotalLen
-				v.snapRef.bgDocs = bgDocs
-				v.snapRef.bgBaseDF = bgBaseDF
-				if revGateOK {
-					v.snapRef.bgCachedRev = bgRev
-				}
-				v.slotCacheMu.Unlock()
 			}
 		}
 	}
 
+	var epiCnt, epiMaxRowID int64
 	var episodicDocs []vaultDocEntry
-	epiTotalLen := 0
 	if len(episodicCodecKey) > 0 {
-		var epiCnt, epiMaxRowID int64
 		// Whole-table fingerprint (no codec_key filter): the snapshot population is
 		// the multi-generation union, and every index trigger bumps episodic_revision
 		// regardless of generation. A per-generation count would desynchronize the
@@ -3383,251 +2809,12 @@ afterInlineCacheCheck:
 			`SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM thin_vault_episodic_index`,
 		).Scan(&epiCnt, &epiMaxRowID)
 
-		if useCache && v.snapRef != nil && inlineFromCache && !inlineGrew && bgFromCache {
-			v.slotCacheMu.RLock()
-			prevSnap := v.snapRef.snap
-			// Algebraic append-only invariant: since INSERT, UPDATE and DELETE triggers each
-			// increment `episodic_revision` by 1 per row, Δrev - Δcnt = U + 2D + O >= 0, which
-			// equals 0 if and only if U == 0, D == 0 and O == 0 (pure INSERTs into this codec_key).
-			if prevSnap != nil &&
-				v.snapRef.epiLoaded &&
-				v.snapRef.epiCodecKey == codecKeyStr &&
-				prevSnap.bgCnt == bgCnt &&
-				prevSnap.bgMaxRowID == bgMaxRowID &&
-				prevSnap.bgOccSum == bgOccSum &&
-				prevSnap.bgSlotsLen == bgSlotsLen &&
-				epiCnt >= v.snapRef.epiLastCnt &&
-				epiMaxRowID >= v.snapRef.epiLastMaxRowID &&
-				(episodicRevision-v.snapRef.epiLastRev) == (epiCnt-v.snapRef.epiLastCnt) {
-				if epiCnt == v.snapRef.epiLastCnt && epiMaxRowID == v.snapRef.epiLastMaxRowID {
-					v.slotCacheMu.RUnlock()
-					// A complete inverted index is immutable after publication
-					// (queryPostings only reads it), so the unchanged-docs refresh
-					// can share it; an incomplete lazy map must not be shared
-					// across two snapshots with distinct mutexes.
-					sharedPostings := map[uint64][]int{}
-					sharedComplete := false
-					if prevSnap.postingsComplete {
-						sharedPostings = prevSnap.postings
-						sharedComplete = true
-					}
-					nextSnap := &vaultCorpusSnapshot{
-						docCnt:           docCnt,
-						docRowSum:        docRowSum,
-						maxRowID:         docMaxRowID,
-						docTextLen:       docTextLen,
-						episodicRevision: prevSnap.episodicRevision,
-						episodicCodecKey: prevSnap.episodicCodecKey,
-						bgCnt:            prevSnap.bgCnt,
-						bgMaxRowID:       prevSnap.bgMaxRowID,
-						bgOccSum:         prevSnap.bgOccSum,
-						bgSlotsLen:       prevSnap.bgSlotsLen,
-						inlineCount:      prevSnap.inlineCount,
-						totalDocLen:      prevSnap.totalDocLen,
-						docs:             prevSnap.docs,
-						episodicDocs:     prevSnap.episodicDocs,
-						validEpisodicIDs: prevSnap.validEpisodicIDs,
-						docIdxByID:       prevSnap.docIdxByID,
-						ftsRowIDToDocID:  prevSnap.ftsRowIDToDocID,
-						globalDF:         prevSnap.globalDF,
-						postings:         sharedPostings,
-						postingsComplete: sharedComplete,
-					}
-					v.slotCacheMu.Lock()
-					if v.snapRef.snap == prevSnap {
-						v.snapRef.snap = nextSnap
-						v.snapRef.lastSnapTime = time.Now()
-						if revGateOK {
-							v.snapRef.lastDocsRev = docsRev
-							v.snapRef.lastBgRev = bgRev
-						}
-						if v.snapRef.snapVerifiedGen < genAtStart {
-							v.snapRef.snapVerifiedGen = genAtStart
-						}
-					}
-					v.slotCacheMu.Unlock()
-					return nextSnap, nil
-				}
-				lastMaxRow := v.snapRef.epiLastMaxRowID
-				v.slotCacheMu.RUnlock()
-				deltaDocs, newMaxRow, dErr := v.indexedEpisodicDocsSince(ctx, lastMaxRow)
-				if dErr == nil {
-					v.slotCacheMu.Lock()
-					if v.snapRef.snap == prevSnap {
-						// Union-read snapshots already contain documents loaded from
-						// historical codec generations; a later heal may re-index one
-						// of them under the current key and surface it here as a
-						// delta. Drop deltas whose document is already in the
-						// snapshot so postings/DF never double-count a unit.
-						filtered := deltaDocs[:0]
-						for _, dd := range deltaDocs {
-							if _, exists := prevSnap.docIdxByID[dd.docID]; exists {
-								continue
-							}
-							filtered = append(filtered, dd)
-						}
-						deltaDocs = filtered
-						// Copy-on-write snapshot publication: a published *vaultCorpusSnapshot is
-						// read lock-free by concurrent recall/hydration goroutines, so its maps and
-						// slices must never be mutated in place after publication.
-						prevSnap.postingsMu.Lock()
-						baseDocLen := len(prevSnap.docs)
-						newDocs := make([]vaultDocEntry, baseDocLen+len(deltaDocs))
-						copy(newDocs, prevSnap.docs)
-						copy(newDocs[baseDocLen:], deltaDocs)
-
-						newEpiDocs := make([]vaultDocEntry, len(prevSnap.episodicDocs)+len(deltaDocs))
-						copy(newEpiDocs, prevSnap.episodicDocs)
-						copy(newEpiDocs[len(prevSnap.episodicDocs):], deltaDocs)
-
-						newValidEpi := make(map[string]struct{}, len(prevSnap.validEpisodicIDs)+len(deltaDocs))
-						for k, val := range prevSnap.validEpisodicIDs {
-							newValidEpi[k] = val
-						}
-						newDocIdxByID := make(map[string]int, len(prevSnap.docIdxByID)+len(deltaDocs))
-						for k, val := range prevSnap.docIdxByID {
-							newDocIdxByID[k] = val
-						}
-						newGlobalDF := make(map[uint64]int, len(prevSnap.globalDF)+len(deltaDocs)*4)
-						for k, val := range prevSnap.globalDF {
-							newGlobalDF[k] = val
-						}
-						newPostings := make(map[uint64][]int, len(prevSnap.postings))
-						for k, list := range prevSnap.postings {
-							// Clip capacity so appending to newPostings[h] never mutates prevSnap's backing array.
-							newPostings[k] = list[:len(list):len(list)]
-						}
-						var newEffDF map[uint64]int
-						if len(prevSnap.effDF) > 0 {
-							newEffDF = make(map[uint64]int, len(prevSnap.effDF))
-							for k, val := range prevSnap.effDF {
-								newEffDF[k] = val
-							}
-						}
-
-						addedLen := 0
-						for i, dd := range deltaDocs {
-							newDocIdx := baseDocLen + i
-							addedLen += dd.docLen
-							newValidEpi[dd.docID] = struct{}{}
-							newDocIdxByID[dd.docID] = newDocIdx
-							for h := range dd.termCounts {
-								newGlobalDF[h]++
-								if list, ok := newPostings[h]; ok {
-									newPostings[h] = append(list, newDocIdx)
-								} else if prevSnap.postingsComplete {
-									// Complete-index semantics: absence means df was 0,
-									// so a first occurrence must create the list or the
-									// term would stay invisible to direct lookups.
-									newPostings[h] = []int{newDocIdx}
-								}
-								delete(newEffDF, h)
-							}
-						}
-						nextSnap := &vaultCorpusSnapshot{
-							docCnt:           docCnt,
-							docRowSum:        docRowSum,
-							maxRowID:         docMaxRowID,
-							docTextLen:       docTextLen,
-							episodicRevision: episodicRevision,
-							episodicCodecKey: prevSnap.episodicCodecKey,
-							bgCnt:            prevSnap.bgCnt,
-							bgMaxRowID:       prevSnap.bgMaxRowID,
-							bgOccSum:         prevSnap.bgOccSum,
-							bgSlotsLen:       prevSnap.bgSlotsLen,
-							inlineCount:      prevSnap.inlineCount,
-							totalDocLen:      prevSnap.totalDocLen + addedLen,
-							docs:             newDocs,
-							episodicDocs:     newEpiDocs,
-							validEpisodicIDs: newValidEpi,
-							docIdxByID:       newDocIdxByID,
-							ftsRowIDToDocID:  prevSnap.ftsRowIDToDocID,
-							globalDF:         newGlobalDF,
-							postings:         newPostings,
-							postingsComplete: prevSnap.postingsComplete,
-							effDF:            newEffDF,
-						}
-						prevSnap.postingsMu.Unlock()
-						if newMaxRow < epiMaxRowID {
-							newMaxRow = epiMaxRowID
-						}
-						v.snapRef.snap = nextSnap
-						v.snapRef.epiLastRev = episodicRevision
-						v.snapRef.epiLastCnt = epiCnt
-						v.snapRef.epiLastMaxRowID = newMaxRow
-						v.snapRef.epiDocCnt = docCnt
-						v.snapRef.epiDocMaxRowID = docMaxRowID
-						v.snapRef.epiTotalLen += addedLen
-						v.snapRef.epiDocs = newEpiDocs
-						v.snapRef.lastSnapTime = time.Now()
-						if revGateOK {
-							v.snapRef.lastDocsRev = docsRev
-							v.snapRef.lastBgRev = bgRev
-						}
-						if v.snapRef.snapVerifiedGen < genAtStart {
-							v.snapRef.snapVerifiedGen = genAtStart
-						}
-						v.slotCacheMu.Unlock()
-						return nextSnap, nil
-					}
-					v.slotCacheMu.Unlock()
-				}
-			} else {
-				v.slotCacheMu.RUnlock()
-			}
-		}
-
-		var maxSeenRow int64
-		var err error
-		// Component-level episodic reuse (mirrors the bg component cache): when the
-		// index table fingerprint is bitwise unchanged (count, max rowid, trigger
-		// revision, codec key), the cached component rows are exact and the full
-		// reload (MAC verification + wire decode over every generation) is skipped.
-		// This is the inline-write path: inlineGrew forces full assembly below, but
-		// assembly only needs the rows, not a reload.
-		epiComponentReused := false
-		if useCache && v.snapRef != nil {
-			v.slotCacheMu.RLock()
-			if v.snapRef.epiLoaded &&
-				v.snapRef.epiCodecKey == codecKeyStr &&
-				v.snapRef.epiLastCnt == epiCnt &&
-				v.snapRef.epiLastMaxRowID >= epiMaxRowID &&
-				v.snapRef.epiLastRev == episodicRevision {
-				episodicDocs = v.snapRef.epiDocs
-				epiTotalLen = v.snapRef.epiTotalLen
-				maxSeenRow = v.snapRef.epiLastMaxRowID
-				epiComponentReused = true
-			}
-			v.slotCacheMu.RUnlock()
-		}
-		if !epiComponentReused {
-			episodicDocs, maxSeenRow, err = v.indexedEpisodicDocsSince(ctx, 0)
-			if err != nil {
-				return nil, err
-			}
-			for _, doc := range episodicDocs {
-				epiTotalLen += doc.docLen
-			}
-		}
-		if maxSeenRow < epiMaxRowID {
-			maxSeenRow = epiMaxRowID
-		}
-		if useCache && v.snapRef != nil {
-			v.slotCacheMu.Lock()
-			v.snapRef.epiLoaded = true
-			v.snapRef.epiCodecKey = codecKeyStr
-			v.snapRef.epiLastRev = episodicRevision
-			v.snapRef.epiLastCnt = epiCnt
-			v.snapRef.epiLastMaxRowID = maxSeenRow
-			v.snapRef.epiDocCnt = docCnt
-			v.snapRef.epiDocMaxRowID = docMaxRowID
-			v.snapRef.epiTotalLen = epiTotalLen
-			v.snapRef.epiDocs = episodicDocs
-			v.slotCacheMu.Unlock()
+		episodicDocs, _, err = v.indexedEpisodicDocsSince(ctx, 0)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	totalDocLen := inlineTotalLen + bgTotalLen + epiTotalLen
 	docs := make([]vaultDocEntry, 0, inlineCount+len(bgDocs)+len(episodicDocs))
 	docs = append(docs, inlineDocs...)
 	docs = append(docs, bgDocs...)
@@ -3641,36 +2828,14 @@ afterInlineCacheCheck:
 	for idx, d := range docs {
 		docIdxByID[d.docID] = idx
 	}
-	globalDF := make(map[uint64]int, len(bgBaseDF)+(inlineCount+len(episodicDocs))*4)
-	for h, c := range bgBaseDF {
-		globalDF[h] = c
-	}
-	for idx := 0; idx < inlineCount; idx++ {
-		for h := range inlineDocs[idx].termCounts {
-			globalDF[h]++
-		}
-	}
-	for idx := range episodicDocs {
-		for h := range episodicDocs[idx].termCounts {
-			globalDF[h]++
-		}
-	}
-	ftsRowIDToDocID := make(map[int64]string, len(docs))
-	if mRows, mErr := v.db.QueryContext(ctx, `SELECT rowid, doc_id FROM thin_vault_fts_map`); mErr == nil {
-		for mRows.Next() {
-			var rid int64
-			var did string
-			if mRows.Scan(&rid, &did) == nil && did != "" {
-				ftsRowIDToDocID[rid] = did
-			}
-		}
-		mRows.Close()
-	}
 	snap := &vaultCorpusSnapshot{
 		docCnt:           docCnt,
 		docRowSum:        docRowSum,
 		maxRowID:         docMaxRowID,
 		docTextLen:       docTextLen,
+		docsRev:          docsRev,
+		bgRev:            bgRev,
+		epiCnt:           epiCnt,
 		episodicRevision: episodicRevision,
 		episodicCodecKey: string(episodicCodecKey),
 		bgCnt:            bgCnt,
@@ -3678,15 +2843,10 @@ afterInlineCacheCheck:
 		bgOccSum:         bgOccSum,
 		bgSlotsLen:       bgSlotsLen,
 		inlineCount:      inlineCount,
-		totalDocLen:      totalDocLen,
 		docs:             docs,
 		episodicDocs:     episodicDocs,
 		validEpisodicIDs: validEpisodicIDs,
 		docIdxByID:       docIdxByID,
-		ftsRowIDToDocID:  ftsRowIDToDocID,
-		globalDF:         globalDF,
-		postings:         buildFullPostings(docs, globalDF),
-		postingsComplete: true,
 	}
 	if useCache && v.snapRef != nil {
 		v.slotCacheMu.Lock()
@@ -3866,629 +3026,56 @@ func localQueryClockHeaderExclusiveHashes(pkt BlindPulsePacket) map[uint64]bool 
 	return dayExcl
 }
 
-// SearchClientSDKDefault implements the built-in Client SDK Default Recall capability on the local SQLite Vault:
-//  1. SQLite FTS5 trigram candidate pre-filtering (`thin_vault_docs_fts MATCH ?`) when available;
-//  2. Surface & keyed-hash token commitment extraction (`SplitWords` + `packSentenceAtoms`);
-//  3. Fixed-point Shannon self-information (Surprisal) + Okapi BM25 TF/length normalization + pairwise Shannon synergy;
-//  4. Sentence-window Shannon wave-packet focus & same-day session continuity pairing.
-//
-// Zero floating-point transcendental math (`math.*`) is used.
-func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]CloudQueryHit, error) {
+// SearchClientSDKDefault executes the canonical RB 4-step dual-cluster engine
+// (`internal/core` + `sdk/go/pulse/plain`) over the Vault's full in-memory
+// corpus snapshot and merges matched Layer-3 Noetic retrieval handles.
+func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, error) {
 	if v == nil || v.db == nil {
 		return nil, nil
 	}
 	if topK <= 0 {
 		topK = 10
 	}
-	qPkt, _ := v.PackBlindPacket("Q-DEFAULT", queryText, 0)
-	if len(qPkt.Slots) == 0 {
+	if strings.TrimSpace(queryText) == "" {
 		return nil, nil
 	}
-	clockExcl := localQueryClockHeaderExclusiveHashes(qPkt)
-	// Identify tokens whose uppercase flag appears in a genuine mid-sentence position
-	// (after the first non-clock primary token of a sentence frame), distinguishing true
-	// proper nouns from sentence-initial grammatical capitalization ("Today is ... . What/In/During ...").
-	midSentUpper := make(map[uint64]bool, len(qPkt.Slots))
-	for _, sf := range qPkt.SentenceFrames {
-		seenFirstPrimary := false
-		var prevPrimary BlindTokenAtom
-		for _, tok := range sf {
-			if clockExcl[tok.H] {
-				continue
-			}
-			if (tok.ClassFlags&(FlagHasDigit|FlagHasConn)) == (FlagHasDigit|FlagHasConn) &&
-				(tok.RawBitsX10 == plain.CalendarBeaconWidthX10 || tok.RawBitsX10 == 284) {
-				continue
-			}
-			isHarm := prevPrimary.H != 0 && (tok.RawBitsX10&1) == 1 && (tok.ClassFlags&FlagHasConn) != 0 &&
-				(tok.ClassFlags&FlagHasDigit) == 0 && prevPrimary.RawBitsX10 >= tok.RawBitsX10 &&
-				(prevPrimary.RawBitsX10-tok.RawBitsX10 == 1 || prevPrimary.RawBitsX10-tok.RawBitsX10 == 3)
-			if isHarm {
-				if seenFirstPrimary && (tok.ClassFlags&FlagHasUpper) != 0 {
-					midSentUpper[tok.H] = true
-				}
-				continue
-			}
-			prevPrimary = tok
-			if !seenFirstPrimary {
-				seenFirstPrimary = true
-				continue
-			}
-			if (tok.ClassFlags & FlagHasUpper) != 0 {
-				midSentUpper[tok.H] = true
-			}
-		}
-	}
-	type queryVariant struct {
-		h           uint64
-		scalePerm   int64 // 1000 = primary exact match, 800 = 1st harmonic (stem), 550 = 2nd harmonic (morph root)
-		shannonGain int64
-		jSurp       int64
-		wSurp       int64
-		isSal       bool
-	}
-	type queryTermGroup struct {
-		primaryH uint64
-		width    uint16
-		flags    uint8
-		variants []queryVariant
-	}
-	var qGroups []queryTermGroup
-	groupIdxByPrimaryH := make(map[uint64]int, len(qPkt.Slots))
-	qHashes := make(map[uint64]uint16, len(qPkt.Slots))
-	qFlags := make(map[uint64]uint8, len(qPkt.Slots))
-
-	for i := 0; i < len(qPkt.Slots); i++ {
-		s := qPkt.Slots[i]
-		if clockExcl[s.H] {
-			s.RawBitsX10 = 18
-			s.ClassFlags &^= FlagHasDigit | FlagHasUpper | FlagHasCamel
-		}
-		if s.RawBitsX10 > qHashes[s.H] {
-			qHashes[s.H] = s.RawBitsX10
-		}
-		qFlags[s.H] |= s.ClassFlags
-
-		// Companion harmonic slot emitted by SetCanonicalHarmonics has odd width (evenW-1 or evenW-3) and FlagHasConn
-		isCompanion := len(qGroups) > 0 && (s.RawBitsX10&1) == 1 && (s.ClassFlags&FlagHasConn) != 0 && (s.ClassFlags&FlagHasDigit) == 0
-		if isCompanion {
-			lastG := &qGroups[len(qGroups)-1]
-			if lastG.width >= s.RawBitsX10 && (lastG.width-s.RawBitsX10 == 1 || lastG.width-s.RawBitsX10 == 3) {
-				scale := int64(820)
-				if lastG.width-s.RawBitsX10 == 3 {
-					scale = 580
-				}
-				alreadyInGroup := false
-				for _, v := range lastG.variants {
-					if v.h == s.H {
-						alreadyInGroup = true
-						break
-					}
-				}
-				if !alreadyInGroup {
-					lastG.variants = append(lastG.variants, queryVariant{h: s.H, scalePerm: scale})
-				}
-				continue
-			}
-		}
-		if gIdx, exists := groupIdxByPrimaryH[s.H]; exists {
-			if s.RawBitsX10 > qGroups[gIdx].width {
-				qGroups[gIdx].width = s.RawBitsX10
-			}
-			qGroups[gIdx].flags |= s.ClassFlags
-			continue
-		}
-		groupIdxByPrimaryH[s.H] = len(qGroups)
-		qGroups = append(qGroups, queryTermGroup{
-			primaryH: s.H,
-			width:    s.RawBitsX10,
-			flags:    s.ClassFlags,
-			variants: []queryVariant{{h: s.H, scalePerm: 1000}},
-		})
-	}
-
-	// NOTE: the local SQLite FTS5 trigram ranker is fused with the blind-slot ranking at the
-	// end of this function via reciprocal rank fusion. It is intentionally NOT added here as
-	// a raw score addend: its milli-magnitude (~1e2) is six orders of magnitude smaller than
-	// the Shannon/BM25 slot score (~1e8), which would make the term behaviourally dead.
-
 	snap, err := v.loadCorpusSnapshot(context.Background())
 	if err != nil || snap == nil {
 		return nil, err
 	}
-
 	docs := snap.docs
 	docIdxMap := snap.docIdxByID
-	df := snap.globalDF
-	totalDocs := len(docs)
-	if totalDocs == 0 {
-		return nil, nil
-	}
-	avgDL := snap.totalDocLen / totalDocs
-	if avgDL < 8 {
-		avgDL = 8
-	}
-
-	// Fixed-point Shannon self-information (Surprisal) in millibits: I(h) = log2((N+4)/(effDF+1)) * 1024
-	// Uses SubmodularCloneFoldedDF to fold near-clone postings logarithmically.
-	qPostings := snap.queryPostings(qHashes)
-	log2Total := fixedLog2Millibits(uint64(totalDocs + 4))
-	occAt := func(docIdx int) int64 { return docs[docIdx].occ }
-	termsAt := func(docIdx int) map[uint64]int { return docs[docIdx].termCounts }
-	qSurprisal := make(map[uint64]int64, len(qHashes))
-	qEffDF := make(map[uint64]int, len(qHashes))
-	if len(qHashes) >= 4 && totalDocs >= 2048 {
-		hList := make([]uint64, 0, len(qHashes))
-		for h := range qHashes {
-			hList = append(hList, h)
-		}
-		effVals := make([]int, len(hList))
-		var wg sync.WaitGroup
-		workers := 4
-		if len(hList) < workers {
-			workers = len(hList)
-		}
-		step := (len(hList) + workers - 1) / workers
-		for w := 0; w < workers; w++ {
-			st := w * step
-			if st >= len(hList) {
-				break
-			}
-			en := st + step
-			if en > len(hList) {
-				en = len(hList)
-			}
-			wg.Add(1)
-			go func(s, e int) {
-				defer wg.Done()
-				for idx := s; idx < e; idx++ {
-					h := hList[idx]
-					effVals[idx] = snap.queryEffDF(h, qPostings[h], totalDocs, occAt, termsAt)
-				}
-			}(st, en)
-		}
-		wg.Wait()
-		for idx, h := range hList {
-			effDF := effVals[idx]
-			qEffDF[h] = effDF
-			surp := log2Total - fixedLog2Millibits(uint64(effDF+1))
-			if surp < 512 {
-				surp = 512
-			}
-			qSurprisal[h] = surp
-		}
-	} else {
-		for h := range qHashes {
-			posting := qPostings[h]
-			effDF := snap.queryEffDF(h, posting, totalDocs, occAt, termsAt)
-			qEffDF[h] = effDF
-			surp := log2Total - fixedLog2Millibits(uint64(effDF+1))
-			if surp < 512 {
-				surp = 512
-			}
-			qSurprisal[h] = surp
-		}
-	}
-
-	grpJointInfo := make([]int64, len(qGroups))
-	var salientJList []int64
-	var totalQueryInfo int64
-	hasHighWidthGroup := false
-	for gIdx := range qGroups {
-		if qGroups[gIdx].width >= 20 {
-			hasHighWidthGroup = true
-			break
-		}
-	}
-
-	// Colloquial Query Condensation & Lexeme-Family Denominator Conservation (pure 64-bit integer arithmetic):
-	//  1. Lexeme-Family Surprisal Conservation: when a non-rigid surface inflected word (e.g. "stayed" df=4,
-	//     "hotels" df=26, "discovered" df=7, "occasions" df=9) has a much more frequent stem/morph root variant
-	//     in the vault (e.g. "stay" df=262, "hotel" df=450), conserve its effective surprisal via the Euler
-	//     log-conjugate (632*S_exact + 368*S_root)/1000 so rare surface inflections do not hijack proper nouns;
-	//  2. Poisson-Occupancy Excess Temporal Condensation (kappaPerm in [0, 1000]): measures whether a query
-	//     term's hits cluster into specific event days (true event/place anchors like Porto/Glasgow/Cairo/Cornwall)
-	//     or scatter uniformly across the calendar like Poisson white noise (colloquial meta-shell words like
-	//     "took", "remember", "occasions", "discovered", "titles").
-	enableColloquialCondense := os.Getenv("ROLLING_MEMORY_COLLOQUIAL_CONDENSE") != "0"
-	grpKappaPerm := make([]int64, len(qGroups))
-	grpIsEventAnchor := make([]bool, len(qGroups))
-	var anchorDocSet map[int]bool
-	var anchorDaySet map[int64]bool
-	hasEventAnchor := false
-	if enableColloquialCondense && totalDocs >= 16 && len(qGroups) >= 2 {
-		estTotalDays := int64(totalDocs/9 + 16)
-		for gIdx := range qGroups {
-			grp := &qGroups[gIdx]
-			if (grp.flags&FlagHasUpper) != 0 && (grp.flags&FlagHasCamel) == 0 && !midSentUpper[grp.primaryH] && df[grp.primaryH] > totalDocs/12 {
-				// Strip syntactic sentence-initial capitalization on frequent words ("What", "In", "During", "Did").
-				grp.flags &^= FlagHasUpper
-			}
-			isProperRigid := (grp.flags&(FlagHasUpper|FlagHasCamel)) != 0 && (grp.flags&FlagHasDigit) == 0
-			posting := qPostings[grp.primaryH]
-			nPost := int64(len(posting))
-			if nPost >= 2 && nPost <= 512 {
-				seenDays := make(map[int64]bool, len(posting))
-				for _, dIdx := range posting {
-					if dIdx >= 0 && dIdx < len(docs) && docs[dIdx].occ > 0 {
-						seenDays[docs[dIdx].occ/86400] = true
-					}
-				}
-				dObs := int64(len(seenDays))
-				if dObs >= 1 {
-					eNullPerm := (nPost * estTotalDays * 1000) / (estTotalDays + nPost/2)
-					if eNullPerm > 1000 && dObs*1000 < eNullPerm {
-						rawK := 1000 - ((dObs*1000 - 1000) * 1000 / (eNullPerm - 1000))
-						if rawK > 0 {
-							conf := ((nPost - 1) * 1000) / (nPost + 2)
-							grpKappaPerm[gIdx] = (rawK * conf) / 1000
-						}
-					}
-				}
-			}
-			if (isProperRigid && grp.width >= 40 && nPost >= 1 && nPost <= int64(totalDocs/3)) || (grpKappaPerm[gIdx] >= 368 && nPost >= 2) {
-				grpIsEventAnchor[gIdx] = true
-				hasEventAnchor = true
-				if anchorDocSet == nil {
-					anchorDocSet = make(map[int]bool, 128)
-					anchorDaySet = make(map[int64]bool, 64)
-				}
-				for _, vr := range grp.variants {
-					if vr.scalePerm < 800 {
-						continue
-					}
-					vp := qPostings[vr.h]
-					if vr.scalePerm < 1000 && len(vp) > 512 {
-						continue
-					}
-					for _, dIdx := range vp {
-						anchorDocSet[dIdx] = true
-						if dIdx >= 0 && dIdx < len(docs) && docs[dIdx].occ > 0 {
-							anchorDaySet[docs[dIdx].occ/86400] = true
-						}
-					}
-				}
-			}
-		}
-	}
-
-	for gIdx := range qGroups {
-		grp := &qGroups[gIdx]
-		isRigid := (grp.flags & (FlagHasUpper | FlagHasCamel | FlagHasDigit)) != 0
-		pSurp := qSurprisal[grp.primaryH]
-		if enableColloquialCondense && !isRigid && len(grp.variants) > 1 {
-			minFamSurp := pSurp
-			for _, vr := range grp.variants[1:] {
-				if vr.scalePerm < 800 {
-					continue
-				}
-				if s := qSurprisal[vr.h]; s > 0 && df[vr.h] > df[grp.primaryH] && s < minFamSurp {
-					minFamSurp = s
-				}
-			}
-			if minFamSurp < pSurp {
-				pSurp = (632*pSurp + 368*minFamSurp) / 1000
-			}
-		}
-		colloquialModPerm := int64(1000)
-		if enableColloquialCondense && hasEventAnchor && !isRigid && !grpIsEventAnchor[gIdx] && grpKappaPerm[gIdx] < 135 {
-			coHits := 0
-			totalVarPost := 0
-			for _, vr := range grp.variants {
-				if vr.scalePerm < 800 {
-					continue
-				}
-				vp := qPostings[vr.h]
-				totalVarPost += len(vp)
-				for _, dIdx := range vp {
-					if anchorDocSet[dIdx] || (dIdx >= 0 && dIdx < len(docs) && docs[dIdx].occ > 0 && anchorDaySet[docs[dIdx].occ/86400]) {
-						coHits++
-						break
-					}
-				}
-				if coHits > 0 {
-					break
-				}
-			}
-			// Orthogonal Scattered Colloquial Shell Continuous Extinction:
-			// Softly attenuate non-rigid tokens whose primary+stem family (scalePerm >= 800) scatters like
-			// Poisson white noise across days (kappaPerm < 135 ≈ e^{-2}) AND has zero document or same-day
-			// light-cone co-occurrence with the query's event anchors (coHits == 0), while preserving vr.isSal
-			// (0-Gate invariant: never flip boolean salience or zero out synergy).
-			if coHits == 0 && totalVarPost >= 2 {
-				colloquialModPerm = 632
-			}
-		}
-		effW := int64(grp.width)
-		if isRigid {
-			effW = effW * 5 / 4
-		}
-		jInfo := (pSurp * (effW + 40) / 128) * colloquialModPerm / 1000
-		grpJointInfo[gIdx] = jInfo
-		hasAnyCorpusHit := false
-		isLowCarrier := hasHighWidthGroup && grp.width < 20
-		for vIdx := range grp.variants {
-			vr := &grp.variants[vIdx]
-			docFreq := qEffDF[vr.h]
-			if df[vr.h] > 0 {
-				hasAnyCorpusHit = true
-			}
-			surp := qSurprisal[vr.h]
-			if enableColloquialCondense && !isRigid && vIdx == 0 && pSurp < surp {
-				surp = pSurp
-			}
-			vEffW := int64(grp.width) * vr.scalePerm / 1000
-			if vEffW < 10 {
-				vEffW = 10
-			}
-			fl := grp.flags
-			if (fl & (FlagHasUpper | FlagHasCamel | FlagHasDigit)) != 0 {
-				vEffW = vEffW * 5 / 4
-			}
-			surp2 := surp * surp / 1024
-			g15 := vEffW * (surp * (1024 + surp/2) / 1024) / 32
-			gSurp2 := vEffW * surp2 / 64
-			sGain := ((g15 + gSurp2) / 2) * colloquialModPerm / 1000
-			if totalDocs >= 16 && docFreq > totalDocs/2 && (fl&(FlagHasDigit|FlagHasUpper|FlagHasCamel)) == 0 {
-				sGain /= 3
-			}
-			if isLowCarrier {
-				sGain = 1
-			}
-			vr.shannonGain = sGain
-			vr.isSal = !isLowCarrier && (totalDocs < 12 || docFreq <= totalDocs/3)
-			vr.jSurp = ((surp * vr.scalePerm / 1000) * (vEffW + 40) / 128) * colloquialModPerm / 1000
-			vr.wSurp = (surp * vr.scalePerm / 1000) * colloquialModPerm / 1000
-		}
-		if !isLowCarrier && hasAnyCorpusHit && (totalDocs < 12 || qEffDF[grp.primaryH] <= totalDocs/3) {
-			totalQueryInfo += jInfo
-			salientJList = append(salientJList, jInfo)
-		}
-	}
-	if len(salientJList) > 5 {
-		sort.Slice(salientJList, func(i, j int) bool { return salientJList[i] > salientJList[j] })
-		totalQueryInfo = 0
-		for i := 0; i < 5; i++ {
-			totalQueryInfo += salientJList[i]
-		}
-	}
-
-	var hits []CloudQueryHit
-	bestDay := int64(-1)
+	var hits []QueryHit
 	var bestScore float64
-
-	candSeen := make([]bool, totalDocs)
-	candCount := 0
-	for _, cutoff := range []int{384, 2048, totalDocs + 1} {
-		for _, grp := range qGroups {
-			for _, vr := range grp.variants {
-				if totalDocs >= 16 && qEffDF[vr.h] > totalDocs/3 && (grp.flags&(FlagHasDigit|FlagHasUpper|FlagHasCamel)) == 0 {
-					continue
-				}
-				if totalDocs >= 2048 && len(qPostings[vr.h]) > cutoff {
-					continue
-				}
-				for _, idx := range qPostings[vr.h] {
-					if !candSeen[idx] {
-						candSeen[idx] = true
-						candCount++
-					}
-				}
+	if len(docs) > 0 {
+		zHits := snap.searchSnapshotCoreEngines(v, queryText, nil, topK)
+		hits = make([]QueryHit, 0, len(zHits))
+		for _, zh := range zHits {
+			if zh.Energy <= 0 {
+				continue
 			}
-		}
-		if candCount >= topK*6 && candCount >= 128 {
-			break
-		}
-	}
-	if candCount < topK*2 {
-		for _, grp := range qGroups {
-			for _, vr := range grp.variants {
-				for _, idx := range qPostings[vr.h] {
-					if !candSeen[idx] {
-						candSeen[idx] = true
-						candCount++
-					}
-				}
+			if zh.Energy > bestScore {
+				bestScore = zh.Energy
 			}
-		}
-	}
-
-	var docSalientBuf [32]int
-	var curSalientBuf [32]int
-	var prevSalientBuf [32]int
-	avgDL64 := int64(avgDL)
-	baseDenom := 960 * avgDL64
-	numFactor := 2200 * avgDL64 * 1000
-
-	for docIdx, isCand := range candSeen {
-		if !isCand {
-			continue
-		}
-		d := docs[docIdx]
-		var scoreInt int64
-		matchedTerms := 0
-		salientMatched := 0
-		matchedEventAnchors := 0
-		var sumSurprisal, sumSqSurprisal int64
-		var matchedQueryInfo int64
-		docSalientGrps := docSalientBuf[:0]
-		docBaseDenom := baseDenom + 240*int64(d.docLen)
-
-		for gIdx, grp := range qGroups {
-			var bestGrpScore int64
-			var bestGrpSurp int64
-			bestGrpSalient := false
-			for _, vr := range grp.variants {
-				tf := d.termCounts[vr.h]
-				if tf <= 0 {
-					continue
-				}
-				denom := int64(tf)*avgDL64*1000 + docBaseDenom
-				tfNormPermille := int64(1000)
-				if denom > 0 {
-					tfNormPermille = int64(tf) * numFactor / denom
-				}
-				candScore := vr.shannonGain * tfNormPermille / 1000
-				if candScore > bestGrpScore {
-					bestGrpScore = candScore + bestGrpScore*350/1000
-					bestGrpSurp = vr.jSurp
-					bestGrpSalient = vr.isSal
-				} else {
-					bestGrpScore += candScore * 350 / 1000
-				}
-			}
-			if bestGrpScore > 0 {
-				scoreInt += bestGrpScore
-				if !(hasHighWidthGroup && grp.width < 20) {
-					matchedTerms++
-				}
-				if grpIsEventAnchor[gIdx] {
-					matchedEventAnchors++
-				}
-				if bestGrpSalient {
-					salientMatched++
-					sumSurprisal += bestGrpSurp
-					sumSqSurprisal += bestGrpSurp * bestGrpSurp
-					matchedQueryInfo += bestGrpSurp
-					docSalientGrps = append(docSalientGrps, gIdx)
-				}
-			}
-		}
-		// Pairwise Joint Shannon Surprisal Synergy: 2 * Σ_{i<j} J(h_i)*J(h_j) = (Σ J)^2 - Σ (J^2)
-		inAnchorLightCone := matchedEventAnchors > 0 || (d.occ > 0 && anchorDaySet[d.occ/86400])
-		if salientMatched >= 2 {
-			pairSynergy := (sumSurprisal*sumSurprisal - sumSqSurprisal) / 2
-			synergyBoostPermille := int64(salientMatched-1)*320 + pairSynergy/(4096*4)
-			maxSynergyPermille := int64(2400)
-			if enableColloquialCondense && hasEventAnchor && !inAnchorLightCone {
-				maxSynergyPermille = 883
-			}
-			if synergyBoostPermille > maxSynergyPermille {
-				synergyBoostPermille = maxSynergyPermille
-			}
-			scoreInt += scoreInt * synergyBoostPermille / 1000
-		} else if matchedTerms >= 2 {
-			scoreInt += scoreInt * int64(matchedTerms-1) / 5
-		}
-		// Quadratic Shannon Information Coverage Ratio: (I(Q ∩ d) / H(Q))^2
-		if totalQueryInfo > 0 && salientMatched >= 2 {
-			covPerm := matchedQueryInfo * 1000 / totalQueryInfo
-			if covPerm > 1000 {
-				covPerm = 1000
-			}
-			covQuad := covPerm * covPerm / 1000
-			scoreInt += scoreInt * (covQuad * 400 / 1000) / 1000
-		}
-		// Sentence-window Shannon wave-packet focus & 2-sentence sliding wave-packet synergy
-		if salientMatched >= 2 && len(d.sentHashes) > 1 && (totalDocs < 2048 || len(d.sentHashes) <= 96 || matchedEventAnchors > 0) {
-			var maxWindowSurp int64
-			var maxWin2Synergy int64
-			maxSentSalient := 0
-			prevSentSurp := int64(0)
-			prevSentSalient := prevSalientBuf[:0]
-			hasHeaderSalient := false
-			hasBodySalient := false
-			sentScanLim := len(d.sentHashes)
-			if totalDocs >= 2048 && sentScanLim > 96 {
-				sentScanLim = 96
-			}
-			for sIdx := 0; sIdx < sentScanLim; sIdx++ {
-				sh := d.sentHashes[sIdx]
-				cnt := 0
-				var curSentSurp int64
-				curSentSalient := curSalientBuf[:0]
-				for _, gIdx := range docSalientGrps {
-					grp := qGroups[gIdx]
-					for _, vr := range grp.variants {
-						if vr.isSal && d.termCounts[vr.h] > 0 && containsHashUint64(sh, vr.h) {
-							cnt++
-							curSentSurp += vr.wSurp
-							curSentSalient = append(curSentSalient, gIdx)
-							if sIdx <= 4 {
-								hasHeaderSalient = true
-							} else {
-								hasBodySalient = true
-							}
-							break
-						}
-					}
-				}
-				if cnt > maxSentSalient {
-					maxSentSalient = cnt
-				}
-				if winSurp := curSentSurp + prevSentSurp; winSurp > maxWindowSurp {
-					maxWindowSurp = winSurp
-				}
-				if len(curSentSalient)+len(prevSentSalient) >= 2 {
-					var wSum, wSq int64
-					for _, gIdx := range curSentSalient {
-						j := grpJointInfo[gIdx]
-						wSum += j
-						wSq += j * j
-					}
-					for _, gIdx := range prevSentSalient {
-						dup := false
-						for _, cg := range curSentSalient {
-							if cg == gIdx {
-								dup = true
-								break
-							}
-						}
-						if !dup {
-							j := grpJointInfo[gIdx]
-							wSum += j
-							wSq += j * j
-						}
-					}
-					if syn := (wSum*wSum - wSq) / 2; syn > maxWin2Synergy {
-						maxWin2Synergy = syn
-					}
-				}
-				prevSentSurp = curSentSurp
-				prevSentSalient = append(prevSalientBuf[:0], curSentSalient...)
-			}
-			if maxSentSalient >= 2 {
-				scoreInt += scoreInt * int64(maxSentSalient-1) / 4
-			} else if sumSurprisal > 0 && maxWindowSurp*10 >= sumSurprisal*8 {
-				// Adjacent-sentence window captures >=80% of matched Shannon surprisal
-				scoreInt += scoreInt / 8
-			}
-			if maxWin2Synergy > 0 {
-				winBoost := maxWin2Synergy / (4096 * 6)
-				if winBoost > 600 {
-					winBoost = 600
-				}
-				scoreInt += scoreInt * winBoost / 1000
-			}
-			// Cross-zone resonance: macro-header (sIdx <= 4) + body detail (sIdx > 4) coherence
-			if hasHeaderSalient && hasBodySalient {
-				scoreInt += scoreInt * 80 / 1000
-			}
-		}
-		if scoreInt > 0 {
-			wScore := float64(scoreInt) / 10.0
-			if wScore > bestScore && d.occ > 0 {
-				bestScore = wScore
-				bestDay = d.occ / 86400
-			}
-			hits = append(hits, CloudQueryHit{
-				UnitID:         d.docID,
-				Layer:          d.layer,
-				OccurredAt:     d.occ,
-				AddressURI:     d.addrURI,
-				AddressCoord64: d.coord64,
-				WaveformBar:    d.waveBar,
-				WaveScore:      wScore,
-				FinalWeight:    wScore,
-			})
-		}
-	}
-
-	// Same-day session continuity boost for multi-document events
-	if bestDay > 0 && len(hits) > 1 {
-		for i := range hits {
-			if di, ok := docIdxMap[hits[i].UnitID]; ok && docs[di].occ > 0 && (docs[di].occ/86400) == bestDay {
-				hits[i].FinalWeight += 1.5
+			if di, ok := docIdxMap[zh.UnitID]; ok && di >= 0 && di < len(docs) {
+				d := docs[di]
+				hits = append(hits, QueryHit{
+					UnitID:         d.docID,
+					Layer:          d.layer,
+					OccurredAt:     d.occ,
+					AddressURI:     d.addrURI,
+					AddressCoord64: d.coord64,
+					WaveformBar:    d.waveBar,
+					WaveScore:      zh.Energy,
+					FinalWeight:    zh.Energy,
+				})
+			} else {
+				hits = append(hits, QueryHit{
+					UnitID:      zh.UnitID,
+					Layer:       LayerEpisodic,
+					WaveScore:   zh.Energy,
+					FinalWeight: zh.Energy,
+				})
 			}
 		}
 	}
@@ -4497,6 +3084,7 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]CloudQuery
 	// and automatically boost/hydrate any underlying `episodic` or `background` units cited by matched Noetic records!
 	noeticHandles, _ := (&Client{Vault: v}).RecallNoetic(queryText, topK)
 	if len(noeticHandles) > 0 {
+		qPkt, _ := v.PackBlindPacket("Q-DEFAULT", queryText, 0)
 		hitIdxByID := make(map[string]int, len(hits))
 		for i := range hits {
 			hitIdxByID[hits[i].UnitID] = i
@@ -4512,8 +3100,9 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]CloudQuery
 				nWeight = blindPacketDice(qPkt, nPkt)
 			}
 			if nWeight > 0 {
-				scaledNoeticW := noeticScale * nWeight
-				hits = append(hits, CloudQueryHit{
+				vGain := rec.VerificationGain()
+				scaledNoeticW := noeticScale * nWeight * vGain
+				hits = append(hits, QueryHit{
 					UnitID:       rec.NoeticID,
 					Layer:        LayerNoetic,
 					OccurredAt:   rec.OccurredAt,
@@ -4527,7 +3116,7 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]CloudQuery
 					} else if di, ok := docIdxMap[cid]; ok {
 						d := docs[di]
 						hitIdxByID[cid] = len(hits)
-						hits = append(hits, CloudQueryHit{
+						hits = append(hits, QueryHit{
 							UnitID:         d.docID,
 							Layer:          d.layer,
 							OccurredAt:     d.occ,
@@ -4541,471 +3130,12 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]CloudQuery
 				}
 			}
 		}
+		sort.SliceStable(hits, func(i, j int) bool {
+			return cloudHitLess(hits[i], hits[j])
+		})
 	}
-
-	// Deterministic sort by FinalWeight DESC, UnitID ASC.
-	// Partition and sort the full prefix consumed by event-chain resonance and post-chain
-	// energy-spectral fusion (`fusionDepth*2`, where `fusionDepth = clamp(topK*8, 128, 512)`),
-	// so every element entering resonance/fusion is ordered by energy while tens of thousands
-	// of low-weight tail items avoid an O(N log N) full sort.
-	headSortDepth := topK * 16
-	if headSortDepth < 256 {
-		headSortDepth = 256
-	}
-	if headSortDepth > 1024 {
-		headSortDepth = 1024
-	}
-	sortTopCloudHits(hits, headSortDepth)
-
-	// Event-Chain Resonance (Rank-Index Blind Coherent Energy Hybridization):
-	// Couples candidate units to higher-energy event anchors via temporal proximity tau(dt),
-	// dimensionless Shannon co-occurrence coherence (infoDice, nuEff) and shared rare lead-sentence
-	// context tokens. Pure energy evaluation: zero dependence on rank index or fixed slot scores.
-	if len(hits) > 2 && totalDocs >= 16 {
-		maxW := hits[0].FinalWeight
-		if maxW <= 0 {
-			maxW = 1.0
-		}
-		// Pure energy superlevel sets, rank-index blind (zero positional windows, zero slot scores):
-		//   core day-saturation set  := { v : E(v) >= e^{-1/2} * E_max }
-		//   radiative anchor set     := { v : E(v) >= e^{-1}   * E_max }
-		//   candidate horizon        := { v : E(v) >= e^{-5/2} * E_max }
-		//   episode mass             := count of anchor-grade frames within +/-4h of the anchor
-		// E_max is the continuous argmax energy.
-		coreDayFloor := maxW * 0.6065
-		highEnergyFloor := maxW * 0.3679
-		candidateFloor := maxW * 0.0821
-		highEnergyDayMass := make(map[int64]int, 16)
-		highIdx := make([]int, 0, 32)
-		maxHighAnchors := 24
-		if totalDocs >= 16384 {
-			maxHighAnchors = 6
-		}
-		for idx := range hits {
-			if len(highIdx) >= maxHighAnchors {
-				break
-			}
-			if hits[idx].FinalWeight < highEnergyFloor {
-				continue
-			}
-			if dIdx, ok := docIdxMap[hits[idx].UnitID]; ok && docs[dIdx].occ > 0 {
-				if hits[idx].FinalWeight >= coreDayFloor {
-					highEnergyDayMass[docs[dIdx].occ/86400]++
-				}
-				highIdx = append(highIdx, idx)
-			}
-		}
-		anchorLeadHashes := make(map[uint64]int, 64)
-		anchorEpisodeMass := make(map[string]int, 16)
-		anchorSet := make([]int, 0, 16)
-		for _, a := range highIdx {
-			da, ok := docIdxMap[hits[a].UnitID]
-			if !ok || docs[da].occ <= 0 {
-				continue
-			}
-			mass := 0
-			for _, j := range highIdx {
-				dj, okJ := docIdxMap[hits[j].UnitID]
-				if !okJ || docs[dj].occ <= 0 {
-					continue
-				}
-				dt := docs[dj].occ - docs[da].occ
-				if dt < 0 {
-					dt = -dt
-				}
-				if dt <= 14400 {
-					mass++
-				}
-			}
-			anchorEpisodeMass[hits[a].UnitID] = mass
-			anchorSet = append(anchorSet, a)
-			limS := len(docs[da].sentHashes)
-			if limS > 5 {
-				limS = 5
-			}
-			for sIdx := 1; sIdx < limS; sIdx++ {
-				for _, h := range docs[da].sentHashes[sIdx] {
-					anchorLeadHashes[h] = df[h]
-				}
-			}
-		}
-		if len(anchorLeadHashes) > 0 {
-			anyBoosted := false
-			scanned := 0
-			scanCap := len(hits)
-			maxScanCap := 256
-			if totalDocs >= 16384 {
-				maxScanCap = 40
-			}
-			if scanCap > maxScanCap {
-				scanCap = maxScanCap
-			}
-			// Salient info mass is a pure per-document function of (termCounts, df):
-			// cache it per doc index so the anchor×candidate double loop computes
-			// each side once instead of |anchorSet|×|scanCap| times. The shared
-			// mass stays pairwise (iterating the smaller side), and the final
-			// divisions run on the same integers, so the pair (infoDice, nuEff)
-			// is bitwise identical to the fused single-call form.
-			salientMassByDoc := make(map[int]int64, len(anchorSet)+scanCap)
-			salientMassOf := func(dIdx int) int64 {
-				if m, ok := salientMassByDoc[dIdx]; ok {
-					return m
-				}
-				m := SalientInfoMass(docs[dIdx].termCounts, df, totalDocs, log2Total)
-				salientMassByDoc[dIdx] = m
-				return m
-			}
-			for i := 1; i < scanCap; i++ {
-				if hits[i].FinalWeight < candidateFloor {
-					continue
-				}
-				scanned = i + 1
-				di, ok := docIdxMap[hits[i].UnitID]
-				if !ok || docs[di].occ <= 0 {
-					continue
-				}
-				bestBoosted := hits[i].FinalWeight
-				bestAnchorID := ""
-				for _, a := range anchorSet {
-					if hits[a].FinalWeight <= hits[i].FinalWeight {
-						continue
-					}
-					da, okA := docIdxMap[hits[a].UnitID]
-					if !okA || docs[da].occ <= 0 {
-						continue
-					}
-					dt := docs[di].occ - docs[da].occ
-					if dt < 0 {
-						dt = -dt
-					}
-					leadRare := 0
-					leadUltraRare := 0
-					limS := len(docs[di].sentHashes)
-					if limS > 5 {
-						limS = 5
-					}
-					for sIdx := 1; sIdx < limS; sIdx++ {
-						for _, h := range docs[di].sentHashes[sIdx] {
-							if docs[da].termCounts[h] > 0 && anchorLeadHashes[h] >= 2 && anchorLeadHashes[h] <= totalDocs/12 {
-								leadRare++
-								if anchorLeadHashes[h] <= totalDocs/24 {
-									leadUltraRare++
-								}
-							}
-						}
-					}
-					infoDice, nuEff := CoherenceFromMasses(
-						salientMassOf(da),
-						salientMassOf(di),
-						SharedSalientInfoMass(docs[da].termCounts, docs[di].termCounts, df, totalDocs, log2Total),
-						log2Total,
-					)
-					tau := TemporalProximityKernel(dt, 1800.0)
-					underSat := dt > 3600 && dt <= 14400 && nuEff >= 9.5 && highEnergyDayMass[docs[di].occ/86400] <= 1 && anchorEpisodeMass[hits[a].UnitID] <= 3 && hits[i].FinalWeight >= maxW*0.368
-					crossDayCoref := dt > 21600 && nuEff >= 35.0 && infoDice >= 0.20 && anchorEpisodeMass[hits[a].UnitID] <= 2
-					burstTwin := tau >= 0.93 && nuEff >= 35.0 && infoDice >= 0.20
-					burstCluster := tau >= 0.93 && nuEff >= 10.5
-					denseSession := dt <= 3600 && nuEff >= 38.0 && hits[i].FinalWeight >= maxW*0.33
-					highCoh := underSat || crossDayCoref || burstTwin || burstCluster || denseSession
-
-					if !highCoh {
-						if hits[a].FinalWeight < maxW*0.60 || hits[i].FinalWeight < maxW*0.30 {
-							continue
-						}
-						if anchorEpisodeMass[hits[a].UnitID] >= 3 || dt > 21600 {
-							continue
-						}
-						if dt > 3600 {
-							if leadUltraRare < 4 || anchorEpisodeMass[hits[a].UnitID] >= 2 || hits[i].FinalWeight < maxW*0.42 {
-								continue
-							}
-						} else if leadRare < 2 {
-							continue
-						}
-					} else if anchorEpisodeMass[hits[a].UnitID] >= 6 || (hits[i].FinalWeight < maxW*0.1353 && anchorEpisodeMass[hits[a].UnitID] >= 3) {
-						continue
-					}
-
-					var boostPerm float64
-					if dt <= 600 {
-						boostPerm = 280.0
-					} else if dt <= 3600 {
-						boostPerm = 160.0
-						if highCoh && nuEff >= 38.0 {
-							boostPerm = 260.0
-						}
-					} else if underSat {
-						boostPerm = 260.0
-					} else {
-						boostPerm = 120.0
-					}
-					if leadRare >= 4 || highCoh {
-						boostPerm *= 1.30
-					}
-					candW := hits[i].FinalWeight * (1.0 + boostPerm/1000.0)
-					// Coherent Two-State Energy Hybridization for phase-locked twin / coreferent frames:
-					// transmits anchor energy strictly via coherence saturation nuEff/(nuEff+16) and cluster
-					// saturation damping 1/(1 + 0.368*m_a), with zero reference to any rank slot.
-					if crossDayCoref || burstTwin {
-						cohSat := nuEff / (nuEff + 16.0)
-						clusterDamp := 1.0 / (1.0 + 0.368*float64(anchorEpisodeMass[hits[a].UnitID]))
-						trans := 0.368 * cohSat * clusterDamp
-						hybridW := hits[i].FinalWeight*(1.0+0.368*cohSat) + trans*hits[a].FinalWeight
-						if hybridW > candW {
-							candW = hybridW
-						}
-					}
-					capW := hits[a].FinalWeight * 0.9817
-					if candW > capW {
-						candW = capW
-					}
-					if candW > bestBoosted {
-						bestBoosted = candW
-						bestAnchorID = hits[a].UnitID
-					}
-				}
-				if bestAnchorID != "" && bestBoosted > hits[i].FinalWeight {
-					wasBelowHigh := hits[i].FinalWeight < highEnergyFloor
-					wasBelowCoreDay := hits[i].FinalWeight < coreDayFloor
-					hits[i].FinalWeight = bestBoosted
-					hits[i].WaveScore = bestBoosted
-					anyBoosted = true
-					if bestBoosted >= highEnergyFloor {
-						daBest, okBest := docIdxMap[bestAnchorID]
-						dtBest := int64(0)
-						if okBest {
-							dtBest = docs[di].occ - docs[daBest].occ
-							if dtBest < 0 {
-								dtBest = -dtBest
-							}
-						}
-						if wasBelowHigh || dtBest > 14400 {
-							anchorEpisodeMass[bestAnchorID]++
-						}
-					}
-					if wasBelowCoreDay && bestBoosted >= coreDayFloor {
-						highEnergyDayMass[docs[di].occ/86400]++
-					}
-				}
-			}
-			if anyBoosted {
-				sub := hits[:scanned]
-				sort.Slice(sub, func(i, j int) bool {
-					if sub[i].FinalWeight != sub[j].FinalWeight {
-						return sub[i].FinalWeight > sub[j].FinalWeight
-					}
-					return sub[i].UnitID < sub[j].UnitID
-				})
-			}
-		}
-	}
-
-	// Energy-Spectral Fusion over two independent lexical channels of the same vault:
-	//   1. the blind-slot ranker (Shannon/BM25 with BPE width + sentence-window boosts) — primary;
-	//   2. the SQLite FTS5 trigram BM25 ranker — continuous substring / morphological corroboration.
-	// Evaluated purely from normalized primary energy and Michaelis-Menten mean-saturated FTS5 BM25
-	// energy (100% rank-index blind: zero discrete rank indices, zero fixed-slot floors).
-	if len(hits) > 1 {
-		fusionDepth := topK * 8
-		if fusionDepth < 128 {
-			fusionDepth = 128
-		}
-		if fusionDepth > 512 {
-			fusionDepth = 512
-		}
-		if len(hits) > fusionDepth*2 {
-			hits = hits[:fusionDepth*2]
-		}
-		var ftsScores map[string]float64
-		var maxFTS float64
-		if v.HasFTS5BM25() && (totalDocs < 16384 || len(hits) < topK*2) {
-			if scores, maxS, ferr := v.queryFTS5BM25ScoresWithDF(queryText, fusionDepth, totalDocs, df, snap.ftsRowIDToDocID); ferr == nil {
-				ftsScores = scores
-				maxFTS = maxS
-			}
-		}
-		if len(ftsScores) > 0 && maxFTS > 0 {
-			maxW := hits[0].FinalWeight
-			if maxW <= 0 {
-				maxW = 1.0
-			}
-			// Continuum pedestal subtraction on FTS5 trigram BM25 energy:
-			// FTS5 trigram phrase OR-queries sit on a non-zero continuum floor B_min across the candidate window.
-			// Subtracting B_min isolates the net excitation energy DeltaB(d) = B(d) - B_min >= 0 above background.
-			minFTS := maxFTS
-			for _, s := range ftsScores {
-				if s > 0 && s < minFTS {
-					minFTS = s
-				}
-			}
-			spanFTS := maxFTS - minFTS
-			var sumNetFTS, sumNetFTSSq float64
-			if spanFTS > 1e-9 {
-				for _, s := range ftsScores {
-					if dB := s - minFTS; dB > 0 {
-						sumNetFTS += dB
-						sumNetFTSSq += dB * dB
-					}
-				}
-			}
-			charNetFTS := spanFTS * 0.3679
-			if sumNetFTS > 0 {
-				charNetFTS = sumNetFTSSq / sumNetFTS
-			}
-			isDocInAnchorCone := func(id string) bool {
-				if !enableColloquialCondense || !hasEventAnchor {
-					return true
-				}
-				di, ok := docIdxMap[id]
-				if !ok {
-					return false
-				}
-				d := docs[di]
-				if d.occ > 0 && anchorDaySet[d.occ/86400] {
-					return true
-				}
-				for gIdx, grp := range qGroups {
-					if !grpIsEventAnchor[gIdx] {
-						continue
-					}
-					for _, vr := range grp.variants {
-						if d.termCounts[vr.h] > 0 {
-							return true
-						}
-					}
-				}
-				return false
-			}
-			var sumSlot, sumSlotSq float64
-			for _, h := range hits {
-				if h.FinalWeight > 0 {
-					sumSlot += h.FinalWeight
-					sumSlotSq += h.FinalWeight * h.FinalWeight
-				}
-			}
-			charSlot := maxW * 0.3679
-			if sumSlot > 0 {
-				charSlot = sumSlotSq / sumSlot
-			}
-			fused := make(map[string]float64, len(hits)+len(ftsScores))
-			for _, h := range hits {
-				w := h.FinalWeight
-				if w < 0 {
-					w = 0
-				}
-				linSlot := w / maxW
-				satSlot := (w * (maxW + charSlot)) / (maxW * (w + charSlot))
-				fused[h.UnitID] = 0.6321*linSlot + 0.3679*satSlot
-			}
-			for id, ftsRaw := range ftsScores {
-				var phiFTS float64
-				if spanFTS > 1e-9 {
-					dB := ftsRaw - minFTS
-					if dB < 0 {
-						dB = 0
-					}
-					uFTS := dB / spanFTS
-					satFTS := (dB * (spanFTS + charNetFTS)) / (spanFTS * (dB + charNetFTS))
-					phiFTS = uFTS * satFTS
-				} else {
-					phiFTS = 1.0
-				}
-				slotNorm := fused[id]
-				kappa := 0.0498 // e^-3 outside anchor cone
-				if isDocInAnchorCone(id) {
-					kappa = 0.2707 // 2*e^-2 inside anchor cone
-				}
-				fused[id] += kappa * phiFTS * (0.3679 + 0.6321*slotNorm)
-			}
-			merged := make([]CloudQueryHit, 0, len(hits)+len(ftsScores))
-			seen := make(map[string]bool, len(fused))
-			for _, h := range hits {
-				if seen[h.UnitID] {
-					continue
-				}
-				seen[h.UnitID] = true
-				fw := fused[h.UnitID] * maxW
-				h.FinalWeight = fw
-				h.WaveScore = fw
-				merged = append(merged, h)
-			}
-			for id := range ftsScores {
-				if seen[id] {
-					continue
-				}
-				di, ok := docIdxMap[id]
-				if !ok {
-					continue
-				}
-				seen[id] = true
-				d := docs[di]
-				fw := fused[id] * maxW
-				merged = append(merged, CloudQueryHit{
-					UnitID:         d.docID,
-					Layer:          d.layer,
-					OccurredAt:     d.occ,
-					AddressURI:     d.addrURI,
-					AddressCoord64: d.coord64,
-					WaveformBar:    d.waveBar,
-					WaveScore:      fw,
-					FinalWeight:    fw,
-				})
-			}
-			sort.Slice(merged, func(i, j int) bool {
-				if merged[i].FinalWeight != merged[j].FinalWeight {
-					return merged[i].FinalWeight > merged[j].FinalWeight
-				}
-				return merged[i].UnitID < merged[j].UnitID
-			})
-			hits = merged
-		}
-	}
-
-	// Submodular Near-Clone Marginal Novelty: attenuate redundant cross-day (>=85%) and
-	// 3rd+ same-day (>=92%) near-clone copies so a single clone cluster cannot monopolize Top-K delivery slots.
-	if len(hits) > 1 {
-		checkLim := topK * 2
-		if checkLim < 24 {
-			checkLim = 24
-		}
-		if len(hits) < checkLim {
-			checkLim = len(hits)
-		}
-		priorAt := func(j int) (map[uint64]int, int64, bool) {
-			dj, okJ := docIdxMap[hits[j].UnitID]
-			if !okJ {
-				return nil, 0, false
-			}
-			return docs[dj].termCounts, docs[dj].occ, true
-		}
-		demoted := false
-		for i := 1; i < checkLim; i++ {
-			di, okI := docIdxMap[hits[i].UnitID]
-			if !okI {
-				continue
-			}
-			if atten := SubmodularCloneAttenuation(docs[di].termCounts, docs[di].occ, i, priorAt); atten < 1.0 {
-				hits[i].FinalWeight *= atten
-				demoted = true
-			}
-		}
-		if demoted {
-			sub := hits[:checkLim]
-			sort.Slice(sub, func(i, j int) bool {
-				if sub[i].FinalWeight != sub[j].FinalWeight {
-					return sub[i].FinalWeight > sub[j].FinalWeight
-				}
-				return sub[i].UnitID < sub[j].UnitID
-			})
-		}
-	}
-
-	if len(hits) > 1 {
-		hits = applyCoreEnergyFusion(snap, qPkt, topK, docs, docIdxMap, hits)
-	}
-
 	if len(hits) > topK {
-		hits = selectKernelSmoothedHits(hits, topK)
+		hits = hits[:topK]
 	}
 	return hits, nil
 }

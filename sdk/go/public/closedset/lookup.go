@@ -116,7 +116,11 @@ func TagMap() map[string][][2]string {
 func LookupGeoPair(token string) (string, string) {
 	ensureMap()
 	l := strings.ToLower(strings.TrimSpace(token))
-	for _, pair := range tagMap[l] {
+	axes := tagMap[l]
+	if len(axes) == 0 && strings.HasSuffix(l, ".") {
+		axes = tagMap[strings.TrimSuffix(l, ".")]
+	}
+	for _, pair := range axes {
 		if strings.HasPrefix(pair[0], "@geo:") {
 			return pair[0], pair[1]
 		}
@@ -140,7 +144,11 @@ func LookupGeoHarmonics(token string) []string {
 func LookupUnitPair(token string) (string, string) {
 	ensureMap()
 	l := strings.ToLower(strings.TrimSpace(token))
-	for _, pair := range tagMap[l] {
+	axes := tagMap[l]
+	if len(axes) == 0 && strings.HasSuffix(l, ".") {
+		axes = tagMap[strings.TrimSuffix(l, ".")]
+	}
+	for _, pair := range axes {
 		if strings.HasPrefix(pair[0], "@unit:") && strings.HasPrefix(pair[1], "@dim:") {
 			return pair[0], pair[1]
 		}

@@ -30,9 +30,9 @@ func (s *candidateTestStore) LoadLocalDocument(id string) (string, string, []str
 
 func TestLocalCandidateLimitPreservesGaps(t *testing.T) {
 	hits := []LocalResolvedHit{
-		{CloudQueryHit: CloudQueryHit{UnitID: "missing"}, SourceUnavailable: true},
-		{CloudQueryHit: CloudQueryHit{UnitID: "first"}},
-		{CloudQueryHit: CloudQueryHit{UnitID: "second"}},
+		{QueryHit: QueryHit{UnitID: "missing"}, SourceUnavailable: true},
+		{QueryHit: QueryHit{UnitID: "first"}},
+		{QueryHit: QueryHit{UnitID: "second"}},
 	}
 	got := limitHydratedLocalHits(hits, 1)
 	if len(got) != 2 || got[0].UnitID != "missing" || got[1].UnitID != "first" {
@@ -46,7 +46,7 @@ func TestLocalCandidateHydrationContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.SaveLocalPlaintext("doc", 1, "quartz nebula", nil, CloudIngestResponse{Layer: LayerEpisodic}); err != nil {
+	if err := vault.SaveLocalPlaintext("doc", 1, "quartz nebula", nil, IngestResponse{Layer: LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -93,7 +93,7 @@ func TestRecallWithOptionsSkipsDuplicateLocalCloudHits(t *testing.T) {
 		vault.snapRef.refreshing = false
 		vault.slotCacheMu.Unlock()
 	}()
-	if err := vault.SaveLocalPlaintext("doc", 1, "quartz nebula", nil, CloudIngestResponse{Layer: LayerEpisodic}); err != nil {
+	if err := vault.SaveLocalPlaintext("doc", 1, "quartz nebula", nil, IngestResponse{Layer: LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := vault.buildCorpusSnapshot(context.Background())
@@ -108,7 +108,7 @@ func TestRecallWithOptionsSkipsDuplicateLocalCloudHits(t *testing.T) {
 	transport := NewLocalVaultTransport(vault)
 	qPkt, _ := vault.PackBlindPacket("QUERY", "quartz nebula", 0)
 	cloudHits, err := transport.QueryBlindManifold(context.Background(), qPkt, 0)
-	if err != nil || len(cloudHits) != 2 || cloudHits[0].UnitID != cloudHits[1].UnitID {
+	if err != nil || len(cloudHits) != 1 || cloudHits[0].UnitID != "doc" {
 		t.Fatalf("duplicate transport fixture: hits=%+v err=%v", cloudHits, err)
 	}
 	client := NewClient(vault, transport)

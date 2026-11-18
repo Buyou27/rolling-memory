@@ -91,34 +91,6 @@ func importReplayEvent(
 	if presence != nil {
 		saveActiveWorkspacePresence(cfg, *presence, session)
 	}
-	if memory != nil && memory.IsThinBrainProxy() {
-		// RAME mode (`/open/memory/v1/*`): legacy tables (`trace`/`node`/`assertion`)
-		// are purged and retired; the closed turn is read directly from the transcript
-		// or harness session and ingested into the engine's episodic layer in real time.
-		if memory.Store != nil && memory.Store.DB() != nil {
-			thinclient.PurgeLegacyTables(memory.Store.DB())
-		}
-		data := map[string]any{
-			"imported": 0,
-			"messages": 0,
-			"replayed": 0,
-			"written":  0,
-		}
-		upReceipt := uploadCurrentEpisodicTurn(memory, cfg, session, payload)
-		if dm := asIntDefault(upReceipt["direct_messages"], 0); dm > 0 {
-			data["messages"] = dm
-			data["imported"] = dm
-		}
-		delete(upReceipt, "direct_messages")
-		for key, value := range upReceipt {
-			data[key] = value
-		}
-		logHook(cfg, event, data)
-		if event == "start" && (cfg.Hooks.BootContext || project != "") {
-			return bootContext(memory, cfg, payload, o)
-		}
-		return "", nil
-	}
 	imported := map[string]any{"messages": 0, "inserted": 0}
 	units, _, sourceErr := currentTurnUnitsChecked(cfg.Scope, session, payload)
 	if sourceErr != nil {
@@ -140,7 +112,7 @@ func importReplayEvent(
 				return "", nil
 			}
 			packet, _ := vault.PackBlindPacket(unit.DocID, unit.Text, unit.OccurredAt)
-			if err := vault.SaveLocalEpisodicPointerIndexed(unit.DocID, unit.OccurredAt, unit.RefPointer, unit.TurnRef, unit.Text, packet, thinclient.CloudIngestResponse{}); err != nil {
+			if err := vault.SaveLocalEpisodicPointerIndexed(unit.DocID, unit.OccurredAt, unit.RefPointer, unit.TurnRef, unit.Text, packet, thinclient.IngestResponse{}); err != nil {
 				if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
 					continue
 				}
@@ -440,12 +412,6 @@ func recallHook(memory *api.Memory, cfg *config.Config, payload map[string]any, 
 		saveActiveWorkspacePresence(cfg, *presence, session)
 	}
 	maybeSyncBackgroundOnHook(memory)
-	// In RAME (ThinBrainProxy) mode the capture side belongs to the background
-	// sync as well: the hook is fully silent.
-	if memory != nil && memory.IsThinBrainProxy() {
-		logHook(cfg, "recall", map[string]any{"injected": 0, "absent": 1})
-		return "", nil
-	}
 	if project != "" {
 		// Capture only: the raw prompt enters `trace` for episodic history and
 		// anchor verification, never as an extracted fact.
@@ -1139,9 +1105,6 @@ func nextSessionTurn(memory *api.Memory, scope, session string) int64 {
 // Moreover, we set Processed: true on the trace row so Stop/Start replay sweeps
 // do not turn raw user questions/commands into fake factual assertions either.
 func captureUserPrompt(memory *api.Memory, cfg *config.Config, session, prompt string, presence *text.PresenceCoordinates) int {
-	if memory != nil && memory.IsThinBrainProxy() {
-		return 0
-	}
 	cleaned := ids.StripInjected(pyStrip(prompt))
 	if cleaned == "" {
 		return 0
@@ -1367,7 +1330,7 @@ func stripDegenerateTail(s string) string {
 // cadence boundary (turn 4, 8, 12, ...) so a lightweight (~40-token) attention
 // anchor can be emitted on otherwise silent turns.
 func isCadenceReminderDue(memory *api.Memory, scope, session string) bool {
-	if memory == nil || memory.IsThinBrainProxy() || memory.Store == nil || memory.Store.DB() == nil || session == "" || session == "default" {
+	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || session == "" || session == "default" {
 		return false
 	}
 	var userTurns int

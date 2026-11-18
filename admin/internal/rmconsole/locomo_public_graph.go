@@ -35,12 +35,12 @@ type LocomoPublicGraphResponse struct {
 	GraphQueryResponse
 	Questions []LocomoPublicQuestion `json:"questions"`
 	Corpus    struct {
-		Suite       string `json:"suite"`
-		Scope       string `json:"scope"`
-		TotalUnits  int    `json:"total_units"`
-		TotalCells  int    `json:"total_cells"`
-		TotalNoetic int    `json:"total_noetic"`
-		Transport   string `json:"transport"`
+		Suite         string `json:"suite"`
+		Scope         string `json:"scope"`
+		TotalUnits    int    `json:"total_units"`
+		TotalClusters int    `json:"total_clusters"`
+		TotalNoetic   int    `json:"total_noetic"`
+		Transport     string `json:"transport"`
 	} `json:"corpus"`
 }
 
@@ -420,7 +420,7 @@ func loadLocomoCorpusWithSnapshots(useSnapshots bool) (*locomoCachedCorpus, erro
 	tierQs, _ := loadTierQuestions(dataDir, "100")
 
 	// 读取已有的本地明文召回记录（按文件从旧到新合并，最新重跑的全量记录覆盖旧记录）
-	cloudHitsByQID := make(map[string][]string)
+	recallHitsByQID := make(map[string][]string)
 	resultFiles := []string{
 		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-none.jsonl"),
 		filepath.Join(home, ".local", "state", "rolling-memory", "eval", "out", "results-sdk-local-plain-llm.jsonl"),
@@ -438,7 +438,7 @@ func loadLocomoCorpusWithSnapshots(useSnapshots bool) (*locomoCachedCorpus, erro
 					RetrievalUnitIDs []string `json:"retrieval_unit_ids"`
 				}
 				if json.Unmarshal([]byte(line), &row) == nil && row.ID != "" && len(row.RetrievalUnitIDs) > 0 {
-					cloudHitsByQID[row.ID] = row.RetrievalUnitIDs
+					recallHitsByQID[row.ID] = row.RetrievalUnitIDs
 				}
 			}
 		}
@@ -456,7 +456,7 @@ func loadLocomoCorpusWithSnapshots(useSnapshots bool) (*locomoCachedCorpus, erro
 						RetrievalUnitIDs []string `json:"retrieval_unit_ids"`
 					}
 					if json.Unmarshal([]byte(p), &item) == nil && item.ID != "" && len(item.RetrievalUnitIDs) > 0 {
-						cloudHitsByQID[item.ID] = item.RetrievalUnitIDs
+						recallHitsByQID[item.ID] = item.RetrievalUnitIDs
 					}
 				}
 			}
@@ -494,7 +494,7 @@ func loadLocomoCorpusWithSnapshots(useSnapshots bool) (*locomoCachedCorpus, erro
 		seenCited := make(map[string]bool)
 
 		// (a) 先并入云端真实召回记录中的 Top-4 高置信 unit_id（严禁把 Top-96 全量塞入单题引证，否则产生 C(68,2)=2278 条伪造完全图边）
-		for _, cuid := range cloudHitsByQID[q.ID] {
+		for _, cuid := range recallHitsByQID[q.ID] {
 			if _, ok := rawMap[cuid]; ok {
 				uk := "unit:" + cuid
 				if !seenCited[uk] {
@@ -1033,9 +1033,11 @@ func buildLocomoSubgraph(corpus *locomoCachedCorpus, limit int, keyword string, 
 	resp.Corpus.Suite = "locomo"
 	resp.Corpus.Scope = scopeKey
 	resp.Corpus.TotalUnits = len(corpus.unitOrder)
-	resp.Corpus.TotalCells = corpus.totalCells
+	resp.Corpus.TotalClusters = corpus.totalCells
 	resp.Corpus.TotalNoetic = len(corpus.questions)
-	resp.Corpus.Transport = "ramesdk.pulse_cipher.open-memory-v1"
+	// 传输标签与现役评测通道同源（本地明文离线通道；与 rmem internal/eval 的
+	// LocalPlainTransport 逐字一致），不再标注任何脉冲云端通道。
+	resp.Corpus.Transport = evalLocalPlainTransport
 	return resp
 }
 
@@ -1208,13 +1210,14 @@ func locomoPublicExpandHandler(c *gin.Context) {
 	httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
 }
 
-func queryUpstreamLocomoBlindEngine(queryText string, topK int, activeScope string) ([]string, int, string) {
+// queryLocomoSnapshotRecall 返回预置 LoCoMo 演示语料的静态快照召回读数：
+// 控制台只展示本地快照，不连接任何远端引擎（零云端外呼）。
+func queryLocomoSnapshotRecall(queryText string, topK int, activeScope string) ([]string, int, string) {
 	tokens := extractSearchTokens(queryText)
 	if len(tokens) == 0 {
 		tokens = []string{"memory"}
 	}
 	pulseBytes := len(tokens) * 10
-	// 本地模式直接走本地静态快照召回，不连接 RB 后端
 	return nil, pulseBytes, "local-locomo-snapshot"
 }
 
@@ -1262,8 +1265,8 @@ func locomoSnapshotRecallWithCorpus(c *gin.Context, corpus *locomoCachedCorpus) 
 		qID = matchedQ.ID
 	}
 
-	// 1. 发起真实 `/open/memory/v1/query?envelope=1` 不可逆盲化脉冲请求
-	upUnitIDs, pulseBytes, transport := queryUpstreamLocomoBlindEngine(qText, req.TopK, corpus.activeScope)
+	// 1. 本地静态快照召回（预置 LoCoMo 演示语料；零云端外呼，不连接任何远端引擎）。
+	upUnitIDs, pulseBytes, transport := queryLocomoSnapshotRecall(qText, req.TopK, corpus.activeScope)
 
 	var hitKeys []string
 	seenKey := make(map[string]bool)

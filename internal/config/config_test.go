@@ -44,7 +44,7 @@ func TestDefaultsAndEnvOverrides(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "missing.toml")
 	env := map[string]string{
-		"ROLLING_MEMORY_MODE":  "cloud",
+		"ROLLING_MEMORY_MODE":  "local",
 		"ROLLING_MEMORY_SCOPE": "mem:task:demo",
 		"ROLLING_MEMORY_DB":    filepath.Join(tmp, "x.db"),
 	}
@@ -52,7 +52,7 @@ func TestDefaultsAndEnvOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Mode != "cloud" || cfg.Scope != "mem:task:demo" || cfg.DB != filepath.Join(tmp, "x.db") {
+	if cfg.Mode != "local" || cfg.Scope != "mem:task:demo" || cfg.DB != filepath.Join(tmp, "x.db") {
 		t.Fatalf("unexpected overrides: %+v", cfg)
 	}
 	if cfg.LLM.Provider != "none" {
@@ -80,7 +80,7 @@ reader = "owner"
 log = "file.log"
 
 [mode]
-name = "cloud"
+name = "local"
 `)
 	env := map[string]string{
 		"ROLLING_MEMORY_DB":     "env.db",
@@ -92,14 +92,14 @@ name = "cloud"
 	cfg, err := Load(LoadOptions{
 		Path:  &path,
 		DB:    stringPtr("explicit.db"),
-		Mode:  stringPtr("cloud"),
+		Mode:  stringPtr("local"),
 		Scope: stringPtr("mem:explicit"),
 		Env:   env,
 	})
 	if err != nil {
 		t.Fatalf("explicit Load: %v", err)
 	}
-	if cfg.DB != "explicit.db" || cfg.Mode != "cloud" || cfg.Scope != "mem:explicit" {
+	if cfg.DB != "explicit.db" || cfg.Mode != "local" || cfg.Scope != "mem:explicit" {
 		t.Fatalf("explicit priority broken: %+v", cfg)
 	}
 	if cfg.Reader != "deliverable" || cfg.Log != "env.log" {
@@ -129,7 +129,7 @@ name = "cloud"
 		t.Fatalf("file Load: %v", err)
 	}
 	if cfg.DB != "file.db" || cfg.Scope != "mem:file" || cfg.Reader != "owner" ||
-		cfg.Mode != "cloud" || cfg.Log != "file.log" {
+		cfg.Mode != "local" || cfg.Log != "file.log" {
 		t.Fatalf("file priority broken: %+v", cfg)
 	}
 
@@ -215,7 +215,7 @@ func TestValidation(t *testing.T) {
 		{
 			name:   "mode",
 			opts:   LoadOptions{Path: &path, Mode: stringPtr("sideways"), Env: map[string]string{}},
-			substr: "mode must be one of ('local', 'cloud'), got 'sideways'",
+			substr: "mode must be one of ('local'), got 'sideways'",
 		},
 		{
 			name:   "reader",
@@ -304,12 +304,8 @@ func TestEgressPolicy(t *testing.T) {
 		t.Errorf("ftp scheme error = %v, want ErrEgressDenied", err)
 	}
 
-	cloud, err := Load(LoadOptions{Path: &path, Mode: stringPtr("cloud"), Env: map[string]string{}})
-	if err != nil {
-		t.Fatalf("cloud Load: %v", err)
-	}
-	if err := cloud.CheckEgress("https://api.openai.com/v1/chat/completions"); err != nil {
-		t.Errorf("cloud CheckEgress = %v, want nil", err)
+	if _, err := Load(LoadOptions{Path: &path, Mode: stringPtr("cloud"), Env: map[string]string{}}); !errors.Is(err, ErrConfig) {
+		t.Fatalf("cloud mode Load = %v, want ErrConfig", err)
 	}
 
 	noLoopbackPath := filepath.Join(tmp, "no-loopback.toml")
@@ -327,7 +323,7 @@ func TestSecretFilePermissions(t *testing.T) {
 	isolateHome(t)
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "c.toml")
-	cfg, err := Load(LoadOptions{Path: &path, Mode: stringPtr("cloud"), Env: map[string]string{}})
+	cfg, err := Load(LoadOptions{Path: &path, Mode: stringPtr("local"), Env: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -375,7 +371,7 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "super-secret")
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "c.toml")
-	cfg, err := Load(LoadOptions{Path: &path, Mode: stringPtr("cloud"), Env: map[string]string{}})
+	cfg, err := Load(LoadOptions{Path: &path, Mode: stringPtr("local"), Env: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -388,7 +384,7 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 	if strings.Contains(serialized, "super-secret") {
 		t.Fatalf("PublicDict leaked a secret: %v", public)
 	}
-	if public["egress"] != "remote-allowed" || public["mode"] != "cloud" {
+	if public["egress"] != "loopback-only" || public["mode"] != "local" {
 		t.Fatalf("unexpected public dict: %+v", public)
 	}
 	recall, ok := public["recall"].(map[string]any)
@@ -474,7 +470,7 @@ func TestWriteDefaultAndSetConfigValue(t *testing.T) {
 		t.Fatalf("WriteDefault overwrote an existing file")
 	}
 
-	if _, err := SetConfigValue(path, "mode.name", "cloud"); err != nil {
+	if _, err := SetConfigValue(path, "mode.name", "local"); err != nil {
 		t.Fatalf("SetConfigValue mode: %v", err)
 	}
 	raw, _ = os.ReadFile(path)
@@ -485,8 +481,8 @@ func TestWriteDefaultAndSetConfigValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after set: %v", err)
 	}
-	if cfg.Mode != "cloud" {
-		t.Fatalf("mode = %q, want cloud", cfg.Mode)
+	if cfg.Mode != "local" {
+		t.Fatalf("mode = %q, want local", cfg.Mode)
 	}
 	if _, err := SetConfigValue(path, "core.scope", "mem:task:demo"); err != nil {
 		t.Fatalf("SetConfigValue scope: %v", err)
@@ -532,12 +528,9 @@ func TestWriteDefaultAndSetConfigValue(t *testing.T) {
 	if !strings.Contains(text, `log = "with space.log"`) {
 		t.Fatalf("spaced string not JSON-quoted:\n%s", text)
 	}
-	cfg, err = Load(LoadOptions{Path: &path, Env: map[string]string{}})
+	_, err = Load(LoadOptions{Path: &path, Env: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load after nested set: %v", err)
-	}
-	if !cfg.Cloud.Enabled {
-		t.Fatalf("cloud.sync.enabled = false, want true")
 	}
 	if _, err := SetConfigValue(path, "nokey", "x"); !errors.Is(err, ErrConfig) {
 		t.Fatalf("bad key error = %v, want ErrConfig", err)
@@ -765,7 +758,7 @@ func TestRetiredEmbeddingAndRerankTablesIgnoredAndEgressBlocked(t *testing.T) {
 		t.Fatalf("SecretStatus must not expose retired embedding key: %#v", cfgStale.SecretStatus())
 	}
 
-	// 2. Local mode rejects advanced_ops = true, while Cloud mode allows it
+	// 2. Local mode rejects advanced_ops = true, and retired cloud mode is also rejected
 	advLocalPath := filepath.Join(tmp, "adv-local.toml")
 	writeConfig(t, advLocalPath, "[mode]\nname = \"local\"\n\n[recall]\nadvanced_ops = true\n")
 	if _, err := Load(LoadOptions{Path: &advLocalPath, Env: map[string]string{}}); err == nil {
@@ -774,9 +767,8 @@ func TestRetiredEmbeddingAndRerankTablesIgnoredAndEgressBlocked(t *testing.T) {
 
 	advCloudPath := filepath.Join(tmp, "adv-cloud.toml")
 	writeConfig(t, advCloudPath, "[mode]\nname = \"cloud\"\n\n[recall]\nadvanced_ops = true\n")
-	cfgCloudAdv, err := Load(LoadOptions{Path: &advCloudPath, Env: map[string]string{}})
-	if err != nil || !cfgCloudAdv.Recall.AdvancedOps {
-		t.Fatalf("expected cloud mode to allow recall.advanced_ops = true, err=%v", err)
+	if _, err := Load(LoadOptions{Path: &advCloudPath, Env: map[string]string{}}); err == nil {
+		t.Fatalf("expected retired cloud mode to be rejected by Load")
 	}
 
 	// 3. Retired [rerank] table in TOML is ignored (even with invalid provider) and

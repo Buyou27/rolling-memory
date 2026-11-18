@@ -145,6 +145,10 @@
                             <el-dropdown-item @click="runCmd('check', 'rolling-memory check --json')">
                                 rolling-memory check --json
                             </el-dropdown-item>
+                            <!-- 只读预演：分类 + 可重锚计数；执行回收与自愈在「记忆总览 → 回收与自愈」入口。 -->
+                            <el-dropdown-item @click="runCmd('prune', 'rolling-memory sync prune --json')">
+                                rolling-memory sync prune --json
+                            </el-dropdown-item>
                         </el-dropdown-menu>
                     </template>
                 </el-dropdown>

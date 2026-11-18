@@ -20,9 +20,9 @@ import (
 //
 // Core Philosophy:
 //   "Your memory is yours — store it however you want."
-//   The Rolling Autonoetic Memory Engine (`/open/memory/v1/*`) only exchanges
-//   `UnitID` + irreversible blind integer pulses `{h, b, f}` and never cares where
-//   or how the user stores their raw plaintext.
+//   The Rolling Autonoetic Memory Engine exchanges only `UnitID` +
+//   irreversible blind integer pulses `{h, b, f}` inside the local vault and
+//   never cares where or how the user stores their raw plaintext.
 //   While the official plugin ships with a default SQLite `Vault`, any user or
 //   third-party plugin developer can store plaintext in:
 //     - Plain `.txt` / `.md` files (`DirTextStore`),
@@ -41,7 +41,7 @@ type PlaintextStore interface {
 
 	// SaveLocalPlaintext persists the user's raw plaintext alongside the engine-assigned
 	// cell address, waveform bar, and kept dry-sentence indices.
-	SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp CloudIngestResponse) error
+	SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error
 
 	// LoadLocalDocument loads the user's raw plaintext and reconstructs the distilled
 	// dry text from `kept_sentence_indices` when the engine returns a hit for `docID`.
@@ -164,7 +164,7 @@ func NewJSONFileStore(filePath string, secret []byte) (*JSONFileStore, error) {
 	return s, nil
 }
 
-func (s *JSONFileStore) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp CloudIngestResponse) error {
+func (s *JSONFileStore) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.docs[docID] = jsonDocRecord{
@@ -238,7 +238,7 @@ func safeFileSlug(docID string) string {
 	return b.String()
 }
 
-func (d *DirTextStore) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp CloudIngestResponse) error {
+func (d *DirTextStore) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error {
 	slug := safeFileSlug(docID)
 	txtPath := filepath.Join(d.dirPath, slug+".txt")
 	if err := writeFileAtomic(txtPath, []byte(rawText), 0o600); err != nil {

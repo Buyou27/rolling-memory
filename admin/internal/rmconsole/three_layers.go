@@ -29,7 +29,7 @@ type LayerStatsResponse struct {
 	BackgroundFileCount  int             `json:"background_file_count"`
 	BackgroundChunkCount int             `json:"background_chunk_count"`
 	EpisodicCount        int             `json:"episodic_count"`
-	EpisodicCellCount    int             `json:"episodic_cell_count"`
+	EpisodicClusterCount int             `json:"episodic_cluster_count"`
 	NoeticActiveCount    int             `json:"noetic_active_count"`
 	NoeticStaleCount     int             `json:"noetic_stale_count"`
 	NoeticCitedLinks     int             `json:"noetic_cited_links"`
@@ -238,7 +238,6 @@ func openWritableVaultDB(dbPath string) (*sql.DB, error) {
 	} {
 		_, _ = db.Exec(stmt)
 	}
-	_, _ = db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS thin_vault_docs_fts USING fts5(raw_text, doc_id UNINDEXED, tokenize = 'trigram')`)
 	// 彻底移除旧版遗留表，保持数据库干净，仅保留唯一的 RAME `thin_vault_*` 引擎表。
 	_, _ = db.Exec(`PRAGMA foreign_keys = OFF`)
 	for _, legacyTbl := range []string{
@@ -247,6 +246,9 @@ func openWritableVaultDB(dbPath string) (*sql.DB, error) {
 		"recall_decision_cache", "activation", "sync_state", "replay_state",
 		"vector", "event", "meta_edge", "meta_edge_v2", "mention",
 		"assertion", "node_alias", "node_fts", "node", "trace_fts", "trace",
+		// 本地 FTS5 词法索引与其 rowid 映射：检索已 100% 由双簇内核承担，
+		// 这两张派生表不再被任何读写路径引用，开写即回收其占用。
+		"thin_vault_docs_fts", "thin_vault_fts_map",
 	} {
 		_, _ = db.Exec(`DROP TABLE IF EXISTS ` + legacyTbl)
 	}
@@ -527,16 +529,9 @@ func layersDeleteHandler(c *gin.Context) {
 		httpx.Fail(c, httpx.WithMessage("请选择要删除的记忆单元"))
 		return
 	}
-	deleted, invalidatedNoetic, purgedIDs, delErr := deleteMemoryUnits(db, cleanPKs, req.PurgeStale)
+	deleted, invalidatedNoetic, _, delErr := deleteMemoryUnits(db, cleanPKs, req.PurgeStale)
 	if delErr != nil {
 		httpx.Fail(c, httpx.WithMessage(delErr.Error()))
-		return
-	}
-
-	// 云端模式下本地已删的单元必须同步 purge：否则两侧记忆状态分叉，且本地金库已无明文可水合。
-	// 本地模式（零外呼硬边界）恒不发请求；失败时如实上报，绝不静默吞掉不一致。
-	if msg := purgeCloudUnitsIfCloudMode(home, purgedIDs); msg != "" {
-		httpx.Fail(c, httpx.WithMessage(msg))
 		return
 	}
 
@@ -622,9 +617,6 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, pk, lyr, nowUnix); execErr != nil {
 				return 0, 0, nil, fmt.Errorf("写入删除墓碑失败: %w", execErr)
 			}
-			if execErr := deleteVaultFTSRow(tx, pk); execErr != nil {
-				return 0, 0, nil, fmt.Errorf("删除记忆索引失败: %w", execErr)
-			}
 			for _, table := range []string{"thin_vault_episodic_lineage", "thin_vault_episodic_index", "thin_vault_episodic_sources"} {
 				if execErr := deleteOptionalVaultRow(tx, table, "doc_id", pk); execErr != nil {
 					return 0, 0, nil, fmt.Errorf("删除记忆索引或谱系失败: %w", execErr)
@@ -665,9 +657,6 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 			purgedIDs = append(purgedIDs, pk)
 			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'background', ?)`, pk, nowUnix); execErr != nil {
 				return 0, 0, nil, fmt.Errorf("写入删除墓碑失败: %w", execErr)
-			}
-			if execErr := deleteVaultFTSRow(tx, pk); execErr != nil {
-				return 0, 0, nil, fmt.Errorf("删除背景索引失败: %w", execErr)
 			}
 			if strings.TrimSpace(ownerAbsPath) != "" {
 				touchedFiles[ownerAbsPath] = true
@@ -725,8 +714,7 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 	return deleted, invalidatedNoetic, purgedIDs, nil
 }
 
-// deleteVaultFTSRow 同步清理 contentless FTS5 映射表（thin_vault_fts_map + 按 rowid 删 thin_vault_docs_fts）
-// 以及旧版带内容 FTS5 表的 doc_id 列，确保后台删除 L1/L2 单元后不残留孤儿倒排索引。
+// vaultTableExistsTx 判断薄金库中的可选表是否真实存在（旧库可能缺少某些可选索引表）。
 func vaultTableExistsTx(tx *sql.Tx, name string) (bool, error) {
 	var exists int
 	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, name).Scan(&exists)
@@ -739,39 +727,6 @@ func deleteOptionalVaultRow(tx *sql.Tx, table, column, id string) error {
 		return err
 	}
 	_, err = tx.Exec(`DELETE FROM `+table+` WHERE `+column+` = ?`, id)
-	return err
-}
-
-func deleteVaultFTSRow(tx *sql.Tx, docID string) error {
-	hasFTS, err := vaultTableExistsTx(tx, "thin_vault_docs_fts")
-	if err != nil {
-		return err
-	}
-	hasMap, err := vaultTableExistsTx(tx, "thin_vault_fts_map")
-	if err != nil {
-		return err
-	}
-	if hasMap {
-		var rowID int64
-		err := tx.QueryRow(`SELECT rowid FROM thin_vault_fts_map WHERE doc_id = ?`, docID).Scan(&rowID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !hasFTS {
-			return errors.New("FTS map exists without FTS index")
-		}
-		if _, err := tx.Exec(`DELETE FROM thin_vault_docs_fts WHERE rowid = ?`, rowID); err != nil {
-			return err
-		}
-		_, err = tx.Exec(`DELETE FROM thin_vault_fts_map WHERE rowid = ?`, rowID)
-		return err
-	}
-	if hasFTS {
-		_, err = tx.Exec(`DELETE FROM thin_vault_docs_fts WHERE doc_id = ?`, docID)
-	}
 	return err
 }
 
@@ -809,39 +764,6 @@ func resyncBackgroundFileBookkeeping(tx *sql.Tx, absPath string) error {
 		len(ids), string(uidJSON), absPath,
 	)
 	return err
-}
-
-// purgeCloudUnitsIfCloudMode 在云端模式下把已删除的单元同步 purge 到记忆引擎；
-// 本地模式（local_plain 零外呼硬边界）恒不发请求。返回非空字符串即需要向用户如实上报的失败原因。
-func purgeCloudUnitsIfCloudMode(home string, unitIDs []string) string {
-	ids := make([]string, 0, len(unitIDs))
-	for _, id := range unitIDs {
-		if s := strings.TrimSpace(id); s != "" {
-			ids = append(ids, s)
-		}
-	}
-	if len(ids) == 0 || isLocalModeForHome(home) {
-		return ""
-	}
-	st := loadCloudAccountState()
-	userID := accountNumericUserID(st)
-	if userID == "" {
-		userID = defaultUpstreamDevUserID
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	// 身份口径与 thin client / graph 路径一致：namespace 是租户（tenant_id），
-	// user_id 必须是账户数字 id（upstream `users.id`）。
-	_, err := callUpstreamJSON(ctx, st.BaseURL, "/open/memory/v1/purge", st.Token, st.APIKey, map[string]any{
-		"tenant_id": strings.TrimSpace(st.Namespace),
-		"user_id":   userID,
-		"mode":      "units",
-		"unit_ids":  ids,
-	})
-	if err != nil {
-		return "本地记忆已删除，但云端 purge 同步失败：" + err.Error()
-	}
-	return ""
 }
 
 // backgroundDirsHandler 返回所有已挂载的本地背景目录及其文件/分块统计与扩展名过滤配置。
@@ -1188,10 +1110,7 @@ func runAdminBackgroundCLI(ctx context.Context, action, dbPath, rootPath string)
 	if bin == "" {
 		return nil, fmt.Errorf("未找到 rolling-memory 引擎二进制")
 	}
-	childEnv, ready := brainChildEnv(ctx)
-	if !ready {
-		return nil, fmt.Errorf("云端记忆签名钥未配置：请先登录云端账户（数据面直连凭据由控制面签发）")
-	}
+	childEnv := stripCloudBrainEnv(os.Environ())
 
 	args := []string{"background", action, "--db", dbPath, "--json"}
 	if strings.TrimSpace(rootPath) != "" {
@@ -1310,8 +1229,9 @@ func collectEnvHealthPayload(ctx context.Context, home, harness string) (map[str
 		return nil, fmt.Errorf("解析诊断 JSON 失败: %w", err)
 	}
 	sw := parseConfigSwitches(filepath.Join(home, ".config", "rolling-memory", "config.toml"), true)
-	payload["auto_sync_enabled"] = sw.CloudAutoSync
-	if sw.CloudAutoSync {
+	payload["auto_sync_enabled"] = sw.SyncAutoWatch
+	payload["delivery_window"] = sw.DeliveryWindow
+	if sw.SyncAutoWatch {
 		payload["sync_mode"] = "auto"
 	} else {
 		payload["sync_mode"] = "manual"
@@ -1395,8 +1315,8 @@ func syncReconcileHandler(c *gin.Context) {
 	// 直接补齐控制台同步开关并广播给实时流订阅者，前端可直接采用 status 而无需再起第二个 status 子进程。
 	if statusMap, ok := payload["status"].(map[string]any); ok && statusMap != nil {
 		sw := parseConfigSwitches(filepath.Join(home, ".config", "rolling-memory", "config.toml"), true)
-		statusMap["auto_sync_enabled"] = sw.CloudAutoSync
-		if sw.CloudAutoSync {
+		statusMap["auto_sync_enabled"] = sw.SyncAutoWatch
+		if sw.SyncAutoWatch {
 			statusMap["sync_mode"] = "auto"
 		} else {
 			statusMap["sync_mode"] = "manual"
@@ -1423,18 +1343,9 @@ func runAdminSyncCLI(ctx context.Context, action, dbPath, harnessID, layer strin
 		ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
 	}
-	var childEnv []string
-	if isLocalModeForHome(home) {
-		// 本地模式 = 零外呼硬边界：不续签签名钥、不注入云端凭据，并剥掉可能从宿主继承的
-		// BRAIN_URL/BRAIN_KEY —— 否则子进程会把开发期覆盖当成云端开关，把本地读写打成远端请求。
-		childEnv = stripCloudBrainEnv(os.Environ())
-	} else {
-		ready := false
-		childEnv, ready = brainChildEnv(ctx)
-		if !ready {
-			return nil, fmt.Errorf("云端记忆签名钥未配置：请先登录云端账户（数据面直连凭据由控制面签发）")
-		}
-	}
+	// 子进程零云端覆盖变量：不注入任何远端端点/凭据，并剥掉可能从宿主继承的
+	// BRAIN_URL/BRAIN_KEY —— 否则子进程会把开发期覆盖当成云端开关，把本地读写打成远端请求。
+	childEnv := stripCloudBrainEnv(os.Environ())
 	if action == "status" && envHealthProgressSink(ctx) != nil {
 		// 仅 env/health 流式采集请求进度事件（CLI 侧默认静默）：一次性端点与直连 CLI 行为不变。
 		childEnv = append(childEnv, statusProgressEnv+"=1")
@@ -1486,8 +1397,9 @@ func finishAdminSyncCLIResult(action string, out []byte, stderrText string, err 
 	return out, fmt.Errorf("sync %s: %w", action, err)
 }
 
-// stripCloudBrainEnv 从子进程环境中剔除云端记忆面覆盖变量（BRAIN_URL / BRAIN_KEY），
-// 使本地模式下派生的 `rolling-memory` 子进程不可能被宿主环境误开云端通道。
+// stripCloudBrainEnv 从子进程环境中剔除云端记忆面覆盖变量（BRAIN_URL / BRAIN_KEY）：
+// 控制台只读写本地明文金库，派生出的 `rolling-memory` 子进程不可能被宿主环境误开云端通道
+// （子进程零云端覆盖变量的纵深防线）。
 func stripCloudBrainEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -1497,25 +1409,4 @@ func stripCloudBrainEnv(env []string) []string {
 		out = append(out, kv)
 	}
 	return out
-}
-
-// brainChildEnv 构造派生子进程的环境变量。本地模式零外呼：剥离继承的云端覆盖变量、不续签凭据；
-// 云端模式续签后在凭据齐备时注入端点与数据面签名钥（返回 ready=false 表示凭据缺失，由调用方如实上报）。
-// 用户身份一律由子进程自行解析（与 MCP / Harness 钩子同源），不得用 account.Namespace 顶替——
-// 否则引擎合成 scope 退化（ast:default），读写错分区。
-func brainChildEnv(ctx context.Context) (env []string, ready bool) {
-	base := os.Environ()
-	if isLocalModeForHome(userHome()) {
-		return stripCloudBrainEnv(base), true
-	}
-	account := loadCloudAccountState()
-	_ = ensureSignedKey(ctx, &account)
-	baseURL, apiKey := resolveBrainEndpoint(account)
-	if baseURL == "" || apiKey == "" {
-		return base, false
-	}
-	return append(base,
-		"ROLLING_MEMORY_BRAIN_URL="+baseURL,
-		"ROLLING_MEMORY_BRAIN_KEY="+apiKey,
-	), true
 }

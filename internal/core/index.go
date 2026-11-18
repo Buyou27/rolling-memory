@@ -138,17 +138,18 @@ func (idx *Index) LookupUnit(unitID string) (int32, bool) {
 }
 
 const (
-	// highDFFraction (~13.53%, calibrated at 1/e^2) is the corpus document-frequency
+	// HighDFFraction (~13.53%, calibrated at 1/e^2) is the corpus document-frequency
 	// ratio above which a term behaves as a high-frequency background token rather
-	// than a specific content anchor.
-	highDFFraction = 0.1353352832366127
+	// than a specific content anchor. Exported as the single value source for
+	// consumers that previously duplicated the literal (eval health doctor).
+	HighDFFraction = 0.1353352832366127
 	// minHighDFFloor prevents single-digit micro-corpora from collapsing the
 	// high-DF threshold to 0 or 1.
 	minHighDFFloor = 7.38905609893065
 )
 
 func HighDFThresholdForN(n int) int {
-	return int(math.Max(minHighDFFloor, float64(n)*highDFFraction))
+	return int(math.Max(minHighDFFloor, float64(n)*HighDFFraction))
 }
 
 // highDFThresholdGuarded 保证被判词项的高 DF 阈值至少为 1：n·fraction 在小 n 上经

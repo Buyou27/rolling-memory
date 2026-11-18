@@ -39,7 +39,7 @@ func TestEpisodicBackfillEncodingFailureStopsBeforeCursor(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":"encoding failure"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.SaveLocalEpisodicPointer(id, 1, "@ref:jsonl:"+path+":0#0", "", CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointer(id, 1, "@ref:jsonl:"+path+":0#0", "", IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := v.BackfillEpisodicIndexes(context.Background(), scope, "", 10)
@@ -78,7 +78,7 @@ func TestEpisodicBackfillCorruptItemDoesNotBlock(t *testing.T) {
 	badRef := "@ref:jsonl:" + path + ":0#0"
 	goodRef := "@ref:jsonl:" + path + ":1#0"
 	for _, row := range []struct{ id, ref string }{{badID, badRef}, {goodID, goodRef}} {
-		if err := v.SaveLocalEpisodicPointer(row.id, 1, row.ref, "", CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointer(row.id, 1, row.ref, "", IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}

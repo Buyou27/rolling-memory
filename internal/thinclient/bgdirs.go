@@ -38,7 +38,7 @@ import (
 //        (`abs_path`, `mtime_ns`, `file_size`, `content_sha256`, `chunk_index`, `kept_indices_json`).
 //      - When `LoadLocalDocument(unitID)` is called upon retrieval hit, the client reads the chunk
 //        LIVE on-demand from the original file on disk (`ReadChunkFromLocalFileLive`) and applies
-//        the cloud-distilled `kept_sentence_indices`!
+//        the ingested `kept_sentence_indices`!
 //   3. Millisecond Delta Sync (`SyncBackgroundDirs`):
 //      - Unchanged files (`mtime_ns` & `size` match) are skipped in O(1) via `os.Stat` with zero file I/O.
 //      - Modified files re-chunk, re-ingest `{h, b, f, layer:"background"}` pulses, and cascade `stale`
@@ -98,7 +98,7 @@ type BackgroundSyncReport struct {
 // drain rather than abort — aborting them would turn genuine transport results into bogus
 // `context canceled` errors — and stage 3 still aborts at the first failure in walk order, so no
 // failing-suffix file is ever committed locally. A failed sync can therefore leave up to
-// `backgroundSyncWorkers-1` files uploaded-but-uncommitted in the cloud; their units are
+// `backgroundSyncWorkers-1` files ingested-but-uncommitted in the transport; their units are
 // content-addressed (the same text re-ingests to the same `ep_<sha256>` unit), so the next
 // successful sync converges them and the extension costs bandwidth on the failure path only.
 const backgroundSyncWorkers = 4
@@ -108,7 +108,7 @@ const backgroundSyncWorkers = 4
 // per file and compared on the stat fast path: rows written by an older rule are re-chunked
 // instead of trusted. Change this string in the same commit as any chunking rule change (budget
 // unit, budget value, packing rule) so existing inventories converge on the next sync.
-const backgroundChunkerGeneration = "tokenz-r/1024"
+const backgroundChunkerGeneration = "tokenz-r/1024/rmbp-v1"
 
 // backgroundTrackedFile is one `thin_vault_bg_files` row loaded as the previous sync's baseline for
 // the stat fast path, the content-SHA comparison and per-chunk delta detection.
@@ -144,7 +144,7 @@ type backgroundSyncUpload struct {
 	chunkHashes       []string
 	changed           []bool
 	packets           []BlindPulsePacket
-	responses         []CloudIngestResponse
+	responses         []IngestResponse
 	changedChunks     int
 	skipReason        string // non-empty: per-file skip (unreadable, oversized, no extractable text)
 	err               error
@@ -523,7 +523,7 @@ func (v *Vault) loadBackgroundDirRemoval(dirPath string) (backgroundDirRemoval, 
 
 // backgroundDirRebind records one tracked file that survives its mount's removal because a
 // remaining mount still physically covers it: only the attribution moves (dir_id and display
-// rel_path point at the deepest covering mount); chunks, unit IDs, cloud receipts and Noetic
+// rel_path point at the deepest covering mount); chunks, unit IDs, ingestion receipts and Noetic
 // citations all stay untouched.
 type backgroundDirRebind struct {
 	absPath string
@@ -532,7 +532,7 @@ type backgroundDirRebind struct {
 }
 
 // backgroundDirPurge is one tracked file that no remaining mount covers: it is removed exactly
-// like a deleted file (cloud units first, then local rows and the Noetic stale cascade).
+// like a deleted file (transport units first, then local rows and the Noetic stale cascade).
 type backgroundDirPurge struct {
 	absPath string
 	unitIDs []string
@@ -550,7 +550,7 @@ type backgroundDirRemovalPlan struct {
 	purges    []backgroundDirPurge
 }
 
-// purgeUnitIDs flattens every UnitID that must be deleted from the cloud.
+// purgeUnitIDs flattens every UnitID that must be deleted from the transport.
 func (plan backgroundDirRemovalPlan) purgeUnitIDs() []string {
 	out := make([]string, 0, len(plan.purges))
 	for _, purge := range plan.purges {
@@ -658,16 +658,15 @@ func (v *Vault) rebindBackgroundFile(rebind backgroundDirRebind) error {
 
 // Purge transactions are bounded twice: backgroundPurgeBatchBudget caps how long one
 // transaction may accumulate work and backgroundPurgeBatchUnits caps its row/WAL footprint.
-// The per-statement FTS5 delete cost is fat-tailed (segment maintenance can cost hundreds of
-// milliseconds inside a single remove), and a mount can hold files with tens of thousands of
-// chunks, so neither one file nor a fixed unit count bounds a transaction's duration. The
-// budget keeps every purge transaction a small fraction of the busy timeout concurrent
-// writers wait on, while staying comfortably above the observed single-statement tail so
-// batches do not degenerate to one unit per transaction. backgroundPurgeYield pauses between
-// consecutive transactions: back-to-back commits leave only sub-millisecond gaps that a
-// waiting writer's busy handler usually misses, letting coarse retry intervals starve it for
-// seconds, while a couple of milliseconds (several times the handler's early 1-2ms step)
-// always gives every waiter a catchable window.
+// A single delete statement's cost is fat-tailed on large chunk tables, and a mount can hold
+// files with tens of thousands of chunks, so neither one file nor a fixed unit count bounds a
+// transaction's duration. The budget keeps every purge transaction a small fraction of the busy
+// timeout concurrent writers wait on, while staying comfortably above the observed
+// single-statement tail so batches do not degenerate to one unit per transaction.
+// backgroundPurgeYield pauses between consecutive transactions: back-to-back commits leave
+// only sub-millisecond gaps that a waiting writer's busy handler usually misses, letting
+// coarse retry intervals starve it for seconds, while a couple of milliseconds (several times
+// the handler's early 1-2ms step) always gives every waiter a catchable window.
 const (
 	backgroundPurgeBatchUnits  = 256
 	backgroundPurgeBatchBudget = 50 * time.Millisecond
@@ -677,8 +676,8 @@ const (
 // RemoveBackgroundDir unmounts a local directory and removes its tracked file/chunk metadata from the local Vault,
 // returning all background `UnitID`s that no remaining mount covers so the caller can purge them. Files still
 // physically covered by another mounted directory are re-attributed to the deepest covering mount instead — their
-// units, cloud receipts and Noetic citations stay intact. It is a local operation; callers that also purge cloud
-// units must do so before calling this method.
+// units, ingestion receipts and Noetic citations stay intact. It is a local operation; callers that also purge
+// transport units must do so before calling this method.
 // Every file is purged or re-bound in bounded batches and the mount row goes last, so the write lock is never
 // held for a whole file or mount and any failure leaves a resumable state behind.
 func (v *Vault) RemoveBackgroundDir(dirPath string) ([]string, error) {
@@ -693,21 +692,13 @@ func (v *Vault) RemoveBackgroundDir(dirPath string) ([]string, error) {
 // purged through the same bounded batches as a deleted file, every covered file is re-bound in
 // its own bounded transaction, and the mount row goes last (with a coverage-aware sweep of any
 // file rows a concurrent walk re-committed after their pass), so a failure at any point leaves a
-// resumable state behind. It returns the purged UnitIDs the caller must still delete from the cloud.
+// resumable state behind. It returns the purged UnitIDs the caller must still delete from the transport.
 func (v *Vault) applyBackgroundDirRemoval(plan backgroundDirRemovalPlan) ([]string, error) {
 	// One citation index for the whole mount: rescanning the Noetic table per removed unit made
 	// the purge quadratic in the mount size.
 	citations, err := loadLocalNoeticCitationIndex(v.db)
 	if err != nil {
 		return nil, err
-	}
-	if v.hasFTS5 && len(plan.purgeUnitIDs()) > backgroundPurgeBatchUnits {
-		_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('automerge', 0)`)
-		_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('crisismerge', 2000)`)
-		defer func() {
-			_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('automerge', 4)`)
-			_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('crisismerge', 16)`)
-		}()
 	}
 	for _, purge := range plan.purges {
 		if err := v.purgeBackgroundFileBatched(purge.absPath, purge.unitIDs, citations); err != nil {
@@ -763,7 +754,7 @@ func (v *Vault) applyBackgroundDirRemoval(plan backgroundDirRemovalPlan) ([]stri
 }
 
 // purgeBackgroundFileBatched removes one tracked file in time-and-unit bounded batches; every
-// batch deletes that slice's chunk rows, FTS rows and citing-Noetic staleness together, and the
+// batch deletes that slice's chunk rows and citing-Noetic staleness together, and the
 // file row goes in the last batch, so a failure anywhere leaves a re-enumerable file behind
 // instead of orphaned index rows; every step is idempotent for the retry.
 func (v *Vault) purgeBackgroundFileBatched(absPath string, unitIDs []string, citations *localNoeticCitationIndex) error {
@@ -772,14 +763,6 @@ func (v *Vault) purgeBackgroundFileBatched(absPath string, unitIDs []string, cit
 }
 
 func (v *Vault) purgeBackgroundFileBatchedWithStaled(ctx context.Context, absPath string, unitIDs []string, citations *localNoeticCitationIndex) (map[string]bool, error) {
-	if v.hasFTS5 && len(unitIDs) > backgroundPurgeBatchUnits {
-		_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('automerge', 0)`)
-		_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('crisismerge', 2000)`)
-		defer func() {
-			_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('automerge', 4)`)
-			_, _ = v.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('crisismerge', 16)`)
-		}()
-	}
 	return v.purgeBackgroundFileBatchedLoop(ctx, absPath, unitIDs, citations)
 }
 
@@ -801,9 +784,9 @@ func (v *Vault) purgeBackgroundFileBatchedLoop(ctx context.Context, absPath stri
 }
 
 // purgeBackgroundFileBatch runs one bounded batch: it deletes up to backgroundPurgeBatchUnits
-// chunk rows and FTS rows using set-based IN(...) statements (avoiding 4*N individual SQL
-// compilations and FTS5 cursor opens per batch), cascades Noetic citation staleness, and
-// deletes the file row itself when this batch reaches the end of unitIDs.
+// chunk rows using set-based IN(...) statements (avoiding 4*N individual SQL compilations),
+// cascades Noetic citation staleness, and deletes the file row itself when this batch
+// reaches the end of unitIDs.
 func (v *Vault) purgeBackgroundFileBatch(ctx context.Context, absPath string, unitIDs []string, start int, citations *localNoeticCitationIndex, staled map[string]bool) (int, bool, error) {
 	tx, err := v.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -827,11 +810,6 @@ func (v *Vault) purgeBackgroundFileBatch(ctx context.Context, absPath string, un
 		placeholders = placeholders[:len(placeholders)-1]
 		if _, err := tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
 			return rollback(fmt.Errorf("thinclient: delete background chunks for %s: %w", absPath, err))
-		}
-		if v.hasFTS5 {
-			if err := ftsDeleteRows(tx, batch); err != nil {
-				return rollback(fmt.Errorf("thinclient: delete FTS rows for %s: %w", absPath, err))
-			}
 		}
 		if citations != nil {
 			for _, unitID := range batch {
@@ -1081,9 +1059,9 @@ type BackgroundDirRemovalReport struct {
 	ReboundFiles   int      `json:"rebound_files"`
 }
 
-// RemoveBackgroundDir purges a mounted directory's cloud chunk units before unmounting its local metadata.
+// RemoveBackgroundDir purges a mounted directory's transport chunk units before unmounting its local metadata.
 // Only units that no remaining mount covers are purged: files still covered by another mount are re-attributed
-// to the deepest covering mount and stay in the cloud. A failed purge leaves the mount and all retry metadata intact.
+// to the deepest covering mount and stay in the transport. A failed purge leaves the mount and all retry metadata intact.
 func (c *Client) RemoveBackgroundDir(ctx context.Context, dirPath string) ([]string, error) {
 	report, err := c.RemoveBackgroundDirReport(ctx, dirPath)
 	if err != nil {
@@ -1114,6 +1092,91 @@ func (c *Client) RemoveBackgroundDirReport(ctx context.Context, dirPath string) 
 		RemovedUnitIDs: removedIDs,
 		ReboundFiles:   len(plan.rebinds),
 	}, nil
+}
+
+// BackgroundDirRemovalPreview is the read-only projection of one directory unmount: the
+// files a remaining mount still covers (re-bound, nothing deleted) versus the files no
+// mount covers anymore (purged together with their chunks), plus how many active Noetic
+// records cite the purged chunks and would flip to stale when the purge lands. It exists
+// so callers can show the exact effect of an unmount before confirming it.
+type BackgroundDirRemovalPreview struct {
+	RootPath        string   `json:"root_path"`
+	RemainingMounts int      `json:"remaining_mounts"`
+	RemainingRoots  []string `json:"remaining_roots,omitempty"`
+	ReboundFiles    int      `json:"rebound_files"`
+	PurgedFiles     int      `json:"purged_files"`
+	PurgedChunks    int      `json:"purged_chunks"`
+	StaledNoetic    int      `json:"staled_noetic"`
+	ReboundSample   []string `json:"rebound_sample,omitempty"`
+	PurgedSample    []string `json:"purged_sample,omitempty"`
+}
+
+// backgroundPreviewSampleLimit caps the per-list samples carried by a preview so a huge
+// mount stays readable without turning the preview into a full file dump.
+const backgroundPreviewSampleLimit = 8
+
+// PreviewBackgroundDirRemoval resolves the same plan RemoveBackgroundDirReport executes but
+// performs zero writes: nothing is purged, no row is re-attributed and no citation changes
+// state. A file still covered by another mount is reported as a re-bind (it survives the
+// unmount untouched); only files no remaining mount covers count as purges.
+func (c *Client) PreviewBackgroundDirRemoval(dirPath string) (BackgroundDirRemovalPreview, error) {
+	if c.Vault == nil {
+		return BackgroundDirRemovalPreview{}, errors.New("thinclient: PreviewBackgroundDirRemoval requires a local SQLite Vault")
+	}
+	plan, err := c.Vault.planBackgroundDirRemoval(dirPath)
+	if err != nil {
+		return BackgroundDirRemovalPreview{}, err
+	}
+	return c.Vault.previewBackgroundDirRemoval(plan)
+}
+
+// previewBackgroundDirRemoval folds one resolved removal plan into its read-only summary,
+// including the citation impact of the purge set (active Noetic records citing any unit the
+// purge would retire).
+func (v *Vault) previewBackgroundDirRemoval(plan backgroundDirRemovalPlan) (BackgroundDirRemovalPreview, error) {
+	preview := BackgroundDirRemovalPreview{
+		RootPath:        plan.removal.rootPath,
+		RemainingMounts: len(plan.remaining),
+		ReboundFiles:    len(plan.rebinds),
+		PurgedFiles:     len(plan.purges),
+	}
+	for _, mount := range plan.remaining {
+		if len(preview.RemainingRoots) >= backgroundPreviewSampleLimit {
+			break
+		}
+		preview.RemainingRoots = append(preview.RemainingRoots, mount.RootPath)
+	}
+	purgedUnitIDs := make(map[string]bool, len(plan.purges))
+	for _, rebind := range plan.rebinds {
+		if len(preview.ReboundSample) >= backgroundPreviewSampleLimit {
+			break
+		}
+		preview.ReboundSample = append(preview.ReboundSample, rebind.absPath)
+	}
+	for _, purge := range plan.purges {
+		preview.PurgedChunks += len(purge.unitIDs)
+		for _, unitID := range purge.unitIDs {
+			purgedUnitIDs[unitID] = true
+		}
+		if len(preview.PurgedSample) < backgroundPreviewSampleLimit {
+			preview.PurgedSample = append(preview.PurgedSample, purge.absPath)
+		}
+	}
+	if len(purgedUnitIDs) == 0 {
+		return preview, nil
+	}
+	citations, err := loadLocalNoeticCitationIndex(v.db)
+	if err != nil {
+		return BackgroundDirRemovalPreview{}, err
+	}
+	staled := make(map[string]bool, 8)
+	for unitID := range purgedUnitIDs {
+		for _, noeticID := range citations.byUnit[unitID] {
+			staled[noeticID] = true
+		}
+	}
+	preview.StaledNoetic = len(staled)
+	return preview, nil
 }
 
 // uploadBackgroundFile drains the network half of one staged file: read and chunk it, diff every
@@ -1156,12 +1219,12 @@ func (c *Client) uploadBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 
 	// Per-chunk delta: a file-level edit no longer re-sends every chunk. Chunk i is
 	// re-ingested only when its text hash changed (or it is new / from a legacy row
-	// without hashes). Unit IDs stay path+index based, so unchanged cloud units and
+	// without hashes). Unit IDs stay path+index based, so unchanged transport units and
 	// their Noetic citations remain valid.
 	up.newUnitIDs = make([]string, len(chunks))
 	up.chunkHashes = make([]string, len(chunks))
 	up.packets = make([]BlindPulsePacket, len(chunks))
-	up.responses = make([]CloudIngestResponse, len(chunks))
+	up.responses = make([]IngestResponse, len(chunks))
 	up.changed = make([]bool, len(chunks))
 	for i, chunk := range chunks {
 		unitID := computeChunkUnitID(up.absPath, chunk.ChunkIndex)
@@ -1208,8 +1271,8 @@ func (c *Client) uploadBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 	return nil
 }
 
-// commitBackgroundFile serializes one staged file's local bookkeeping after its uploads drained:
-// purge obsolete trailing cloud units before deleting their local metadata, refresh a metadata-only
+// commitBackgroundFile serializes one staged file's local bookkeeping after its ingests drained:
+// purge obsolete trailing transport units before deleting their local metadata, refresh a metadata-only
 // touch, then write the chunk/FTS/file rows in bounded transactions while cascading `stale` to every
 // Noetic record citing a changed chunk. Normal files (<= backgroundPurgeBatchUnits chunks within
 // backgroundPurgeBatchBudget) commit in one transaction; giant multi-thousand-chunk files split
@@ -1225,7 +1288,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 		return affectedNoetic, 0, nil
 	}
 
-	// Purge obsolete trailing cloud units before deleting their local metadata.
+	// Purge obsolete trailing transport units before deleting their local metadata.
 	if up.hadPrev && len(up.prev.unitIDs) > len(up.chunks) {
 		if err := c.deleteBackgroundUnits(ctx, up.prev.unitIDs[len(up.chunks):]); err != nil {
 			return nil, 0, err
@@ -1270,14 +1333,6 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 	if up.hadPrev && len(up.prev.unitIDs) > len(up.chunks) {
 		trailingUnits = up.prev.unitIDs[len(up.chunks):]
 	}
-	if c.Vault.hasFTS5 && up.changedChunks+len(trailingUnits) > backgroundPurgeBatchUnits {
-		_, _ = c.Vault.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('automerge', 0)`)
-		_, _ = c.Vault.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('crisismerge', 2000)`)
-		defer func() {
-			_, _ = c.Vault.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('automerge', 4)`)
-			_, _ = c.Vault.db.Exec(`INSERT INTO thin_vault_docs_fts(thin_vault_docs_fts, rank) VALUES('crisismerge', 16)`)
-		}()
-	}
 
 	chunkIdx := 0
 	trailIdx := 0
@@ -1297,7 +1352,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			chunk := up.chunks[i]
 			unitID := up.newUnitIDs[i]
 			if !up.changed[i] {
-				// Reused chunk: keep its cloud receipt and slots; only refresh the
+				// Reused chunk: keep its ingestion receipt and slots; only refresh the
 				// display path if the file moved between mounts.
 				if up.hadPrev && up.prev.relPath != up.relPath {
 					if _, err := tx.Exec(`UPDATE thin_vault_bg_chunks SET rel_path = ? WHERE unit_id = ?`, up.relPath, unitID); err != nil {
@@ -1316,7 +1371,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			if err != nil {
 				return rollback(fmt.Errorf("thinclient: encode kept indices for %s: %w", unitID, err))
 			}
-			slotsBlob := encodeAtomSlots(up.packets[i].Slots)
+			slotsBlob := encodePacketWireBlob(up.packets[i])
 			if _, err := tx.Exec(`
 					INSERT INTO thin_vault_bg_chunks(
 						unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, inserted_at, address_uri, coord64, waveform_bar, kept_indices_json, slots_json
@@ -1337,11 +1392,6 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 				resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, string(keptJSON), slotsBlob,
 			); err != nil {
 				return rollback(fmt.Errorf("thinclient: save background chunk %s: %w", unitID, err))
-			}
-			if c.Vault.hasFTS5 {
-				if err := ftsReplaceRow(tx, unitID, chunk.Text); err != nil {
-					return rollback(fmt.Errorf("thinclient: index FTS row for %s: %w", unitID, err))
-				}
 			}
 			chunkIdx++
 			ops++
@@ -1367,11 +1417,6 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			placeholders = placeholders[:len(placeholders)-1]
 			if _, err := tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
 				return rollback(fmt.Errorf("thinclient: delete trailing background chunks for %s: %w", up.absPath, err))
-			}
-			if c.Vault.hasFTS5 {
-				if err := ftsDeleteRows(tx, trailSlice); err != nil {
-					return rollback(fmt.Errorf("thinclient: delete trailing FTS rows for %s: %w", up.absPath, err))
-				}
 			}
 			trailIdx = endTrail
 		}
@@ -1426,8 +1471,8 @@ func markBackgroundFailure(stopIndex *atomic.Int64, at int) {
 
 // rollbackPostFailureUploads purges the units of files that finished uploading after the first
 // failure. The pool cannot know the failure in advance, so files behind it may already have
-// reached the cloud while their local metadata is never written; purging them here restores the
-// strict serial invariant "nothing after the first failure reaches the cloud" instead of leaving
+// reached the transport while their local metadata is never written; purging them here restores the
+// strict serial invariant "nothing after the first failure reaches the transport" instead of leaving
 // an orphan tail that only a later retry would converge. Idempotent by construction: those units
 // are content-addressed and a retry re-ingests the same ids.
 func (c *Client) rollbackPostFailureUploads(ctx context.Context, tail []backgroundSyncUpload) error {
@@ -1444,7 +1489,7 @@ func (c *Client) rollbackPostFailureUploads(ctx context.Context, tail []backgrou
 	return c.deleteBackgroundUnits(ctx, orphans)
 }
 
-// purgeTrackedBackgroundFile removes one previously indexed file from both planes: its cloud
+// purgeTrackedBackgroundFile removes one previously indexed file from both planes: its transport
 // chunk units are purged first (so a failed purge keeps every retry row intact), then its local
 // file/chunk/FTS rows and the `stale` cascade into every Noetic record citing those chunks are
 // written in bounded batches. It returns the invalidated Noetic IDs and is shared by the
@@ -1795,7 +1840,7 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 		// Stage 3: commit the staged files serially in walk order. This is the old single-threaded
 		// body (trailing purge → transaction → Noetic cascade → counters) unchanged, which keeps
 		// the single-writer transaction path and the first-failure abort semantics intact. Both
-		// abort sites roll the uploaded-but-uncommitted tail back out of the cloud first, so a
+		// abort sites roll the ingested-but-uncommitted tail back out of the transport first, so a
 		// failed sync leaves exactly the serial invariant behind: nothing after the first failure.
 		for i := range uploads {
 			up := &uploads[i]

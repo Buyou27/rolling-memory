@@ -12,6 +12,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 )
@@ -52,6 +53,11 @@ func newStore(t *testing.T) *store.Store {
 	st, err := store.Open(cfg)
 	if err != nil {
 		t.Fatalf("store: %v", err)
+	}
+	// Fresh production databases bootstrap thin; this suite exercises the
+	// legacy assertion-graph import path, so apply its schema.
+	if err := db.EnsureLegacyGraphSchema(st.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
 	return st

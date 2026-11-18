@@ -37,7 +37,7 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 	}
 	for _, id := range []string{"bad", "good"} {
 		pkt, _ := v.PackBlindPacket(id, text, 1)
-		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -55,7 +55,7 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 	if err != nil || compatible != 1 || incompatible != 0 || missing != 0 {
 		t.Fatalf("coverage: %d %d %d %v", compatible, incompatible, missing, err)
 	}
-	assertHits := func(hits []CloudQueryHit, err error) {
+	assertHits := func(hits []QueryHit, err error) {
 		t.Helper()
 		if err != nil || len(hits) != 1 || hits[0].UnitID != "good" {
 			t.Fatalf("search: %+v %v", hits, err)
@@ -96,7 +96,7 @@ func TestEpisodicIndexAuthenticatedPayloadIsolation(t *testing.T) {
 	const scope = "authenticated-test"
 	id := episodicunit.DocID(scope, text)
 	pkt, _ := v.PackBlindPacket(id, text, 1)
-	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if created, err := other.EnsureLocalEpisodicIndex(scope, id, ref, text); err != nil || !created {
@@ -194,7 +194,7 @@ func TestEpisodicIndexSwappedRows(t *testing.T) {
 	}
 	for _, id := range []string{"one", "two", "good"} {
 		pkt, _ := v.PackBlindPacket(id, text, 1)
-		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -238,7 +238,7 @@ func TestEpisodicIndexSourceDeleteCascade(t *testing.T) {
 	}
 	for _, id := range []string{"delete", "keep"} {
 		pkt, _ := v.PackBlindPacket(id, text, 1)
-		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+		if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -50,7 +50,7 @@ func TestEpisodicIndexCodecIsolation(t *testing.T) {
 	const scope = "codec-test"
 	docID := episodicunit.DocID(scope, text)
 	pkt, _ := v1.PackBlindPacket(docID, text, 1)
-	if err := v1.SaveLocalEpisodicPointerIndexed(docID, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v1.SaveLocalEpisodicPointerIndexed(docID, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := v2.SearchClientSDKDefault("quartz", 10); err != nil {
@@ -109,7 +109,7 @@ func TestEpisodicIndexCodecIsolation(t *testing.T) {
 		t.Fatalf("unmatched codec diagnostics: compatible=%d incompatible=%d missing=%d: %v", compatible, incompatible, missing, err)
 	}
 	pkt, _ = v1.PackBlindPacket(docID, text, 1)
-	if err := v1.SaveLocalEpisodicPointerIndexed(docID, 1, ref, "", text, pkt, CloudIngestResponse{}); err != nil {
+	if err := v1.SaveLocalEpisodicPointerIndexed(docID, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db1.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, docID).Scan(&count); err != nil || count != 2 {

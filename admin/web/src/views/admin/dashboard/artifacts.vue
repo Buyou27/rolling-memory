@@ -34,9 +34,6 @@
                 </el-tooltip>
             </div>
             <div class="hero-right">
-                <el-button v-if="!isLocalMode" size="small" type="warning" plain @click="showCloudAccountDialog = true">
-                    {{ isEn ? 'Service Account / API Key' : '服务账号 / API Key' }}
-                </el-button>
                 <el-button size="small" plain data-testid="btn-artifacts-system-update" @click="showSystemUpdateDialog = true">
                     {{ isEn ? 'Version & Update' : '版本与在线更新' }}
                 </el-button>
@@ -64,18 +61,10 @@
                 <div class="pipe-eyebrow">{{ isEn ? '① LOCAL PLAINTEXT VAULT' : '① 本地 SQLite 明文金库' }}</div>
                 <div class="pipe-main">
                     <strong>{{
-                        isLocalMode
-                            ? isEn
-                                ? 'SQLite Plaintext Vault (FTS5 + BM25 + Shannon Gain)'
-                                : '本地 SQLite 明文金库 (FTS5 + BM25 + 香农自信息连续增益)'
-                            : isEn
-                              ? 'SQLite Plaintext Vault + 256-bit Secret Key'
-                              : '本地 SQLite 明文金库 + 键控脉冲编码'
+                        isEn ? 'SQLite Plaintext Vault (FTS5 + BM25 + Shannon Gain)' : '本地 SQLite 明文金库 (FTS5 + BM25 + 香农自信息连续增益)'
                     }}</strong>
                     <span class="pipe-main-right">
-                        <el-tag size="small" type="success" effect="plain">{{
-                            isLocalMode ? 'local_plain · 0 Egress' : '0 Plaintext Egress'
-                        }}</el-tag>
+                        <el-tag size="small" type="success" effect="plain">local_plain · 0 Egress</el-tag>
                         <el-tooltip :content="vaultStageHint" placement="bottom" :show-after="250" :enterable="false" :hide-after="0">
                             <span class="term-hint">?</span>
                         </el-tooltip>
@@ -83,30 +72,17 @@
                 </div>
             </div>
             <div class="pipe-arrow">→</div>
-            <div
-                class="pipe-stage is-enhanced"
-                :style="isLocalMode ? 'cursor: default' : 'cursor: pointer'"
-                @click="isLocalMode ? undefined : (showCloudAccountDialog = true)"
-            >
+            <div class="pipe-stage is-enhanced">
                 <div class="pipe-eyebrow">
                     {{
-                        isLocalMode
-                            ? isEn
-                                ? '② LOCAL RECALL (SQLite FTS5 · local_plain)'
-                                : '② 本地检索（SQLite 明文金库 · local_plain）'
-                            : isEn
-                              ? '② ROLLING MEMORY ENGINE API'
-                              : '② 洛灵自知记忆引擎接口 (/open/memory/v1)'
+                        isEn ? '② LOCAL RECALL (SQLite FTS5 · local_plain)' : '② 本地检索（SQLite 明文金库 · local_plain）'
                     }}
                 </div>
                 <div class="pipe-main">
                     <strong>{{ status.artifacts?.upstream_endpoint || 'local://vault' }}</strong>
                     <span class="pipe-main-right">
-                        <el-tag v-if="!isLocalMode" size="small" type="primary" effect="plain">
-                            user_id={{ status.artifacts?.upstream_user_id || '10' }}
-                        </el-tag>
-                        <el-tag v-else size="small" type="success" effect="plain">
-                            {{ isEn ? 'Zero Cloud Requests' : '零云端请求' }}
+                        <el-tag size="small" type="success" effect="plain">
+                            {{ isEn ? 'Local Vault Only' : '仅本地金库' }}
                         </el-tag>
                         <el-tooltip :content="recallStageHint" placement="bottom" :show-after="250" :enterable="false" :hide-after="0">
                             <span class="term-hint">?</span>
@@ -160,22 +136,11 @@
                         }}
                     </el-tag>
                     <el-tag size="small" type="primary" effect="plain">
-                        {{
-                            isLocalMode
-                                ? isEn
-                                    ? 'Memory Scope: Local Plaintext Vault (local_plain)'
-                                    : '记忆域：本地明文金库 (local_plain)'
-                                : isEn
-                                  ? `Bound User ID: ${status.artifacts?.upstream_user_id || '10'}`
-                                  : `绑定用户 ID: ${status.artifacts?.upstream_user_id || '10'}`
-                        }}
+                        {{ isEn ? 'Memory Scope: Local Plaintext Vault (local_plain)' : '记忆域：本地明文金库 (local_plain)' }}
                     </el-tag>
                     <el-tooltip :content="scopeHint" placement="bottom" :show-after="250" :enterable="false" :hide-after="0">
                         <span class="term-hint">?</span>
                     </el-tooltip>
-                    <el-button v-if="!isLocalMode" size="small" type="primary" plain @click="showCloudAccountDialog = true">
-                        {{ isEn ? '⚙️ Configure Service Endpoint & Key' : '⚙️ 配置记忆服务地址与密钥' }}
-                    </el-button>
                 </div>
             </div>
 
@@ -326,28 +291,21 @@
                         <div class="stat-box-head">
                             <span>
                                 {{
-                                    isLocalMode
-                                        ? isEn
-                                            ? '④ Retrieval Path (Local)'
-                                            : '④ 检索通道（本地）'
-                                        : isEn
-                                          ? '④ Retrieval Path (Cloud)'
-                                          : '④ 检索通道（云端）'
+                                    isEn ? '④ Retrieval Path (Local)' : '④ 检索通道（本地）'
                                 }}
                                 <el-tooltip :content="cardHints.channel" placement="top" :show-after="250" :enterable="false" :hide-after="0">
                                     <span class="term-hint">?</span>
                                 </el-tooltip>
                             </span>
-                            <el-tag v-if="!isLocalMode" size="small" type="success">user_id={{ status.artifacts?.upstream_user_id || '10' }}</el-tag>
-                            <el-tag v-else size="small" type="success">{{ isEn ? 'local_plain' : '本地模式' }}</el-tag>
+                            <el-tag size="small" type="success">{{ isEn ? 'local_plain' : '本地模式' }}</el-tag>
                         </div>
                         <div class="stat-big">
-                            {{ isLocalMode ? (isEn ? 'Local' : '本地') : 'v1' }}
-                            <small>{{ isLocalMode ? 'SQLite FTS5 + BM25 (local_plain)' : '/open/memory/v1' }}</small>
+                            {{ isEn ? 'Local' : '本地' }}
+                            <small>SQLite FTS5 + BM25 (local_plain)</small>
                         </div>
                         <div class="stat-foot">
                             <span
-                                ><code>{{ status.artifacts?.upstream_endpoint || (isLocalMode ? 'local://vault' : '/open/memory/v1') }}</code></span
+                                ><code>{{ status.artifacts?.upstream_endpoint || 'local://vault' }}</code></span
                             >
                         </div>
                     </div>
@@ -444,7 +402,6 @@
             </el-row>
         </div>
 
-        <CloudAccountDialog v-model="showCloudAccountDialog" @changed="loadStatusOnce" />
         <SystemUpdateDialog v-model="showSystemUpdateDialog" @updated="loadStatusOnce" />
     </div>
 </template>
@@ -456,7 +413,6 @@ import { useRouter } from 'vue-router'
 import { useAdminInfo } from '@/stores/adminInfo'
 import { MonitorSocket } from '@/utils/monitorSocket'
 import request from '@/utils/request'
-import CloudAccountDialog from '../plugin/rolling-memory/cloudAccountDialog.vue'
 import MemoryHoverPreview from '../plugin/rolling-memory/MemoryHoverPreview.vue'
 import SystemUpdateDialog from '../plugin/rolling-memory/systemUpdateDialog.vue'
 
@@ -473,16 +429,12 @@ const isEn = computed(() =>
         .startsWith('en')
 )
 
-const showCloudAccountDialog = ref(false)
 const showSystemUpdateDialog = ref(false)
 const togglingKey = ref('')
 const wsConnected = ref(false)
 let statusSocket: MonitorSocket | null = null
 
 const status = ref<any>({})
-
-// 本地模式（local_plain）：零云端请求、无远端读数 —— 由状态面 switches.mode 判定。
-const isLocalMode = computed(() => String(status.value?.switches?.mode || 'local') !== 'cloud')
 
 // ── 「?」悬停人话说明：口径对齐公开帮助文档 docs/plugin-console.md 与后台实现 ──
 const heroHint = computed(() =>
@@ -497,25 +449,16 @@ const wsHint = computed(() =>
         : 'WebSocket 实时推送：本页数字由后台通过单连接 WebSocket 主动推送更新，不做定时轮询（0-Poll）；配置改动与记忆写入会立即反映在这里。'
 )
 
-const vaultStageHint = computed(() => {
-    if (isEn.value) {
-        return isLocalMode.value
-            ? 'All raw memories live in a local SQLite database. Retrieval uses the built-in full-text index (FTS5) with classic BM25 relevance scoring, re-weighted by Shannon self-information gain (rarer terms carry more signal) — pure local math. local_plain means plaintext, local-only storage: nothing is uploaded.'
-            : 'Local SQLite vault + keyed pulse encoding: raw text stays on this machine; what may leave are irreversible keyed pulses (HMAC), never plaintext.'
-    }
-    return isLocalMode.value
-        ? '记忆原文全部保存在本机的 SQLite 数据库里。全文检索用 SQLite 内置索引 FTS5，相关性打分用经典 BM25 算法，再用「香农自信息增益」（越罕见的词信息量越大）做连续加权——全部纯数学、本地完成。local_plain ＝ 本地明文模式：数据只存本机、不上传。'
-        : '本地 SQLite 明文金库 + 键控脉冲编码：原文只留在本机；对外发送的是经 HMAC 加键的不可逆脉冲，不含原文。'
-})
+const vaultStageHint = computed(() =>
+    isEn.value
+        ? 'All raw memories live in a local SQLite database. Retrieval uses the built-in full-text index (FTS5) with classic BM25 relevance scoring, re-weighted by Shannon self-information gain (rarer terms carry more signal) — pure local math. local_plain means plaintext, local-only storage: nothing is uploaded.'
+        : '记忆原文全部保存在本机的 SQLite 数据库里。全文检索用 SQLite 内置索引 FTS5，相关性打分用经典 BM25 算法，再用「香农自信息增益」（越罕见的词信息量越大）做连续加权——全部纯数学、本地完成。local_plain ＝ 本地明文模式：数据只存本机、不上传。'
+)
 
 const recallStageHint = computed(() =>
-    isLocalMode.value
-        ? isEn.value
-            ? 'Where recalls actually run: straight against the local SQLite vault (local_plain mode) — zero cloud requests.'
-            : '本次检索实际执行位置：直接读本机 SQLite 金库（本地明文模式 local_plain），零云端请求。'
-        : isEn.value
-          ? 'Memory-service endpoint; currently configured in cloud mode.'
-          : '记忆服务的请求地址；当前配置为云端模式。'
+    isEn.value
+        ? 'Where recalls actually run: straight against the local SQLite vault (local_plain mode) — zero network requests.'
+        : '本次检索实际执行位置：直接读本机 SQLite 金库（本地明文模式 local_plain），零网络请求。'
 )
 
 const pipelineHint = computed(() =>
@@ -545,13 +488,9 @@ const engineHint = computed(() =>
 )
 
 const scopeHint = computed(() =>
-    isLocalMode.value
-        ? isEn.value
-            ? 'Memory scope: the namespace these memories live in. local_plain = plaintext, local-only — raw text sits in a local SQLite file, not uploaded and not encrypted.'
-            : '记忆域（Scope）：这批记忆的命名空间。local_plain ＝ 本地明文：原文只存本机 SQLite 文件，不上传、不加密。'
-        : isEn.value
-          ? 'Memory scope & bound user id: how the memory service tells tenants apart.'
-          : '记忆域与绑定用户 ID：供记忆服务区分不同用户的数据。'
+    isEn.value
+        ? 'Memory scope: the namespace these memories live in. local_plain = plaintext, local-only — raw text sits in a local SQLite file, not uploaded and not encrypted.'
+        : '记忆域（Scope）：这批记忆的命名空间。local_plain ＝ 本地明文：原文只存本机 SQLite 文件，不上传、不加密。'
 )
 
 const sectionOneHint = computed(() =>
@@ -592,14 +531,14 @@ const cardHints = computed(() =>
               noetic: 'Entries crystallized from recalls — “query + cited sentences + answer” — reused by later retrievals.',
               manifold:
                   'Combined count of all memory nodes across the three layers: docs/code + sessions + recall trail. Click to open the Memory Graph.',
-              channel: 'Where recalls actually go. Local = straight to the local vault, zero cloud requests.',
+              channel: 'Where recalls actually go: straight to the local vault, zero network requests.',
           }
         : {
               docs: '金库中的全部「文档单元」：L1 背景文档 / 代码分块 ＋ L2 会话记录条目。',
               cells: '记忆地址：去掉片段编号后的地址数量——同一来源 / 坐标的记忆片段归入同一个记忆地址。',
               noetic: '检索沉淀：每次 recall 命中证据后自动生成的「提问 + 引证原句 + 回答」条目，可被后续检索反复引用。',
               manifold: '三层记忆节点按地址与引证关系构成的整体图谱规模；合计 ＝ 文档/代码 ＋ 会话记录 ＋ 检索沉淀。点击卡片进入记忆图谱。',
-              channel: '当前 recall 真正走的链路：本地＝直接查询本机金库，零云端请求。',
+              channel: '当前 recall 真正走的链路：直接查询本机金库，零网络请求。',
           }
 )
 

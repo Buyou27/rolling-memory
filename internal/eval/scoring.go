@@ -281,13 +281,6 @@ func firstRunes(value string, limit int) string {
 	return value
 }
 
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
-}
-
 func firstTruthy(primary, fallback any) any {
 	if truthy(primary) {
 		return primary

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/memcore"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -322,6 +323,15 @@ func TestDeliverableMaskingAndPremiseAttribution(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	defer st.Close()
+	// Fresh production databases bootstrap thin; this test exercises the
+	// legacy assertion-graph surfaces, so apply its schema and re-sample the
+	// FTS probe.
+	if err := db.EnsureLegacyGraphSchema(st.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
+	}
+	if err := st.RefreshFTS(); err != nil {
+		t.Fatalf("refresh fts: %v", err)
+	}
 	_, _ = st.EnsureNode(scope, "referent", "Bob", store.NodeOptions{})
 	_, _ = st.EnsureNode(scope, "referent", "Charlie", store.NodeOptions{})
 	tokyoID, _ := st.EnsureNode(scope, "referent", "Tokyo", store.NodeOptions{})

@@ -2165,7 +2165,7 @@ func TestUnixDaemonRejectsNonLocalAndChangedConfig(t *testing.T) {
 	}
 	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
 	response, handled = ForwardToolCallToUnixDaemon(8, map[string]any{"cue": "test"}, nil)
-	if !handled || !isError(t, response) || !strings.Contains(textOf(t, response), "requires local mode") {
+	if !handled || !isError(t, response) || !strings.Contains(textOf(t, response), "mode must be one of ('local')") {
 		t.Fatalf("non-local request should fail closed: %#v", response)
 	}
 }

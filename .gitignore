@@ -2,6 +2,7 @@
 bin/*
 !bin/rolling-memory-*
 dist/
+dist-verify/
 *.log
 *.db
 !testdata/golden/db/*.db

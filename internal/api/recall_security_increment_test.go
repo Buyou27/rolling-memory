@@ -252,7 +252,7 @@ func TestSecurityWholeTurnPointerIsNotDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	packet, _ := client.Vault.PackBlindPacket("ep_whole", text, testNow)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_whole", testNow, ref, "", text, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_whole", testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())
@@ -292,11 +292,11 @@ func TestSecurityAlternateSourceRequiresProvenance(t *testing.T) {
 	const docID = "ep_provenance"
 	packet, _ := client.Vault.PackBlindPacket(docID, text, testNow)
 	client.SetIdentity("primary-assistant", "primary-session", "primary-locus")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, primaryTurn+"#0", primaryTurn, text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, primaryTurn+"#0", primaryTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	client.SetIdentity("alternate-assistant", "alternate-session", "alternate-locus")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow+100, alternateTurn+"#0", alternateTurn, text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow+100, alternateTurn+"#0", alternateTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())
@@ -339,7 +339,7 @@ func TestSecuritySameTurnRelocationUsesActualSegment(t *testing.T) {
 	text := "[user] quartz relocation witness"
 	const docID = "ep_relocation"
 	packet, _ := client.Vault.PackBlindPacket(docID, text, testNow)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, turn+"#0", turn, text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, turn+"#0", turn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())
@@ -381,7 +381,7 @@ func TestSecurityLineageDoesNotAuthorizeAdjacentHit(t *testing.T) {
 		{"ep_secret", turn + "#1", "[assistant] unrelated confidential sibling"},
 	} {
 		packet, _ := client.Vault.PackBlindPacket(row.id, row.text, testNow)
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(row.id, testNow, row.ref, turn, row.text, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(row.id, testNow, row.ref, turn, row.text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}

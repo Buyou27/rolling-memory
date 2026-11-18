@@ -20,8 +20,7 @@ func TestPulseRecallRejectsUnsupportedFiltersBeforeTransport(t *testing.T) {
 		http.Error(w, "transport witness", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", server.URL+"/open/memory/v1")
-	memory := thinBrainMemory(t, server.URL+"/open/memory/v1")
+	memory := newVaultOnlyMemory(t)
 	session, empty := "another-session", ""
 	for _, mode := range []string{"full", "probe", "recent"} {
 		for _, tc := range []struct {
@@ -40,7 +39,7 @@ func TestPulseRecallRejectsUnsupportedFiltersBeforeTransport(t *testing.T) {
 				tc.req.Mode = mode
 				tc.req.Cue = "filter witness"
 				result, err := memory.Recall(tc.req)
-				if err == nil || !strings.Contains(err.Error(), "cannot enforce") || result != nil {
+				if err == nil || (!strings.Contains(err.Error(), "cannot enforce") && !strings.Contains(err.Error(), "does not support")) || result != nil {
 					t.Fatalf("filtered recall = %#v, %v; want unsupported error", result, err)
 				}
 			})

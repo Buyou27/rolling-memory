@@ -347,8 +347,8 @@ const honestyPrinciples = computed(() => [
         icon: 'lucide-shield',
         title: isEn.value ? '3. Zero Plaintext Egress · Local Vault Stays Offline' : '3. 明文不出网 · 本地金库离线保管',
         desc: isEn.value
-            ? 'Plaintext and the 256-bit key stay in the on-host SQLite vault, and CheckEgress blocks non-loopback traffic so memory data never leaves the host. Full Rolling Autonoetic Memory Engine capabilities require connecting to the /open/memory/v1/* API; the local vault stays available for offline inspection and export.'
-            : '本地明文与 256-bit 密钥保存在本机 SQLite 金库；传输层 CheckEgress 物理阻断一切非 loopback 连接，记忆数据绝对不出网，private 记忆永不离开本机。完整洛灵自知记忆引擎能力需连接 /open/memory/v1/* 记忆服务接口；本地金库可离线查阅与导出。',
+            ? 'Plaintext and the 256-bit key stay in the on-host SQLite vault, and CheckEgress blocks non-loopback traffic so memory data never leaves the host. There is no cloud memory service: the local vault is the complete product and stays available for offline inspection and export.'
+            : '本地明文与 256-bit 密钥保存在本机 SQLite 金库；传输层 CheckEgress 物理阻断一切非 loopback 连接，记忆数据绝对不出网，private 记忆永不离开本机。本产品没有云端记忆服务——本地金库即完整能力，可离线查阅与导出。',
     },
     {
         icon: 'lucide-circle-alert',

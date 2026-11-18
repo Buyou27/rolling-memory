@@ -2,7 +2,6 @@
 package rollingmemory
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,9 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -87,14 +83,21 @@ type roiFactWindow struct {
 	AdoptionRatePct     float64          `json:"adoption_rate_pct"`
 }
 
-// roiDailyBucket tracks daily 3-layer ingestion, L3 crystallization, and citation activity.
+// roiDailyBucket tracks daily 3-layer ingestion, L3 crystallization, citation
+// activity, and the settled evidence-adoption audit outcome of that ingest day.
 type roiDailyBucket struct {
-	Date            string `json:"date"`
-	EpisodicCount   int64  `json:"episodic_count"`
-	BackgroundCount int64  `json:"background_count"`
-	NoeticCount     int64  `json:"noetic_count"`
-	CitationLinks   int64  `json:"citation_links"`
-	DeliveredTokens int64  `json:"delivered_tokens"`
+	Date                string  `json:"date"`
+	EpisodicCount       int64   `json:"episodic_count"`
+	BackgroundCount     int64   `json:"background_count"`
+	NoeticCount         int64   `json:"noetic_count"`
+	CitationLinks       int64   `json:"citation_links"`
+	DeliveredTokens     int64   `json:"delivered_tokens"`
+	AdoptedCount        int64   `json:"adopted_count"`
+	AdoptedToolCount    int64   `json:"adopted_tool_count"`
+	AdoptedContextCount int64   `json:"adopted_context_count"`
+	UnadoptedCount      int64   `json:"unadopted_count"`
+	PendingCount        int64   `json:"pending_count"`
+	AdoptionRatePct     float64 `json:"adoption_rate_pct"`
 }
 
 // roiUnitCitation is one recorded recall that cited a unit, with the full query
@@ -385,6 +388,9 @@ const hydrateDaemonBatchSize = 64
 
 // hydrateRefsViaDaemon returns only results explicitly verified for the requested
 // document and pointer. Missing, malformed, or failed results remain unavailable.
+// 水合一律经产品二进制 `engine hydrate` 的已核验连接执行（控制台不自带 socket 客户端，
+// 也未核验的 socket 一律失败关闭）；守护进程不可用时 handled=false，调用方按
+// 「正文暂不可读」降级。
 func hydrateRefsViaDaemon(home, dbPath string, refs []hydrateRef) (map[hydrateRef]string, bool) {
 	if len(refs) == 0 || strings.TrimSpace(dbPath) == "" {
 		return nil, false
@@ -393,15 +399,18 @@ func hydrateRefsViaDaemon(home, dbPath string, refs []hydrateRef) (map[hydrateRe
 	case "0", "false", "off", "no":
 		return nil, false
 	}
+	// 测试二进制默认不路由守护进程（与引擎侧 ShouldUseUnixDaemon 同一不变量），
+	// 除非显式指定 socket 覆盖，避免单测串到开发机上的真实实例。
+	if adminTestBinary() && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
+		return nil, false
+	}
 	sockPath := resolveDaemonSocketPath(home)
 	if _, err := os.Stat(sockPath); err != nil {
 		triggerConsoleDaemonBootstrap(home, dbPath)
 		return nil, false
 	}
-	// 测试二进制默认不路由守护进程（与引擎侧 ShouldUseUnixDaemon 同一不变量），
-	// 除非显式指定 socket 覆盖，避免单测串到开发机上的真实实例。
-	exe := filepath.Base(os.Args[0])
-	if (strings.HasSuffix(exe, ".test") || strings.Contains(exe, ".test.")) && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
+	bin := resolveBinary(home)
+	if bin == "" {
 		return nil, false
 	}
 	out := make(map[hydrateRef]string, len(refs))
@@ -430,30 +439,9 @@ func hydrateRefsViaDaemon(home, dbPath string, refs []hydrateRef) (map[hydrateRe
 		if err != nil {
 			break
 		}
-		dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-		client := &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				DialContext: func(dCtx context.Context, _, _ string) (net.Conn, error) {
-					return dialer.DialContext(dCtx, "unix", sockPath)
-				},
-				DisableKeepAlives: true,
-			},
-		}
-		httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://unix/v1/hydrate", bytes.NewReader(bodyBytes))
-		if err != nil {
-			break
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			triggerConsoleDaemonBootstrap(home, dbPath)
-			break
-		}
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			break
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), engineDataExecTimeout)
+		rawBody, execErr := engineCommandRunner(ctx, bin, "hydrate", []string{"--db", dbPath}, bodyBytes)
+		cancel()
 		var dResp struct {
 			OK    bool `json:"ok"`
 			Texts []struct {
@@ -465,9 +453,10 @@ func hydrateRefsViaDaemon(home, dbPath string, refs []hydrateRef) (map[hydrateRe
 				Error     string `json:"error"`
 			} `json:"texts"`
 		}
-		rawBody, rErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		_ = resp.Body.Close()
-		if rErr != nil || json.Unmarshal(rawBody, &dResp) != nil || !dResp.OK {
+		if execErr != nil || json.Unmarshal(rawBody, &dResp) != nil || !dResp.OK {
+			if execErr != nil {
+				triggerConsoleDaemonBootstrap(home, dbPath)
+			}
 			break
 		}
 		handled = true
@@ -503,10 +492,11 @@ type localDocumentBody struct {
 	distilled string
 }
 
-// documentsViaDaemon 通过本机唯一常驻守护进程（engine.sock）批量解析本地文档正文
+// documentsViaDaemon 经产品二进制 `engine documents` 的已核验通道批量解析本地文档正文
 // （`/v1/documents` → 产品正典 `Vault.LoadLocalDocument`）。控制台禁止导入 thinclient，
 // 也不允许自研第二套文件分块副本——L1 分块的正文只能由内核现场重读重切，展示层不得
-// 用路径坐标冒充正文；handled=false 表示守护进程不可用，调用方按「正文暂不可读」降级。
+// 用路径坐标冒充正文；控制台亦不自带 socket 客户端，未核验 socket 一律失败关闭；
+// handled=false 表示守护进程不可用，调用方按「正文暂不可读」降级。
 //
 // 返回 map 中出现的 unitID 即为守护进程已裁决（raw 可能为空 = 源文件不可读/内容为空，
 // 调用方应负缓存，绝不用本地副本猜内容顶上）。
@@ -518,15 +508,18 @@ func documentsViaDaemon(home string, unitIDs []string) (map[string]localDocument
 	case "0", "false", "off", "no":
 		return nil, false
 	}
+	// 测试二进制默认不路由守护进程（与引擎侧 ShouldUseUnixDaemon 同一不变量），
+	// 除非显式指定 socket 覆盖，避免单测串到开发机上的真实实例。
+	if adminTestBinary() && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
+		return nil, false
+	}
 	sockPath := resolveDaemonSocketPath(home)
 	if _, err := os.Stat(sockPath); err != nil {
 		triggerConsoleDaemonBootstrap(home, resolveMemoryDBPath(home))
 		return nil, false
 	}
-	// 测试二进制默认不路由守护进程（与引擎侧 ShouldUseUnixDaemon 同一不变量），
-	// 除非显式指定 socket 覆盖，避免单测串到开发机上的真实实例。
-	exe := filepath.Base(os.Args[0])
-	if (strings.HasSuffix(exe, ".test") || strings.Contains(exe, ".test.")) && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
+	bin := resolveBinary(home)
+	if bin == "" {
 		return nil, false
 	}
 	dbPath := resolveMemoryDBPath(home)
@@ -545,30 +538,9 @@ func documentsViaDaemon(home string, unitIDs []string) (map[string]localDocument
 		if err != nil {
 			break
 		}
-		dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-		client := &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				DialContext: func(dCtx context.Context, _, _ string) (net.Conn, error) {
-					return dialer.DialContext(dCtx, "unix", sockPath)
-				},
-				DisableKeepAlives: true,
-			},
-		}
-		httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://unix/v1/documents", bytes.NewReader(bodyBytes))
-		if err != nil {
-			break
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			triggerConsoleDaemonBootstrap(home, dbPath)
-			break
-		}
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			break
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), engineDataExecTimeout)
+		rawBody, execErr := engineCommandRunner(ctx, bin, "documents", []string{"--db", dbPath}, bodyBytes)
+		cancel()
 		var dResp struct {
 			OK   bool `json:"ok"`
 			Docs []struct {
@@ -578,9 +550,10 @@ func documentsViaDaemon(home string, unitIDs []string) (map[string]localDocument
 				Error         string `json:"error"`
 			} `json:"docs"`
 		}
-		rawBody, rErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		_ = resp.Body.Close()
-		if rErr != nil || json.Unmarshal(rawBody, &dResp) != nil || !dResp.OK {
+		if execErr != nil || json.Unmarshal(rawBody, &dResp) != nil || !dResp.OK {
+			if execErr != nil {
+				triggerConsoleDaemonBootstrap(home, dbPath)
+			}
 			break
 		}
 		for _, item := range dResp.Docs {
@@ -627,7 +600,8 @@ func hydratedLocalDocumentLive(home, unitID string) (string, bool) {
 	return text, text != ""
 }
 
-// invalidateDaemonViaSocket 通知本机常驻守护进程（engine.sock）立即丢弃内存中的三层快照与分块缓存。
+// invalidateDaemonViaSocket 经产品二进制 `engine invalidate` 的已核验单连接通知本机常驻
+// 守护进程立即丢弃内存中的三层快照与分块缓存；尽力而为，守护进程不在或不核验一律静默。
 func invalidateDaemonViaSocket(home string) {
 	if strings.TrimSpace(home) == "" {
 		return
@@ -636,32 +610,20 @@ func invalidateDaemonViaSocket(home string) {
 	case "0", "false", "off", "no":
 		return
 	}
-	exe := filepath.Base(os.Args[0])
-	if (strings.HasSuffix(exe, ".test") || strings.Contains(exe, ".test.")) && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
+	if adminTestBinary() && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
 		return
 	}
 	sockPath := resolveDaemonSocketPath(home)
 	if _, err := os.Stat(sockPath); err != nil {
 		return
 	}
-	dialer := &net.Dialer{Timeout: 250 * time.Millisecond}
-	client := &http.Client{
-		Timeout: 400 * time.Millisecond,
-		Transport: &http.Transport{
-			DialContext: func(dCtx context.Context, _, _ string) (net.Conn, error) {
-				return dialer.DialContext(dCtx, "unix", sockPath)
-			},
-			DisableKeepAlives: true,
-		},
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://unix/v1/invalidate", strings.NewReader(`{}`))
-	if err != nil {
+	bin := resolveBinary(home)
+	if bin == "" {
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if resp, dErr := client.Do(req); dErr == nil && resp != nil {
-		_ = resp.Body.Close()
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), engineInvalidateExecTimeout)
+	defer cancel()
+	_, _ = engineCommandRunner(ctx, bin, "invalidate", []string{"--db", resolveMemoryDBPath(home)}, []byte(`{}`))
 }
 
 // warmHydrateLocalDocumentsBatch 为三层列表投影行中的 L1 背景分块（src == 'chunk'）
@@ -1718,6 +1680,38 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 				})
 			}
 		}
+		// Re-consolidated L3 handles (occurred_at > ingest_at) were recalled again across
+		// subsequent turns; credit the L3 handle itself as a reused memory unit.
+		if ev.IngestAt > 0 && ev.OccurredAt > ev.IngestAt && len(ev.CitedUnitIDs) > 0 {
+			u := strings.TrimSpace(ev.NoeticID)
+			if u != "" {
+				st, exists := citedStats[u]
+				if !exists {
+					st = &citeStat{seenQuery: make(map[string]bool), count: 1}
+					citedStats[u] = st
+				}
+				st.count++
+				if ev.OccurredAt > st.lastAt {
+					st.lastAt = ev.OccurredAt
+				}
+				if st.firstSnippet == "" {
+					st.firstSnippet = strings.TrimSpace("Q: " + ev.QueryText + "\nA: " + ev.AnswerText)
+				}
+				qTrim := strings.TrimSpace(ev.QueryText)
+				if qTrim != "" && !st.seenQuery[qTrim] && len(st.queries) < 5 {
+					st.seenQuery[qTrim] = true
+					st.queries = append(st.queries, qTrim)
+				}
+				if len(st.citations) < 16 {
+					st.citations = append(st.citations, roiUnitCitation{
+						NoeticID:   ev.NoeticID,
+						QueryText:  clipRunes(ev.QueryText, 240),
+						AnswerText: clipRunes(ev.AnswerText, 360),
+						OccurredAt: ev.OccurredAt,
+					})
+				}
+			}
+		}
 	}
 
 	vault.UniqueCitedUnits = int64(len(citedStats))
@@ -1922,6 +1916,31 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			}
 		}
 	}
+	for i := range allNoetics {
+		ev := &allNoetics[i]
+		uid := strings.TrimSpace(ev.NoeticID)
+		if uid == "" {
+			continue
+		}
+		if _, exists := unitMetaMap[uid]; exists {
+			continue
+		}
+		locus := ""
+		for _, cid := range ev.CitedUnitIDs {
+			if cm, ok := unitMetaMap[strings.TrimSpace(cid)]; ok && cm.locus != "" {
+				locus = cm.locus
+				break
+			}
+		}
+		unitMetaMap[uid] = unitMeta{
+			layer:       "noetic",
+			locus:       locus,
+			addressURI:  ev.AddressURI,
+			waveformBar: ev.WaveformBar,
+			occurredAt:  ev.OccurredAt,
+			rawText:     strings.TrimSpace("Q: " + ev.QueryText + "\nA: " + ev.AnswerText),
+		}
+	}
 
 	// 零拷贝指针与 L1 分块先走引擎守护进程的规范批量水合，再进下方缓存读；
 	// 否则冷缓存会让证据抽屉退化成片段预览或仅显示路径坐标。
@@ -1996,6 +2015,8 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			if layer == "" {
 				if strings.HasPrefix(uid, "bg:") {
 					layer = "background"
+				} else if strings.HasPrefix(uid, "nt_") || strings.HasPrefix(uid, "noetic_") {
+					layer = "noetic"
 				} else {
 					layer = "episodic"
 				}
@@ -2061,6 +2082,43 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			w.AdoptionRatePct = roundFloat(float64(w.AdoptedRecalls)*100.0/float64(w.AuditedRecalls), 1)
 		}
 	}
+
+	// Fill the per-day adoption buckets (last 14 days) from the same settled audit
+	// outcomes: only active crystallizations count, pending outcomes stay out of the
+	// adoption-rate denominator, mirroring the vault-window aggregation above.
+	dailyIdx := make(map[string]int, len(out.dailySeries))
+	for i := range out.dailySeries {
+		dailyIdx[out.dailySeries[i].Date] = i
+	}
+	for i := range allNoetics {
+		ev := &allNoetics[i]
+		if ev.Status != "active" || ev.IngestAt <= 0 {
+			continue
+		}
+		idx, ok := dailyIdx[time.Unix(ev.IngestAt, 0).In(now.Location()).Format("2006-01-02")]
+		if !ok {
+			continue
+		}
+		b := &out.dailySeries[idx]
+		switch ev.AdoptionOutcome {
+		case "adopted_tool":
+			b.AdoptedCount++
+			b.AdoptedToolCount++
+		case "adopted_context":
+			b.AdoptedCount++
+			b.AdoptedContextCount++
+		case "unadopted":
+			b.UnadoptedCount++
+		default:
+			b.PendingCount++
+		}
+	}
+	for i := range out.dailySeries {
+		b := &out.dailySeries[i]
+		if audited := b.AdoptedCount + b.UnadoptedCount; audited > 0 {
+			b.AdoptionRatePct = roundFloat(float64(b.AdoptedCount)*100.0/float64(audited), 1)
+		}
+	}
 	for _, st := range citedStats {
 		for idx := range st.citations {
 			c := &st.citations[idx]
@@ -2102,6 +2160,8 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		if layer == "" {
 			if strings.HasPrefix(uid, "bg:") {
 				layer = "background"
+			} else if strings.HasPrefix(uid, "nt_") || strings.HasPrefix(uid, "noetic_") {
+				layer = "noetic"
 			} else {
 				layer = "episodic"
 			}

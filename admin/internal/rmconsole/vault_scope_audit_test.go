@@ -37,7 +37,6 @@ func TestConsoleGuardActualMountAvailability(t *testing.T) {
 		{"/background/select", http.StatusOK},
 		{"/status", http.StatusForbidden},
 		{"/eval/overview", http.StatusOK},
-		{"/cloud/account/state", http.StatusOK},
 	} {
 		t.Setenv("ROLLING_MEMORY_MODE", "local")
 		w := httptest.NewRecorder()
@@ -48,15 +47,6 @@ func TestConsoleGuardActualMountAvailability(t *testing.T) {
 			}
 		} else if strings.Contains(w.Body.String(), "local_plain vault scope verification failed") {
 			t.Errorf("%s unexpectedly hit vault guard", tc.path)
-		}
-	}
-
-	for _, pulseMode := range []string{"pulse_plain", "pulse_cipher"} {
-		t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/admin/plugin/rolling-memory/graph", strings.NewReader(`{"pulse_mode":"`+pulseMode+`"}`)))
-		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "local_plain vault scope verification failed") {
-			t.Errorf("%s graph: status=%d body=%s", pulseMode, w.Code, w.Body.String())
 		}
 	}
 }
@@ -356,34 +346,5 @@ func TestLocalPlainEvalAgentsTransmitContextToConfiguredModel(t *testing.T) {
 	}
 	if len(requests) != 2 || !strings.Contains(string(encoded), "eval-context-marker") || !strings.Contains(string(encoded), "question-marker") {
 		t.Fatalf("unexpected model requests: %s", encoded)
-	}
-}
-
-func TestCloudAccountMemoryProxyTransmitsRequestPlaintext(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
-	var body map[string]any
-	var auth, apiKey, path string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		auth, apiKey = r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-		_, _ = w.Write([]byte(`{"code":0,"data":{"ok":true}}`))
-	}))
-	defer srv.Close()
-	if err := saveCloudAccountState(CloudAccountState{BaseURL: srv.URL, Token: "test-token", APIKey: "test-key"}); err != nil {
-		t.Fatal(err)
-	}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/cloud/account/memory", strings.NewReader(`{"action":"remember","content":"request-secret-marker","cue":"query-marker","sub_namespace":"private-scope"}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-	cloudAccountMemoryHandler(c)
-	if path != "/user/memory/remember" || body["content"] != "request-secret-marker" || body["cue"] != "query-marker" || body["sub_namespace"] != "private-scope" || auth != "Bearer test-token" || apiKey != "test-key" {
-		t.Fatalf("unexpected proxy request: path=%s body=%v auth=%q key=%q", path, body, auth, apiKey)
 	}
 }

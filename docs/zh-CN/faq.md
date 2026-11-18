@@ -74,11 +74,11 @@
 
 ---
 
-## Q5：需要注册云端账号吗？未来的云端能力是怎么回事？
+## Q5：需要注册云端账号吗？云端能力是怎么回事？
 
-**不需要——本发布版是纯本地模式，无需注册、无需账号、零外部网络请求。**
+**本地产品无需任何账号——Rolling Memory 100% 本地运行，无需注册，也不发起任何记忆面网络请求。**
 
-我们的云端记忆引擎是一项独立能力，采用**申请制**逐步开放预览（在线注册已关闭；申请联系 [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn)，技术支持联系 [support@psychologylake.org.cn](mailto:support@psychologylake.org.cn)）。它不属于本次发布：本发布版为纯本地模式，本地工具与本地金库始终完整可用且源码公开（发布与许可边界见 [DECLARATION.md](DECLARATION.md)）。
+在本地面之上，我们还以**申请制**提供一项独立的**云端记忆服务**，面向高级用户与企业团队：上行载荷**端到端密文**（端侧先做不可逆编码，原文永不离开本地金库），并提供**更强的高级检索算子**与跨设备连续性能力。它不属于本发布版，本仓库的任何功能也不依赖它；产品级预览见 [privacy.md](privacy.md)，发布与许可边界见 [DECLARATION.md](DECLARATION.md)。申请联系：[pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn)。
 
 ---
 

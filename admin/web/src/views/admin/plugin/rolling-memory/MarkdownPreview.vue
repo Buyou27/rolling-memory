@@ -1,6 +1,6 @@
 <!-- plugin: rolling-memory v0.0.58 -->
 <!--
-  MarkdownPreview —— 记忆正文的统一阅读面（三层浏览器 / 检索调试台 / ROI 证据抽屉 / 云端回忆共用）。
+  MarkdownPreview —— 记忆正文的统一阅读面（三层浏览器 / 检索调试台 / 评测实验室 / ROI 证据抽屉共用）。
 
   渲染内核 = md-editor-v3 的 MdPreview（与帮助中心同一套组件、同一份样式，不再自维护渲染器）：
   · 正文先经 memoryMarkdown 自动格式化（结构化内容包代码围栏）再交给 MdPreview 渲染；

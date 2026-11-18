@@ -51,7 +51,7 @@ func TestRealVaultWriteThenQueryLatency(t *testing.T) {
 	saveOne := func(i int) {
 		text := fmt.Sprintf("Latency probe entry %d: measuring write-then-query recall path.", i)
 		id := fmt.Sprintf("latency_probe_%d_%d", time.Now().UnixNano(), i)
-		if err := v.SaveLocalPlaintext(id, time.Now().Unix(), text, SplitSentences(text), CloudIngestResponse{AddressURI: "mem://" + id}); err != nil {
+		if err := v.SaveLocalPlaintext(id, time.Now().Unix(), text, SplitSentences(text), IngestResponse{AddressURI: "mem://" + id}); err != nil {
 			t.Fatalf("save: %v", err)
 		}
 	}
@@ -86,7 +86,7 @@ func TestRealVaultWriteThenQueryLatency(t *testing.T) {
 	// unchanged), which should keep the inline component cache valid.
 	ptr := fmt.Sprintf("@ref:zcode:probe:%d#1", time.Now().UnixNano())
 	id := fmt.Sprintf("latency_ptr_%d", time.Now().UnixNano())
-	if err := v.SaveLocalEpisodicPointer(id, time.Now().Unix(), ptr, "probe-turn", CloudIngestResponse{AddressURI: "mem://" + id}); err != nil {
+	if err := v.SaveLocalEpisodicPointer(id, time.Now().Unix(), ptr, "probe-turn", IngestResponse{AddressURI: "mem://" + id}); err != nil {
 		t.Fatalf("pointer save: %v", err)
 	}
 	ts := time.Now()

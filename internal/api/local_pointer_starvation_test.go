@@ -37,7 +37,7 @@ func TestLocalPointerStarvationCorruptIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 		packet, _ := client.Vault.PackBlindPacket(id, text, testNow)
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 		if i < 30 {
@@ -82,7 +82,7 @@ func TestLocalPointerStarvation(t *testing.T) {
 					t.Fatal(err)
 				}
 				packet, _ := client.Vault.PackBlindPacket(id, text, testNow)
-				if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+				if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 					t.Fatal(err)
 				}
 				if i < n {

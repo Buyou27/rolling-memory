@@ -21,7 +21,7 @@ func TestLocalRecallDefaultAndExpandedBudgets(t *testing.T) {
 	for i := 0; i < 70; i++ {
 		id := fmt.Sprintf("budget-%02d", i)
 		body := "quartz evidence " + id + " " + strings.Repeat("evidence ", 200)
-		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), body, nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), body, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}

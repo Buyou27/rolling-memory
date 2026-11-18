@@ -55,6 +55,11 @@ func connectMigrated(t *testing.T, profile StorageProfile) (*sql.DB, string) {
 	if _, err := Migrate(connection); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	// Fresh production databases bootstrap thin; most package tests exercise
+	// the historical/canonical surface, so apply the legacy graph schema here.
+	if err := EnsureLegacyGraphSchema(connection); err != nil {
+		t.Fatalf("EnsureLegacyGraphSchema: %v", err)
+	}
 	return connection, path
 }
 
@@ -722,6 +727,11 @@ func TestAssertionActivePreprobeIndex10kScale(t *testing.T) {
 
 func TestHasFTSNoVariant(t *testing.T) {
 	connection, _ := connectMigrated(t, LocalProfile())
+	// Historical databases carry the FTS-backed legacy graph; fresh databases
+	// bootstrap thin, so apply the canonical schema before the probe.
+	if err := EnsureLegacyGraphSchema(connection); err != nil {
+		t.Fatal(err)
+	}
 	execSQL(t, connection, "DROP TABLE node_fts")
 	execSQL(t, connection, "DROP TABLE trace_fts")
 	ok, err := HasFTS(connection)
@@ -747,6 +757,11 @@ func TestSplitSchemaStatements(t *testing.T) {
 func TestVaultScopePreflightLegacyScopedAndUnscopedTables(t *testing.T) {
 	connection, path := connectMigrated(t, LocalProfile())
 	defer connection.Close()
+	// Historical databases carry the legacy scoped/unscoped tables that the
+	// preflight classifies; fresh databases bootstrap thin.
+	if err := EnsureLegacyGraphSchema(connection); err != nil {
+		t.Fatal(err)
+	}
 
 	// Seed unscoped legacy tables (sync_state, injection_ledger) and scoped legacy tables
 	// (mention, activation) for a non-default scope "custom-team-scope".

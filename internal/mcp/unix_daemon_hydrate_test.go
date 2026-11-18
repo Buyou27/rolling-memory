@@ -72,7 +72,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 		{"ep_answer", turn + "#1", "[assistant] fixture reply body"},
 	} {
 		packet, _ := tc.Vault.PackBlindPacket(fixture.id, fixture.text, testNow)
-		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, testNow, fixture.ref, turn, fixture.text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, testNow, fixture.ref, turn, fixture.text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 			t.Fatalf("seed indexed pointer: %v", err)
 		}
 	}
@@ -159,7 +159,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 	}
 	alternateTurn := "@ref:jsonl:" + alternatePath + ":0"
 	packet, _ := tc.Vault.PackBlindPacket("ep_question", "[user] fixture question", testNow)
-	if err := tc.Vault.SaveLocalEpisodicPointerIndexed("ep_question", testNow, alternateTurn+"#0", alternateTurn, "[user] fixture question", packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := tc.Vault.SaveLocalEpisodicPointerIndexed("ep_question", testNow, alternateTurn+"#0", alternateTurn, "[user] fixture question", packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: alternateTurn + "#0"}}})

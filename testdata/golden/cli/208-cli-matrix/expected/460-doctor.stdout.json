@@ -11,7 +11,7 @@
       "ok": true
     },
     {
-      "detail": "trigram tokenizer required for CJK lexical search",
+      "detail": "trigram tokenizer required for the legacy assertion-graph lexical legs (the plaintext vault needs none)",
       "name": "fts5",
       "ok": true
     },
@@ -36,7 +36,7 @@
       "ok": true
     },
     {
-      "detail": "cloud.sync requires cloud mode",
+      "detail": "local plaintext vault; remote sync retired",
       "name": "sync",
       "ok": true
     }
@@ -72,29 +72,20 @@
       "relative_tag": false,
       "token_correct": false
     },
-    "scope": "mem:golden:208",
-    "sync": {
-      "auto": false,
-      "base_url": "",
-      "enabled": false,
-      "key": {
-        "configured": false,
-        "source": "none"
-      }
-    }
+    "scope": "mem:golden:208"
   },
   "integrity": {
     "bare_assertions": 0,
     "conflicts_proposed": 0,
     "counts": {
       "assertion": 0,
-      "event": 3,
+      "event": 0,
       "mention": 0,
       "meta_edge": 0,
       "node": 0,
       "node_alias": 0,
       "schema_version": 1,
-      "trace": 3,
+      "trace": 0,
       "vector": 0
     },
     "issues": [],

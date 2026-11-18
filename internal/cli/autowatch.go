@@ -164,6 +164,14 @@ func RunAutoWatchTick(ctx context.Context, memory *api.Memory, settleBG, quiesce
 		log.Printf("episodic index backfill: %v", err)
 	}
 
+	// 常规 tick 的只愈合巡检：漂移的情景指针（含跨轮次重锚）在后台被逐步重指并重封，
+	// 用户无需先跑 `sync prune` 才能看到来源缺口消失；确证不存在的行不在此处回收。
+	if _, healed, healErr := healDriftedEpisodicPointers(ctx, memory, episodicHealTickLimit); healErr != nil {
+		log.Printf("episodic pointer heal: %v", healErr)
+	} else if healed > 0 {
+		log.Printf("episodic pointer heal: re-anchored %d drifted pointer(s)", healed)
+	}
+
 	// 1. L1 Background: only sync when mounted dirs have dirty/new/deleted files whose
 	// mtime has settled past settleBG.
 	if hasSettledDirtyBackgroundState(db, settleBG) {
@@ -222,11 +230,16 @@ func RunAutoWatchLoop(ctx context.Context, memory *api.Memory, interval time.Dur
 // auto-sync is active so it neither re-runs schema probes every 10s nor shares the
 // foreground recall connection pool.
 func (a *application) backgroundMCPAutoWatch(ctx context.Context) {
+	a.backgroundMCPAutoWatchWithMemory(ctx, nil)
+}
+
+func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, sharedMem *api.Memory) {
 	ticker := time.NewTicker(defaultAutoWatchTick)
 	defer ticker.Stop()
 	var watchMem *api.Memory
+	ownsMem := false
 	defer func() {
-		if watchMem != nil {
+		if ownsMem && watchMem != nil {
 			_ = watchMem.Close()
 		}
 	}()
@@ -240,18 +253,25 @@ func (a *application) backgroundMCPAutoWatch(ctx context.Context) {
 			}
 			cfgPath := strings.TrimSpace(a.args.String("config"))
 			if !IsAutoSyncEnabled(cfgPath) {
-				if watchMem != nil {
+				if ownsMem && watchMem != nil {
 					_ = watchMem.Close()
 					watchMem = nil
+					ownsMem = false
 				}
 				continue
 			}
 			if watchMem == nil {
-				mem, err := a.openMemory()
-				if err != nil || mem == nil {
-					continue
+				if sharedMem != nil {
+					watchMem = sharedMem
+					ownsMem = false
+				} else {
+					mem, err := a.openMemory()
+					if err != nil || mem == nil {
+						continue
+					}
+					watchMem = mem
+					ownsMem = true
 				}
-				watchMem = mem
 			}
 			RunAutoWatchTick(ctx, watchMem, bgSettleWindow, episodicQuiescenceWindow)
 		}

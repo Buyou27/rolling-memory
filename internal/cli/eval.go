@@ -17,8 +17,8 @@ import (
 // runEval 跑随包评测（`rmem eval`）。
 //
 // 三条纪律：
-//  1. **评测引擎**：非 Oracle 评测只经公共 SDK 与本地明文金库（或远端 /open/memory/v1），禁止本地断言图与静默回退；
-//  2. **专属隔离**：明文写入独立 JSON Vault，云端写入租户专属评测 scope，绝不碰用户默认记忆空间；
+//  1. **评测引擎**：非 Oracle 评测只经严格本地数据面（本地明文金库 + 离线检索），零云端请求、禁止静默回退；
+//  2. **专属隔离**：明文写入独立 JSON Vault 与租户专属评测 scope，绝不碰用户默认记忆空间；
 //  3. **冻结协议**：答题 / 判官使用随包冻结提示词协议（sha1 钉在 internal/eval/frozen.go），不可配置。
 func (a *application) runEval() int {
 	cfg, err := config.Load(config.LoadOptions{
@@ -103,12 +103,9 @@ func (a *application) runEval() int {
 		if suite == eval.SuiteATM {
 			baseName = "eval-atm"
 		}
-		switch pulseMode {
-		case eval.PulseModePulsePlain:
-			baseName += "-pulse-plain"
-		case eval.PulseModeLocalPlain:
-			baseName += "-local-plain"
-		}
+		// 现役唯一合法模式 = local_plain（脉冲云端臂已移除）：store 名固定带 -local-plain 后缀；
+		// 非法/历史模式名由 NewLocalEngine 在任何读写前 fail-closed 拒绝。
+		baseName += "-local-plain"
 		storePath = filepath.Join(stateDir, "eval", baseName+".json")
 	}
 	tier := firstNonEmptyString(a.args.String("tier"), eval.Tier1540)
@@ -118,9 +115,10 @@ func (a *application) runEval() int {
 	rawLimit := a.args.Int("raw_limit")
 	if !a.args.provided["raw_limit"] || rawLimit <= 0 {
 		if suite == eval.SuiteATM {
-			rawLimit = 50
+			// ATM-Bench 默认智能交付窗口 = 0–64 items（基于物理信息能量包络 E(u_k) >= E(u_1)/e 零保底自适应选材）。
+			rawLimit = 64
 		} else {
-			// LoCoMo 默认交付窗口 = 0–96 items（本地渲染上限 24576 字符 ≈ TokenTier8192）：
+			// LoCoMo 默认智能交付窗口 = 0–96 items（本地渲染上限 24576 字符 ≈ TokenTier8192）：
 			// 96 条交付窗口是当前实测证据命中 100% 的档位，低于它会截断多跳题的相关轮次。
 			rawLimit = 96
 		}
@@ -159,7 +157,7 @@ func (a *application) runEval() int {
 		ProgressEach:    intOr(a.args.Int("progress_every"), 20),
 		DenoiseRatio:    a.args.Float("denoise_ratio"),
 		NoVerify:        a.args.Flag("no_verify"),
-		PulseTokenizer:  firstNonEmptyString(a.args.String("pulse_tokenizer"), eval.PulseTokenizerFTS5BM25),
+		PulseTokenizer:  firstNonEmptyString(a.args.String("pulse_tokenizer"), eval.PulseTokenizerProduct),
 		PulseMode:       pulseMode,
 		Log: evalLogWriter(a.args.Flag("json"), a.printf, func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)

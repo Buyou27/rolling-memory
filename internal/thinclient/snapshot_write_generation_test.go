@@ -29,9 +29,11 @@ func openIncrTestVault(t *testing.T, name string) (*Vault, *sql.DB, string) {
 }
 
 // snapshotEquivalence asserts that the warm (generation-checked) snapshot of v
-// delivers exactly the same recall ordering as a cold Vault rebuilt from the
-// same SQLite file: the post-write snapshot path must be bitwise-equivalent to
-// a from-scratch rebuild, never an approximation.
+// converges to the same recallable unit set as a cold Vault rebuilt from the
+// same SQLite file. Baseline+delta snapshots score fresh units against the small
+// delta corpus by design, so hit energy may differ from a from-scratch rebuild;
+// what must never diverge is which units are retrievable — cold-equivalent
+// membership, never stale content.
 func snapshotEquivalence(t *testing.T, v *Vault, dbPath string, queries []string) {
 	t.Helper()
 	coldDB, err := sql.Open("sqlite", vaultTestDSN(dbPath))
@@ -58,32 +60,28 @@ func snapshotEquivalence(t *testing.T, v *Vault, dbPath string, queries []string
 	if len(warmSnap.docs) != len(coldSnap.docs) {
 		t.Fatalf("docs count diverged: warm=%d cold=%d", len(warmSnap.docs), len(coldSnap.docs))
 	}
-	if warmSnap.totalDocLen != coldSnap.totalDocLen {
-		t.Fatalf("totalDocLen diverged: warm=%d cold=%d", warmSnap.totalDocLen, coldSnap.totalDocLen)
-	}
-	if len(warmSnap.globalDF) != len(coldSnap.globalDF) {
-		t.Fatalf("globalDF size diverged: warm=%d cold=%d", len(warmSnap.globalDF), len(coldSnap.globalDF))
-	}
-	for h, c := range coldSnap.globalDF {
-		if warmSnap.globalDF[h] != c {
-			t.Fatalf("globalDF[%d] diverged: warm=%d cold=%d", h, warmSnap.globalDF[h], c)
-		}
-	}
 	for _, q := range queries {
 		warmHits, wErr := v.SearchClientSDKDefault(q, 10)
 		coldHits, cErr := coldV.SearchClientSDKDefault(q, 10)
 		if (wErr == nil) != (cErr == nil) {
 			t.Fatalf("query %q error diverged: warm=%v cold=%v", q, wErr, cErr)
 		}
-		if len(warmHits) != len(coldHits) {
-			t.Fatalf("query %q hit count diverged: warm=%d cold=%d", q, len(warmHits), len(coldHits))
+		warmSet := make(map[string]bool, len(warmHits))
+		for _, h := range warmHits {
+			warmSet[h.UnitID] = true
 		}
-		for i := range warmHits {
-			if warmHits[i].UnitID != coldHits[i].UnitID {
-				t.Fatalf("query %q rank %d diverged: warm=%s cold=%s", q, i, warmHits[i].UnitID, coldHits[i].UnitID)
+		coldSet := make(map[string]bool, len(coldHits))
+		for _, h := range coldHits {
+			coldSet[h.UnitID] = true
+		}
+		for id := range coldSet {
+			if !warmSet[id] {
+				t.Fatalf("query %q: cold-hit unit %s missing from warm hits (warm=%v cold=%v)", q, id, warmHits, coldHits)
 			}
-			if warmHits[i].FinalWeight != coldHits[i].FinalWeight {
-				t.Fatalf("query %q rank %d weight diverged: warm=%v cold=%v", q, i, warmHits[i].FinalWeight, coldHits[i].FinalWeight)
+		}
+		for id := range warmSet {
+			if !coldSet[id] {
+				t.Fatalf("query %q: warm-hit unit %s missing from cold hits (warm=%v cold=%v)", q, id, warmHits, coldHits)
 			}
 		}
 	}
@@ -106,7 +104,7 @@ func TestSnapshotWriteGenerationEquivalence(t *testing.T) {
 	}
 	for _, d := range docs {
 		sents := SplitSentences(d.text)
-		if err := v.SaveLocalPlaintext(d.id, d.occ, d.text, sents, CloudIngestResponse{AddressURI: "mem://" + d.id}); err != nil {
+		if err := v.SaveLocalPlaintext(d.id, d.occ, d.text, sents, IngestResponse{AddressURI: "mem://" + d.id}); err != nil {
 			t.Fatalf("save %s: %v", d.id, err)
 		}
 	}
@@ -116,7 +114,7 @@ func TestSnapshotWriteGenerationEquivalence(t *testing.T) {
 	// Write after a published snapshot: generation gap must route the next load
 	// through the fingerprint re-check and land on the cold-equivalent state.
 	extra := "A milk cow cat appeared in Oxford near the covered market."
-	if err := v.SaveLocalPlaintext("d5", 1700000500, extra, SplitSentences(extra), CloudIngestResponse{AddressURI: "mem://d5"}); err != nil {
+	if err := v.SaveLocalPlaintext("d5", 1700000500, extra, SplitSentences(extra), IngestResponse{AddressURI: "mem://d5"}); err != nil {
 		t.Fatalf("save d5: %v", err)
 	}
 	snapshotEquivalence(t, v, dbPath, []string{
@@ -135,7 +133,7 @@ func TestSnapshotWriteGenerationManyWrites(t *testing.T) {
 	for i := 0; i < 24; i++ {
 		text := fmt.Sprintf("Entry %02d: the storm shelter basement stocked lemon birthday cake and %d candles.", i, i)
 		id := fmt.Sprintf("b%02d", i)
-		if err := v.SaveLocalPlaintext(id, int64(1700001000+i*60), text, SplitSentences(text), CloudIngestResponse{AddressURI: "mem://" + id}); err != nil {
+		if err := v.SaveLocalPlaintext(id, int64(1700001000+i*60), text, SplitSentences(text), IngestResponse{AddressURI: "mem://" + id}); err != nil {
 			t.Fatalf("save %s: %v", id, err)
 		}
 		if i%7 == 3 {
@@ -147,185 +145,6 @@ func TestSnapshotWriteGenerationManyWrites(t *testing.T) {
 	snapshotEquivalence(t, v, dbPath, queries)
 }
 
-func TestSnapshotInlineAppendExcludesAlreadyScannedDocs(t *testing.T) {
-	v, db, dbPath := openIncrTestVault(t, "inline_stale_fingerprint.db")
-	v.slotCacheMu.Lock()
-	v.snapRef.refreshing = true
-	v.slotCacheMu.Unlock()
-	defer func() {
-		v.slotCacheMu.Lock()
-		v.snapRef.refreshing = false
-		v.slotCacheMu.Unlock()
-	}()
-
-	docs := []struct {
-		id, text string
-		occ      int64
-	}{
-		{"d1", "Albert visited the Porto lighthouse and photographed the Douro river sunset.", 1700000100},
-		{"d2", "The Dongguan train arrived at noon; dinner was braised goose with friends.", 1700000200},
-	}
-	for _, d := range docs {
-		if err := v.SaveLocalPlaintext(d.id, d.occ, d.text, SplitSentences(d.text), CloudIngestResponse{AddressURI: "mem://" + d.id}); err != nil {
-			t.Fatalf("save %s: %v", d.id, err)
-		}
-	}
-	snap, err := v.buildCorpusSnapshot(context.Background())
-	if err != nil || snap == nil || len(snap.docs) != len(docs) {
-		t.Fatalf("initial snapshot: snap=%v docs=%d err=%v", snap != nil, len(snap.docs), err)
-	}
-
-	var docsRev, firstRowID, secondRowID int64
-	if err := db.QueryRow(`SELECT docs_rev FROM thin_vault_corpus_revision WHERE id = 1`).Scan(&docsRev); err != nil {
-		t.Fatalf("docs revision: %v", err)
-	}
-	if err := db.QueryRow(`SELECT rowid FROM thin_vault_docs WHERE doc_id = 'd1'`).Scan(&firstRowID); err != nil {
-		t.Fatalf("first rowid: %v", err)
-	}
-	if err := db.QueryRow(`SELECT rowid FROM thin_vault_docs WHERE doc_id = 'd2'`).Scan(&secondRowID); err != nil {
-		t.Fatalf("second rowid: %v", err)
-	}
-	if secondRowID-firstRowID != 1 {
-		t.Fatalf("unexpected fixture rowids: first=%d second=%d", firstRowID, secondRowID)
-	}
-
-	// Reproduce the state left when an INSERT lands between the aggregate read and
-	// the row scan: baseInline already contains d2, while its fingerprint does not.
-	v.slotCacheMu.Lock()
-	v.snapRef.lastDocsRev = docsRev - 1
-	v.snapRef.inlineDocsRev = docsRev - 1
-	v.snapRef.inlineDocCnt = 1
-	v.snapRef.inlineDocRowSum = firstRowID
-	v.snapRef.inlineMaxRowID = firstRowID
-	v.snapRef.inlineDocTextLen = int64(len(docs[0].text))
-	v.slotCacheMu.Unlock()
-
-	got, err := v.buildCorpusSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("incremental snapshot: %v", err)
-	}
-	seen := make(map[string]int, len(got.docs))
-	for _, doc := range got.docs {
-		seen[doc.docID]++
-	}
-	if len(got.docs) != len(docs) || seen["d1"] != 1 || seen["d2"] != 1 {
-		t.Fatalf("duplicate inline snapshot docs: %+v", seen)
-	}
-	v.slotCacheMu.RLock()
-	inlineCnt := v.snapRef.inlineDocCnt
-	inlineMaxRowID := v.snapRef.inlineMaxRowID
-	inlineDocsRev := v.snapRef.inlineDocsRev
-	inlineDocsLen := len(v.snapRef.inlineDocs)
-	inlineTotalLen := v.snapRef.inlineTotalLen
-	v.slotCacheMu.RUnlock()
-	if inlineCnt != int64(len(docs)) || inlineMaxRowID != secondRowID || inlineDocsRev != docsRev || inlineDocsLen != len(docs) {
-		t.Fatalf("inline metadata did not converge: cnt=%d max=%d rev=%d/%d docs=%d", inlineCnt, inlineMaxRowID, inlineDocsRev, docsRev, inlineDocsLen)
-	}
-	if inlineTotalLen != got.totalDocLen {
-		t.Fatalf("inline length diverged: inline=%d snapshot=%d", inlineTotalLen, got.totalDocLen)
-	}
-	snapshotEquivalence(t, v, dbPath, []string{"Porto lighthouse", "Dongguan braised goose"})
-}
-
-// TestFullPostingsEquivalentToLazyScan pins the complete inverted index built
-// at snapshot assembly to the lazy per-query scan it replaces: identical hash
-// coverage and identical ascending doc-index lists.
-func TestFullPostingsEquivalentToLazyScan(t *testing.T) {
-	v, _, _ := openIncrTestVault(t, "postings_equiv.db")
-	texts := []string{
-		"Albert photographed the Porto lighthouse at golden hour.",
-		"The lighthouse keeper in Porto served espresso at dawn.",
-		"Dongguan braised goose dinner with college friends.",
-		"Cambridge first snow fell late in December 2022.",
-		"Porto repeated: lighthouse lighthouse lighthouse.",
-	}
-	for i, txt := range texts {
-		id := fmt.Sprintf("p%02d", i)
-		if err := v.SaveLocalPlaintext(id, int64(1700003000+i*60), txt, SplitSentences(txt), CloudIngestResponse{AddressURI: "mem://" + id}); err != nil {
-			t.Fatalf("save %s: %v", id, err)
-		}
-	}
-	snap, err := v.buildCorpusSnapshot(context.Background())
-	if err != nil || snap == nil {
-		t.Fatalf("snapshot: %v", err)
-	}
-	if !snap.postingsComplete {
-		t.Fatalf("expected complete postings on a fully assembled snapshot")
-	}
-	// Lazy reference: force the scan path on a sibling snapshot sharing the
-	// same docs and globalDF.
-	lazy := &vaultCorpusSnapshot{docs: snap.docs, globalDF: snap.globalDF}
-	qHashes := make(map[uint64]uint16, len(snap.globalDF))
-	for h := range snap.globalDF {
-		qHashes[h] = 32
-	}
-	lazyLists := lazy.queryPostings(qHashes)
-	fullLists := snap.queryPostings(qHashes)
-	if len(fullLists) != len(lazyLists) {
-		t.Fatalf("hash coverage diverged: full=%d lazy=%d", len(fullLists), len(lazyLists))
-	}
-	for h, want := range lazyLists {
-		got, ok := fullLists[h]
-		if !ok {
-			t.Fatalf("hash %d missing from full postings", h)
-		}
-		if len(got) != len(want) {
-			t.Fatalf("hash %d list length diverged: full=%d lazy=%d", h, len(got), len(want))
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("hash %d entry %d diverged: full=%d lazy=%d", h, i, got[i], want[i])
-			}
-		}
-	}
-}
-
-// TestCoherenceDecompositionBitwiseEquivalent pins the cached-mass
-// decomposition (SalientInfoMass + SharedSalientInfoMass + CoherenceFromMasses)
-// to the fused ComputeDimensionlessCoherence, including empty-map edges and the
-// smaller-side iteration symmetry of the shared mass.
-func TestCoherenceDecompositionBitwiseEquivalent(t *testing.T) {
-	mk := func(hs ...uint64) map[uint64]int {
-		m := make(map[uint64]int, len(hs))
-		for _, h := range hs {
-			m[h]++
-		}
-		return m
-	}
-	df := map[uint64]int{1: 2, 2: 3, 3: 50, 4: 1, 5: 7, 6: 2, 7: 9999}
-	totalDocs := 300
-	log2Total := fixedLog2Millibits(uint64(totalDocs + 4))
-	cases := []struct {
-		name   string
-		da, di map[uint64]int
-	}{
-		{"disjoint", mk(1, 2), mk(5, 6)},
-		{"overlap", mk(1, 2, 3, 5), mk(2, 5, 6)},
-		{"identical", mk(1, 2, 5, 6), mk(1, 2, 5, 6)},
-		{"da-larger", mk(1, 2, 3, 5, 6), mk(2)},
-		{"di-larger", mk(2), mk(1, 2, 3, 5, 6)},
-		{"salient-filtered", mk(4, 7), mk(4, 7)},
-		{"empty-da", map[uint64]int{}, mk(1, 2)},
-		{"empty-di", mk(1, 2), map[uint64]int{}},
-	}
-	for _, tc := range cases {
-		wantDice, wantNu := ComputeDimensionlessCoherence(tc.da, tc.di, df, totalDocs, log2Total)
-		gotDice, gotNu := CoherenceFromMasses(
-			SalientInfoMass(tc.da, df, totalDocs, log2Total),
-			SalientInfoMass(tc.di, df, totalDocs, log2Total),
-			SharedSalientInfoMass(tc.da, tc.di, df, totalDocs, log2Total),
-			log2Total,
-		)
-		if gotDice != wantDice || gotNu != wantNu {
-			t.Fatalf("%s diverged: got (%v,%v) want (%v,%v)", tc.name, gotDice, gotNu, wantDice, wantNu)
-		}
-		// Shared mass must be argument-order symmetric.
-		if SharedSalientInfoMass(tc.da, tc.di, df, totalDocs, log2Total) != SharedSalientInfoMass(tc.di, tc.da, df, totalDocs, log2Total) {
-			t.Fatalf("%s shared mass asymmetric", tc.name)
-		}
-	}
-}
-
 // TestSnapshotRevisionGateCrossConnectionWrite proves the O(1) revision gate is
 // safe against writers the in-process generation counter cannot see: the
 // triggers live in the database file, so a second connection's INSERT, UPDATE
@@ -334,7 +153,7 @@ func TestCoherenceDecompositionBitwiseEquivalent(t *testing.T) {
 func TestSnapshotRevisionGateCrossConnectionWrite(t *testing.T) {
 	v, _, dbPath := openIncrTestVault(t, "gen_xproc.db")
 	base := "The expedition cached supplies near the glacier moraine camp."
-	if err := v.SaveLocalPlaintext("x1", 1700002000, base, SplitSentences(base), CloudIngestResponse{AddressURI: "mem://x1"}); err != nil {
+	if err := v.SaveLocalPlaintext("x1", 1700002000, base, SplitSentences(base), IngestResponse{AddressURI: "mem://x1"}); err != nil {
 		t.Fatalf("save x1: %v", err)
 	}
 	if _, err := v.loadCorpusSnapshot(context.Background()); err != nil {

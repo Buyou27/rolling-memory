@@ -39,8 +39,8 @@ func TestHighDFThresholdScalingInvariance(t *testing.T) {
 		t.Fatalf("比例段被守卫改动：%d != %d", highDFThresholdGuarded(11034), HighDFThresholdForN(11034))
 	}
 	frac := float64(HighDFThresholdForN(11034)) / 11034.0
-	if math.Abs(frac-highDFFraction) > 0.01 {
-		t.Fatalf("比例段偏离 highDFFraction：%.4f", frac)
+	if math.Abs(frac-HighDFFraction) > 0.01 {
+		t.Fatalf("比例段偏离 HighDFFraction：%.4f", frac)
 	}
 }
 

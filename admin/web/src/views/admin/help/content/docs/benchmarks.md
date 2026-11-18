@@ -2,7 +2,7 @@
 
 **[English](benchmarks.md) · [简体中文](zh-CN/benchmarks.md) · [FAQ](faq.md) · [Documentation Hub](README.md)**
 
-Rolling Memory ships a one-command, frozen-protocol evaluation runner (`rmem eval`) for the University of Cambridge ATM-Bench (primary benchmark) and ACL 2024 LoCoMo (comparative reference). **The benchmark corpora themselves are not redistributed with this repository** — bring your own copy obtained from the upstream projects and pin it with the `SHA-256` digests published below. The default evaluation arm is **`local_plain`**: on-device retrieval over the local plaintext vault with zero network requests. Cloud pulse arms belong to the application-based cloud preview (see [privacy.md](privacy.md)) and are out of scope for this release's documentation.
+Rolling Memory ships a one-command, frozen-protocol evaluation runner (`rmem eval`) for the University of Cambridge ATM-Bench (primary benchmark) and ACL 2024 LoCoMo (comparative reference). **The benchmark corpora themselves are not redistributed with this repository** — bring your own copy obtained from the upstream projects and pin it with the `SHA-256` digests published below. This release evaluates the local arm **`local_plain`**: on-device retrieval over the local plaintext vault with zero network requests. Cloud-plane evaluation belongs to the application-based cloud capability preview (see [privacy.md](privacy.md)) and is out of scope for this release's reproduction.
 
 > **Evidence requirement**: every published score must carry actual provenance (`transport / scope / corpus_sha256 / commit / per-question retrieval IDs`). Oracle is a human-labelled ceiling, not an engine retrieval score.
 

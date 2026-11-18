@@ -63,8 +63,8 @@ func TestDedupeResolvedHitsByContentPreservesDistinctFactsAndSources(t *testing.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hits := []thinclient.LocalResolvedHit{
-				{CloudQueryHit: thinclient.CloudQueryHit{UnitID: "a"}, RawPlaintext: tc.first},
-				{CloudQueryHit: thinclient.CloudQueryHit{UnitID: "b"}, RawPlaintext: tc.second},
+				{QueryHit: thinclient.QueryHit{UnitID: "a"}, RawPlaintext: tc.first},
+				{QueryHit: thinclient.QueryHit{UnitID: "b"}, RawPlaintext: tc.second},
 			}
 			got, dropped := dedupeResolvedHitsByContent(hits)
 			if dropped != 0 || len(got) != 2 || got[0].UnitID != "a" || got[1].UnitID != "b" {
@@ -76,8 +76,8 @@ func TestDedupeResolvedHitsByContentPreservesDistinctFactsAndSources(t *testing.
 
 func TestDedupeResolvedHitsByContentKeepsShortRepeatedPrompts(t *testing.T) {
 	hits := []thinclient.LocalResolvedHit{
-		{CloudQueryHit: thinclient.CloudQueryHit{UnitID: "a"}, RawPlaintext: "[user] 继续"},
-		{CloudQueryHit: thinclient.CloudQueryHit{UnitID: "b"}, RawPlaintext: "[user] 继续"},
+		{QueryHit: thinclient.QueryHit{UnitID: "a"}, RawPlaintext: "[user] 继续"},
+		{QueryHit: thinclient.QueryHit{UnitID: "b"}, RawPlaintext: "[user] 继续"},
 	}
 	got, dropped := dedupeResolvedHitsByContent(hits)
 	if dropped != 0 || len(got) != 2 {

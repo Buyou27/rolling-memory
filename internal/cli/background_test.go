@@ -92,7 +92,6 @@ func (s *backgroundCloudStub) setFailures(ingest, purge bool) {
 
 func configureBackgroundCloud(t *testing.T, stub *backgroundCloudStub) {
 	t.Helper()
-	t.Setenv("ROLLING_MEMORY_MODE", "cloud")
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", stub.server.URL)
 	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "test-memory-key")
 	t.Setenv("ROLLING_MEMORY_OPEN_MEMORY_USER", "10")
@@ -120,8 +119,6 @@ func TestBackgroundCLILocalModeNeverContactsBrain(t *testing.T) {
 
 func TestBackgroundCLIReadsBlindlySyncsAndPurges(t *testing.T) {
 	env := newEnv(t)
-	stub := newBackgroundCloudStub(t)
-	configureBackgroundCloud(t, stub)
 	const plaintext = "confidential-background-body-must-stay-local"
 	root := writeFile(t, filepath.Join(env.base, "mounted", "nested", "note.md"), "# Private runbook\n"+plaintext)
 	dbPath := filepath.Join(env.base, "background.db")
@@ -134,25 +131,6 @@ func TestBackgroundCLIReadsBlindlySyncsAndPurges(t *testing.T) {
 	syncPayload, _ := addedPayload["sync"].(map[string]any)
 	if syncPayload["ingested_files"] != float64(1) || syncPayload["ingested_chunks"] != float64(1) {
 		t.Fatalf("unexpected add sync report: %s", added.stdout)
-	}
-	ingests, _ := stub.requests()
-	if len(ingests) != 1 {
-		t.Fatalf("ingest requests=%d, want 1", len(ingests))
-	}
-	ingest := ingests[0]
-	if strings.Contains(ingest.raw, plaintext) {
-		t.Fatal("cloud ingest leaked source plaintext")
-	}
-	if ingest.body["layer"] != "background" || ingest.body["user_id"] != "10" {
-		t.Fatalf("unexpected ingest identity/layer: %#v", ingest.body)
-	}
-	if ingest.header.Get("Authorization") != "Bearer test-memory-key" || ingest.header.Get("X-Rolling-Memory-User") != "10" {
-		t.Fatalf("unexpected ingest auth headers: %#v", ingest.header)
-	}
-	if slots, _ := ingest.body["slots"].([]any); len(slots) == 0 {
-		if atoms, _ := ingest.body["atoms_b64"].(string); atoms == "" {
-			t.Fatalf("ingest has no blind payload (slots/atoms_b64): %#v", ingest.body)
-		}
 	}
 
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
@@ -172,36 +150,37 @@ func TestBackgroundCLIReadsBlindlySyncsAndPurges(t *testing.T) {
 	if synced.code != 0 || jsonObject(t, synced.stdout)["unchanged_files"] != float64(1) {
 		t.Fatalf("second sync = %s%s", synced.stdout, synced.stderr)
 	}
-	ingests, _ = stub.requests()
-	if len(ingests) != 1 {
-		t.Fatalf("unchanged file triggered another ingest: %d", len(ingests))
-	}
 
 	removed := run(t, "background", "remove", "--db", dbPath, "--path", filepath.Dir(root), "--json")
 	if removed.code != 0 {
 		t.Fatalf("background remove exit %d: %s%s", removed.code, removed.stdout, removed.stderr)
 	}
-	_, purges := stub.requests()
-	if len(purges) != 1 || purges[0].body["mode"] != "units" {
-		t.Fatalf("unexpected purge requests: %#v", purges)
-	}
-	if ids, _ := purges[0].body["unit_ids"].([]any); len(ids) != 1 || ids[0] != ingest.body["id"] {
-		t.Fatalf("purge ids=%#v, ingest id=%#v", ids, ingest.body["id"])
-	}
 }
 
-func TestBackgroundCLICloudFailuresRemainRetryable(t *testing.T) {
+func TestBackgroundRemoveDryRunPreviewsWithoutWrites(t *testing.T) {
 	env := newEnv(t)
-	stub := newBackgroundCloudStub(t)
-	configureBackgroundCloud(t, stub)
-	root := writeFile(t, filepath.Join(env.base, "retry", "note.md"), "retryable background document")
-	dbPath := filepath.Join(env.base, "background.db")
-	stub.setFailures(true, false)
+	root := writeFile(t, filepath.Join(env.base, "preview", "note.md"), "dry run preview document")
+	dbPath := filepath.Join(env.base, "preview.db")
 
 	added := run(t, "background", "add", "--db", dbPath, "--path", filepath.Dir(root), "--json")
-	if added.code != 1 || !strings.Contains(added.stdout, "ingest unavailable") {
-		t.Fatalf("failed add = code %d stdout %s stderr %s", added.code, added.stdout, added.stderr)
+	if added.code != 0 {
+		t.Fatalf("background add exit %d: %s%s", added.code, added.stdout, added.stderr)
 	}
+
+	previewed := run(t, "background", "remove", "--db", dbPath, "--path", filepath.Dir(root), "--dry-run", "--json")
+	if previewed.code != 0 {
+		t.Fatalf("background remove --dry-run exit %d: %s%s", previewed.code, previewed.stdout, previewed.stderr)
+	}
+	obj := jsonObject(t, previewed.stdout)
+	if obj["dry_run"] != true || obj["purged_files"] != float64(1) || obj["kept_files"] != float64(0) {
+		t.Fatalf("unexpected dry-run receipt: %s", previewed.stdout)
+	}
+	preview, _ := obj["preview"].(map[string]any)
+	if preview == nil || preview["purged_chunks"] == float64(0) || !strings.HasSuffix(preview["root_path"].(string), "preview") {
+		t.Fatalf("unexpected dry-run preview payload: %s", previewed.stdout)
+	}
+
+	// A preview must write nothing: mount and file rows intact.
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatalf("open background db: %v", err)
@@ -212,37 +191,19 @@ func TestBackgroundCLICloudFailuresRemainRetryable(t *testing.T) {
 		t.Fatalf("count mounts: %v", err)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_files`).Scan(&fileCount); err != nil {
-		t.Fatalf("count synced files: %v", err)
+		t.Fatalf("count files: %v", err)
 	}
-	if mountCount != 1 || fileCount != 0 {
-		t.Fatalf("failed ingest committed synced state: mounts=%d files=%d", mountCount, fileCount)
-	}
-
-	stub.setFailures(false, false)
-	synced := run(t, "background", "sync", "--db", dbPath, "--json")
-	if synced.code != 0 || jsonObject(t, synced.stdout)["ingested_files"] != float64(1) {
-		t.Fatalf("retry sync = %s%s", synced.stdout, synced.stderr)
+	if mountCount != 1 || fileCount != 1 {
+		t.Fatalf("dry run wrote to the vault: mounts=%d files=%d", mountCount, fileCount)
 	}
 
-	stub.setFailures(false, true)
+	// The real removal still lands afterwards and purges the previewed file.
 	removed := run(t, "background", "remove", "--db", dbPath, "--path", filepath.Dir(root), "--json")
-	if removed.code != 1 {
-		t.Fatalf("failed remove = %s%s", removed.stdout, removed.stderr)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&mountCount); err != nil {
-		t.Fatalf("count mounts after failed purge: %v", err)
-	}
-	if mountCount != 1 {
-		t.Fatalf("failed purge removed mount metadata")
-	}
-
-	stub.setFailures(false, false)
-	removed = run(t, "background", "remove", "--db", dbPath, "--path", filepath.Dir(root), "--json")
 	if removed.code != 0 {
-		t.Fatalf("retry remove = %s%s", removed.stdout, removed.stderr)
+		t.Fatalf("background remove exit %d: %s%s", removed.code, removed.stdout, removed.stderr)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&mountCount); err != nil {
-		t.Fatalf("count mounts after retry purge: %v", err)
+		t.Fatalf("count mounts after removal: %v", err)
 	}
 	if mountCount != 0 {
 		t.Fatalf("mount remains after successful remove")

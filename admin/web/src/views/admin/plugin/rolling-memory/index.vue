@@ -20,6 +20,17 @@
                 </div>
             </div>
             <div class="rm-hero-right">
+                <el-select
+                    v-model="envHealth.delivery_window"
+                    size="small"
+                    style="width: 175px"
+                    data-testid="select-overview-delivery-window"
+                    @change="handleToggleDeliveryWindow"
+                >
+                    <el-option :label="isEn ? 'Window: auto (0-16)' : '智能交付: auto (0-16)'" value="0-16" />
+                    <el-option :label="isEn ? 'Window: 0-32 (span)' : '智能交付: 0-32 (扩展)'" value="0-32" />
+                    <el-option :label="isEn ? 'Window: 0-64 (deep)' : '智能交付: 0-64 (全景)'" value="0-64" />
+                </el-select>
                 <el-switch
                     v-model="envHealth.auto_sync_enabled"
                     :disabled="typeof envHealth.auto_sync_enabled !== 'boolean'"
@@ -169,6 +180,128 @@
                     </el-col>
                 </el-row>
             </template>
+        </el-card>
+
+        <!-- 回收与自愈：只清「确证过时」的单元、修复坐标位移的指针；源不可读的行默认保留
+             （fail-safe），破坏性的 --include-unreadable 只留在 CLI。预演为只读分类。 -->
+        <el-card shadow="never" class="mt-16 maintenance-card" data-testid="card-maintenance-prune">
+            <div class="sec-head">
+                <span class="sec-title">{{ t('plugin.rolling-memory.overview.maintenanceTitle') }}</span>
+                <span class="mp-sub">{{ t('plugin.rolling-memory.overview.maintenanceSub') }}</span>
+            </div>
+            <div class="mp-actions">
+                <el-button size="small" :loading="prunePreviewing" data-testid="btn-prune-preview" @click="handlePrunePreview">
+                    {{ t('plugin.rolling-memory.overview.maintenancePreviewBtn') }}
+                </el-button>
+                <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="pruneApplying"
+                    :disabled="!pruneActionable"
+                    data-testid="btn-prune-apply"
+                    @click="handlePruneApply"
+                >
+                    {{ t('plugin.rolling-memory.overview.maintenanceApplyBtn') }}
+                </el-button>
+                <span v-if="pruneReport" class="mp-hint">{{ t('plugin.rolling-memory.overview.maintenancePreviewHint') }}</span>
+            </div>
+            <div v-if="pruneReport" class="mp-grid" data-testid="maintenance-report">
+                <div class="mp-item">
+                    <span class="mp-num">{{ pruneReport.verified ?? 0 }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.maintenanceVerifiedLbl') }}</span>
+                </div>
+                <div class="mp-item">
+                    <span class="mp-num">{{ pruneMode === 'apply' ? pruneReport.reanchored ?? 0 : pruneReport.reanchorable ?? 0 }}</span>
+                    <span class="mp-lbl">{{
+                        pruneMode === 'apply'
+                            ? t('plugin.rolling-memory.overview.maintenanceReanchoredLbl')
+                            : t('plugin.rolling-memory.overview.maintenanceReanchorLbl')
+                    }}</span>
+                </div>
+                <div class="mp-item">
+                    <span class="mp-num">{{ pruneMode === 'apply' ? pruneReport.removed ?? 0 : pruneReport.absent ?? 0 }}</span>
+                    <span class="mp-lbl">{{
+                        pruneMode === 'apply'
+                            ? t('plugin.rolling-memory.overview.maintenanceRemovedLbl')
+                            : t('plugin.rolling-memory.overview.maintenanceAbsentLbl')
+                    }}</span>
+                </div>
+                <div class="mp-item">
+                    <span class="mp-num">{{ pruneReport.unreadable ?? 0 }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.maintenanceUnreadableLbl') }}</span>
+                </div>
+                <div v-if="pruneMode === 'apply'" class="mp-item">
+                    <span class="mp-num">{{ pruneReport.noetic_removed ?? 0 }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.maintenanceNoeticLbl') }}</span>
+                </div>
+            </div>
+            <div v-if="pruneReport?.receipt" class="mp-receipt" data-testid="maintenance-receipt">
+                {{ t('plugin.rolling-memory.overview.maintenanceReceiptLbl') }}: <code>{{ pruneReport.receipt }}</code>
+            </div>
+        </el-card>
+
+        <!-- 空间维护：旧版本备份、可再生成缓存与金库空闲页的一站式自助维护。扫描为只读体检；
+             清理与瘦身必须显式确认，三条路径都走产品 CLI `maintain` 正典——保留策略、
+             守护进程有序停启与回执文件都在引擎侧，控制台只做参数校验与报告透传。 -->
+        <el-card shadow="never" class="mt-16 maintenance-card" data-testid="card-maintenance-space">
+            <div class="sec-head">
+                <span class="sec-title">{{ t('plugin.rolling-memory.overview.spaceMaintenanceTitle') }}</span>
+                <span class="mp-sub">{{ t('plugin.rolling-memory.overview.spaceMaintenanceSub') }}</span>
+            </div>
+            <div class="mp-actions">
+                <el-button size="small" :loading="spaceBusy === 'status'" data-testid="btn-maintain-scan" @click="handleSpaceScan">
+                    {{ t('plugin.rolling-memory.overview.spaceMaintenanceScanBtn') }}
+                </el-button>
+                <el-button
+                    size="small"
+                    type="warning"
+                    plain
+                    :loading="spaceBusy === 'clean'"
+                    :disabled="!spaceCleanActionable"
+                    data-testid="btn-maintain-clean"
+                    @click="handleSpaceClean"
+                >
+                    {{ t('plugin.rolling-memory.overview.spaceMaintenanceCleanBtn') }}
+                </el-button>
+                <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="spaceBusy === 'compact'"
+                    :disabled="!spaceActionable"
+                    data-testid="btn-maintain-compact"
+                    @click="handleSpaceCompact"
+                >
+                    {{ t('plugin.rolling-memory.overview.spaceMaintenanceCompactBtn') }}
+                </el-button>
+                <span v-if="spaceReport" class="mp-hint">{{ t('plugin.rolling-memory.overview.spaceMaintenanceHint') }}</span>
+            </div>
+            <div v-if="spaceReport" class="mp-grid" data-testid="space-maintenance-report">
+                <div class="mp-item">
+                    <span class="mp-num">{{ formatSpaceBytes(spaceReclaimable) }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.spaceMaintenanceTotalLbl') }}</span>
+                </div>
+                <div class="mp-item">
+                    <span class="mp-num">{{ formatSpaceBytes(spaceBackupsReclaim) }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.spaceMaintenanceBackupsLbl') }}</span>
+                </div>
+                <div class="mp-item">
+                    <span class="mp-num">{{ formatSpaceBytes(spaceCachesReclaim) }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.spaceMaintenanceCachesLbl') }}</span>
+                </div>
+                <div class="mp-item">
+                    <span class="mp-num">{{ formatSpaceBytes(spaceCompactReclaim) }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.spaceMaintenanceCompactLbl') }}</span>
+                </div>
+                <div v-if="spaceFreed > 0" class="mp-item">
+                    <span class="mp-num">{{ formatSpaceBytes(spaceFreed) }}</span>
+                    <span class="mp-lbl">{{ t('plugin.rolling-memory.overview.spaceMaintenanceFreedLbl') }}</span>
+                </div>
+            </div>
+            <div v-if="spaceReceipt" class="mp-receipt" data-testid="space-maintenance-receipt">
+                {{ t('plugin.rolling-memory.overview.spaceMaintenanceReceiptLbl') }}: <code>{{ spaceReceipt }}</code>
+            </div>
         </el-card>
 
         <!-- 三层认知记忆统计卡片（含本地 vs 远端对比与单层手动对齐同步按钮） -->
@@ -363,7 +496,7 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAdminInfo } from '@/stores/adminInfo'
 import { useLoadingProgressText } from '@/utils/loadingProgress'
 import { MonitorSocket } from '@/utils/monitorSocket'
@@ -405,7 +538,7 @@ const stats = ref<any>({
     background_file_count: 0,
     background_chunk_count: 0,
     episodic_count: 0,
-    episodic_cell_count: 0,
+    episodic_cluster_count: 0,
     noetic_active_count: 0,
     noetic_stale_count: 0,
     noetic_cited_links: 0,
@@ -436,6 +569,21 @@ const handleToggleAutoSync = async (val: string | number | boolean) => {
         )
     } catch {
         envHealth.value.auto_sync_enabled = !enabled
+    }
+}
+
+const handleToggleDeliveryWindow = async (val: string) => {
+    const prev = envHealth.value.delivery_window || '0-16'
+    try {
+        await request<any>({
+            url: '/admin/plugin/rolling-memory/toggle',
+            method: 'POST',
+            data: { key: 'delivery_window', value: val },
+        })
+        envHealth.value.delivery_window = val
+        ElMessage.success(isEn.value ? `Smart delivery window set to ${val}` : `智能交付窗口已切换为 ${val}`)
+    } catch {
+        envHealth.value.delivery_window = prev
     }
 }
 
@@ -481,6 +629,168 @@ const loadEnvHealth = async (force = false) => {
     } finally {
         checkingHealth.value = false
     }
+}
+
+// 回收与自愈：预演为只读分类（可回收 / 可重锚计数），执行必须显式确认；两条路径都走
+// 产品 CLI `sync prune` 正典（分类、回收、跨轮次重锚、回执与守护进程失效通知全在引擎侧），
+// 控制台只做参数校验与报告透传，不自研第二套清洗逻辑。
+const prunePreviewing = ref(false)
+const pruneApplying = ref(false)
+const pruneMode = ref<'dry_run' | 'apply'>('dry_run')
+const pruneReport = ref<Record<string, any> | null>(null)
+const pruneActionable = computed(
+    () =>
+        pruneMode.value === 'dry_run' &&
+        pruneReport.value !== null &&
+        ((pruneReport.value.absent || 0) > 0 || (pruneReport.value.reanchorable || 0) > 0)
+)
+
+const requestPrune = async (action: 'preview' | 'apply') => {
+    const res = await request<any>({
+        url: '/admin/plugin/rolling-memory/maintenance/prune',
+        method: 'POST',
+        data: { action, confirm: action === 'apply' },
+        timeout: 0,
+    })
+    const report = res.data?.data?.report || null
+    pruneReport.value = report
+    pruneMode.value = action === 'apply' ? 'apply' : 'dry_run'
+    return report
+}
+
+const handlePrunePreview = async () => {
+    if (prunePreviewing.value || pruneApplying.value) return
+    prunePreviewing.value = true
+    try {
+        const report = await requestPrune('preview')
+        if (report) ElMessage.success(t('plugin.rolling-memory.overview.maintenancePreviewToast'))
+    } catch {
+        // 失败提示由 request 统一弹出；不覆盖上次读数，避免把失败伪装成零结果。
+    } finally {
+        prunePreviewing.value = false
+    }
+}
+
+const handlePruneApply = async () => {
+    if (pruneApplying.value || !pruneActionable.value) return
+    try {
+        await ElMessageBox.confirm(
+            t('plugin.rolling-memory.overview.maintenanceApplyConfirm'),
+            t('plugin.rolling-memory.overview.maintenanceTitle'),
+            {
+                type: 'warning',
+                confirmButtonText: t('plugin.rolling-memory.overview.maintenanceConfirmOk'),
+                cancelButtonText: t('plugin.rolling-memory.overview.maintenanceConfirmCancel'),
+            }
+        )
+    } catch {
+        return
+    }
+    pruneApplying.value = true
+    try {
+        const report = await requestPrune('apply')
+        if (report) ElMessage.success(t('plugin.rolling-memory.overview.maintenanceDoneToast'))
+        // 回收与重锚改写了统计与索引：强制重算环境健康读数，页面随即显示新计数。
+        void loadEnvHealth(true)
+    } catch {
+        // 同上：错误提示由 request 统一弹出。
+    } finally {
+        pruneApplying.value = false
+    }
+}
+
+// 空间维护：扫描为只读体检（旧版本备份 / 可再生成缓存 / 金库空闲页），清理与瘦身必须显式确认；
+// 三条路径都走产品 CLI `maintain` 正典（保留策略、守护进程有序停启与回执都在引擎侧），
+// 控制台只做参数校验与报告透传，不自研第二套清理逻辑。
+const spaceBusy = ref<'' | 'status' | 'clean' | 'compact'>('')
+const spaceReport = ref<Record<string, any> | null>(null)
+
+const spaceReclaimable = computed(() => Number(spaceReport.value?.reclaimable?.total_bytes || 0))
+const spaceBackupsReclaim = computed(() => Number(spaceReport.value?.reclaimable?.backups_bytes || 0))
+const spaceCachesReclaim = computed(() => Number(spaceReport.value?.reclaimable?.caches_bytes || 0))
+const spaceCompactReclaim = computed(() => Number(spaceReport.value?.reclaimable?.compact_bytes || 0))
+const spaceFreed = computed(() => Number(spaceReport.value?.freed_bytes || 0))
+const spaceReceipt = computed(() => String(spaceReport.value?.receipt || ''))
+const spaceActionable = computed(() => spaceReport.value !== null && spaceCompactReclaim.value > 0)
+const spaceCleanActionable = computed(
+    () => spaceReport.value !== null && spaceBackupsReclaim.value + spaceCachesReclaim.value > 0
+)
+
+const requestSpace = async (action: 'status' | 'clean' | 'compact', apply = false) => {
+    const res = await request<any>({
+        url: '/admin/plugin/rolling-memory/maintenance/space',
+        method: 'POST',
+        data: { action, apply, confirm: apply, caches: action === 'clean' },
+        timeout: 0,
+    })
+    const report = res.data?.data?.report || null
+    spaceReport.value = report
+    return report
+}
+
+const confirmSpaceAction = async (messageKey: string) => {
+    try {
+        await ElMessageBox.confirm(t(messageKey), t('plugin.rolling-memory.overview.spaceMaintenanceTitle'), {
+            type: 'warning',
+            confirmButtonText: t('plugin.rolling-memory.overview.spaceMaintenanceConfirmOk'),
+            cancelButtonText: t('plugin.rolling-memory.overview.spaceMaintenanceConfirmCancel'),
+        })
+        return true
+    } catch {
+        return false
+    }
+}
+
+const handleSpaceScan = async () => {
+    if (spaceBusy.value) return
+    spaceBusy.value = 'status'
+    try {
+        const report = await requestSpace('status')
+        if (report) ElMessage.success(t('plugin.rolling-memory.overview.spaceMaintenanceScanToast'))
+    } catch {
+        // 失败提示由 request 统一弹出；不覆盖上次读数，避免把失败伪装成零结果。
+    } finally {
+        spaceBusy.value = ''
+    }
+}
+
+const handleSpaceClean = async () => {
+    if (spaceBusy.value || !spaceCleanActionable.value) return
+    if (!(await confirmSpaceAction('plugin.rolling-memory.overview.spaceMaintenanceCleanConfirm'))) return
+    spaceBusy.value = 'clean'
+    try {
+        const report = await requestSpace('clean', true)
+        if (report) ElMessage.success(t('plugin.rolling-memory.overview.spaceMaintenanceDoneToast'))
+    } catch {
+        // 同上：错误提示由 request 统一弹出。
+    } finally {
+        spaceBusy.value = ''
+    }
+}
+
+const handleSpaceCompact = async () => {
+    if (spaceBusy.value || !spaceActionable.value) return
+    if (!(await confirmSpaceAction('plugin.rolling-memory.overview.spaceMaintenanceCompactConfirm'))) return
+    spaceBusy.value = 'compact'
+    try {
+        const report = await requestSpace('compact', true)
+        if (report) ElMessage.success(t('plugin.rolling-memory.overview.spaceMaintenanceDoneToast'))
+        // 瘦身改写了金库体量与空闲页读数：强制重算环境健康读数，页面随即显示新计数。
+        void loadEnvHealth(true)
+    } catch {
+        // 同上：错误提示由 request 统一弹出。
+    } finally {
+        spaceBusy.value = ''
+    }
+}
+
+function formatSpaceBytes(value: number | null | undefined): string {
+    const bytes = Number(value ?? 0)
+    if (!bytes) return '0 B'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 // 「重新检测」：有实时面订阅时排入共享流——引擎的进度帧与最终数据帧走同一条 SSE，
@@ -1196,5 +1506,49 @@ onBeforeUnmount(() => {
     display: flex;
     flex: none;
     gap: 8px;
+}
+/* 回收与自愈：预演计数网格 + 回执路径；只读预演可反复执行，执行按钮在预演前禁用。 */
+.mp-sub {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+}
+.mp-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+.mp-hint {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+}
+.mp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+.mp-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--el-fill-color-light);
+}
+.mp-num {
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+.mp-lbl {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+}
+.mp-receipt {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    word-break: break-all;
 }
 </style>

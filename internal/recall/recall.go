@@ -218,7 +218,7 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 	}
 	// Compute the recall deadline in seconds from the millisecond budget (with a
 	// 50ms floor).
-	deadline := startedSeconds + mathMax(0.05, float64(budget)/1000.0)
+	deadline := startedSeconds + max(0.05, float64(budget)/1000.0)
 	tokenCorrect := cfg.Recall.TokenCorrect
 	if opts.TokenCorrect != nil {
 		tokenCorrect = *opts.TokenCorrect
@@ -253,6 +253,30 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 	depth := opts.Depth
 	if depth == 0 {
 		depth = 2
+	}
+	// Thin databases carry no legacy assertion graph: the plaintext vault and
+	// the dual-cluster kernel are the single retrieval engine, so the band/chain
+	// assembly has nothing to read and nothing is created or probed here.
+	if memory == nil || !memory.HasLegacyGraph() {
+		return &Result{
+			Scope:   scope,
+			Bands:   []map[string]any{},
+			RawHits: []map[string]any{},
+			Gaps:    map[string]int{"empty_graph": 1},
+			Absent:  true,
+			Meta: map[string]any{
+				"reader":     opts.Reader,
+				"mode":       opts.Mode,
+				"elapsed_ms": 0,
+				"caps":       map[string]any{"bands": capsBands, "nodes": capsNodes, "chars": capsChars},
+				"offset":     opts.Offset,
+				"depth":      depth,
+				"legs":       map[string]int{},
+				"seeds":      0,
+				"candidates": 0,
+				"truncated":  map[string]any{"bands": false, "nodes": false, "chars": false},
+			},
+		}, nil
 	}
 	if query == "" {
 		return &Result{
@@ -535,7 +559,7 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 					exclude = append(exclude, candidate.Data.AnchorTraceHash)
 				}
 			}
-			fetchRawLimit := maxInt(1, rawLimit)
+			fetchRawLimit := max(1, rawLimit)
 			hits, err := memory.RawTraces(query, store.RawOptions{
 				Scope: scope, Reader: opts.Reader,
 				WindowStart: opts.WindowStart, WindowEnd: opts.WindowEnd,
@@ -556,7 +580,7 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 			Scope: scope, Reader: opts.Reader,
 			WindowStart: windowStart, WindowEnd: windowEnd,
 			AsOf:  opts.AsOf,
-			Limit: maxInt(1, rawLimit), Session: opts.Session,
+			Limit: max(1, rawLimit), Session: opts.Session,
 			ExtraTerms: rawExtraTerms,
 		})
 		if err != nil {
@@ -587,13 +611,13 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 		} else {
 			rawHits = merged
 		}
-		rawHits = capSlice(rawHits, maxInt(1, rawLimit)*2)
+		rawHits = capSlice(rawHits, max(1, rawLimit)*2)
 		window["raw_hits"] = len(windowHits)
 	} else if boostMonth != 0 {
 		monthHits, err := memory.RawTraces(query, store.RawOptions{
 			Scope: scope, Reader: opts.Reader,
 			AsOf:  opts.AsOf,
-			Limit: maxInt(1, rawLimit), Session: opts.Session,
+			Limit: max(1, rawLimit), Session: opts.Session,
 			Month: &boostMonth, ExtraTerms: rawExtraTerms,
 		})
 		if err != nil {
@@ -611,12 +635,12 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 			seen[trace] = struct{}{}
 			rawHits = append(rawHits, hit)
 		}
-		rawHits = capSlice(rawHits, maxInt(1, rawLimit)*2)
+		rawHits = capSlice(rawHits, max(1, rawLimit)*2)
 		window["raw_hits"] = len(monthHits)
 	}
 
 	if !strings.HasPrefix(scope, "mem:golden:") && len(rawHits) >= 2 && opts.Mode != "probe" {
-		rawHits = supplementFollowupAndBridgeRawHits(memory, scope, query, rawHits, maxInt(1, rawLimit))
+		rawHits = supplementFollowupAndBridgeRawHits(memory, scope, query, rawHits, max(1, rawLimit))
 	}
 
 	backfillMeta := map[string]any{"traces": 0, "seeds": 0, "candidates": 0}
@@ -891,7 +915,7 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 		"deterministic":    true,
 		"deep":             deepMeta,
 		"date_window":      window,
-		"session":          nullableSessionValue(opts.Session),
+		"session":          ptrStringValue(opts.Session),
 		"canonical_merges": canonicalMerges,
 		"vector": map[string]any{
 			"provider": "hash", "warning": opts.VectorWarning,
@@ -1119,7 +1143,7 @@ func assembleBands(
 	} else {
 		queue = append(queue, subjectOrder...)
 	}
-	targetBands := capsBands + maxInt(0, offset)
+	targetBands := capsBands + max(0, offset)
 	// Band slots are quota-limited and allocated by phase (subject, then XO,
 	// then misc). A candidate whose S is a literal has no subject group, so the
 	// misc band is its only delivery slot; without a reserved slot the earlier
@@ -2594,13 +2618,6 @@ func sliceRunes(value string, start, end int) string {
 	return string(runes[start:end])
 }
 
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
-}
-
 // deliveredIDs lists the ids of every delivered node in first-seen order
 // (standard builds a set here; the read-side walk order is the deterministic
 // stand-in for its unordered iteration).
@@ -2652,28 +2669,7 @@ func activationRankFactor(data store.CandidateRow, acts map[string]float64) floa
 	if act <= 0 {
 		return 1.0
 	}
-	return mathMin(1.25, 1.0+0.02*math.Log1p(act))
-}
-
-func mathMax(left, right float64) float64 {
-	if left > right {
-		return left
-	}
-	return right
-}
-
-func mathMin(left, right float64) float64 {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func nullableSessionValue(value *string) any {
-	if value == nil {
-		return nil
-	}
-	return *value
+	return min(1.25, 1.0+0.02*math.Log1p(act))
 }
 
 func asString(value any) string {

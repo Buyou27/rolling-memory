@@ -144,6 +144,13 @@ func (h *streamHub) subscribe(events map[string]bool) *streamSub {
 	}
 	h.subs[sub] = struct{}{}
 	first := len(h.subs) == 1
+	if !first && (events["status"] || events["dashboard"] || events["roi"]) {
+		h.forceNext, h.forcePush = true, true
+		select {
+		case h.poke <- struct{}{}:
+		default:
+		}
+	}
 	if first && !h.closed {
 		ctx, cancel := context.WithCancel(context.Background())
 		h.watchStop = cancel
@@ -248,7 +255,9 @@ func (h *streamHub) publishStateFrame(event, sig string, payload any) {
 			h.lastRuns[i] = time.Now()
 		}
 	}
-	h.lastFrames[event] = frame
+	if event != "status" && event != "dashboard" && event != "roi" {
+		h.lastFrames[event] = frame
+	}
 	for sub := range h.subs {
 		if !sub.events[event] {
 			continue
@@ -371,7 +380,9 @@ func (h *streamHub) collect(ctx context.Context) {
 		}
 		h.lastSigs[i] = sig
 		frame := "event: " + p.event + "\ndata: " + string(raw) + "\n\n"
-		h.lastFrames[p.event] = frame
+		if p.event != "status" && p.event != "dashboard" && p.event != "roi" {
+			h.lastFrames[p.event] = frame
+		}
 		for sub := range h.subs {
 			if !sub.events[p.event] {
 				continue
@@ -448,16 +459,18 @@ func newStatusStreamHub(key streamKey, home string) *streamHub {
 	var snapMu sync.Mutex
 	var snapshot StatusResponse
 	var snapshotAt time.Time
+	var hubRef *streamHub
 
-	return newStreamHub(key, streamFileWatchInterval,
+	hub := newStreamHub(key, streamFileWatchInterval,
 		// 全量状态帧：先比 250ms 级的廉价文件指纹，指纹未变时**完全不跑全量聚合**（静默期 0 次 SQL）；
 		// 指纹变化且距离上次聚合 ≥500ms 才重算产物统计与最近单元，故持续写入时聚合频率有界（2Hz），
 		// 控制台 CPU 不会被自己的实时面吃满，而去重推帧与首帧补发由 hub 的帧缓存承担。
 		streamFrameProducer{event: "status", minInterval: 500 * time.Millisecond, produce: func(context.Context) (string, any, bool) {
 			sig := statusStreamSignature(home, dbPath, logPath)
+			forced := hubRef != nil && hubRef.consumeForce()
 			sigMu.Lock()
 			defer sigMu.Unlock()
-			if sig == lastFullSig {
+			if !forced && sig == lastFullSig {
 				return "", nil, false
 			}
 			payload := collectStatus(home, hostVer, hostAPIVer)
@@ -465,7 +478,7 @@ func newStatusStreamHub(key streamKey, home string) *streamHub {
 			snapMu.Lock()
 			snapshot, snapshotAt = payload, time.Now()
 			snapMu.Unlock()
-			return sig, payload, true
+			return jsonSignature(payload), payload, true
 		}},
 		// 浮标采样帧：固定 1Hz 节拍（实时曲线的每格 = 1 秒），只做一次本地金库/上游探针 + 复用最近一次
 		// status 快照的计数（快照由指纹巡检驱动，任何真实变化都会在 ≤250ms 内刷新它），
@@ -480,6 +493,8 @@ func newStatusStreamHub(key streamKey, home string) *streamHub {
 			return "", buildWidgetSnapshot(ctx, home, latest), true
 		}},
 	)
+	hubRef = hub
+	return hub
 }
 
 // newDashboardStreamHub 装配主控制台状态流：签名（文件指纹 + 后台任务进度 + 5 分钟槽）变化即推全量仪表盘。
@@ -751,18 +766,11 @@ func jsonSignature(payload any) string {
 	return fmt.Sprintf("%x", sum[:16])
 }
 
-// buildWidgetSnapshot 装配浮标契约载荷：一次本地金库/上游探针 + 最近一次状态快照。
+// buildWidgetSnapshot 装配浮标契约载荷：一次本地金库探针 + 最近一次状态快照。
 // `/widget` 端点与 status 流的 1Hz probe 帧共用本装配，两处口径不漂移。
 func buildWidgetSnapshot(ctx context.Context, home string, st StatusResponse) WidgetResponse {
-	var upOnline bool
-	var upRTT float64
-	var upEngine, upEndpoint string
-	if isLocalModeForHome(home) {
-		// 本地模式：浮标采样本地 SQLite 明文金库往返，零云端请求。
-		upOnline, upRTT, upEngine, upEndpoint = probeLocalVaultHealth(home)
-	} else {
-		upOnline, upRTT, upEngine, upEndpoint = probeUpstreamV1Health(ctx)
-	}
+	// 浮标恒采样本地 SQLite 明文金库往返（控制台零云端请求）。
+	upOnline, upRTT, upEngine, upEndpoint := probeLocalVaultHealth(home)
 	lastEv := "idle"
 	var lastEvTS int64
 	if len(st.HookEvents) > 0 {

@@ -20,6 +20,8 @@ import rawMcpZh from './content/docs/zh-CN/mcp.md?raw'
 import rawMcpEn from './content/docs/mcp.md?raw'
 import rawPluginConsoleZh from './content/docs/zh-CN/plugin-console.md?raw'
 import rawPluginConsoleEn from './content/docs/plugin-console.md?raw'
+import rawConsoleTerminalZh from './content/docs/zh-CN/console-terminal.md?raw'
+import rawConsoleTerminalEn from './content/docs/console-terminal.md?raw'
 import rawPrivacyZh from './content/docs/zh-CN/privacy.md?raw'
 import rawPrivacyEn from './content/docs/privacy.md?raw'
 import rawTokenEconomicsZh from './content/docs/zh-CN/token-economics.md?raw'
@@ -323,13 +325,13 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
             'Q1：与 grep / ripgrep 的区别与配合（只记得症状不记得变量名、留存排障教训、跨天串联对话）',
             'Q2：与向量 RAG 及 LLM 抽取服务的区别（真免费实时、不改写事实防错上加错、契合 Coding Agent 术语一致性）',
             'Q3：各家 Harness 厂商都有自带记忆功能了，为什么还要用它（桌面便签纸 vs. 全量历史黑匣子、跨 10 大宿主共享）',
-            'Q4–Q6：本地数据安全与边界、云端申请制说明、随包基准与省 Token 账单复现',
+            'Q4–Q6：本地数据安全与边界、云端能力申请制预览、随包基准与省 Token 账单复现',
         ],
         sectionsEn: [
             'Q1: How it complements grep/ripgrep (symptom lookup, negative knowledge, cross-session context)',
             'Q2: Differences vs. Vector RAG & LLM extraction (genuinely free, no fact-rewriting error compounding, coding terminology fit)',
             'Q3: Why use this when every harness vendor already has built-in memory (sticky note vs. full-history black-box across 10 harnesses)',
-            'Q4–Q6: Local data safety & boundaries, cloud preview note, and benchmark / token-math verification',
+            'Q4–Q6: Local data safety & boundaries, the cloud capability preview, and benchmark / token-math verification',
         ],
         rawZh: rawFaqZh,
         rawEn: rawFaqEn,
@@ -429,6 +431,39 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
         rawEn: rawPluginConsoleEn,
     },
     {
+        id: 'docs-console-terminal',
+        scope: 'docs',
+        repoFullName: 'rocareer/rolling-memory',
+        path: 'docs/console-terminal.md',
+        icon: 'lucide-terminal',
+        category: 'guide',
+        badgeZh: '控制台 CLI',
+        badgeEn: 'Console CLI',
+        url: `${MAIN_REPO_URL}/blob/main/docs/console-terminal.md`,
+        shortTitleZh: 'Web 控制台内置命令行（终端）',
+        shortTitleEn: 'Built-in Console Command Line',
+        titleZh: 'docs/zh-CN/console-terminal.md · Web 控制台内置命令行（终端）使用指南',
+        titleEn: 'docs/console-terminal.md · Built-in Console Command Line (Terminal) Guide',
+        summaryZh:
+            '管理后台内置终端的使用指南：入口与界面构成、实时流与水合回显纪律、快捷命令与常用命令对照表（status / doctor / recent / check / sync prune 只读预演），以及白名单执行与破坏性操作的分工边界。',
+        summaryEn:
+            'How to use the admin console built-in terminal: entry points and screen layout, the live stream and hydrated-text display discipline, quick commands and the common command reference (status / doctor / recent / check / sync prune preview), plus allow-listed execution and where destructive operations live.',
+        sectionsZh: [
+            '打开方式：顶栏终端图标 / 桌面浮标 / 记忆总览页按钮；展开状态跨页面保持',
+            '界面构成：recall 与 Hook 实时流、最近写入单元回显（水合后正文）、任务卡片（重跑/清理）与流过滤',
+            '常用命令对照表：status / doctor / recent / check / sync prune（只读预演）/ recall / watch 控制 / 执行清理与自愈的入口分工',
+            '安全边界：白名单执行、子进程剥离云端凭据（本地模式零外呼）、回执路径与页面协同刷新',
+        ],
+        sectionsEn: [
+            'Entry points: header terminal icon / desktop widget / overview page buttons; expanded state survives page switches',
+            'Screen layout: recall & hook live stream, recent ingest echo (hydrated text), task cards (re-run / clean) and stream filters',
+            'Common command reference: status / doctor / recent / check / sync prune (read-only preview) / recall / watch controls, and where applying maintenance lives',
+            'Safety boundaries: allow-listed execution, credential-stripped child processes (zero egress in local mode), receipt paths and cross-page refresh',
+        ],
+        rawZh: rawConsoleTerminalZh,
+        rawEn: rawConsoleTerminalEn,
+    },
+    {
         id: 'docs-benchmarks',
         scope: 'docs',
         repoFullName: 'rocareer/rolling-memory',
@@ -471,12 +506,12 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
         url: `${MAIN_REPO_URL}/blob/main/docs/privacy.md`,
         shortTitleZh: '隐私与本地数据说明',
         shortTitleEn: 'Privacy & Local Data',
-        titleZh: 'docs/zh-CN/privacy.md · 隐私与本地数据说明（本地优先 + 云端申请制预览）',
-        titleEn: 'docs/privacy.md · Privacy & Local Data Statement (Local-First + Cloud Preview)',
+        titleZh: 'docs/zh-CN/privacy.md · 隐私与本地数据说明（本地优先 + 云端能力预览）',
+        titleEn: 'docs/privacy.md · Privacy & Local Data Statement (Local-First + Cloud Capability Preview)',
         summaryZh:
-            '说明哪些数据永不离开本机（明文/沉淀记忆/主密钥 100% 留在本机 SQLite 金库）、本地金库纵深防御、四级受众隔离、一键自证命令，以及云端能力的申请制预览。',
+            '说明哪些数据永不离开本机（明文/沉淀记忆/主密钥 100% 留在本机 SQLite 金库）、本地金库纵深防御、四级受众隔离与一键自证命令，以及云端能力的申请制预览（端到端密文 · 面向高级与企业用户）。',
         summaryEn:
-            'Explains what never leaves the machine (plaintext, consolidated memory, and the local key stay in the local SQLite vault), local vault defense-in-depth, audience isolation, one-command self-verification, and the application-based cloud preview.',
+            'Explains what never leaves the machine (plaintext, consolidated memory, and the local key stay in the local SQLite vault), local vault defense-in-depth, audience isolation, and one-command self-verification, plus the application-based cloud capability preview (ciphertext-only, for advanced & enterprise users).',
         sectionsZh: [
             '哪些数据永不离开本机：原始对话、沉淀记忆、主密钥与本地索引全部留在本机 SQLite 金库（0 出网）',
             '本地金库纵深防御：单文件 SQLite + 0700/0600 权限 + 全盘加密继承 + 原位流式读取 + 四级受众隔离',

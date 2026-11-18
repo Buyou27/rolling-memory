@@ -176,7 +176,9 @@ func (r *Runner) opConfigLoad(args map[string]any) (any, error) {
 
 // opConfigEgress mirrors the driver's config_egress: load the case
 // configuration in the requested mode and probe every URL through the egress
-// policy, reporting denial instead of failing the op.
+// policy, reporting denial instead of failing the op. A configuration that no
+// longer validates (e.g., a retired mode left over from an upgrade) is pinned
+// as a load-error receipt, the same fail-closed shape config_load records.
 func (r *Runner) opConfigEgress(args map[string]any) (any, error) {
 	caseDir, err := r.surfaceCaseDir("config", orString(argString(args, "case"), "egress"))
 	if err != nil {
@@ -186,7 +188,7 @@ func (r *Runner) opConfigEgress(args map[string]any) (any, error) {
 	path := filepath.Join(caseDir, "config.toml")
 	loaded, err := config.Load(config.LoadOptions{Path: &path, Mode: &mode, Env: map[string]string{}})
 	if err != nil {
-		return nil, err
+		return map[string]any{"ok": false, "error": "ConfigError", "message": err.Error()}, nil
 	}
 	if value, ok := args["allow_loopback_llm"]; ok {
 		loaded.AllowLoopbackLLM = truthy(value)
@@ -241,8 +243,6 @@ func (r *Runner) opConfigSecret(args map[string]any) (any, error) {
 	envName := argString(args, "env_name")
 	loaded.LLM.APIKeyEnv = envName
 	loaded.LLM.APIKeyFile = filePath
-	loaded.Cloud.APIKeyEnv = ""
-	loaded.Cloud.APIKeyFile = ""
 	env := map[string]string{}
 	if envName != "" {
 		env[envName] = argStringDefault(args, "env_value", "")

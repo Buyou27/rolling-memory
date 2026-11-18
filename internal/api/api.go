@@ -7,8 +7,12 @@
 package api
 
 import (
+	"bufio"
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,8 +26,9 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
+	"github.com/rocareer/rolling-memory/internal/episodic"
+	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/llm"
 	"github.com/rocareer/rolling-memory/internal/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/text"
@@ -34,10 +39,8 @@ import (
 
 // Memory is one open scope-bound facade.
 type Memory struct {
-	Config     *config.Config
-	Store      *store.Store
-	LLM        llm.Extractor
-	LLMWarning *string
+	Config *config.Config
+	Store  *store.Store
 
 	thinVaultOnce sync.Once
 	thinVault     *thinclient.Vault
@@ -53,8 +56,7 @@ func New(cfg *config.Config) (*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	extractor, warning := llm.BuildLLM(cfg)
-	return &Memory{Config: cfg, Store: database, LLM: extractor, LLMWarning: warning}, nil
+	return &Memory{Config: cfg, Store: database}, nil
 }
 
 // Close closes the store (the usb profile checkpoints the WAL first).
@@ -121,9 +123,9 @@ func (req RememberRequest) effectivePresence() *text.PresenceCoordinates {
 	return nil
 }
 
-// Remember runs a thinclient remember or seeds structured test assertions locally.
+// Remember runs a thinclient remember on vault-only stores or seeds structured test assertions on legacy graph stores.
 func (m *Memory) Remember(req RememberRequest) (map[string]any, error) {
-	if m.IsThinBrainProxy() {
+	if m.Store == nil || !m.Store.HasLegacyGraph() {
 		return m.thinClientRemember(req)
 	}
 	return m.seedStructuredAssertion(req)
@@ -350,16 +352,17 @@ func defaultString(val, fallback string) string {
 
 // RecallRequest carries the read-side keyword arguments.
 type RecallRequest struct {
-	Cue         string
-	Scope       *string
-	Reader      *string
-	Mode        string
-	AsOf        any
-	WindowStart any
-	WindowEnd   any
-	CapsBands   *int
-	CapsNodes   *int
-	CapsChars   *int
+	Cue            string
+	Scope          *string
+	Reader         *string
+	Mode           string
+	AsOf           any
+	WindowStart    any
+	WindowEnd      any
+	CapsBands      *int
+	CapsNodes      *int
+	CapsChars      *int
+	DeliveryWindow string
 	// CapsChains / CapsRows bound delivery breadth: chains per band and rows per
 	// chain. The engine already accepts these as request-level overrides; the cloud
 	// `/open/memory` protocol carries them as optional `caps_chains` / `caps_rows`
@@ -410,50 +413,26 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 	if err := m.checkLocalVaultScope(pickString(req.Scope, m.Config.Scope)); err != nil {
 		return nil, err
 	}
-	if m.IsThinBrainProxy() {
-		if req.Session != nil || req.AsOf != nil || req.WindowStart != nil || req.WindowEnd != nil {
-			// Noetic and locally hydrated sources cannot enforce these filters.
-			return nil, fmt.Errorf("pulse_plain and pulse_cipher recall cannot enforce session, asof or window filters across all sources")
-		}
-		return m.thinClientRecall(req)
-	}
 	if m.Store != nil && m.Store.HasLegacyGraph() && (req.Session != nil || req.AsOf != nil || req.WindowStart != nil || req.WindowEnd != nil) {
 		// Graph supplementary traces can bypass the requested filters.
 		return nil, fmt.Errorf("graph recall cannot enforce session, asof or window filters across all sources")
 	}
 	// Databases without the legacy assertion table serve recall from the local
-	// plaintext vault only (FTS5 + slot matching). Fresh databases still carry the
-	// legacy schema with an empty graph (store.TestLegacyGraphLivenessOnFreshDatabase),
-	// so for them the legacy body below runs first and the local-mode fallback
-	// further down is the load-bearing path.
+	// plaintext vault only (the dual-cluster retrieval kernel). Fresh databases
+	// bootstrap thin and take this fast path (store.TestLegacyGraphLivenessOnFreshDatabase);
+	// for historical databases that still carry the graph, the legacy body below
+	// runs and the local-mode fallback further down stays the load-bearing path
+	// for empty graphs.
 	if m.Store != nil && !m.Store.HasLegacyGraph() {
 		return m.thinClientRecall(req)
 	}
 	now := clock.Unix()
-	// The legacy graph's cue hints come from the deep LLM rewrite alone: the
-	// public s/x/o hint slots were removed with the structured memory assertion contract (2026-11-06)
-	// and no caller populates them anymore.
+	// The legacy graph's cue hints came from a model-driven query rewrite; the
+	// public s/x/o hint slots were removed with the structured memory assertion contract
+	// (2026-11-06) and the runtime model leg is retired — the local client never
+	// calls a model, so the hint set stays empty.
 	hints := map[string]string{}
 	deepMeta := map[string]any{"requested": req.Deep, "used": false}
-	if req.Deep && strings.TrimSpace(req.Cue) != "" {
-		provider, ok := m.LLM.(llm.HintsProvider)
-		if m.LLM != nil && ok {
-			llmHints, err := provider.QueryHints(req.Cue)
-			if err != nil {
-				deepMeta["error"] = err.Error()
-			} else {
-				for key, value := range llmHints {
-					if _, exists := hints[key]; !exists {
-						hints[key] = value
-					}
-				}
-				deepMeta["used"] = len(llmHints) > 0
-				deepMeta["hints"] = llmHints
-			}
-		} else {
-			deepMeta["error"] = "no LLM configured or remote egress is blocked"
-		}
-	}
 	scope := m.Config.Scope
 	if req.Scope != nil && *req.Scope != "" {
 		scope = *req.Scope
@@ -490,9 +469,9 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 	}
 	// Local mode: the legacy assertion graph may be empty for transcript imports,
 	// while the thin plaintext vault has the indexed source text. Fall back to the
-	// local thinclient recall (FTS5 + slot matching) instead of returning empty —
-	// but never for explicit session or time filters, which the vault path does not
-	// reconstruct.
+	// local thinclient recall (the dual-cluster retrieval kernel) instead of returning
+	// empty — but never for explicit session or time filters, which the vault path
+	// does not reconstruct.
 	noFilters := req.Session == nil && req.AsOf == nil && req.WindowStart == nil && req.WindowEnd == nil
 	if noFilters && m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") && len(result.Bands) == 0 {
 		local, localErr := m.thinClientRecall(req)
@@ -522,13 +501,9 @@ func (m *Memory) Recent(scope, reader *string, limit int) ([]map[string]any, err
 		return nil, err
 	}
 	// Serve the newest-entries view from the local plaintext vault when the legacy
-	// assertion table is absent. Fresh databases still carry the legacy schema
-	// (store.TestLegacyGraphLivenessOnFreshDatabase), so this fast path does not
-	// trigger for them.
+	// assertion table is absent. Fresh databases bootstrap thin and take this
+	// fast path (store.TestLegacyGraphLivenessOnFreshDatabase).
 	if m.Store != nil && !m.Store.HasLegacyGraph() {
-		return m.recentVaultItems(limit)
-	}
-	if m.IsThinBrainProxy() && !strings.HasPrefix(effectiveScope, "mem:golden:") {
 		return m.recentVaultItems(limit)
 	}
 	items, err := m.Store.Recent(effectiveScope, pickString(reader, m.Config.Reader), limit)
@@ -555,11 +530,7 @@ func (m *Memory) Status(scope string) (map[string]any, error) {
 	}
 	result["version"] = version.Version
 	result["config"] = m.Config.PublicDict()
-	if m.LLMWarning != nil {
-		result["llm_warning"] = *m.LLMWarning
-	} else {
-		result["llm_warning"] = nil
-	}
+	result["llm_warning"] = nil
 	result["vector_warning"] = m.vectorWarning()
 	return result, nil
 }
@@ -575,30 +546,30 @@ func (m *Memory) Doctor() (map[string]any, error) {
 	_, statErr := os.Stat(dbPath)
 	check("db_exists", statErr == nil, dbPath)
 	check("db_writable", writable(filepath.Dir(dbPath)), filepath.Dir(dbPath))
-	check("fts5", db.FTS5Available(), "trigram tokenizer required for CJK lexical search")
+	// FTS5 backs the legacy assertion-graph lexical legs only; the plaintext
+	// vault path is pure Go and needs no tokenizer, so thin (fresh) databases
+	// pass this check regardless of the platform's FTS5 support.
+	check("fts5", m.Store == nil || !m.Store.HasLegacyGraph() || db.FTS5Available(),
+		"trigram tokenizer required for the legacy assertion-graph lexical legs (the plaintext vault needs none)")
 	check("json1", db.JSONExtractAvailable(), "needed by some inspection queries")
 	check("config", true, m.Config.Path)
-	check("llm", m.Config.LLM.Provider == "none" || m.LLM != nil, m.Config.LLM.Provider)
+	check("llm", true, m.Config.LLM.Provider)
 	check("embedding", true, "hash")
-	check("sync", !m.Config.Cloud.Enabled || m.Config.Mode == "cloud", "cloud.sync requires cloud mode")
+	check("sync", true, "local plaintext vault; remote sync retired")
 	// The deployment face only speaks when it has something to say: the fixed check
 	// list is a published contract, while an image/deployment mismatch is an alarm.
 	if deployOK, deployDetail := deploymentConsistency(); !deployOK {
 		warnings = append(warnings, deployDetail)
 	}
-	if m.Config.Mode == "local" {
-		if m.Config.LLM.Provider != "none" && !loopback(m.Config.LLM.BaseURL) {
-			warnings = append(warnings, "local mode: remote LLM configured but blocked; deterministic rule extractor will be used")
-		}
-	}
-	if m.Config.Cloud.Enabled && m.Config.Mode != "cloud" {
-		warnings = append(warnings, "cloud sync is enabled in config but mode is local; sync commands will refuse")
-	}
-	if m.LLMWarning != nil {
-		warnings = append(warnings, *m.LLMWarning)
-	}
 	if warning := m.vectorWarning(); warning != nil {
 		warnings = append(warnings, warning)
+	}
+	// A read-only identity audit: episodic rows whose id predates the shared
+	// content-addressed derivation cannot be deduplicated against scanner units,
+	// and that backlog is reported instead of migrated — history is never
+	// rewritten or deleted automatically.
+	if legacy := legacyEpisodicIdentityCount(m.Store.DB(), m.Config.Scope); legacy > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d legacy-identity episodic units (inline text with non-canonical ids); no automatic dedup migration has been applied", legacy))
 	}
 	integrity, err := m.Store.Check()
 	if err != nil {
@@ -697,8 +668,9 @@ func checkFileExportTraceAudiences(payload map[string]any) error {
 	return nil
 }
 
-// ImportFile imports a JSON export, or falls back to the transcript adapter
-// for plain text transcripts.
+// ImportFile imports a JSON export, or falls back to the transcript adapters.
+// JSONL transcripts in local plain mode go through the canonical pipeline shared
+// with the background scanner; plain-text transcripts keep the text adapter.
 func (m *Memory) ImportFile(path string, scope, session *string, audience string, replay bool) (map[string]any, error) {
 	if audience != "" && audience != "shared" && audience != "public" {
 		return nil, fmt.Errorf("restricted or unknown audience file import is unavailable: background transcript scanning cannot enforce file privacy; keep sensitive files outside scanned directories until source-level access controls are supported")
@@ -763,6 +735,13 @@ func (m *Memory) ImportFile(path string, scope, session *string, audience string
 		}
 		return imported, nil
 	}
+	if m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") &&
+		(canonicalJSONLTranscript(target) || !m.Store.HasLegacyGraph()) {
+		// Fresh databases bootstrap thin: every local file ingests through the
+		// plaintext-vault path (JSONL turn units), and formats the path cannot
+		// parse fail closed there instead of writing legacy graph rows.
+		return m.importCanonicalJSONL(target, effectiveScope, session, replay)
+	}
 	var result map[string]any
 	messages, inserted, offset := 0, 0, 0
 	for {
@@ -795,6 +774,171 @@ func (m *Memory) ImportFile(path string, scope, session *string, audience string
 	return result, nil
 }
 
+// canonicalJSONLTranscript reports whether the path carries a JSONL transcript
+// extension the canonical (scanner-identical) ingest pipeline owns: a plain
+// transcript, a zstd-compressed one, or a bare zstd container of one. JSON
+// exports and plain-text transcripts keep their own readers.
+func canonicalJSONLTranscript(path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	for _, suffix := range []string{".jsonl", ".jsonl.zst", ".jsonl.zstd", ".zst", ".zstd"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// countJSONLLines counts the physical lines of one transcript (decompressed when
+// zstd-compressed) for the receipt's offset/total_lines fields.
+func countJSONLLines(path string) (int, error) {
+	file, err := episodic.OpenJSONL(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	lines := 0
+	lastByte := byte('\n')
+	buffer := make([]byte, 32*1024)
+	for {
+		n, readErr := reader.Read(buffer)
+		for _, value := range buffer[:n] {
+			if value == '\n' {
+				lines++
+			}
+		}
+		if n > 0 {
+			lastByte = buffer[n-1]
+		}
+		if readErr == nil {
+			continue
+		}
+		if !errors.Is(readErr, io.EOF) {
+			return 0, readErr
+		}
+		break
+	}
+	if lastByte != '\n' {
+		lines++
+	}
+	return lines, nil
+}
+
+// importCanonicalJSONL ingests one JSONL transcript through the same readers and
+// unit derivation the background scanner uses: completed turns only (the same
+// explicit completion evidence), one `@ref:jsonl:<abs>:<idx>#<k>` pointer per
+// segment, and the same content-addressed document ids — so a hand-imported file
+// and the same file captured by the scanner converge on one set of documents
+// instead of two identities. No trace rows are queued for the JSONL path and the
+// trace mirror is skipped; file imports establish no process persona, so identity
+// and locus stay empty here (a later scan stamps the harness coordinate).
+//
+// One frozen parse of the file drives the whole import: every unit's pointer is
+// verified against it in O(1) instead of re-reading and re-decompressing the
+// transcript per unit. A parse that fails (oversize, corrupt) keeps the streaming
+// reader unchanged; a source that changes while the import runs is reported at the
+// end, with the units written so far (one transaction per unit) left in place.
+func (m *Memory) importCanonicalJSONL(target, scope string, session *string, replay bool) (map[string]any, error) {
+	tc, err := m.ThinClient()
+	if err != nil {
+		return nil, err
+	}
+	if tc == nil || tc.Vault == nil {
+		return nil, fmt.Errorf("jsonl import requires a local vault")
+	}
+	vault := tc.Vault
+	vault.SetIdentity(thinclient.VaultIdentity{})
+	snapshot, snapshotErr := episodic.NewSourceSnapshotContext(context.Background(), target)
+	if snapshotErr != nil {
+		snapshot = nil
+	}
+	messages, inserted, skippedIncomplete := 0, 0, 0
+	saveTurnUnits := func(turnIndex int, segments []episodic.Segment, completed bool) error {
+		if !completed {
+			skippedIncomplete++
+			return nil
+		}
+		prefix := fmt.Sprintf("@ref:jsonl:%s:%d", target, turnIndex)
+		for _, segment := range segments {
+			occurredAt := segment.OccurredAt
+			if occurredAt > 1e11 {
+				occurredAt /= 1000
+			}
+			if occurredAt < 0 {
+				occurredAt = 0
+			}
+			for _, unit := range episodicunit.SegmentUnits(scope, prefix, segment, occurredAt, true) {
+				var exists int
+				if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, unit.DocID).Scan(&exists); err != nil {
+					return err
+				}
+				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, unit.DocID, occurredAt, unit.RefPointer, unit.TurnRef, unit.Text, thinclient.IngestResponse{}); err != nil {
+					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+						// A tombstoned unit was deleted by user intent: a manual
+						// import must not resurrect it.
+						continue
+					}
+					return fmt.Errorf("jsonl import %s: %w", unit.DocID, err)
+				}
+				messages++
+				if exists == 0 {
+					inserted++
+				}
+			}
+		}
+		return nil
+	}
+	if snapshot != nil {
+		defer snapshot.Close()
+		for turn := 0; turn < snapshot.Turns(); turn++ {
+			segments, ok := snapshot.Segments(turn)
+			if !ok {
+				continue
+			}
+			if err := saveTurnUnits(turn, segments, snapshot.Completed(turn)); err != nil {
+				return nil, err
+			}
+		}
+		if snapshot.Stale() {
+			return nil, fmt.Errorf("jsonl import %s: transcript changed during import; retry the import", target)
+		}
+	} else {
+		err = episodic.VisitJSONLTurns(context.Background(), target, func(turn episodic.JSONLTurn, completed bool) error {
+			return saveTurnUnits(turn.Index, turn.Segments, completed)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	totalLines, err := countJSONLLines(target)
+	if err != nil {
+		return nil, err
+	}
+	size := int64(0)
+	if info, statErr := os.Stat(target); statErr == nil {
+		size = info.Size()
+	}
+	sessionName := transcript.SessionStem(target)
+	if session != nil && *session != "" {
+		sessionName = *session
+	}
+	receipt := map[string]any{
+		"ok": true, "path": target, "session": sessionName,
+		"messages": messages, "inserted": inserted,
+		"offset": totalLines, "total_lines": totalLines, "size": size,
+		"skipped_incomplete_tail": skippedIncomplete,
+	}
+	if replay {
+		// The canonical pipeline queues no traces, so replay has nothing of its
+		// own to drain; the block keeps its shape at zero counts.
+		receipt["replay"] = map[string]any{
+			"ok": true, "scope": scope, "processed": 0, "written": 0, "skipped": 0,
+			"anchor_failed": 0, "resolve_failed": 0, "llm_calls": 0, "warnings": []any{},
+		}
+	}
+	return receipt, nil
+}
+
 // ExportUnavailable reports why the legacy JSON export cannot serve as a backup.
 func ExportUnavailable() error {
 	return fmt.Errorf("JSON export is unavailable: it omits the local vault and referenced source files and is not a complete backup; existing exports remain available for import into a compatible database")
@@ -809,6 +953,12 @@ func (m *Memory) Export(path, scope *string) (map[string]any, error) {
 func (m *Memory) ImportData(payload map[string]any, scope *string) (map[string]any, error) {
 	if asString(payload["format"]) != version.ExportFormat {
 		return nil, fmt.Errorf("not a rolling-memory export")
+	}
+	// Fresh databases bootstrap thin (vault-only): the JSON export carries the
+	// legacy assertion graph and has nowhere to land. Fail closed with an
+	// actionable message instead of raw SQL errors.
+	if m.Store == nil || !m.Store.HasLegacyGraph() {
+		return nil, fmt.Errorf("JSON export import requires the legacy assertion graph, which this plaintext-vault database does not carry; import a JSONL transcript instead")
 	}
 	effectiveScope := m.Config.Scope
 	if scope != nil && *scope != "" {
@@ -883,6 +1033,37 @@ func (m *Memory) Efficacy(scope *string, harnessID string, limit, budgetSeconds 
 
 // ------------------------------------------------------------------ helpers
 
+// legacyEpisodicIdentityCount counts episodic documents whose id predates the
+// shared content-addressed derivation: inline (non-pointer) rows whose doc_id
+// does not equal `episodicunit.DocID(scope, raw_text)`. Pointer rows are excluded
+// by construction — their doc_id addresses the unit text, not the pointer — and
+// the count is strictly read-only.
+func legacyEpisodicIdentityCount(database *sql.DB, scope string) int {
+	if database == nil {
+		return 0
+	}
+	var present int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_docs'`).Scan(&present); err != nil || present == 0 {
+		return 0
+	}
+	rows, err := database.Query(`SELECT doc_id, raw_text FROM thin_vault_docs WHERE (layer = 'episodic' OR layer = '') AND raw_text NOT LIKE '@ref:%'`)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var docID, raw string
+		if rows.Scan(&docID, &raw) != nil {
+			continue
+		}
+		if docID != episodicunit.DocID(scope, raw) {
+			count++
+		}
+	}
+	return count
+}
+
 func (m *Memory) vectorWarning() any {
 	if m == nil || m.Store == nil {
 		return nil
@@ -937,11 +1118,6 @@ func writable(directory string) bool {
 	file.Close()
 	_ = os.Remove(name)
 	return true
-}
-
-func loopback(rawURL string) bool {
-	host, ok := ids.URLHost(rawURL)
-	return ok && ids.IsLoopbackHost(host)
 }
 
 func expandUser(path string) string {

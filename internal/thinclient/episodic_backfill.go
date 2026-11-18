@@ -155,7 +155,7 @@ func (v *Vault) BackfillEpisodicIndexes(ctx context.Context, scope, cursor strin
 		} else if episodicunit.DocID(scope, text) != ref.id {
 			report.Unverified++
 		} else {
-			created, err := v.ensureLocalEpisodicIndex(scope, ref.id, ref.pointer, text, true)
+			created, err := v.ensureLocalEpisodicIndex(scope, ref.id, ref.pointer, text, true, nil)
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return report, ctxErr
 			}

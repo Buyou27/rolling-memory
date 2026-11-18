@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,12 +18,12 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
-	ramesdk "github.com/rocareer/rolling-memory/sdk/go"
+	local "github.com/rocareer/rolling-memory/sdk/go/local"
 )
 
 // 评测世代（generation）租约与回收。
 //
-// 第一性事实：同一套件的两次评测如果共用同一个云端 scope，第二次的「重算记忆」就会把第一次
+// 第一性事实：同一套件的两次评测如果共用同一个本地 scope/store，第二次的「重算记忆」就会把第一次
 // 正在用的语料整库清掉（或把两份语料叠在同一个 scope 里互相污染检索）——这就是「打架」。
 // 因此每次**新评测**都自动分配一个独立世代 scope：
 //
@@ -34,8 +33,8 @@ import (
 // 与引擎侧「评测命名空间」的既定形态保持一致（数据面只 trim + 191 字节列宽）。
 //
 // 「清旧记忆」：引擎没有枚举 scope 的公开接口，所以本地租约文件是唯一可枚举的世代真源。
-// 分配新世代时，把同一 (endpoint, user, suite) 下**心跳已过期**的旧世代按 /units 权威全集
-// 分批清空（云端 + 本地明文金库同步删），并顺带清掉旧固定 scope 的孤儿残留；
+// 分配新世代时，把同一 (endpoint, user, suite) 下**心跳已过期**的旧世代
+// 清理本地隔离金库并摘除租约，并顺带清掉旧固定 scope 的孤儿残留；
 // **心跳新鲜的世代一律不清**——这是并发评测互不删库的硬保证。
 //
 // 租约文件只存身份与读数（scope / 端点 / 语料摘要 / 时间戳），零原文、零密钥。
@@ -228,17 +227,15 @@ func (g EvalGeneration) live(now time.Time) bool {
 func newEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePath string, now time.Time) (EvalGeneration, error) {
 	suite = strings.ToLower(strings.TrimSpace(suite))
 	pulseMode = NormalizePulseMode(pulseMode)
-	userID := cloudUserID()
+	userID := evalUserID()
 	generationID, err := NewEvalGenerationID(now)
 	if err != nil {
 		return EvalGeneration{}, err
 	}
 	host, _ := os.Hostname()
 	stamp := now.UTC().Format(time.RFC3339)
-	endpoint := "local://sqlite-fts5-bm25"
-	if pulseMode != PulseModeLocalPlain {
-		endpoint = cloudEndpoint(cfg)
-	}
+	// 本地评测世代恒用本地金库身份（零云端端点解析）。
+	endpoint := "local://thin-vault"
 	ownerTok, _ := NewEvalGenerationID(now)
 	return EvalGeneration{
 		Scope:       ScopeForModeGeneration(suite, userID, pulseMode, generationID),
@@ -383,20 +380,18 @@ func liveWriterOnStore(storePath, endpoint, userID string, now time.Time) (EvalG
 //     而不是静默地把两边都做坏。
 //  2. 世代号重试若干次（撞名概率极低），登记租约（role=writer）后返回。
 //
-// 新世代的云端 scope 构造上为空，随后 Ingest(rebuild=true) 会按 /units 复核并给出清库回执。
+// 新世代的本地 scope 构造上为空，随后 Ingest(rebuild=true) 会复核并给出清库回执。
 func AllocateEvalGeneration(cfg *config.Config, suite, storePath string) (EvalGeneration, error) {
-	return AllocateEvalGenerationForMode(cfg, suite, PulseModePulseCipher, storePath)
+	return AllocateEvalGenerationForMode(cfg, suite, PulseModeLocalPlain, storePath)
 }
 
-// AllocateEvalGenerationForMode 为指定脉冲模式（local_plain / pulse_plain / pulse_cipher）分配独立世代 scope。
+// AllocateEvalGenerationForMode 为指定脉冲模式（现役唯一值 local_plain）分配独立世代 scope。
 func AllocateEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePath string) (EvalGeneration, error) {
 	now := time.Now()
 	pulseMode = NormalizePulseMode(pulseMode)
-	endpoint := "local://sqlite-fts5-bm25"
-	if pulseMode != PulseModeLocalPlain {
-		endpoint = cloudEndpoint(cfg)
-	}
-	userID := cloudUserID()
+	// 本地评测世代恒用本地金库身份（零云端端点解析）。
+	endpoint := "local://thin-vault"
+	userID := evalUserID()
 	if busy, ok := liveWriterOnStore(storePath, endpoint, userID, now); ok {
 		return EvalGeneration{}, fmt.Errorf(
 			"评测 store %s 正被活跃世代 %s 写入（心跳 %s，角色 %s）：请等待其结束，或用 --eval-store 指定独立 store",
@@ -424,7 +419,7 @@ func AllocateEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePa
 
 // startNewGeneration 打开一个新世代：分配 → 回收同模式过期世代 → 把引擎绑定到新 scope。
 // 回收回执挂在引擎上，随本次 manifest 落盘（审计「这次回收了谁」）。
-func (e *CloudEngine) startNewGeneration(ctx context.Context, logf func(string, ...any)) error {
+func (e *LocalEngine) startNewGeneration(ctx context.Context, logf func(string, ...any)) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -440,12 +435,12 @@ func (e *CloudEngine) startNewGeneration(ctx context.Context, logf func(string, 
 	}
 	e.ownsGeneration = true
 	e.ownerToken = gen.OwnerToken
-	logf("[eval] 新评测世代 scope=%s mode=%s（每种脉冲模式独立 scope，互不清库、互不干扰）", gen.Scope, NormalizePulseMode(e.PulseMode))
+	logf("[eval] 新评测世代 scope=%s mode=%s（本地评测独立 scope，互不清库、互不干扰）", gen.Scope, NormalizePulseMode(e.PulseMode))
 	e.retired = e.ReconcileRetiredGenerations(ctx, logf)
 	return nil
 }
 
-func (e *CloudEngine) finishGeneration() {
+func (e *LocalEngine) finishGeneration() {
 	if e == nil || strings.TrimSpace(e.Scope) == "" || !e.ownsGeneration {
 		return
 	}
@@ -463,7 +458,7 @@ func (e *CloudEngine) finishGeneration() {
 
 // CloseGeneration 在评测收尾时落「已结束」标记，并顺手回收心跳过期的旧世代（best-effort）。
 // 标记而非删除：心跳窗口内的世代仍可能被 Admin 批次逐题读取，回收只在心跳过期后进行。
-func (e *CloudEngine) CloseGeneration(ctx context.Context, logf func(string, ...any)) []EvalGenerationPurge {
+func (e *LocalEngine) CloseGeneration(ctx context.Context, logf func(string, ...any)) []EvalGenerationPurge {
 	if e == nil || strings.TrimSpace(e.Scope) == "" {
 		return nil
 	}
@@ -473,7 +468,7 @@ func (e *CloudEngine) CloseGeneration(ctx context.Context, logf func(string, ...
 
 // adoptStoredGeneration 采纳本 store 上既有 manifest 的世代：manifest 是「这个 store 当前是谁」
 // 的唯一真源；仅当套件与脉冲模式（local_plain / pulse_plain / pulse_cipher）均一致时才采纳。
-func (e *CloudEngine) adoptStoredGeneration() (EvalGeneration, bool) {
+func (e *LocalEngine) adoptStoredGeneration() (EvalGeneration, bool) {
 	manifest, err := ReadCloudManifest(e.StorePath)
 	if err != nil || manifest.Suite != e.Suite || e.validateManifestPulseMode(manifest) != nil {
 		return EvalGeneration{}, false
@@ -502,40 +497,29 @@ func (e *CloudEngine) adoptStoredGeneration() (EvalGeneration, bool) {
 	return gen, true
 }
 
-// remoteScopeEmpty 以 /units 权威全集（或 local 模式本地金库）判定该 scope 是否为空。
-// 空 = 旧记忆已被清空（他处清库、世代回收、引擎重置）⇒ 复用无意义，必须新开世代重算。
-func (e *CloudEngine) remoteScopeEmpty(ctx context.Context) (bool, error) {
-	if NormalizePulseMode(e.PulseMode) == PulseModeLocalPlain {
-		return len(e.localStoredUnitIDs()) == 0, nil
-	}
-	if err := e.CheckHealth(ctx); err != nil {
-		return false, err
-	}
-	ids, err := e.Client.ListCloudUnitIDs(ctx)
-	if err != nil {
-		return false, err
-	}
-	return len(ids) == 0, nil
+// scopeEmpty 以本地金库文档全集判定该 store 是否为空。
+// 空 = 旧记忆已被清空（他处清库、世代回收、库文件重置）⇒ 复用无意义，必须新开世代重算。
+func (e *LocalEngine) scopeEmpty(_ context.Context) (bool, error) {
+	return len(e.localStoredUnitIDs()) == 0, nil
 }
 
 // ReconcileRetiredGenerations 回收过期世代（「新测评回收过期记忆」）：
 //
 //   - 只清理**本地租约登记过**、且心跳已过期（> evalGenerationLiveTTL）的世代——活跃的评测/批次
 //     一律跳过，这是「不打架」的硬保证；
-//   - 逐 scope 走 /units 权威全集分批删除（云端成功后才删本地明文），逐条留回执；
+//   - 逐 scope 清理本地隔离金库并摘除租约，逐条留回执；
 //   - 任何失败都只记回执、绝不阻塞本次评测（清理过期记忆是卫生动作，不是本次运行的前置条件）。
 //
 // **不做「无租约即孤儿」的推断清理**：没有租约的 scope 可能正被其他评测进程使用，
 // 按缺少登记去删它等于删其他在跑数据。历史固定 scope 的残留只有在被
 // 登记（adopt / ingest 会补建租约）之后才进入回收体系。
-func (e *CloudEngine) ReconcileRetiredGenerations(ctx context.Context, logf func(string, ...any)) []EvalGenerationPurge {
+func (e *LocalEngine) ReconcileRetiredGenerations(ctx context.Context, logf func(string, ...any)) []EvalGenerationPurge {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	// 清库要按权威租户回显校验（tenant 与 user 分离）；身份未确认时暂缓清理过期记忆，
-	// 绝不拿未经核验的租户去删另一个 scope。
+	// 身份未确认时暂缓清理过期记忆。
 	if err := e.CheckHealth(ctx); err != nil {
-		logf("[eval] 清理过期记忆暂缓（云端身份未确认）：%v", err)
+		logf("[eval] 清理过期记忆暂缓（本地身份未确认）：%v", err)
 		return nil
 	}
 	// 回收要把旧世代的本地明文一起删干净：先按盘上真值刷新内存金库快照。
@@ -558,8 +542,8 @@ func (e *CloudEngine) ReconcileRetiredGenerations(ctx context.Context, logf func
 		if e.Suite != "" && gen.Suite != "" && gen.Suite != e.Suite {
 			continue
 		}
-		// 模式隔离：脉冲明文（pulse_plain）、脉冲密文（pulse_cipher）与本地明文（local_plain）各自独立维护世代，
-		// 严禁脉冲明文评测去回收脉冲密文的数据（反之亦然）！
+		// 模式隔离：现役唯一模式 = 本地明文（local_plain）；历史脉冲代（pulse_plain / pulse_cipher）
+		// 的世代租约不属于本模式，严禁本地评测去回收它们。
 		if EvalScopePulseMode(gen.Scope) != activeMode {
 			continue
 		}
@@ -568,14 +552,10 @@ func (e *CloudEngine) ReconcileRetiredGenerations(ctx context.Context, logf func
 		}
 		var units int
 		var err error
-		if activeMode == PulseModeLocalPlain {
-			if sameEvalStorePath(gen.StorePath, e.StorePath) || storeSharedWithLiveGeneration(gen.StorePath, gen.Scope, now) {
-				// 共享物理 store 正在被当前或其他活跃世代使用，严禁删除其 SQLite 文件。
-			} else if rmErr := os.Remove(gen.StorePath + ".local-vault.sqlite"); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				err = rmErr
-			}
-		} else {
-			units, err = e.purgeForeignScope(ctx, gen.Scope, gen.StorePath)
+		if sameEvalStorePath(gen.StorePath, e.StorePath) || storeSharedWithLiveGeneration(gen.StorePath, gen.Scope, now) {
+			// 共享物理 store 正在被当前或其他活跃世代使用，严禁删除其 SQLite 文件。
+		} else if rmErr := os.Remove(gen.StorePath + ".local-vault.sqlite"); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			err = rmErr
 		}
 		receipt := EvalGenerationPurge{Scope: gen.Scope, Units: units}
 		if err != nil {
@@ -583,11 +563,7 @@ func (e *CloudEngine) ReconcileRetiredGenerations(ctx context.Context, logf func
 			logf("[eval] 旧世代 %s 回收失败（不阻塞本次评测）：%v", gen.Scope, err)
 		} else {
 			_ = os.Remove(evalGenerationPath(gen.Suite, gen.Scope))
-			if activeMode == PulseModeLocalPlain {
-				logf("[eval] 旧世代 %s 已回收：%d 条旧记忆（本地隔离金库已清理 · 零云端请求）", gen.Scope, units)
-			} else {
-				logf("[eval] 旧世代 %s 已回收：%d 条旧记忆（云端 + 本地金库同步删）", gen.Scope, units)
-			}
+			logf("[eval] 旧世代 %s 已回收：%d 条旧记忆（本地隔离金库已清理 · 零云端请求）", gen.Scope, units)
 		}
 		receipts = append(receipts, receipt)
 	}
@@ -628,42 +604,15 @@ func storeSharedWithLiveGeneration(storePath, excludeScope string, now time.Time
 
 // reloadPlaintextStore 按盘上真值重建内存明文金库（同一 store 文件被多个世代 / 多个进程
 // 依次使用时，进程内快照必须与盘上对齐，否则删除不生效、flush 还会写回旧明文）。
-func (e *CloudEngine) reloadPlaintextStore() error {
-	if e == nil || e.Client == nil || strings.TrimSpace(e.StorePath) == "" {
-		return errors.New("cloud evaluation engine is not initialized")
+func (e *LocalEngine) reloadPlaintextStore() error {
+	if e == nil || strings.TrimSpace(e.StorePath) == "" {
+		return errors.New("evaluation engine is not initialized")
 	}
-	store, err := ramesdk.NewJSONFileStore(e.StorePath, []byte(evalVaultSecretFromKey(e.Client.APIToken)))
+	store, err := local.NewJSONFileStore(e.StorePath, evalLocalVaultKey(e.UserID))
 	if err != nil {
 		return err
 	}
-	applyPulseTokenizer(store, e.PulseTokenizer, []byte(evalVaultSecretFromKey(e.Client.APIToken)))
+	applyPulseTokenizer(store, e.PulseTokenizer, evalLocalVaultKey(e.UserID))
 	e.Store = store
-	e.Client.Store = store
 	return nil
-}
-
-// purgeForeignScope 用本引擎的身份与凭据清空另一个 scope（本 store 共用时复用同一金库实例，
-// 保证「云端删除成功 → 本地明文同步删」这条链的一致性）。
-func (e *CloudEngine) purgeForeignScope(ctx context.Context, scope, storePath string) (int, error) {
-	scope = strings.TrimSpace(scope)
-	if scope == "" || scope == e.Scope {
-		return 0, nil
-	}
-	if _, ok := EvalScopeSuite(scope); !ok {
-		return 0, fmt.Errorf("scope %q 不在评测命名空间，拒绝清库", scope)
-	}
-	apiKey := e.Client.APIToken
-	store := e.Store
-	if strings.TrimSpace(storePath) != "" && storePath != e.StorePath {
-		var err error
-		store, err = ramesdk.NewJSONFileStore(storePath, []byte(evalVaultSecretFromKey(apiKey)))
-		if err != nil {
-			return 0, fmt.Errorf("清库需要旧世代的本地金库 %s: %w", storePath, err)
-		}
-	}
-	client := ramesdk.NewClient(e.Endpoint, apiKey, e.UserID, store)
-	client.TenantID = e.TenantID
-	client.Scope = scope
-	client.HTTPClient = &http.Client{Timeout: 5 * time.Minute}
-	return purgeScopeUnitsWithClient(ctx, client, scope, func(string, ...any) {})
 }

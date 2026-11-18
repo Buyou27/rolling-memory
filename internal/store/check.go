@@ -12,9 +12,9 @@ import (
 )
 
 // HasLegacyGraph reports whether the legacy assertion graph tables exist.
-// Fresh databases created through Migrate still carry the full canonical schema
-// (see TestLegacyGraphLivenessOnFreshDatabase), so this reports true for them with
-// an empty graph; historical databases keep their graph as well (PurgeLegacyTables
+// Fresh databases bootstrap thin (see TestLegacyGraphLivenessOnFreshDatabase),
+// so this reports false for them and every caller takes the thin-only fast
+// path; historical databases keep their graph as well (PurgeLegacyTables
 // preserves it by design). Every legacy read path must ask this before touching
 // `assertion`/`trace`.
 func (s *Store) HasLegacyGraph() bool {

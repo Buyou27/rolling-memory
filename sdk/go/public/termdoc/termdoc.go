@@ -50,6 +50,19 @@ func UnpackTermRoleExt(re uint8) (TermRole, uint16) {
 	return TermRole(re & 0x1F), uint16((re >> 5) & 0x07)
 }
 
+// PackInferredOrdinalDay 与 UnpackInferredOrdinalDay 显式承载查询侧序数日信标的推断日：
+// 当 RoleClosedBeacon + ExtFlagSeenMorphOrClos 的裸 ISO 日词面在语料中无倒排命中（df=0）时，
+// (Sent, Slot) 复合值承载自 Unix 纪元起的天数（写入侧限 32 位；复合值 0 表示无推断日）。
+// 该通道仅被簇内同日激活路径读取，不参与任何位置语义。
+func PackInferredOrdinalDay(day int64) (sent, slot uint16) {
+	return uint16((uint64(day) >> 16) & 0xFFFF), uint16(uint64(day) & 0xFFFF)
+}
+
+// UnpackInferredOrdinalDay 还原 PackInferredOrdinalDay 承载的推断日。
+func UnpackInferredOrdinalDay(sent, slot uint16) int64 {
+	return int64(uint32(sent)<<16 | uint32(slot))
+}
+
 // InferSlotRole 推导词项相对于宿主主词 host 的槽内偏序格角色：
 //  1. 双词闭集同态修饰（RoleBiwordHomomorph）与单/双词闭集信标（RoleClosedBeacon）具有代数封闭性，恒保持各自闭集角色；
 //  2. 剥离尾部数字的前导字母块伴随（ExtFlagSeenSubword != 0 且 host 含数字而自身不含数字）恒为 RoleSubwordPiece（免疫跨槽 max(Bits) 冲刷）；

@@ -125,7 +125,7 @@ func authorizeRMWSRoom(ctx context.Context, identity wsengine.Identity, room str
 			return fmt.Errorf("requested scope is not supported by the console")
 		}
 		home, err := os.UserHomeDir()
-		if err != nil || !isLocalModeForHome(home) || checkConsoleVaultScope(home) != nil {
+		if err != nil || checkConsoleVaultScope(home) != nil {
 			return errors.New("local_plain vault scope verification failed")
 		}
 	}

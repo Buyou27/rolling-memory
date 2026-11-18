@@ -174,7 +174,7 @@ func evalExportHandler(c *gin.Context) {
 		baseline = nil
 	}
 	items := []EvalQuestionResultItem{}
-	var manifest EvalCloudManifest
+	var manifest EvalManifest
 	if !run.IsBaseline {
 		var err error
 		items, err = readEvalTaskItemRowsOn(db, run.ID)
@@ -318,7 +318,7 @@ func exportDeltaRows(run, baseline *EvalRunRecord) []exportDeltaRow {
 }
 
 // renderEvalReproMarkdown 生成自包含复现报告（ATM 官方评测器口径）。
-func renderEvalReproMarkdown(suite string, run, baseline *EvalRunRecord, manifest EvalCloudManifest, corpusSHA string, itemCount int) string {
+func renderEvalReproMarkdown(suite string, run, baseline *EvalRunRecord, manifest EvalManifest, corpusSHA string, itemCount int) string {
 	var b strings.Builder
 	suiteName := "LoCoMo"
 	if suite == SuiteATM {

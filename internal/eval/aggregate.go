@@ -217,7 +217,7 @@ func Aggregate(rows []map[string]any, arm string) map[string]any {
 // WriteMarkdown renders the human report.
 func WriteMarkdown(summary map[string]any, path string) error {
 	lines := []string{
-		"# Rolling-Memory Cloud SDK Evaluation — " + pyStr(summary["arm"]),
+		"# Rolling-Memory Local Evaluation — " + pyStr(summary["arm"]),
 		"",
 		"| metric | value |",
 		"| --- | --- |",

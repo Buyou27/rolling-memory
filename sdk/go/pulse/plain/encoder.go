@@ -250,7 +250,7 @@ func alphaScriptFamily(r rune) uint8 {
 	}
 }
 func isVariationSelector(r rune) bool {
-	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF)
+	return shaping.IsVariationSelector(r)
 }
 func isLetterOrNumber(r rune) bool {
 	return !isVariationSelector(r) && (unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r))

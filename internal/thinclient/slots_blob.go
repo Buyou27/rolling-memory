@@ -8,7 +8,34 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"strconv"
+	"strings"
+
+	core "github.com/rocareer/rolling-memory/internal/core"
+	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
+
+// parseBackgroundAnchorLines extracts 1-based (LineStart, LineEnd) from a line-range
+// anchor such as "L12-40" or "L12"; non-line anchors (e.g. "p1", "page2") return (0, 0).
+func parseBackgroundAnchorLines(anchor string) (int, int) {
+	s := strings.TrimSpace(anchor)
+	if len(s) < 2 || (s[0] != 'L' && s[0] != 'l') {
+		return 0, 0
+	}
+	rest := s[1:]
+	if dash := strings.IndexByte(rest, '-'); dash > 0 {
+		start, err1 := strconv.Atoi(rest[:dash])
+		end, err2 := strconv.Atoi(rest[dash+1:])
+		if err1 == nil && err2 == nil && start > 0 && end >= start {
+			return start, end
+		}
+		return 0, 0
+	}
+	if line, err := strconv.Atoi(rest); err == nil && line > 0 {
+		return line, line
+	}
+	return 0, 0
+}
 
 // ============================================================================
 // Compact blind-slot storage (`thin_vault_bg_chunks.slots_json`)
@@ -48,12 +75,30 @@ func encodeAtomSlots(atoms []BlindTokenAtom) []byte {
 	return buf
 }
 
-// decodeAtomSlots accepts both the packed form and legacy JSON rows. ok is false
-// only for data that is neither (a corrupt row is skipped, never guessed). The
-// packed form is binary: it is never trimmed (a flag byte may BE whitespace).
+// encodePacketWireBlob encodes a BlindPulsePacket (both flat Slots and SentenceFrames)
+// into the canonical RMBP wire stream (`plain.EncodeWireBytes`), falling back to
+// `encodeAtomSlots` only if the wire encoder rejects the frame shape.
+func encodePacketWireBlob(pkt BlindPulsePacket) []byte {
+	if len(pkt.SentenceFrames) > 0 || len(pkt.Slots) > 0 {
+		if wire, err := plain.EncodeWireBytes(pkt.Slots, pkt.SentenceFrames); err == nil && len(wire) > 0 {
+			return wire
+		}
+	}
+	return encodeAtomSlots(pkt.Slots)
+}
+
+// decodeAtomSlots accepts the canonical RMBP wire stream (`RMBP`), the packed `RMA1`
+// form, and legacy JSON rows. ok is false only for data that is none of them.
 func decodeAtomSlots(raw []byte) (atoms []BlindTokenAtom, ok bool) {
 	if len(raw) == 0 {
 		return nil, true
+	}
+	if len(raw) >= 4 && string(raw[:4]) == "RMBP" {
+		slots, _, err := plain.DecodeWireBytes(raw)
+		if err != nil {
+			return nil, false
+		}
+		return slots, true
 	}
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -85,96 +130,60 @@ func decodeAtomSlots(raw []byte) (atoms []BlindTokenAtom, ok bool) {
 	return atoms, true
 }
 
-// decodeAtomSlotTermCounts extracts per-hash term counts and total slot length directly
-// from a packed `RMBS` blob without allocating an intermediate `[]BlindTokenAtom` slice.
-// Legacy JSON rows fall back to `decodeAtomSlots`.
-func decodeAtomSlotTermCounts(raw []byte) (tCounts map[uint64]int, docLen int, ok bool) {
-	if len(raw) >= len(atomSlotsMagic)+4 &&
-		raw[0] == atomSlotsMagic[0] && raw[1] == atomSlotsMagic[1] &&
-		raw[2] == atomSlotsMagic[2] && raw[3] == atomSlotsMagic[3] {
-		count := int(binary.LittleEndian.Uint32(raw[4:8]))
-		if count < 0 || len(raw) != len(atomSlotsMagic)+4+count*atomSlotStride {
-			return nil, 0, false
+// partitionFlatAtomsIntoFrames splits a flat `RMA1` / JSON atom slice that lost its
+// sentence boundaries into synthetic sentence frames (~24 primary words per frame),
+// preventing a 1024-token background chunk from collapsing into one 900-word sentence
+// and generating O(W^2) false intra-sentence dyads before the mount re-syncs to RMBP.
+func partitionFlatAtomsIntoFrames(atoms []BlindTokenAtom) [][]BlindTokenAtom {
+	const primaryPerFrame = 24
+	if len(atoms) == 0 {
+		return nil
+	}
+	frames := make([][]BlindTokenAtom, 0, len(atoms)/32+1)
+	start := 0
+	primCount := 0
+	for i, a := range atoms {
+		isPrim := a.ClassFlags&plain.FlagIsHarmonicCompanion == 0
+		if isPrim {
+			if primCount >= primaryPerFrame && i > start {
+				frames = append(frames, atoms[start:i])
+				start = i
+				primCount = 0
+			}
+			primCount++
 		}
-		hint := count/2 + 4
-		if count < 8 {
-			hint = count
+	}
+	if start < len(atoms) {
+		frames = append(frames, atoms[start:])
+	}
+	return frames
+}
+
+// decodeAtomSlotCoreTerms extracts canonical core.Term, counts, positions, and
+// total slot length from an `RMBP` wire blob, a packed `RMA1` blob, or a legacy JSON row.
+func decodeAtomSlotCoreTerms(raw []byte) (tMeta map[uint64]core.Term, tCounts map[uint64]int, tPos map[uint64][]core.TermPosition, docLen int, ok bool) {
+	if len(raw) >= 4 && string(raw[:4]) == "RMBP" {
+		slots, frames, err := plain.DecodeWireBytes(raw)
+		if err != nil {
+			return nil, nil, nil, 0, false
 		}
-		tCounts = make(map[uint64]int, hint)
-		offset := len(atomSlotsMagic) + 4
-		for i := 0; i < count; i++ {
-			h := binary.LittleEndian.Uint64(raw[offset : offset+8])
-			tCounts[h]++
-			offset += atomSlotStride
-		}
-		docLen = count
+		tMeta, tCounts, tPos = coreTermsFromPacket(slots, frames)
+		docLen = len(slots)
 		if docLen < 1 {
 			docLen = 1
 		}
-		return tCounts, docLen, true
+		return tMeta, tCounts, tPos, docLen, true
 	}
 	atoms, ok := decodeAtomSlots(raw)
 	if !ok {
-		return nil, 0, false
+		return nil, nil, nil, 0, false
 	}
-	tCounts = make(map[uint64]int, len(atoms)/2+4)
-	for _, ds := range atoms {
-		tCounts[ds.H]++
-	}
+	tMeta, tCounts, tPos = coreTermsFromPacket(atoms, partitionFlatAtomsIntoFrames(atoms))
 	docLen = len(atoms)
 	if docLen < 1 {
 		docLen = 1
 	}
-	return tCounts, docLen, true
-}
-
-// atomSlotMatchWidth sums the query widths of the distinct atom hashes present in one
-// stored chunk blob, so a background query can scan the resident packed bytes instead of
-// decoding (and allocating) the whole slot list. `seen` is caller-provided scratch and is
-// cleared on entry; legacy JSON rows fall back to decodeAtomSlots.
-func atomSlotMatchWidth(raw []byte, qHashes map[uint64]uint16, seen map[uint64]struct{}) uint32 {
-	if len(raw) == 0 || len(qHashes) == 0 {
-		return 0
-	}
-	clear(seen)
-	var width uint32
-	if raw[0] != atomSlotsMagic[0] {
-		atoms, ok := decodeAtomSlots(raw)
-		if !ok {
-			return 0
-		}
-		for _, atom := range atoms {
-			if qw, hit := qHashes[atom.H]; hit {
-				if _, dup := seen[atom.H]; dup {
-					continue
-				}
-				seen[atom.H] = struct{}{}
-				width += uint32(qw)
-			}
-		}
-		return width
-	}
-	if !bytes.HasPrefix(raw, []byte(atomSlotsMagic)) || len(raw) < len(atomSlotsMagic)+4 {
-		return 0
-	}
-	count := int(binary.LittleEndian.Uint32(raw[len(atomSlotsMagic) : len(atomSlotsMagic)+4]))
-	if count < 0 || len(raw) != len(atomSlotsMagic)+4+count*atomSlotStride {
-		return 0
-	}
-	for i := 0; i < count; i++ {
-		offset := len(atomSlotsMagic) + 4 + i*atomSlotStride
-		h := binary.LittleEndian.Uint64(raw[offset : offset+8])
-		qw, hit := qHashes[h]
-		if !hit {
-			continue
-		}
-		if _, dup := seen[h]; dup {
-			continue
-		}
-		seen[h] = struct{}{}
-		width += uint32(qw)
-	}
-	return width
+	return tMeta, tCounts, tPos, docLen, true
 }
 
 // migrateBackgroundSlotBlobs rewrites legacy JSON slot rows into the packed form.
@@ -202,7 +211,7 @@ func migrateBackgroundSlotBlobs(db *sql.DB) error {
 		var head []byte
 		if err := probeRows.Scan(&head); err == nil {
 			seenProbe++
-			if len(head) > 0 && (head[0] == '[' || string(head) != atomSlotsMagic) {
+			if len(head) > 0 && (head[0] == '[' || (string(head) != atomSlotsMagic && string(head) != "RMBP")) {
 				needsScan = true
 			}
 		}

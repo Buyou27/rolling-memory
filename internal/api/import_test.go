@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
@@ -89,78 +90,107 @@ func TestImportFilePreservesOccurrenceAndRecordingTimes(t *testing.T) {
 	memory := newMemory(t)
 	path := writeTranscript(t, "times.jsonl", strings.Join([]string{
 		`{"type":"user","message":{"role":"user","content":"quartz unknown time evidence"}}`,
-		`{"type":"assistant","timestamp":"2026-11-18T00:00:00Z","message":{"role":"assistant","content":"sapphire dated evidence"}}`,
+		`{"type":"assistant","timestamp":"2026-11-18T00:00:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":"sapphire dated evidence"}}`,
 	}, "\n")+"\n")
 	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
 		t.Fatal(err)
 	}
+	// The per-segment occurrence times land on the canonical documents.
 	for _, fixture := range []struct {
 		text     string
+		role     string
 		occurred int64
 	}{
-		{"quartz unknown time evidence", 0},
-		{"sapphire dated evidence", 1794960000},
+		{"quartz unknown time evidence", "user", 0},
+		{"sapphire dated evidence", "assistant", 1794960000},
 	} {
-		var traceOccurred, recorded, vaultOccurred int64
-		var docID string
-		err := memory.Store.DB().QueryRow(`SELECT t.occurred_at, t.recorded_at, d.occurred_at, d.doc_id
-			FROM trace t JOIN thin_vault_docs d ON d.doc_id = 'ep_' || t.hash WHERE t.text = ?`, fixture.text).
-			Scan(&traceOccurred, &recorded, &vaultOccurred, &docID)
-		if err != nil || traceOccurred != fixture.occurred || vaultOccurred != fixture.occurred || recorded != testNow {
-			t.Fatalf("%q occurrence/recording = %d/%d/%d, doc=%q err=%v", fixture.text, traceOccurred, recorded, vaultOccurred, docID, err)
+		var vaultOccurred int64
+		docID := episodicunit.DocID("mem:test", "["+fixture.role+"] "+fixture.text)
+		err := memory.Store.DB().QueryRow(`SELECT occurred_at FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&vaultOccurred)
+		if err != nil || vaultOccurred != fixture.occurred {
+			t.Fatalf("%q occurrence = %d, doc=%q err=%v", fixture.text, vaultOccurred, docID, err)
 		}
-		result, err := memory.Recall(api.RecallRequest{Cue: fixture.text, NoCrystallize: true})
-		if err != nil || len(result.Bands) == 0 {
-			t.Fatalf("recall %q: %+v %v", fixture.text, result, err)
-		}
-		found := false
-		for _, band := range result.Bands {
-			for _, node := range band["nodes"].([]map[string]any) {
-				if node["id"] == docID {
-					found = true
-					if node["occurred_at"] != fixture.occurred || (fixture.occurred == 0 && node["time"] != "") {
-						t.Fatalf("recall occurrence for %q: %+v", fixture.text, node)
-					}
+	}
+	// Recall delivers the turn with its truthful time (the dated assistant row).
+	result, err := memory.Recall(api.RecallRequest{Cue: "sapphire dated evidence", NoCrystallize: true})
+	if err != nil || len(result.Bands) == 0 {
+		t.Fatalf("recall: %+v %v", result, err)
+	}
+	found := false
+	for _, band := range result.Bands {
+		for _, node := range band["nodes"].([]map[string]any) {
+			if text, _ := node["content"].(string); strings.Contains(text, "sapphire dated evidence") {
+				found = true
+				if node["occurred_at"] != int64(1794960000) || node["time"] != "2026-11-18 00:00:00 +00:00" {
+					t.Fatalf("dated turn delivery: %+v", node)
 				}
-			}
-		}
-		if !found {
-			t.Fatalf("missing imported document %q in %+v", docID, result.Bands)
-		}
-		if fixture.occurred == 0 {
-			recent, err := memory.Recall(api.RecallRequest{Mode: "recent", NoCrystallize: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			found = false
-			for _, band := range recent.Bands {
-				for _, node := range band["nodes"].([]map[string]any) {
-					if node["id"] == docID {
-						found = true
-						if node["time"] != "" || band["time_label"] != "" {
-							t.Fatalf("recent assigned a time to unknown source: %+v", band)
-						}
-					}
-				}
-			}
-			if !found {
-				t.Fatalf("recent omitted unknown-time document %q", docID)
 			}
 		}
 	}
+	if !found {
+		t.Fatalf("dated turn missing from %+v", result.Bands)
+	}
+	// A turn whose rows carry no timestamp must never gain one.
+	undated := writeTranscript(t, "undated.jsonl", strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"garnet undated evidence"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"topaz undated answer"}}`,
+	}, "\n")+"\n")
+	if _, err := memory.ImportFile(undated, nil, nil, "shared", false); err != nil {
+		t.Fatal(err)
+	}
+	undatedID := episodicunit.DocID("mem:test", "[user] garnet undated evidence")
+	result, err = memory.Recall(api.RecallRequest{Cue: "garnet undated evidence", NoCrystallize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, band := range result.Bands {
+		for _, node := range band["nodes"].([]map[string]any) {
+			if node["id"] != undatedID {
+				continue
+			}
+			found = true
+			if node["occurred_at"] != int64(0) || node["time"] != "" {
+				t.Fatalf("undated turn gained a time: %+v", node)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("undated turn missing from recall: %+v", result.Bands)
+	}
+	recent, err := memory.Recall(api.RecallRequest{Mode: "recent", NoCrystallize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, band := range recent.Bands {
+		for _, node := range band["nodes"].([]map[string]any) {
+			if node["id"] != undatedID {
+				continue
+			}
+			found = true
+			if node["time"] != "" || band["time_label"] != "" {
+				t.Fatalf("recent assigned a time to unknown source: %+v", band)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("recent omitted unknown-time document %q", undatedID)
+	}
 	const existingTime = int64(123456789)
-	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_docs SET occurred_at = ?, inserted_at = ? WHERE raw_text = ?`, existingTime, existingTime, "quartz unknown time evidence"); err != nil {
+	quartzID := episodicunit.DocID("mem:test", "[user] quartz unknown time evidence")
+	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_docs SET occurred_at = ?, inserted_at = ? WHERE doc_id = ?`, existingTime, existingTime, quartzID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
 		t.Fatal(err)
 	}
 	var traces, docs int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs)`).Scan(&traces, &docs); err != nil || traces != 2 || docs != 2 {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs)`).Scan(&traces, &docs); err != nil || traces != 0 || docs != 4 {
 		t.Fatalf("repeat import: traces=%d docs=%d err=%v", traces, docs, err)
 	}
 	var occurred, inserted int64
-	if err := memory.Store.DB().QueryRow(`SELECT occurred_at, inserted_at FROM thin_vault_docs WHERE raw_text = ?`, "quartz unknown time evidence").Scan(&occurred, &inserted); err != nil || occurred != existingTime || inserted != existingTime {
+	if err := memory.Store.DB().QueryRow(`SELECT occurred_at, inserted_at FROM thin_vault_docs WHERE doc_id = ?`, quartzID).Scan(&occurred, &inserted); err != nil || occurred != existingTime || inserted != existingTime {
 		t.Fatalf("repeat import changed existing vault row: occurred=%d inserted=%d err=%v", occurred, inserted, err)
 	}
 }

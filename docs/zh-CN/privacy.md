@@ -87,11 +87,17 @@ go test ./...                                   # 公开测试套件：零明文
 
 ---
 
-## 6. 云端能力预览（申请制）
+## 6. 云端能力预览（申请制 · 面向高级与企业用户）
 
-Rolling Memory 的云端记忆引擎（Rolling Autonoetic Memory Engine · 洛灵自知记忆引擎）是一项独立能力，将以**申请制**逐步开放；在线注册已关闭。请邮件 [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn) 申请（支持：[support@psychologylake.org.cn](mailto:support@psychologylake.org.cn)）。它不属于本次发布：本发布版为纯本地模式，接入说明仅提供给获批申请人。
+本仓库的本地面就是完整且源码公开的产品本身。在此之上，我们还以**申请制**提供一项独立的**云端记忆服务**，面向高级个人用户与企业团队；它不属于本发布版，本仓库的任何功能也不依赖它。
 
-由于你的全部原始数据始终留在本地金库，任何阶段都**不存在厂商数据绑架**。未来当团队具备足够的生存与发展保障时，我们仍完全不排除将云端核心引擎彻底开源——完整立场见 [DECLARATION.md](DECLARATION.md)。
+云端能力的产品级定位：
+
+- **端到端密文设计**：凡是离开你设备的载荷，都先在端侧完成**不可逆编码**——**原文永不离开本地金库**，连服务端也读不到；
+- **更强的检索能力**：云端面提供超出端侧的高级检索算子与跨设备连续性能力；
+- **申请制接入**：在线注册已关闭，接入资格按申请安排。
+
+由于你的全部原始数据始终留在本地金库，任何阶段都**不存在厂商数据绑架**：本地面永远完整可用，云端能力只是增量增强。申请或咨询请邮件 [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn)（支持：[support@psychologylake.org.cn](mailto:support@psychologylake.org.cn)）。云端面的实现细节不对外公布。
 
 ---
 

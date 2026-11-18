@@ -25,8 +25,8 @@ import (
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/llm"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 	"github.com/rocareer/rolling-memory/internal/version"
@@ -414,6 +414,14 @@ func (r *Runner) OpenFresh() error {
 	if err != nil {
 		return err
 	}
+	// The frozen fixtures deliberately exercise the legacy assertion graph
+	// (add_trace / graph reads); fresh production databases bootstrap thin,
+	// so the scenario database gets the canonical schema applied.
+	if database.Store != nil && database.Store.DB() != nil {
+		if err := db.EnsureLegacyGraphSchema(database.Store.DB()); err != nil {
+			return err
+		}
+	}
 	r.Memory = database
 	return nil
 }
@@ -534,11 +542,6 @@ func (r *Runner) Invoke(name string, args map[string]any) (any, error) {
 		return map[string]any{"ok": true, "dotted": args["path"], "value": args["value"]}, nil
 	case "drop_fts":
 		return r.opDropFTS()
-	case "set_fake_llm":
-		return r.opSetFakeLLM(args)
-	case "set_llm_none":
-		r.Memory.LLM = nil
-		return map[string]any{"ok": true}, nil
 	case "expect_error":
 		return r.opExpectError(args)
 	case "config_load":
@@ -877,44 +880,6 @@ func (r *Runner) opDropFTS() (any, error) {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "has_fts": false}, nil
-}
-
-func (r *Runner) opSetFakeLLM(args map[string]any) (any, error) {
-	hints := map[string]string{}
-	if raw, ok := args["hints"].(map[string]any); ok {
-		for key, value := range raw {
-			hints[key] = asString(value)
-		}
-	}
-	fake := fakeQueryLLM{hints: hints}
-	if text := argString(args, "error"); text != "" {
-		fake.err = text
-	}
-	r.Memory.LLM = fake
-	return map[string]any{"hints": hints, "error": argString(args, "error")}, nil
-}
-
-// fakeQueryLLM satisfies llm.Extractor and llm.HintsProvider.
-type fakeQueryLLM struct {
-	hints map[string]string
-	err   string
-}
-
-func (f fakeQueryLLM) Name() string { return "fake" }
-
-func (f fakeQueryLLM) Extract(text, speaker string, timeRef int64) (llm.Extraction, error) {
-	return llm.Extraction{}, fmt.Errorf("fake LLM has no extractor")
-}
-
-func (f fakeQueryLLM) QueryHints(cue string) (map[string]string, error) {
-	if f.err != "" {
-		return nil, fmt.Errorf("%s", f.err)
-	}
-	copied := map[string]string{}
-	for key, value := range f.hints {
-		copied[key] = value
-	}
-	return copied, nil
 }
 
 func (r *Runner) opExpectError(args map[string]any) (any, error) {

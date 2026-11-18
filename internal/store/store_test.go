@@ -15,6 +15,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 )
 
 const testNow = int64(1793102400) // 2026-10-27T12:00:00Z
@@ -47,6 +48,15 @@ func openStoreAt(t *testing.T, scope, dbPath string) *Store {
 	store, err := Open(cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
+	}
+	// Fresh production databases bootstrap thin; the graph tests below
+	// deliberately exercise the legacy assertion graph, so apply its schema
+	// on the test database and re-sample the FTS probe afterwards.
+	if err := db.EnsureLegacyGraphSchema(store.DB()); err != nil {
+		t.Fatalf("EnsureLegacyGraphSchema: %v", err)
+	}
+	if err := store.RefreshFTS(); err != nil {
+		t.Fatalf("RefreshFTS: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	return store

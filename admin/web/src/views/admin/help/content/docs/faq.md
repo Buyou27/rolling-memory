@@ -74,11 +74,11 @@ Core rules in `AGENTS.md` / `CLAUDE.md`, host Auto-Memory, and Rolling Memory ca
 
 ---
 
-## Q5: Do I need a cloud account? What about future cloud capabilities?
+## Q5: Do I need a cloud account? What about the cloud capability?
 
-**No — this release is pure local mode, requires no account or registration, and makes zero external network requests.**
+**No account is needed for the local product — Rolling Memory runs 100% locally, with no registration and no memory-plane network requests.**
 
-Our cloud memory engine is a separate capability opening progressively on an **application basis** (online registration is closed; email [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn) to apply, or [support@psychologylake.org.cn](mailto:support@psychologylake.org.cn) for support). It is not part of this release: the local tool and local vault remain complete, usable, and source-available — see [Declaration & Disclaimer (DECLARATION.md)](../DECLARATION.md) for the release and license boundary.
+Beyond the local plane, a separate **cloud memory service** is offered on an **application basis** for advanced and enterprise users: everything sent to it is **ciphertext-only** (irreversibly encoded on your device first — plaintext never leaves the local vault), and it adds **stronger retrieval operators** plus cross-device continuity. It is not part of this release and nothing here requires it; see [privacy.md](privacy.md) for the preview and [Declaration & Disclaimer (DECLARATION.md)](../DECLARATION.md) for the release and license boundary. To apply: [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn).
 
 ---
 

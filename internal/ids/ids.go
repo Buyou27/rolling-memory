@@ -1193,7 +1193,7 @@ func isPySpace(char rune) bool {
 }
 
 func pyTrimSpace(value string) string {
-	return strings.TrimFunc(value, isPySpace)
+	return speech.TrimSpace(value)
 }
 
 func isASCIIDigits(value string) bool {

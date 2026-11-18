@@ -177,7 +177,7 @@ func TestEpisodicBackfillTickResumesAndRetries(t *testing.T) {
 		text := fmt.Sprintf("[user] historical entry %d", i)
 		id := episodicunit.DocID(cfg.Scope, text)
 		ref := fmt.Sprintf("@ref:jsonl:%s:%d#0", path, i)
-		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.CloudIngestResponse{}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestEpisodicBackfillTickStopsOnIndexWriteError(t *testing.T) {
 		id := episodicunit.DocID(cfg.Scope, "[user] "+text)
 		ids = append(ids, id)
 		ref := fmt.Sprintf("@ref:jsonl:%s:%d#0", path, i)
-		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.CloudIngestResponse{}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -273,7 +273,7 @@ func TestEpisodicSyncPauseStepResumeAndProgress(t *testing.T) {
 	}
 	id := episodicunit.DocID(cfg.Scope, "[user] pause resume witness")
 	ref := "@ref:jsonl:" + path + ":0#0"
-	if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.CloudIngestResponse{}); err != nil {
+	if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	db := memory.Store.DB()

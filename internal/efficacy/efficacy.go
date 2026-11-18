@@ -1029,8 +1029,8 @@ func Evaluate(st *store.Store, cfg *config.Config, opts Options) (*Report, error
 			modelReqs = turnReqs
 			toolCalls = turnTools
 		} else if nStat != nil {
-			turnsDenom := maxInt(nStat.Turns, 1)
-			modelReqs = maxInt(nStat.ModelRequests/turnsDenom, 1)
+			turnsDenom := max(nStat.Turns, 1)
+			modelReqs = max(nStat.ModelRequests/turnsDenom, 1)
 			toolCalls = nStat.ToolCalls / turnsDenom
 		}
 		if nStat != nil {
@@ -1347,14 +1347,14 @@ func Evaluate(st *store.Store, cfg *config.Config, opts Options) (*Report, error
 		// requests in the turn, request #1 pays 1.0x and subsequent requests pay 0.10x cache-read.
 		he.Injections++
 		report.InjectedCount++
-		baseTokens := maxInt(len(bandTitles)*165, 140)
+		baseTokens := max(len(bandTitles)*165, 140)
 		if rendered != "" {
 			compactTokens := int(math.Round(float64(utf8.RuneCountInString(rendered)) * 0.34))
 			if compactTokens > 0 && compactTokens < baseTokens {
-				baseTokens = maxInt(compactTokens, 120)
+				baseTokens = max(compactTokens, 120)
 			}
 		}
-		multiplier := 1.0 + 0.10*float64(maxInt(modelReqs-1, 0))
+		multiplier := 1.0 + 0.10*float64(max(modelReqs-1, 0))
 		if multiplier > 3.5 {
 			multiplier = 3.5
 		}
@@ -1726,7 +1726,7 @@ func Evaluate(st *store.Store, cfg *config.Config, opts Options) (*Report, error
 	// All-time daemon log counters are preserved separately in LogDedupTotal / LogAbsentTotal / TotalHookRuns.
 	report.SilencedCount = report.Funnel.DedupSuppressed + report.Funnel.SilenceFiltered
 	if report.TotalHookRuns < report.InjectedCount+report.SilencedCount+logDedupCount+logAbsentCount {
-		report.TotalHookRuns = maxInt(report.TotalHookRuns, report.InjectedCount+report.SilencedCount)
+		report.TotalHookRuns = max(report.TotalHookRuns, report.InjectedCount+report.SilencedCount)
 	}
 
 	// NetSavedTokens is strictly (verified avoided exploration tokens) - (injected tokens).
@@ -2180,8 +2180,8 @@ func loadNativeHarnessTelemetry(home string, st *store.Store) (map[string]*nativ
 								//     (bounded to [1,200 .. 4,800] so a cold-cache turn #1 prefix miss never inflates per-step fresh cost to 28,000!);
 								//  2) Early-Turn Cached Context / Exploration Step = initial session prefix re-read during early exploration
 								//     (bounded to [12,000 .. 48,000], avoiding late-turn 240,000 tail-context inflation).
-								uncached := maxInt(inTok-cacheTok, 0)
-								freshPerReq := (uncached/maxInt(turns*2, 1) + outTok + reasonTok) / reqs
+								uncached := max(inTok-cacheTok, 0)
+								freshPerReq := (uncached/max(turns*2, 1) + outTok + reasonTok) / reqs
 								if freshPerReq < 1200 {
 									freshPerReq = 1200
 								}
@@ -2538,7 +2538,7 @@ func computeDynamicRoundCost(nStat *nativeSessionStats, promptAt, nextPromptAt i
 			// mid-turn hits KV-cache for the prefix and only adds marginal fresh tokens (search output +
 			// tool call + step output, ~1,200..4,800 tokens) plus early-turn cached prefix re-read (~12k..56k).
 			stepOutAndReason := (best.OutputTokens + best.ReasoningTokens) / best.ModelRequests
-			uncachedPerReq := maxInt(best.InputTokens-best.CacheReadTokens, 0) / best.ModelRequests
+			uncachedPerReq := max(best.InputTokens-best.CacheReadTokens, 0) / best.ModelRequests
 			if uncachedPerReq > 3600 {
 				uncachedPerReq = 2200 + (uncachedPerReq-2200)/10
 			}
@@ -2569,14 +2569,14 @@ func computeDynamicRoundCost(nStat *nativeSessionStats, promptAt, nextPromptAt i
 		cached := nStat.RoundCachedTokens
 		return fresh + cached, fresh, cached, 0, 0
 	}
-	contextDepthTokens := maxInt(cumContextRunes/2, 600)
-	fresh := 1600 + maxInt(turn-1, 0)*220
+	contextDepthTokens := max(cumContextRunes/2, 600)
+	fresh := 1600 + max(turn-1, 0)*220
 	if fresh > 9500 {
 		fresh = 9500
 	}
 	// Full session historical context re-read on each stateless LLM round-trip:
 	// system prompt & tool schemas (~14,000 tokens) + accumulated conversation & file context.
-	cached := 14000 + contextDepthTokens + maxInt(turn-1, 0)*2800
+	cached := 14000 + contextDepthTokens + max(turn-1, 0)*2800
 	if cached > 72000 {
 		cached = 72000
 	}
@@ -2719,11 +2719,11 @@ func loadOtherNativeHarnesses(home string, out map[string]*nativeSessionStats, e
 							}
 						}
 						if ns.DynamicRoundTokens == 0 && tokUsed > 0 {
-							reqs := maxInt(ns.ModelRequests, 1)
+							reqs := max(ns.ModelRequests, 1)
 							perReq := tokUsed / reqs
 							if perReq > 4000 {
-								ns.RoundFreshTokens = maxInt(perReq/8, 1600)
-								ns.RoundCachedTokens = maxInt(perReq-ns.RoundFreshTokens, 12000)
+								ns.RoundFreshTokens = max(perReq/8, 1600)
+								ns.RoundCachedTokens = max(perReq-ns.RoundFreshTokens, 12000)
 								ns.DynamicRoundTokens = ns.RoundFreshTokens + ns.RoundCachedTokens
 							}
 						}
@@ -2816,10 +2816,10 @@ func parseJSONLTranscriptStats(path, harnessID string) *nativeSessionStats {
 		ns.Turns = 1
 	}
 	if ns.ModelRequests == 0 {
-		ns.ModelRequests = maxInt(ns.ToolCalls, ns.Turns)
+		ns.ModelRequests = max(ns.ToolCalls, ns.Turns)
 	}
 	if ns.InputTokens > 0 && ns.ModelRequests > 0 {
-		uncached := maxInt(ns.InputTokens-ns.CacheReadTokens, 0)
+		uncached := max(ns.InputTokens-ns.CacheReadTokens, 0)
 		fresh := (uncached + ns.OutputTokens) / ns.ModelRequests
 		if fresh < 1200 {
 			fresh = 1200
@@ -3967,13 +3967,6 @@ func round1(v float64) float64 {
 	return math.Round(v*10) / 10
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func asString(v any) string {
 	switch t := v.(type) {
 	case nil:
@@ -4186,7 +4179,7 @@ func computeEmpiricalReductionRates(home string) (billedPct, rawPct, reqPct, tim
 			continue
 		}
 		rawTok := float64(inTok + outTok + reasTok)
-		uncached := float64(maxInt(inTok-cacheTok, 0))
+		uncached := float64(max(inTok-cacheTok, 0))
 		billedTok := uncached + float64(cacheTok)*0.10 + float64(outTok+reasTok)
 		if roTools <= 2 {
 			lowN++
@@ -4408,7 +4401,7 @@ func computeEngineeringDiagnostics(report *Report, allSessions []SessionEvaluati
 		if len(parts) == 0 {
 			continue
 		}
-		perBandTok := s.InjectedTokens / maxInt(len(parts), 1)
+		perBandTok := s.InjectedTokens / max(len(parts), 1)
 		for _, rawTitle := range parts {
 			bt := strings.TrimSpace(rawTitle)
 			if bt == "" {

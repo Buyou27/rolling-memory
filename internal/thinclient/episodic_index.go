@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
@@ -335,6 +334,11 @@ func isPollutedInlineEpisodicText(raw string) bool {
 // unindexed pointer, legacy whole-turn pointer, or inline text) and, when heal is
 // true, repairs relocatable or unindexed pointers in-place once their content
 // identity is verified against the live turn.
+//
+// This sweep resolves each unit's source live: it repairs one row at a time from a
+// caller that holds no page-scoped parse, so the frozen-source seam of the ingest
+// chains (SaveLocalEpisodicPointerIndexedVerified, EnsureLocalEpisodicIndexVerified)
+// has nothing to share here.
 func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurredAt int64, heal bool) EpisodicContentStatus {
 	if v == nil || v.db == nil {
 		return EpisodicContentUnreadable
@@ -365,11 +369,6 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 		return EpisodicContentUnreadable
 	}
 	wasIndexed := err == nil
-	if wasIndexed {
-		if _, source, err := v.loadVerifiedEpisodicPointer(docID, rawText, true); err == nil && pointerStem(source) != stem {
-			return EpisodicContentRelocatable
-		}
-	}
 	if len(digest) == sha256.Size {
 		if text, err := ResolveEpisodicPointerLive(rawText); err == nil && strings.TrimSpace(text) != "" && hmac.Equal(digest, v.episodicContentDigest(text)) {
 			if heal && !wasIndexed {
@@ -379,6 +378,11 @@ func (v *Vault) ClassifyAndHealEpisodicUnit(scope, docID, rawText string, occurr
 				return EpisodicContentRelocatable
 			}
 			return EpisodicContentVerified
+		}
+	}
+	if wasIndexed {
+		if _, source, err := v.loadVerifiedEpisodicPointer(docID, rawText, true); err == nil && pointerStem(source) != stem {
+			return EpisodicContentRelocatable
 		}
 	}
 	segments, err := episodicPointerTurnSegments(rawText)
@@ -574,11 +578,6 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 	if _, err = tx.Exec(`DELETE FROM thin_vault_episodic_sources WHERE doc_id = ?`, docID); err != nil {
 		return false, err
 	}
-	if v.hasFTS5 {
-		if err = ftsDeleteRow(tx, docID); err != nil {
-			return false, err
-		}
-	}
 	if err = tx.Commit(); err != nil {
 		return false, err
 	}
@@ -647,6 +646,58 @@ func verifyEpisodicPointerSource(refPointer, text string) error {
 		return fmt.Errorf("%w: episodic pointer content mismatch", ErrEpisodicIndexItem)
 	}
 	return nil
+}
+
+// verifyEpisodicPointerSourceSnapshot is verifyEpisodicPointerSource against a
+// frozen source parse: the ref must belong to the snapshot's own source and
+// resolve to text verbatim, so one page's saves verify in O(1) per unit instead of
+// re-reading and re-decompressing the transcript each time. A ref the snapshot
+// cannot address is an explicit error — never a silent fallback to the live read
+// the snapshot exists to replace; callers pass a snapshot exactly when the ref
+// belongs to its source. A nil snapshot keeps the live resolver.
+func verifyEpisodicPointerSourceSnapshot(snapshot *episodic.SourceSnapshot, refPointer, text string) error {
+	if snapshot == nil {
+		return verifyEpisodicPointerSource(refPointer, text)
+	}
+	resolved, ok := snapshot.Resolve(refPointer)
+	if !ok {
+		return fmt.Errorf("%w: episodic pointer %s is not addressable in the source snapshot", ErrEpisodicIndexItem, strings.TrimSpace(refPointer))
+	}
+	if strings.TrimSpace(resolved) == "" || resolved != text {
+		return fmt.Errorf("%w: episodic pointer content mismatch", ErrEpisodicIndexItem)
+	}
+	return nil
+}
+
+// verifyEpisodicPointerSourceEnsure is the pointer-source check of the
+// index-creation path (EnsureLocalEpisodicIndex and the re-scan backfill): the
+// frozen parse answers first when it can address the ref, and a ref it cannot
+// address falls to the live resolver as it always has — the ref then belongs to
+// another source (content-addressed units can be said in several transcripts) or
+// to a view the frozen parse predates, which only the live read can answer.
+func verifyEpisodicPointerSourceEnsure(snapshot *episodic.SourceSnapshot, refPointer, text string) error {
+	if snapshot != nil {
+		if resolved, ok := snapshot.Resolve(refPointer); ok {
+			if strings.TrimSpace(resolved) == "" || resolved != text {
+				return fmt.Errorf("%w: episodic pointer content mismatch", ErrEpisodicIndexItem)
+			}
+			return nil
+		}
+	}
+	return verifyEpisodicPointerSource(refPointer, text)
+}
+
+// resolveEpisodicPointerFrozenFirst resolves one pointer against a frozen source
+// parse when the snapshot can address it, and falls back to the live resolver
+// otherwise: the pointer then belongs to another source, or to a view the frozen
+// parse predates, and the live read is the only answer available.
+func resolveEpisodicPointerFrozenFirst(snapshot *episodic.SourceSnapshot, refPointer string) (string, error) {
+	if snapshot != nil {
+		if text, ok := snapshot.Resolve(refPointer); ok {
+			return text, nil
+		}
+	}
+	return ResolveEpisodicPointerLive(refPointer)
 }
 
 // LoadVerifiedEpisodicPointer resolves an indexed pointer only if its source still
@@ -838,7 +889,45 @@ func (v *Vault) VerifiedTurnFirstSegment(turnRef string) (string, bool) {
 // SaveLocalEpisodicPointerIndexed stores a pointer and its canonical, plaintext-free
 // scoring packet in one transaction. pkt must be the packet produced by this Vault
 // for livePlaintext under its current key and segmentation options.
-func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, refPointer, turnRef, livePlaintext string, pkt BlindPulsePacket, resp CloudIngestResponse) error {
+func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, refPointer, turnRef, livePlaintext string, pkt BlindPulsePacket, resp IngestResponse) error {
+	return v.saveLocalEpisodicPointerIndexed(docID, occurredAt, refPointer, turnRef, livePlaintext, pkt, resp, nil)
+}
+
+// SaveLocalEpisodicPointerIndexedVerified stores one pointer and its canonical,
+// plaintext-free scoring packet in one transaction, verifying the pointer against a
+// frozen source parse instead of re-reading the transcript per unit. The ref must
+// belong to the snapshot's own source and resolve to text verbatim; a ref the
+// snapshot does not own, or cannot resolve, is an explicit error — the live read
+// the snapshot exists to replace is never consulted as a silent fallback. A nil
+// snapshot behaves exactly like SaveLocalEpisodicPointerIndexed, for callers that
+// hold no frozen view.
+//
+// scope binds the verified write to the content addressing every ingest path
+// shares: docID must be episodicunit.DocID(scope, text), so verification and
+// document identity can never disagree about which speech was written.
+//
+// Everything else — the tombstone check inside the write transaction, the payload
+// MAC, the source record, the lineage row and the runtime cache invalidation — is
+// byte-for-byte the semantics of SaveLocalEpisodicPointerIndexed.
+func (v *Vault) SaveLocalEpisodicPointerIndexedVerified(scope string, snapshot *episodic.SourceSnapshot, docID string, occurredAt int64, refPointer, turnRef, text string, resp IngestResponse) error {
+	if v == nil || v.db == nil {
+		return errors.New("thinclient: nil Vault db")
+	}
+	if snapshot == nil {
+		pkt, _ := v.PackBlindPacket(docID, text, occurredAt)
+		return v.SaveLocalEpisodicPointerIndexed(docID, occurredAt, refPointer, turnRef, text, pkt, resp)
+	}
+	if episodicunit.DocID(scope, text) != docID {
+		return fmt.Errorf("%w: episodic document content identity mismatch", ErrEpisodicIndexItem)
+	}
+	pkt, _ := v.PackBlindPacket(docID, text, occurredAt)
+	return v.saveLocalEpisodicPointerIndexed(docID, occurredAt, refPointer, turnRef, text, pkt, resp, snapshot)
+}
+
+// saveLocalEpisodicPointerIndexed is the shared write behind the two public saves.
+// snapshot selects the pointer-source verification: nil keeps the live transcript
+// read, non-nil answers from the frozen parse.
+func (v *Vault) saveLocalEpisodicPointerIndexed(docID string, occurredAt int64, refPointer, turnRef, livePlaintext string, pkt BlindPulsePacket, resp IngestResponse, snapshot *episodic.SourceSnapshot) error {
 	if v == nil || v.db == nil {
 		return errors.New("thinclient: nil Vault db")
 	}
@@ -857,7 +946,7 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 	if pkt.UnitID != docID {
 		return fmt.Errorf("%w: episodic packet document mismatch", ErrEpisodicIndexItem)
 	}
-	if err := verifyEpisodicPointerSource(refPointer, livePlaintext); err != nil {
+	if err := verifyEpisodicPointerSourceSnapshot(snapshot, refPointer, livePlaintext); err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: %w", ErrEpisodicIndexItem, err)
 		}
@@ -924,7 +1013,7 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 			if pointerStem(existingRaw) != stem {
 				alternate = true
 			} else {
-				oldText, oldErr := ResolveEpisodicPointerLive(existingRaw)
+				oldText, oldErr := resolveEpisodicPointerFrozenFirst(snapshot, existingRaw)
 				if oldErr == nil {
 					repoint = !hmac.Equal(digest, v.episodicContentDigest(oldText))
 				}
@@ -971,11 +1060,6 @@ func (v *Vault) SaveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 			return err
 		}
 	}
-	if v.hasFTS5 {
-		if err = ftsDeleteRow(tx, docID); err != nil {
-			return err
-		}
-	}
 	if err = v.recordEpisodicSource(tx, docID, turnRef, refPointer, digest, occurredAt); err != nil {
 		return err
 	}
@@ -991,8 +1075,27 @@ var ErrEpisodicIndexItem = errors.New("thinclient: episodic index item")
 
 // EnsureLocalEpisodicIndex indexes a content-addressed live source without replacing
 // another encoder's packet or an established content identity.
+//
+// The pointer-source check reads the live transcript. The ingest chains
+// (reconcile, source scan, canonical import) pass their page's frozen parse
+// through EnsureLocalEpisodicIndexVerified instead; the per-unit heal sweep
+// (ClassifyAndHealEpisodicUnit) keeps this live read — it repairs one unit at a
+// time and holds no page-scoped parse to share.
 func (v *Vault) EnsureLocalEpisodicIndex(scope, docID, refPointer, text string) (bool, error) {
-	return v.ensureLocalEpisodicIndex(scope, docID, refPointer, text, false)
+	return v.ensureLocalEpisodicIndex(scope, docID, refPointer, text, false, nil)
+}
+
+// EnsureLocalEpisodicIndexVerified is EnsureLocalEpisodicIndex against a frozen
+// source parse: the pointer-source check answers from the snapshot when it can
+// address the ref (O(1) per unit), and only a ref the snapshot cannot address —
+// another source, or a view the frozen parse predates — falls to the live
+// resolver, which has always been this check's answer there. A ref the snapshot
+// resolves to different text fails closed like the live mismatch.
+func (v *Vault) EnsureLocalEpisodicIndexVerified(scope string, snapshot *episodic.SourceSnapshot, docID, refPointer, text string) (bool, error) {
+	if snapshot == nil {
+		return v.EnsureLocalEpisodicIndex(scope, docID, refPointer, text)
+	}
+	return v.ensureLocalEpisodicIndex(scope, docID, refPointer, text, false, snapshot)
 }
 
 // HasLocalEpisodicIndex reports whether docID already has a MAC-verified index row
@@ -1012,7 +1115,7 @@ func (v *Vault) HasLocalEpisodicIndex(docID, refPointer string) bool {
 	return v.validEpisodicPayloadMAC(docID, strings.TrimSpace(refPointer), key, payload, digest, mac)
 }
 
-func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, sourceAlreadyVerified bool) (bool, error) {
+func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, sourceAlreadyVerified bool, snapshot *episodic.SourceSnapshot) (bool, error) {
 	if v == nil || v.db == nil {
 		return false, errors.New("thinclient: nil Vault db")
 	}
@@ -1045,7 +1148,7 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 	}
 
 	if !sourceAlreadyVerified {
-		if err := verifyEpisodicPointerSource(refPointer, text); err != nil {
+		if err := verifyEpisodicPointerSourceEnsure(snapshot, refPointer, text); err != nil {
 			return false, fmt.Errorf("%w: %w", ErrEpisodicIndexItem, err)
 		}
 	}
@@ -1168,14 +1271,6 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 		ok         bool
 		entry      vaultDocEntry
 	}
-	var cachedByMAC map[string]vaultDocEntry
-	if v.slotCacheMu != nil && v.snapRef != nil {
-		v.slotCacheMu.RLock()
-		if v.snapRef.epiCodecKey == string(key) && len(v.snapRef.epiByMAC) > 0 {
-			cachedByMAC = v.snapRef.epiByMAC
-		}
-		v.slotCacheMu.RUnlock()
-	}
 	maxSeenRowID := minIndexRowID
 	var rawRows []rawEpisodicRow
 	var toDecodeIdx []int
@@ -1199,26 +1294,6 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 		}
 		seenDocIDs[r.docID] = true
 		r.coord64 = uint64(coord)
-		if len(r.mac) == sha256.Size && len(r.digest) == sha256.Size {
-			r.cacheKey = r.docID + "\x00" + r.refPointer + "\x00" + string(r.mac)
-			if cachedByMAC != nil {
-				if prev, ok := cachedByMAC[r.cacheKey]; ok {
-					prev.layer = r.layer
-					prev.occ = r.occ
-					prev.addrURI = r.addrURI
-					prev.coord64 = r.coord64
-					prev.waveBar = r.waveBar
-					prev.locus = strings.TrimSpace(r.locus)
-					prev.refPointer = r.refPointer
-					prev.contentDigest = r.digest
-					r.entry = prev
-					r.ok = true
-					r.payload = nil
-					rawRows = append(rawRows, r)
-					continue
-				}
-			}
-		}
 		toDecodeIdx = append(toDecodeIdx, len(rawRows))
 		rawRows = append(rawRows, r)
 	}
@@ -1241,6 +1316,11 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 		if err != nil {
 			return
 		}
+		tMeta, tCounts, tPos := coreTermsFromPacket(pkt.Slots, pkt.SentenceFrames)
+		docLen := len(pkt.Slots)
+		if docLen < 1 {
+			docLen = 1
+		}
 		doc := vaultDocEntry{
 			docID:         r.docID,
 			layer:         r.layer,
@@ -1251,54 +1331,10 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 			locus:         strings.TrimSpace(r.locus),
 			refPointer:    r.refPointer,
 			contentDigest: r.digest,
-			termMeta:      make(map[uint64]core.Term, len(pkt.Slots)/2+4),
-			termCounts:    make(map[uint64]int, len(pkt.Slots)/2+4),
-		}
-		for _, atom := range pkt.Slots {
-			doc.termCounts[atom.H]++
-			doc.docLen++
-			if atom.H == 0 {
-				continue
-			}
-			bits := atom.RawBitsX10
-			if bits == 0 {
-				bits = 32
-			}
-			role := core.RolePrimary
-			ext := core.ExtFlagSeenPrimary
-			if (atom.RawBitsX10&1) == 1 && (atom.ClassFlags&FlagHasConn) != 0 {
-				role = core.RoleMorphStem
-				ext = core.ExtFlagSeenMorphOrClos
-			}
-			if cur, ok := doc.termMeta[atom.H]; !ok || bits > cur.Bits {
-				doc.termMeta[atom.H] = core.Term{
-					Hash:     atom.H,
-					Bits:     bits,
-					Flags:    atom.ClassFlags,
-					Role:     role,
-					ExtFlags: ext,
-					Group:    atom.H,
-				}
-			}
-		}
-		if len(pkt.SentenceFrames) > 0 {
-			doc.sentHashes = make([][]uint64, 0, len(pkt.SentenceFrames))
-			for _, frame := range pkt.SentenceFrames {
-				seen := make(map[uint64]bool, len(frame))
-				var hashes []uint64
-				for _, atom := range frame {
-					if !seen[atom.H] {
-						seen[atom.H] = true
-						hashes = append(hashes, atom.H)
-					}
-				}
-				if len(hashes) > 0 {
-					doc.sentHashes = append(doc.sentHashes, hashes)
-				}
-			}
-		}
-		if doc.docLen < 1 {
-			doc.docLen = 1
+			termMeta:      tMeta,
+			termCounts:    tCounts,
+			termPositions: tPos,
+			docLen:        docLen,
 		}
 		r.payload = nil
 		r.entry = doc
@@ -1349,26 +1385,9 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 	}
 
 	docs := make([]vaultDocEntry, 0, len(rawRows))
-	if v.slotCacheMu != nil && v.snapRef != nil {
-		v.slotCacheMu.Lock()
-		if v.snapRef.epiCodecKey != string(key) || v.snapRef.epiByMAC == nil || minIndexRowID == 0 {
-			v.snapRef.epiCodecKey = string(key)
-			v.snapRef.epiByMAC = make(map[string]vaultDocEntry, len(rawRows))
-		}
-		for idx := range rawRows {
-			if rawRows[idx].ok {
-				docs = append(docs, rawRows[idx].entry)
-				if rawRows[idx].cacheKey != "" {
-					v.snapRef.epiByMAC[rawRows[idx].cacheKey] = rawRows[idx].entry
-				}
-			}
-		}
-		v.slotCacheMu.Unlock()
-	} else {
-		for idx := range rawRows {
-			if rawRows[idx].ok {
-				docs = append(docs, rawRows[idx].entry)
-			}
+	for idx := range rawRows {
+		if rawRows[idx].ok {
+			docs = append(docs, rawRows[idx].entry)
 		}
 	}
 	return docs, maxSeenRowID, nil

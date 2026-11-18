@@ -30,7 +30,7 @@ func TestLocalModeRecallServesThinVaultOnlyDatabase(t *testing.T) {
 		testNow,
 		"控制台开箱默认账号由宿主 bootstrap 播种，登录页一键填入预置账号。",
 		nil,
-		thinclient.CloudIngestResponse{Layer: "episodic"},
+		thinclient.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestLocalRecallReportsUnavailableEpisodicSource(t *testing.T) {
 	}
 	ref := "@ref:jsonl:" + path + ":0#0"
 	packet, _ := client.Vault.PackBlindPacket("ep_missing", text, testNow)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_missing", testNow, ref, "", text, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_missing", testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -98,7 +98,7 @@ func TestLocalRecallDeliveryCapsAndOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"caps-a", "caps-b", "caps-c"} {
-		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), "quartz evidence "+id, nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), "quartz evidence "+id, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -136,7 +136,7 @@ func TestLocalVaultRecallRejectsDifferentScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz scope isolation witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz scope isolation witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())
@@ -164,7 +164,7 @@ func TestLocalVaultReopenedWithDifferentScopeDoesNotExposeOldRows(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz reopen isolation witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz reopen isolation witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -203,7 +203,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 			}
 			switch source {
 			case "docs":
-				err = client.SaveLocalPlaintext("unbound-doc", testNow, "unbound secret witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"})
+				err = client.SaveLocalPlaintext("unbound-doc", testNow, "unbound secret witness", nil, thinclient.IngestResponse{Layer: "episodic"})
 			case "noetic":
 				err = client.SaveLocalNoetic(thinclient.LocalNoeticRecord{NoeticID: "unbound-noetic", QueryText: "unbound secret witness", AnswerText: "unbound secret answer"})
 			case "background":
@@ -256,7 +256,7 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 	if err != nil || bound != memory.Config.Scope || populated {
 		t.Fatalf("bound vault preflight = %q, %v, %v", bound, populated, err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("bound-doc", testNow, "quartz bound scope secret", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("bound-doc", testNow, "quartz bound scope secret", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.Vault.SaveLocalNoetic(thinclient.LocalNoeticRecord{NoeticID: "bound-noetic", QueryText: "quartz bound scope secret", AnswerText: "quartz derived secret", CitedUnitIDs: []string{"bound-doc"}}); err != nil {
@@ -306,7 +306,7 @@ func TestLocalVaultImportRejectsScopeBeforeWrites(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := vault.SaveLocalPlaintext("unbound-doc", testNow, "unbound witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+				if err := vault.SaveLocalPlaintext("unbound-doc", testNow, "unbound witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 					t.Fatal(err)
 				}
 			} else if _, err := memory.ThinClient(); err != nil {
@@ -436,11 +436,11 @@ func TestLocalRecallMixedSourceUnifiedRankingWithLocusAnchor(t *testing.T) {
 	turnText := "[user] quartz mixed ranking weak turn witness"
 	packet, _ := client.Vault.PackBlindPacket("ep_turn_low", turnText, testNow)
 	client.SetIdentity("default", "", "Rolling-Memory")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_turn_low", testNow, ref, "@ref:jsonl:"+path+":0", turnText, packet, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_turn_low", testNow, ref, "@ref:jsonl:"+path+":0", turnText, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	standaloneText := "quartz mixed ranking strong standalone witness crystalline prism"
-	if err := client.Vault.SaveLocalPlaintext("doc_standalone_high", testNow+10, standaloneText, nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("doc_standalone_high", testNow+10, standaloneText, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	one := 1
@@ -472,7 +472,7 @@ func TestLocalModeRecallLocusAnchorPromotesSameWorkspace(t *testing.T) {
 		client.SetIdentity("default", "", locus)
 		if err := client.Vault.SaveLocalPlaintext(
 			docID, testNow, text, nil,
-			thinclient.CloudIngestResponse{Layer: "episodic"},
+			thinclient.IngestResponse{Layer: "episodic"},
 		); err != nil {
 			t.Fatalf("seed %s: %v", docID, err)
 		}
@@ -527,7 +527,7 @@ func TestRecentVaultItemsKeepsSourceVisibleInDerivedWindow(t *testing.T) {
 		"ep_recent_source", testNow,
 		"控制台守卫记录：首次进入需强刷新才能进入。",
 		nil,
-		thinclient.CloudIngestResponse{Layer: "episodic"},
+		thinclient.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed source: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestRecentVaultRecallHonorsWorkspaceLocusAnchor(t *testing.T) {
 		"ep_target_old", testNow,
 		"TargetRepo earlier milestone record.",
 		nil,
-		thinclient.CloudIngestResponse{Layer: "episodic"},
+		thinclient.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
@@ -583,7 +583,7 @@ func TestRecentVaultRecallHonorsWorkspaceLocusAnchor(t *testing.T) {
 			"ep_other_"+string(rune('a'+i)), testNow+int64(10*(i+1)),
 			"OtherRepo newer chatter.",
 			nil,
-			thinclient.CloudIngestResponse{Layer: "episodic"},
+			thinclient.IngestResponse{Layer: "episodic"},
 		); err != nil {
 			t.Fatalf("seed other %d: %v", i, err)
 		}
@@ -620,7 +620,7 @@ func TestRecentVaultRecallFoldsRedundantNoeticDerivativesBehindSourceMemories(t 
 		"ep_src_1", testNow,
 		"First genuine source conversation turn.",
 		nil,
-		thinclient.CloudIngestResponse{Layer: "episodic"},
+		thinclient.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed ep_src_1: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestRecentVaultRecallFoldsRedundantNoeticDerivativesBehindSourceMemories(t 
 		"ep_src_2", testNow+10,
 		"Second genuine source conversation turn.",
 		nil,
-		thinclient.CloudIngestResponse{Layer: "episodic"},
+		thinclient.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed ep_src_2: %v", err)
 	}
@@ -671,7 +671,7 @@ func TestLocalRecallLargeOffsetDoesNotOverflowOrPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("offset-doc", testNow, "quartz large offset overflow witness", nil, thinclient.CloudIngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("offset-doc", testNow, "quartz large offset overflow witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	maxInt := int(^uint(0) >> 1)

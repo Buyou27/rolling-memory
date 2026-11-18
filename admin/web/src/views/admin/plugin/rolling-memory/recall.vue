@@ -116,11 +116,12 @@
                 </el-col>
                 <el-col :xs="12" :sm="6" :md="4">
                     <div class="rm-param-item">
-                        <span class="rm-param-lbl">Bands / Depth</span>
-                        <div class="rm-inline-pair">
-                            <el-input-number v-model="form.bands" size="small" :min="1" :max="30" controls-position="right" @change="runRecall" />
-                            <el-input-number v-model="form.depth" size="small" :min="1" :max="4" controls-position="right" @change="runRecall" />
-                        </div>
+                        <span class="rm-param-lbl">{{ isEn ? 'Smart Delivery Window' : '智能交付窗口' }}</span>
+                        <el-select v-model="form.delivery_window" size="small" data-testid="select-recall-delivery-window" @change="onDeliveryWindowChange">
+                            <el-option :label="isEn ? 'auto (0-16 default · focused)' : 'auto (0-16 默认 · 轻量聚焦)'" value="0-16" />
+                            <el-option :label="isEn ? '0-32 (balanced span)' : '0-32（标准扩展）'" value="0-32" />
+                            <el-option :label="isEn ? '0-64 (deep synthesis)' : '0-64（深度全景）'" value="0-64" />
+                        </el-select>
                     </div>
                 </el-col>
                 <el-col :xs="12" :sm="6" :md="4">
@@ -651,16 +652,32 @@ const form = reactive({
     locus: '',
     carrier: '',
     incarnation: '',
-    bands: 10,
+    delivery_window: '0-16',
+    bands: 16,
     nodes: 60,
-    chars: 12000,
     depth: 2,
     include_raw: true,
-    raw_limit: 5,
+    raw_limit: 16,
     sort_by: 'delivery',
     // 调试台默认只读：试查不写入 L3；需要复现 Agent 的完整写入路径时再勾选
     crystallize: false,
 })
+
+const onDeliveryWindowChange = async (val: string) => {
+    const cap = val === '0-64' ? 64 : val === '0-32' ? 32 : 16
+    form.bands = cap
+    form.raw_limit = cap
+    try {
+        await request({
+            url: '/admin/plugin/rolling-memory/toggle',
+            method: 'POST',
+            data: { key: 'delivery_window', value: val },
+        })
+    } catch {
+        // best-effort persistence to config.toml
+    }
+    runRecall()
+}
 
 const result = ref<Partial<RecallQueryResponse>>({
     hits: [],
@@ -798,6 +815,9 @@ const runRecall = async () => {
         hasResult.value = true
         if (data.available_scopes && data.available_scopes.length > 0) {
             availableScopes.value = data.available_scopes
+        }
+        if ((data as any).delivery_window) {
+            form.delivery_window = (data as any).delivery_window
         }
         availableWorkspaces.value = data.available_workspaces || []
         if (params.crystallize && params.q.trim() !== '') {

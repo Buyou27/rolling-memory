@@ -8,10 +8,11 @@
 //   - `internal/eval`（评测流水线）用它解析 scope 轴；
 //   - `internal/api`（产品生命周期）用它把自动 L3 Noetic 结晶挡在评测空间之外。
 //
-// 命名空间闭集（正本 internal/eval/cloud_engine.go 的 ScopeForSuiteAndMode）：
-//   - <user>-mem-eval-<locomo|atmbench>[-pulse-cipher][-<世代号>] => pulse_cipher（脉冲密文）
-//   - <user>-mem-eval-<locomo|atmbench>-pulse-plain[-<世代号>]    => pulse_plain （脉冲明文，兼容 -plaintext）
-//   - <user>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]    => local_plain （本地明文，兼容 -local）
+// 命名空间闭集（正本 internal/eval/local_engine.go 的 ScopeForSuiteAndMode；现役新产物只产出 local_plain，
+// 历史形态仅按只读解析兼容）：
+//   - <user>-mem-eval-<locomo|atmbench>[-pulse-cipher][-<世代号>] => pulse_cipher（脉冲密文，历史只读值）
+//   - <user>-mem-eval-<locomo|atmbench>-pulse-plain[-<世代号>]    => pulse_plain （脉冲明文，历史只读值）
+//   - <user>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]    => local_plain （本地明文）
 //
 // 引擎侧落库时 scope 还会带上分身前缀（`ast:default:inc:<user>-mem-eval-...`）。
 package evalns

@@ -13,6 +13,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -67,6 +68,11 @@ func monitorTestMemory(t *testing.T) (*api.Memory, *config.Config, string) {
 		t.Fatalf("new memory: %v", err)
 	}
 	t.Cleanup(func() { _ = mem.Close() })
+	// Fresh production databases bootstrap thin; this suite replays the legacy
+	// assertion-graph surfaces, so apply its schema on the test database.
+	if err := db.EnsureLegacyGraphSchema(mem.Store.DB()); err != nil {
+		t.Fatalf("legacy graph schema: %v", err)
+	}
 	seedAt := time.Now().Unix() - 3600
 	if _, err := mem.Remember(api.RememberRequest{
 		Content: strPtr("监控窗聚合落位于 internal/efficacy/efficacy.go 的 window buckets。"),

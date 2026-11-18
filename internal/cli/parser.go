@@ -774,8 +774,8 @@ func BuildParser() *Parser {
 			"evaluation job id (default for ingest/run/grade/status: latest job of the suite/store)"),
 		choiceOption([]string{"--suite"}, "suite", []string{"locomo", "atm"}, "locomo",
 			"benchmark suite (locomo | atm)"),
-		choiceOption([]string{"--tier"}, "tier", []string{"1540", "hard", "1013"}, "1540",
-			"question tier (LoCoMo: 1540 = official cat1-4 set; ATM-Bench: hard/1013; the retired LoCoMo convenience tiers 100/200 are no longer offered)"),
+		choiceOption([]string{"--tier"}, "tier", []string{"1540", "adversarial-446", "hard", "1013"}, "1540",
+			"question tier (LoCoMo: 1540 = official cat1-4 set, adversarial-446 = official cat5 adversarial set; ATM-Bench: hard/1013; the retired LoCoMo convenience tiers 100/200 are no longer offered)"),
 		stringOption([]string{"--eval-data"}, "eval_data", nil,
 			"evaluation data directory (default: evaldata next to the binary)"),
 		stringOption([]string{"--fetch"}, "fetch", nil,
@@ -813,8 +813,8 @@ func BuildParser() *Parser {
 		flagOption([]string{"--rebuild"}, "rebuild", false, "reset the isolated cloud scope (purge every remembered unit), then re-ingest the corpus"),
 		flagOption([]string{"--reuse-prepare"}, "reuse_prepare", false, "reuse an identical isolated corpus only after exact remote-set verification"),
 		flagOption([]string{"--verify-prepare"}, "verify_prepare", false, "verify exact manifest/corpus/remote-unit equality without ingesting or scoring"),
-		choiceOption([]string{"--pulse-tokenizer"}, "pulse_tokenizer", []string{"fts5-bm25", "standard", "fts5-trigram"}, "fts5-bm25",
-			"blind pulse tokenizer: fts5-bm25 = default max-capability product tokenizer (128k BPE prior + stem/root/compound harmonics + unit/date beacons; default) | standard = SDK native surface+subword | fts5-trigram = local FTS5 trigram index tokenizer"),
+		choiceOption([]string{"--pulse-tokenizer"}, "pulse_tokenizer", []string{"product", "standard", "trigram"}, "product",
+			"blind pulse tokenizer: product = default max-capability product tokenizer (128k BPE substring pieces + companion-word expansion + unit/date beacons; default) | standard = SDK native surface+subword | trigram = trigram-window segmenter"),
 		choiceOption([]string{"--pulse-mode"}, "pulse_mode", []string{"local_plain", "pulse_cipher", "pulse_plain"}, "local_plain",
 			"evaluation arm (each registered in its own isolated scope & store): local_plain (本地明文, default; the only arm available in local mode) | pulse_cipher (脉冲密文, requires cloud mode) | pulse_plain (脉冲明文, requires cloud mode)"),
 		flagOption([]string{"--no-verify"}, "no_verify", false,
@@ -845,7 +845,7 @@ func BuildParser() *Parser {
 		Options: append(commonOptions(),
 			stringOption([]string{"--session"}, "session", nil, ""),
 			choiceOption([]string{"--audience"}, "audience",
-				[]string{"private", "group", "shared", "public"}, "shared", "file import currently accepts only shared or public"),
+				[]string{"shared", "public"}, "shared", "本地金库为单人本地，仅支持 shared/public；受限受众在写入前拒绝"),
 			flagOption([]string{"--replay"}, "replay", false, ""),
 		),
 		Positionals: []*positional{{Name: "path", Required: true}},
@@ -884,6 +884,7 @@ func BuildParser() *Parser {
 		Name: "prune", Path: []string{"sync", "prune"}, Options: append(commonOptions(),
 			intOption([]string{"--limit"}, "limit", 20000, "max pointer rows to classify in one pass"),
 			flagOption([]string{"--include-unreadable"}, "include_unreadable", false, "also retire pointers whose source session or transcript is gone"),
+			flagOption([]string{"--reanchor-cross-source"}, "reanchor_cross_source", false, "also re-anchor drifted rows whose verified content lives in another session (explicit opt-in)"),
 			flagOption([]string{"--apply"}, "apply", false, "retire the units whose content the turn no longer yields (dry-run without it)"),
 			flagOption([]string{"--yes"}, "yes", false, "confirm the prune (required with --apply)")),
 	}
@@ -902,7 +903,8 @@ func BuildParser() *Parser {
 		{Name: "sync", Path: []string{"background", "sync"}, Options: commonOptions()},
 		{
 			Name: "remove", Path: []string{"background", "remove"}, Options: append(commonOptions(),
-				requiredOption([]string{"--path"}, "path", "DIR", "mounted directory to purge and unmount")),
+				requiredOption([]string{"--path"}, "path", "DIR", "mounted directory to purge and unmount"),
+				flagOption([]string{"--dry-run"}, "dry_run", false, "preview the unmount (re-binds vs purges vs citation impact) without writing")),
 		},
 		{Name: "list", Path: []string{"background", "list"}, Options: commonOptions()},
 	}
@@ -951,6 +953,28 @@ func BuildParser() *Parser {
 	reindexCmd := &command{
 		Name: "reindex", Path: []string{"reindex"}, Help: "rebuild the lexical index and the local compatibility index（本地兼容索引，不参与引擎检索）",
 		Options: commonOptions(),
+	}
+
+	maintainCmd := &command{
+		Name: "maintain", Path: []string{"maintain"},
+		Help:    "user maintenance: inspect reclaimable space, clean obsolete backups/caches, compact the vault",
+		Options: commonOptions(), SubDest: "maintain_command", DefaultSub: "status",
+	}
+	maintainCmd.Subcommands = []*command{
+		{Name: "status", Path: []string{"maintain", "status"}, Options: commonOptions()},
+		{
+			Name: "clean", Path: []string{"maintain", "clean"}, Options: append(commonOptions(),
+				intOption([]string{"--keep"}, "keep", maintainDefaultBackupKeep, "keep the newest N backups per (dir, family)"),
+				flagOption([]string{"--caches"}, "caches", false, "also clear regenerable state caches (daemon memory snapshots are dropped first)"),
+				flagOption([]string{"--apply"}, "apply", false, "execute the cleanup (dry-run without it)"),
+				flagOption([]string{"--yes"}, "yes", false, "confirm the cleanup (required with --apply)")),
+		},
+		{
+			Name: "compact", Path: []string{"maintain", "compact"}, Options: append(commonOptions(),
+				flagOption([]string{"--apply"}, "apply", false, "execute the compaction (dry-run without it)"),
+				flagOption([]string{"--yes"}, "yes", false, "confirm the compaction (required with --apply)"),
+				flagOption([]string{"--no-daemon-restart"}, "no_daemon_restart", false, "leave the shared engine daemon stopped after compaction")),
+		},
 	}
 
 	installCmd := &command{
@@ -1082,11 +1106,23 @@ func BuildParser() *Parser {
 		Options: updateOptions,
 	}
 
+	// engine 是控制台与自动化专用的内部已核验守护通道（请求 JSON 走 stdin、响应 JSON 走
+	// stdout）：不在用户文档中宣传，也不改变任何用户面命令的行为。
+	engineCmd := &command{
+		Name: "engine", Path: []string{"engine"},
+		Help:    "internal verified local-daemon channel for the web console and automation (request JSON on stdin, response JSON on stdout)",
+		Options: commonOptions(),
+		Positionals: []*positional{{
+			Name: "op", Choices: []string{"recall", "hydrate", "documents", "invalidate"}, Required: true,
+		}},
+	}
+
 	root.Subcommands = []*command{
 		initCmd, modeCmd, configCmd, recallCmd, recentCmd,
 		importCmd, exportCmd, syncCmd, backgroundCmd, mcpCmd, hookCmd,
 		statusCmd, doctorCmd, checkCmd, reindexCmd, installCmd, evalCmd,
 		ejectCmd, efficacyCmd, waveCmd, panelCmd, updateCmd, upgradeCmd,
+		maintainCmd, engineCmd,
 	}
 	for _, sub := range root.Subcommands {
 		sub.Path = []string{sub.Name}

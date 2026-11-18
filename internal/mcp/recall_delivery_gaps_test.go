@@ -35,7 +35,7 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 			}
 			text := "[user] quartz nebula evidence"
 			packet, _ := client.Vault.PackBlindPacket("ep_gap", text, testNow)
-			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_gap", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_gap", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 				t.Fatal(err)
 			}
 			if tc.mutation != "" {
@@ -72,7 +72,7 @@ func TestLocalRecallMCPTextReportsCharacterTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"chars-a", "chars-b", "chars-c"} {
-		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id+" "+strings.Repeat("sample ", 100), nil, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id+" "+strings.Repeat("sample ", 100), nil, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -95,7 +95,7 @@ func TestLocalRecallMCPTextReportsDeliveryCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"caps-a", "caps-b", "caps-c"} {
-		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id, nil, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id, nil, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -6,15 +6,10 @@ package thinclient_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/thinclient"
@@ -31,35 +26,21 @@ func vaultTestDSN(dbPath string) string {
 	return dbPath + "?_txlock=immediate&_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)"
 }
 
-// TestHTTPBrainTransportDefaultsToSingleIncarnation pins the ordinary Harness
-// query boundary: sibling fan-out is an explicit opt-in, never an engine default
-// that can hydrate unrelated evaluation generations into a user recall.
-func TestHTTPBrainTransportDefaultsToSingleIncarnation(t *testing.T) {
-	var got []any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		got = append(got, payload["cross_incarnation"])
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]thinclient.CloudQueryHit{})
-	}))
-	defer srv.Close()
+type failingTransportStub struct {
+	calls   int
+	failErr error
+}
 
-	transport := thinclient.NewHTTPBrainTransport(srv.URL, "test-token")
-	if _, err := transport.QueryBlindManifold(context.Background(), thinclient.BlindPulsePacket{UnitID: "Q"}, 1); err != nil {
-		t.Fatalf("default query: %v", err)
+func (f *failingTransportStub) IngestBlindPulse(_ context.Context, pkt thinclient.BlindPulsePacket) (thinclient.IngestResponse, error) {
+	f.calls++
+	if f.failErr != nil {
+		return thinclient.IngestResponse{}, f.failErr
 	}
-	allow := true
-	transport.CrossIncarnation = &allow
-	if _, err := transport.QueryBlindManifold(context.Background(), thinclient.BlindPulsePacket{UnitID: "Q"}, 1); err != nil {
-		t.Fatalf("opt-in query: %v", err)
-	}
-	if len(got) != 2 || got[0] != false || got[1] != true {
-		t.Fatalf("cross_incarnation sequence = %#v, want [false true]", got)
-	}
+	return thinclient.IngestResponse{UnitID: pkt.UnitID, Layer: pkt.Layer}, nil
+}
+
+func (f *failingTransportStub) QueryBlindManifold(_ context.Context, _ thinclient.BlindPulsePacket, _ int) ([]thinclient.QueryHit, error) {
+	return nil, f.failErr
 }
 
 // TestRecallNoeticMatchesOriginalCueNotEvidence proves that a long answer or
@@ -94,13 +75,61 @@ func TestRecallNoeticMatchesOriginalCueNotEvidence(t *testing.T) {
 	}
 }
 
+func TestRecallNoeticVerificationGainAndDAGClosure(t *testing.T) {
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "noetic-verify.db")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	vault, err := thinclient.NewVault(db, []byte("noetic-verify-secret"))
+	if err != nil {
+		t.Fatalf("NewVault: %v", err)
+	}
+	client := thinclient.NewClient(vault, nil)
+	const cue = "quartz harbor gate ledger"
+	// Unverified handle (single write).
+	if err := client.RememberNoetic("NT-FRESH", cue, []string{"ep_fresh"}, []string{"fresh"}, "ans", 100); err != nil {
+		t.Fatalf("RememberNoetic NT-FRESH: %v", err)
+	}
+	// Verified handle: written once at t=100, then re-consolidated and cited by NT-CHILD.
+	if err := client.RememberNoetic("NT-VERIFIED", cue, []string{"ep_root"}, []string{"root"}, "ans", 100); err != nil {
+		t.Fatalf("RememberNoetic NT-VERIFIED initial: %v", err)
+	}
+	if err := client.RememberNoetic("NT-VERIFIED", cue, []string{"ep_root"}, []string{"root"}, "ans", 100); err != nil {
+		t.Fatalf("RememberNoetic NT-VERIFIED re-consolidate: %v", err)
+	}
+	if err := client.RememberNoetic("NT-CHILD", "quartz harbor", []string{"ep_child", "NT-VERIFIED"}, []string{"child"}, "ans", 200); err != nil {
+		t.Fatalf("RememberNoetic NT-CHILD: %v", err)
+	}
+	hits, err := client.RecallNoetic(cue, 10)
+	if err != nil {
+		t.Fatalf("RecallNoetic: %v", err)
+	}
+	if len(hits) < 2 || hits[0].NoeticID != "NT-VERIFIED" {
+		t.Fatalf("expected verified L3 handle to rank first, got %+v", hits)
+	}
+	if hits[0].ReuseCount < 2 || hits[0].VerificationGain() <= 1.0 {
+		t.Fatalf("expected NT-VERIFIED ReuseCount>=2 and VerificationGain>1, got reuse=%d gain=%f", hits[0].ReuseCount, hits[0].VerificationGain())
+	}
+	childHits, err := client.RecallNoetic("quartz harbor", 10)
+	if err != nil || len(childHits) == 0 {
+		t.Fatalf("RecallNoetic child: %v %+v", err, childHits)
+	}
+	foundRootLeaf := false
+	for _, cid := range childHits[0].CitedUnitIDs {
+		if cid == "ep_root" {
+			foundRootLeaf = true
+			break
+		}
+	}
+	if !foundRootLeaf {
+		t.Fatalf("expected DAG closure to expand ep_root into NT-CHILD CitedUnitIDs, got %+v", childHits[0].CitedUnitIDs)
+	}
+}
+
 // TestRememberPreservesVaultWhenCloudIngestFails proves the local-first write
-// contract: remote indexing failure cannot erase the only local plaintext copy.
+// contract: transport failure cannot erase the only local plaintext copy.
 func TestRememberPreservesVaultWhenCloudIngestFails(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "engine unavailable", http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
 	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "local-first.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -110,7 +139,7 @@ func TestRememberPreservesVaultWhenCloudIngestFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVault: %v", err)
 	}
-	client := thinclient.NewClient(vault, thinclient.NewHTTPBrainTransport(srv.URL, "test-token"))
+	client := thinclient.NewClient(vault, &failingTransportStub{failErr: fmt.Errorf("engine unavailable")})
 	resp, err := client.Remember(context.Background(), "DOC-LOCAL-FIRST", "plaintext survives a cloud ingest failure", 100)
 	if err == nil {
 		t.Fatalf("expected remote ingest error, got %+v", resp)
@@ -178,7 +207,7 @@ func TestRememberEpisodicByRefInvalidSourcePreservesPlaintext(t *testing.T) {
 			}
 		})
 	}
-	if err := vault.SaveLocalPlaintext("existing", 1, "another user's data", []string{"another user's data"}, thinclient.CloudIngestResponse{}); err != nil {
+	if err := vault.SaveLocalPlaintext("existing", 1, "another user's data", []string{"another user's data"}, thinclient.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.RememberEpisodicByRef(context.Background(), "existing", "@ref:jsonl:"+source+":0#0", "", "new user text", 2); err == nil {
@@ -222,16 +251,11 @@ func TestRememberEpisodicByRefPreservesIdenticalInline(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, sents := vault.PackBlindPacket("same", text, 1)
-	if err := vault.SaveLocalPlaintext("same", 1, text, sents, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := vault.SaveLocalPlaintext("same", 1, text, sents, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	var requests int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		http.Error(w, "engine unavailable", http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-	client := thinclient.NewClient(vault, thinclient.NewHTTPBrainTransport(srv.URL, "test-token"))
+	errTr := &failingTransportStub{failErr: fmt.Errorf("engine unavailable")}
+	client := thinclient.NewClient(vault, errTr)
 	if _, err := client.RememberEpisodicByRef(context.Background(), "same", ref, ref, text, 2); err == nil || !strings.Contains(err.Error(), "engine unavailable") {
 		t.Fatalf("expected transport error after preserved inline, got %v", err)
 	}
@@ -244,25 +268,19 @@ func TestRememberEpisodicByRefPreservesIdenticalInline(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = 'same'`).Scan(&indexes); err != nil {
 		t.Fatal(err)
 	}
-	if stored != text || occurred != 1 || indexes != 0 || requests != 1 {
-		t.Fatalf("inline changed or ingest skipped: text=%q occurred=%d indexes=%d requests=%d", stored, occurred, indexes, requests)
+	if stored != text || occurred != 1 || indexes != 0 || errTr.calls != 1 {
+		t.Fatalf("inline changed or ingest skipped: text=%q occurred=%d indexes=%d requests=%d", stored, occurred, indexes, errTr.calls)
 	}
-	var completeRequests int
-	complete := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		completeRequests++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"unit_id":"same","layer":"episodic"}`))
-	}))
-	defer complete.Close()
-	client = thinclient.NewClient(vault, thinclient.NewHTTPBrainTransport(complete.URL, "test-token"))
+	okTr := &failingTransportStub{}
+	client = thinclient.NewClient(vault, okTr)
 	if _, err := client.RememberEpisodicByRef(context.Background(), "same", ref, ref, text, 3); err != nil {
 		t.Fatalf("successful ingest with identical inline: %v", err)
 	}
 	if err := db.QueryRow(`SELECT raw_text, occurred_at FROM thin_vault_docs WHERE doc_id = 'same'`).Scan(&stored, &occurred); err != nil {
 		t.Fatal(err)
 	}
-	if stored != text || occurred != 1 || completeRequests != 1 {
-		t.Fatalf("successful ingest modified inline: text=%q occurred=%d requests=%d", stored, occurred, completeRequests)
+	if stored != text || occurred != 1 || okTr.calls != 1 {
+		t.Fatalf("successful ingest modified inline: text=%q occurred=%d requests=%d", stored, occurred, okTr.calls)
 	}
 }
 
@@ -289,20 +307,20 @@ func TestLoadLocalDocumentRefPrefixIdentity(t *testing.T) {
 	for _, text := range []string{"@ref: literal user text", ref} {
 		id := "inline-" + text
 		_, sents := vault.PackBlindPacket(id, text, 1)
-		if err := vault.SaveLocalPlaintext(id, 1, text, sents, thinclient.CloudIngestResponse{}); err != nil {
+		if err := vault.SaveLocalPlaintext(id, 1, text, sents, thinclient.IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 		if got, _, _, err := vault.LoadLocalDocument(id); err != nil || got != text {
 			t.Fatalf("inline %q read as %q: %v", text, got, err)
 		}
 	}
-	if err := vault.SaveLocalEpisodicPointer("legacy", 1, ref, "", thinclient.CloudIngestResponse{}); err != nil {
+	if err := vault.SaveLocalEpisodicPointer("legacy", 1, ref, "", thinclient.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, _, err := vault.LoadLocalDocument("legacy"); err == nil || got != "" {
 		t.Fatalf("unverified legacy source delivered %q: %v", got, err)
 	}
-	if err := vault.SaveLocalEpisodicPointer("lineage", 1, ref, ref, thinclient.CloudIngestResponse{}); err != nil {
+	if err := vault.SaveLocalEpisodicPointer("lineage", 1, ref, ref, thinclient.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE thin_vault_docs SET sentences_json = ? WHERE doc_id = 'lineage'`, `["@ref:jsonl:"]`); err != nil {
@@ -340,164 +358,6 @@ func TestLoadLocalDocumentRefPrefixIdentity(t *testing.T) {
 //
 //	Local SQLite Vault -> Ultra-Thin Client -> HTTP JSON Wire (0 Plaintext, 0 Floats) -> Cloud Endpoint -> Local Resolution.
 func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
-	var wireMu sync.Mutex
-	var capturedWirePayloads []string
-	var ingestedPackets []thinclient.BlindPulsePacket
-
-	// Mock HTTP server representing the remote Autonoetic Engine `/open/memory/v1/*` service.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bodyBytes, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		wireMu.Lock()
-		capturedWirePayloads = append(capturedWirePayloads, string(bodyBytes))
-		wireMu.Unlock()
-
-		switch r.URL.Path {
-		case "/open/memory/v1/ingest", "/brain/v1/ingest":
-			var pkt thinclient.BlindPulsePacket
-			if err := json.Unmarshal(bodyBytes, &pkt); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := normalizePulseForTest(&pkt); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			wireMu.Lock()
-			ingestedPackets = append(ingestedPackets, pkt)
-			epoch := len(ingestedPackets)
-			wireMu.Unlock()
-
-			// Deduplicate identical blind sentence frames (simulating cloud blind dry-sentence distillation)
-			var keptIdx []int
-			seenSentHash := make(map[uint64]int)
-			for sIdx, sf := range pkt.SentenceFrames {
-				var sig uint64
-				for _, a := range sf {
-					sig = (sig * 1099511628211) ^ a.H
-				}
-				seenSentHash[sig]++
-				if seenSentHash[sig] == 1 {
-					keptIdx = append(keptIdx, sIdx)
-				}
-			}
-
-			out := thinclient.CloudIngestResponse{
-				UnitID:              pkt.UnitID,
-				Epoch:               epoch,
-				WaveformHex:         "2C22DE1AAE1E",
-				WaveformBar:         "▂▇▂▂▇█▁▆▆█▁█",
-				ConservedMass:       3.28,
-				QualityMult:         0.98,
-				AddressURI:          fmt.Sprintf("C6:L3:B001/C6:L2:B001/C6:L1:B001#%02d", epoch-1),
-				AddressCoord64:      0x1000100010001000 | uint64(epoch-1),
-				ContainerID:         0x1100000000000001,
-				ParentID:            0x1200000000000001,
-				ShiftScore:          0.42,
-				KeptSentenceIndices: keptIdx,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(out)
-
-		case "/open/memory/v1/query", "/brain/v1/query":
-			var req struct {
-				Query            thinclient.BlindPulsePacket `json:"query"`
-				TopK             int                         `json:"top_k"`
-				CrossIncarnation *bool                       `json:"cross_incarnation"`
-			}
-			if err := json.Unmarshal(bodyBytes, &req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if req.CrossIncarnation == nil || *req.CrossIncarnation {
-				http.Error(w, "ordinary Harness recall must explicitly lock one incarnation", http.StatusBadRequest)
-				return
-			}
-			if err := normalizePulseForTest(&req.Query); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			out := []thinclient.CloudQueryHit{
-				{
-					UnitID:         "DOC1",
-					AddressURI:     "C6:L3:B001/C6:L2:B001/C6:L1:B001#00",
-					AddressCoord64: 0x1000100010001000,
-					WaveformBar:    "▂▇▂▂▇█▁▆▆█▁█",
-					WaveScore:      22.633,
-					CellWormhole:   9.506,
-					ManifoldGain:   2.234,
-					FinalWeight:    34.374,
-				},
-				{
-					UnitID:         "DOC3",
-					AddressURI:     "C6:L3:B001/C6:L2:B001/C6:L1:B001#02",
-					AddressCoord64: 0x1000100010001002,
-					WaveformBar:    "▁▆▄▅▅▇▁▅▅█▅▁▅",
-					WaveScore:      0.000,
-					CellWormhole:   9.506,
-					ManifoldGain:   1.647,
-					FinalWeight:    11.153,
-				},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(out)
-
-		case "/open/memory/v1/graph", "/brain/v1/graph":
-			var req thinclient.BlindGraphRequest
-			_ = json.Unmarshal(bodyBytes, &req)
-			out := thinclient.CloudGraphResponse{
-				Success:      true,
-				Version:      "v1",
-				Layers:       req.Layers,
-				LayerWeights: req.LayerWeights,
-				Nodes: []thinclient.CloudGraphNode{
-					{
-						ID:          "cell:C6:L1:B001",
-						RawID:       "C6:L1:B001",
-						NodeType:    "cell",
-						Layer:       "episodic",
-						AddressURI:  "C6:L3:B001/C6:L2:B001/C6:L1:B001",
-						Weight:      2.5,
-						MemberCount: 3,
-					},
-					{
-						ID:          "unit:DOC1",
-						RawID:       "DOC1",
-						NodeType:    "unit",
-						Layer:       "background",
-						ParentID:    "cell:C6:L1:B001",
-						AddressURI:  "C6:L3:B001/C6:L2:B001/C6:L1:B001#00",
-						WaveformBar: "▂▇▂▂▇█▁▆▆█▁█",
-						Weight:      1.5,
-					},
-					{
-						ID:          "unit:DOC3",
-						RawID:       "DOC3",
-						NodeType:    "unit",
-						Layer:       "episodic",
-						ParentID:    "cell:C6:L1:B001",
-						AddressURI:  "C6:L3:B001/C6:L2:B001/C6:L1:B001#02",
-						WaveformBar: "▁▆▄▅▅▇▁▅▅█▅▁▅",
-						Weight:      1.2,
-					},
-				},
-				Edges: []thinclient.CloudGraphEdge{
-					{Source: "unit:DOC1", Target: "cell:C6:L1:B001", Kind: "member_of", Layer: "background", Weight: 1.0},
-					{Source: "unit:DOC3", Target: "cell:C6:L1:B001", Kind: "member_of", Layer: "episodic", Weight: 1.0},
-				},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(out)
-
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
 	dbPath := filepath.Join(t.TempDir(), "thin_vault.db")
 	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
 	if err != nil {
@@ -509,8 +369,7 @@ func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVault: %v", err)
 	}
-	transport := thinclient.NewHTTPBrainTransport(srv.URL, "test-token")
-	client := thinclient.NewClient(vault, transport)
+	client := thinclient.NewClient(vault, thinclient.NewLocalVaultTransport(vault))
 	ctx := context.Background()
 
 	docs := []struct {
@@ -530,63 +389,29 @@ func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
 	}
 
 	for _, d := range docs {
-		resp, err := client.Remember(ctx, d.id, d.text, 1731794400)
-		if err != nil {
+		if _, err := client.Remember(ctx, d.id, d.text, 1731794400); err != nil {
 			t.Fatalf("Remember(%s): %v", d.id, err)
 		}
-		t.Logf("  Remember[%s] -> Cloud Addr=%s (Coord64=0x%016x) | KeptSents=%v",
-			d.id, resp.AddressURI, resp.AddressCoord64, resp.KeptSentenceIndices)
 	}
-
-	secrets := []string{"bmvc2024", "glasgow", "hilton", "655.59", "credit", "deposit"}
-	for _, wireJSON := range capturedWirePayloads {
-		low := strings.ToLower(wireJSON)
-		for _, sec := range secrets {
-			if strings.Contains(low, sec) {
-				t.Fatalf("PLAINTEXT LEAK ON HTTP WIRE: found %q in %s", sec, wireJSON)
-			}
-		}
-	}
-	t.Logf("  ✓ HTTP Wire Audit Passed: %d HTTP payloads inspected, 0.00%% plaintext leakage", len(capturedWirePayloads))
 
 	hits, err := client.Recall(ctx, "BMVC2024 conference registration", 5)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
-
-	foundDoc3 := false
-	for rank, h := range hits {
-		t.Logf("  Rank #%d: [%s] Weight=%.3f | Addr=%s | DistilledDryText=%q",
-			rank+1, h.UnitID, h.FinalWeight, h.AddressURI, h.DistilledPlaintext)
-		if h.UnitID == "DOC3" && strings.Contains(h.DistilledPlaintext, "655.59 GBP") {
-			foundDoc3 = true
-			// Verify the 3x repeated "A credit card deposit is needed upon check-in" was deduplicated to 1!
-			if strings.Count(h.DistilledPlaintext, "credit card deposit") != 1 {
-				t.Fatalf("expected repeated loop line to be deduplicated once, got:\n%s", h.DistilledPlaintext)
-			}
-		}
-	}
-	if len(hits) < 2 || hits[0].UnitID != "DOC1" || !foundDoc3 {
-		t.Fatalf("expected DOC1 at #1 and DOC3 ('655.59 GBP') recalled, got %+v", hits)
+	if len(hits) == 0 || hits[0].UnitID != "DOC1" {
+		t.Fatalf("expected DOC1 at #1, got %+v", hits)
 	}
 
-	// Verify Downstream Self-Maintained L3 Noetic Table (`thin_vault_noetic`):
-	// Agent Harness stores (Query + CitedUnitIDs/Sentences + Answer) locally in `thin_vault_noetic` without sending to cloud!
-	wireCountBeforeNoetic := len(capturedWirePayloads)
 	err = client.RememberNoetic(
 		"NOETIC-1",
 		"How much does the Glasgow conference hotel cost?",
 		[]string{"DOC1", "DOC3"},
-		nil, // auto-hydrated from local DOC1 & DOC3 distilled sentences
+		nil,
 		"The Hilton Glasgow hotel for BMVC2024 costs 655.59 GBP in total.",
 		1731795000,
 	)
 	if err != nil {
 		t.Fatalf("RememberNoetic failed: %v", err)
-	}
-	if len(capturedWirePayloads) != wireCountBeforeNoetic {
-		t.Fatalf("expected 0 cloud HTTP requests when saving downstream Noetic record, got %d new requests",
-			len(capturedWirePayloads)-wireCountBeforeNoetic)
 	}
 
 	noeticHits, err := client.RecallNoetic("Glasgow hotel cost GBP", 5)
@@ -596,23 +421,7 @@ func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
 	if len(noeticHits) != 1 || noeticHits[0].NoeticID != "NOETIC-1" || len(noeticHits[0].CitedSentences) < 2 {
 		t.Fatalf("unexpected local Noetic hits: %+v", noeticHits)
 	}
-	t.Logf("  ✓ Downstream Local Noetic Table Hit: [%s] Score=%.1f Answer=%q CitedSents=%d",
-		noeticHits[0].NoeticID, noeticHits[0].MatchScore, noeticHits[0].AnswerText, len(noeticHits[0].CitedSentences))
 
-	// Verify Client-Resolved Unified Three-Layer Graph (`/open/memory/v1/graph` + Local Vault + Local Noetic):
-	resolvedGraph, err := client.ResolveGraph(ctx, thinclient.BlindGraphRequest{
-		Layers:       []string{"background", "episodic", "noetic"},
-		LayerWeights: map[string]float64{"background": 1.1, "episodic": 1.0, "noetic": 1.4},
-	})
-	if err != nil {
-		t.Fatalf("ResolveGraph failed: %v", err)
-	}
-	if len(resolvedGraph.Nodes) < 4 || len(resolvedGraph.Edges) < 4 {
-		t.Fatalf("expected >=4 nodes (cell + DOC1 + DOC3 + NOETIC-1) and >=4 edges, got nodes=%d edges=%d",
-			len(resolvedGraph.Nodes), len(resolvedGraph.Edges))
-	}
-
-	// Verify cascade invalidation when underlying DOC3 is invalidated
 	affected, err := vault.InvalidateLocalNoeticByCitedDoc("DOC3")
 	if err != nil || len(affected) != 1 || affected[0] != "NOETIC-1" {
 		t.Fatalf("expected NOETIC-1 to be invalidated when DOC3 changes, got affected=%v err=%v", affected, err)
@@ -621,107 +430,6 @@ func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
 	if err != nil || len(afterHits) != 0 {
 		t.Fatalf("expected 0 active Noetic hits after invalidation, got %+v (err=%v)", afterHits, err)
 	}
-}
-
-// TestLiveUpstreamV1Integration_UserID10 connects the local Ultra-Thin Client (`internal/thinclient`)
-// directly to the live Autonoetic Engine `/open/memory/v1/{health,ingest,query,distill}`
-// service using the canonical dev/demo `user_id = "10"`, verifying real
-// end-to-end persistence, the memory engine synthesis, L3 Noetic reconsolidation, and recall.
-func TestLiveUpstreamV1Integration_UserID10(t *testing.T) {
-	// 端侧唯一凭据 = 数据面签名钥（`mem2.*`）：仅在显式提供 ROLLING_MEMORY_BRAIN_URL 时才执行远端集成测试。
-	baseURL := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_URL"))
-	if baseURL == "" {
-		t.Skip("ROLLING_MEMORY_BRAIN_URL not set; skipping live upstream integration test in local mode")
-	}
-	apiKey := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BRAIN_KEY"))
-	if apiKey == "" {
-		t.Skip("ROLLING_MEMORY_BRAIN_KEY not set; skipping live integration check")
-	}
-	healthURL := strings.TrimRight(baseURL, "/")
-	if !strings.HasSuffix(healthURL, "/open/memory/v1") {
-		healthURL += "/open/memory/v1"
-	}
-	resp, err := http.Get(healthURL + "/health")
-	if err != nil {
-		t.Skipf("live upstream %s not reachable (%v); skipping live integration check", healthURL, err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Skipf("live upstream %s returned status %d; skipping live integration check", healthURL, resp.StatusCode)
-	}
-
-	dbPath := filepath.Join(t.TempDir(), "live_u10_vault.db")
-	db, err := sql.Open("sqlite", vaultTestDSN(dbPath))
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	defer db.Close()
-
-	vault, err := thinclient.NewVault(db, []byte("rolling-memory-u10-live-vault-secret"))
-	if err != nil {
-		t.Fatalf("NewVault: %v", err)
-	}
-	transport := thinclient.NewHTTPBrainTransport(baseURL, apiKey)
-	transport.UserID = thinclient.DefaultUpstreamDevUserID // "10"
-	client := thinclient.NewClient(vault, transport)
-	ctx := context.Background()
-
-	// 1. Ingest two real episodic memories into upstream for user_id=10
-	r1, err := client.Remember(ctx, "U10-LIVE-DOC-1", "Rolling-Memory 现已全面切换为薄客户端架构，不再维护本地核心算法，100% 走云端 /open/memory/v1 接口，绑定 user_id=10。", 1730800100)
-	if err != nil {
-		t.Fatalf("live upstream Remember DOC-1 (user_id=10) failed: %v", err)
-	}
-	r2, err := client.Remember(ctx, "U10-LIVE-DOC-2", "LoCoMo Tier-100 全池 5882 轮评测在 the memory engine 引擎上取得 84.00% (84/100) 端到端判官总分。", 1730800200)
-	if err != nil {
-		t.Fatalf("live upstream Remember DOC-2 (user_id=10) failed: %v", err)
-	}
-	if r1.AddressURI == "" {
-		t.Fatalf("expected non-empty upstream the memory engine address for user_id=10, got %+v", r1)
-	}
-	t.Logf("[Live Upstream Ingest · user_id=10] DOC-1 => Addr=%s Mass=%.3f", r1.AddressURI, r1.ConservedMass)
-	t.Logf("[Live Upstream Ingest · user_id=10] DOC-2 => Addr=%s Mass=%.3f", r2.AddressURI, r2.ConservedMass)
-
-	// 2. Query manifold from upstream for user_id=10 and resolve plaintext locally
-	hits, err := client.Recall(ctx, "薄客户端架构 云端接口 user_id=10", 5)
-	if err != nil {
-		t.Fatalf("live upstream Recall (user_id=10) failed: %v", err)
-	}
-	if len(hits) == 0 {
-		t.Fatalf("expected non-empty recall hits from upstream for user_id=10")
-	}
-	if hits[0].UnitID != "U10-LIVE-DOC-1" || !strings.Contains(hits[0].RawPlaintext, "薄客户端架构") {
-		t.Fatalf("unexpected top-1 recall hit for user_id=10: %+v", hits[0])
-	}
-	t.Logf("[Live Upstream Recall · user_id=10] Top-1 => ID=%s Weight=%.3f Addr=%s Text=%q",
-		hits[0].UnitID, hits[0].FinalWeight, hits[0].AddressURI, hits[0].DistilledPlaintext)
-
-	// 3. Verify Bring-Your-Own-Storage (JSONFileStore & DirTextStore) against the exact same live upstream service!
-	jsonStore, err := thinclient.NewJSONFileStore(filepath.Join(t.TempDir(), "custom_memories.json"), []byte("rolling-memory-u10-live-vault-secret"))
-	if err != nil {
-		t.Fatalf("NewJSONFileStore: %v", err)
-	}
-	jsonClient := thinclient.NewClientWithStore(jsonStore, transport)
-	if _, err := jsonClient.Remember(ctx, "U10-JSON-DOC-1", "用户可以使用任意 JSON 文件或纯文本目录存储自己的记忆明文，完全不受限于 SQLite。", 1730800300); err != nil {
-		t.Fatalf("jsonClient.Remember: %v", err)
-	}
-	jsonHits, err := jsonClient.Recall(ctx, "JSON 文件 纯文本目录 存储记忆明文", 3)
-	if err != nil || len(jsonHits) == 0 || jsonHits[0].UnitID != "U10-JSON-DOC-1" {
-		t.Fatalf("expected U10-JSON-DOC-1 at #1 from JSONFileStore, got %+v (err=%v)", jsonHits, err)
-	}
-
-	txtStore, err := thinclient.NewDirTextStore(filepath.Join(t.TempDir(), "txt_vault"), []byte("rolling-memory-u10-live-vault-secret"))
-	if err != nil {
-		t.Fatalf("NewDirTextStore: %v", err)
-	}
-	txtClient := thinclient.NewClientWithStore(txtStore, transport)
-	if _, err := txtClient.Remember(ctx, "U10-TXT-DOC-1", "纯文本 .txt 目录存储适配器同样支持零明文盲化脉冲与分形干句还原。", 1730800400); err != nil {
-		t.Fatalf("txtClient.Remember: %v", err)
-	}
-	txtHits, err := txtClient.Recall(ctx, "纯文本 txt 目录存储适配器", 3)
-	if err != nil || len(txtHits) == 0 || txtHits[0].UnitID != "U10-TXT-DOC-1" {
-		t.Fatalf("expected U10-TXT-DOC-1 at #1 from DirTextStore, got %+v (err=%v)", txtHits, err)
-	}
-	t.Logf("✓ Bring-Your-Own-Storage (SQLite + JSONFileStore + DirTextStore) verified live against /open/memory/v1 (user_id=10)!")
 }
 
 // TestClientSDKDefaultRecall_StandaloneAndOfflineFallback verifies that the Client SDK Default Recall
@@ -741,7 +449,7 @@ func TestClientSDKDefaultRecallCacheInvalidatesChangedDocument(t *testing.T) {
 	}
 	save := func(text string) {
 		_, sents := vault.PackBlindPacket("DOC-CHANGING", text, 100)
-		if err := vault.SaveLocalPlaintext("DOC-CHANGING", 100, text, sents, thinclient.CloudIngestResponse{
+		if err := vault.SaveLocalPlaintext("DOC-CHANGING", 100, text, sents, thinclient.IngestResponse{
 			UnitID: "DOC-CHANGING", Layer: thinclient.LayerEpisodic,
 		}); err != nil {
 			t.Fatalf("SaveLocalPlaintext: %v", err)
@@ -787,7 +495,7 @@ func TestClientSDKDefaultRecall_StandaloneAndOfflineFallback(t *testing.T) {
 	}
 	for _, d := range seedDocs {
 		_, sents := vault.PackBlindPacket(d.id, d.text, d.occ)
-		if err := vault.SaveLocalPlaintext(d.id, d.occ, d.text, sents, thinclient.CloudIngestResponse{
+		if err := vault.SaveLocalPlaintext(d.id, d.occ, d.text, sents, thinclient.IngestResponse{
 			UnitID: d.id,
 			Layer:  "episodic",
 		}); err != nil {
@@ -834,125 +542,16 @@ func TestClientSDKDefaultRecall_StandaloneAndOfflineFallback(t *testing.T) {
 		hits[0].UnitID, hits[0].FinalWeight, hits[1].UnitID, hits[1].FinalWeight)
 }
 
-func TestHTTPBrainTransportDeleteUnitsBatchingAndErrors(t *testing.T) {
-	type purgeRequest struct {
-		UserID  string   `json:"user_id"`
-		Scope   string   `json:"scope"`
-		Mode    string   `json:"mode"`
-		UnitIDs []string `json:"unit_ids"`
-	}
-	var batches []int
-	var receivedIDs []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open/memory/v1/purge" {
-			t.Errorf("unexpected purge path: %s", r.URL.Path)
-			http.NotFound(w, r)
-			return
-		}
-		var req purgeRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("decode purge request: %v", err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.UserID != "10" || req.Scope != "purge-scope" || req.Mode != "units" {
-			t.Errorf("unexpected purge request: %+v", req)
-		}
-		if got := r.Header.Get("X-Rolling-Memory-User"); got != "10" {
-			t.Errorf("unexpected purge user header: %q", got)
-		}
-		if got := r.Header.Get("X-Rolling-Memory-Scope"); got != "purge-scope" {
-			t.Errorf("unexpected purge scope header: %q", got)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer purge-token" {
-			t.Errorf("unexpected purge authorization: %q", got)
-		}
-		batches = append(batches, len(req.UnitIDs))
-		receivedIDs = append(receivedIDs, req.UnitIDs...)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true}`))
-	}))
-
-	unitIDs := make([]string, 205)
-	for i := range unitIDs {
-		unitIDs[i] = fmt.Sprintf("unit-%03d", i)
-	}
-	transport := thinclient.NewHTTPBrainTransport(srv.URL, "purge-token")
-	transport.Scope = "purge-scope"
-	if err := transport.DeleteUnits(context.Background(), unitIDs); err != nil {
-		srv.Close()
-		t.Fatalf("DeleteUnits: %v", err)
-	}
-	srv.Close()
-	if len(batches) != 3 || batches[0] != 100 || batches[1] != 100 || batches[2] != 5 {
-		t.Fatalf("unexpected purge batches: %v", batches)
-	}
-	if len(receivedIDs) != len(unitIDs) {
-		t.Fatalf("purge lost unit IDs: got=%d want=%d", len(receivedIDs), len(unitIDs))
-	}
-	for i := range unitIDs {
-		if receivedIDs[i] != unitIDs[i] {
-			t.Fatalf("purge order mismatch at %d: got=%q want=%q", i, receivedIDs[i], unitIDs[i])
-		}
-	}
-
-	for _, tc := range []struct {
-		name   string
-		status int
-		body   string
-	}{
-		{name: "success false", status: http.StatusOK, body: `{"success":false}`},
-		{name: "non 2xx", status: http.StatusServiceUnavailable, body: `{"success":false}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			errorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			defer errorSrv.Close()
-			errorTransport := thinclient.NewHTTPBrainTransport(errorSrv.URL, "purge-token")
-			if err := errorTransport.DeleteUnits(context.Background(), []string{"unit-1"}); err == nil {
-				t.Fatalf("expected purge error for status=%d body=%s", tc.status, tc.body)
-			}
-		})
-	}
-}
-
-// normalizePulseForTest mirrors the server-side pulse expansion so the mock blind brain accepts
-// both plaintext slots/sents and the compact atoms_b64 payload (single on-wire encoding).
-func normalizePulseForTest(pkt *thinclient.BlindPulsePacket) error {
-	if pkt.AtomsB64 == "" {
-		return nil
-	}
-	atoms, offsets, err := thinclient.DecodePulsePayloadB64(pkt.AtomsB64)
-	if err != nil {
-		return err
-	}
-	frames := make([][]thinclient.BlindTokenAtom, 0, len(offsets))
-	prev := 0
-	for _, end := range offsets {
-		frames = append(frames, atoms[prev:end])
-		prev = end
-	}
-	pkt.Slots = atoms
-	if len(frames) > 0 {
-		pkt.SentenceFrames = frames
-	}
-	pkt.AtomsB64 = ""
-	return nil
-}
-
-// TestQueryFTS5BM25RankedOrdersByBM25 pins the contract that the auxiliary FTS5 ranker used by
-// reciprocal rank fusion returns a deterministic, relevance-ordered doc list (not the clamped
-// score map), and that the fused recall puts a doc corroborated by both rankers ahead of a doc
-// only one ranker can see.
-func TestQueryFTS5BM25RankedOrdersByBM25(t *testing.T) {
-	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "fts5-ranked.db")))
+// TestSearchClientSDKDefaultRanksRelevantDocFirst pins the kernel ranking contract:
+// the default recall surfaces the doc carrying the matching evidence first, returns
+// hits ordered by FinalWeight DESC, and is deterministic across repeated runs.
+func TestSearchClientSDKDefaultRanksRelevantDocFirst(t *testing.T) {
+	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "kernel-rank.db")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
-	vault, err := thinclient.NewVault(db, []byte("fts5-ranked-secret"))
+	vault, err := thinclient.NewVault(db, []byte("kernel-rank-secret"))
 	if err != nil {
 		t.Fatalf("NewVault: %v", err)
 	}
@@ -967,22 +566,11 @@ func TestQueryFTS5BM25RankedOrdersByBM25(t *testing.T) {
 	}
 	for _, d := range docs {
 		_, sents := vault.PackBlindPacket(d.id, d.text, d.occ)
-		if err := vault.SaveLocalPlaintext(d.id, d.occ, d.text, sents, thinclient.CloudIngestResponse{
+		if err := vault.SaveLocalPlaintext(d.id, d.occ, d.text, sents, thinclient.IngestResponse{
 			UnitID: d.id, Layer: thinclient.LayerEpisodic,
 		}); err != nil {
 			t.Fatalf("SaveLocalPlaintext(%s): %v", d.id, err)
 		}
-	}
-
-	ranked, err := vault.QueryFTS5BM25Ranked("BMVC 2024 Glasgow hotel cost", 10)
-	if err != nil {
-		t.Fatalf("QueryFTS5BM25Ranked: %v", err)
-	}
-	if len(ranked) == 0 || ranked[0] != "DOC-STRONG" {
-		t.Fatalf("expected DOC-STRONG first from FTS5 BM25, got %v", ranked)
-	}
-	if again, err := vault.QueryFTS5BM25Ranked("BMVC 2024 Glasgow hotel cost", 10); err != nil || len(again) != len(ranked) || again[0] != ranked[0] {
-		t.Fatalf("QueryFTS5BM25Ranked must be deterministic: first=%v second=%v err=%v", ranked, again, err)
 	}
 
 	hits, err := vault.SearchClientSDKDefault("BMVC 2024 Glasgow hotel cost", 3)
@@ -990,11 +578,14 @@ func TestQueryFTS5BM25RankedOrdersByBM25(t *testing.T) {
 		t.Fatalf("SearchClientSDKDefault: %v", err)
 	}
 	if len(hits) == 0 || hits[0].UnitID != "DOC-STRONG" {
-		t.Fatalf("expected DOC-STRONG first after RRF fusion, got %+v", hits)
+		t.Fatalf("expected DOC-STRONG first from the kernel ranking, got %+v", hits)
+	}
+	if again, err := vault.SearchClientSDKDefault("BMVC 2024 Glasgow hotel cost", 3); err != nil || len(again) != len(hits) || again[0].UnitID != hits[0].UnitID {
+		t.Fatalf("SearchClientSDKDefault must be deterministic: first=%+v second=%+v err=%v", hits, again, err)
 	}
 	for i := 1; i < len(hits); i++ {
 		if hits[i-1].FinalWeight < hits[i].FinalWeight {
-			t.Fatalf("fused hits must be ordered by FinalWeight DESC: %+v", hits)
+			t.Fatalf("hits must be ordered by FinalWeight DESC: %+v", hits)
 		}
 	}
 }

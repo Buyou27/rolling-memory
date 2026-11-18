@@ -278,7 +278,8 @@ func writeEvalTaskItemRowsOn(db *gorm.DB, runID string, items []EvalQuestionResu
 					"recall_ms", "delivered_tokens", "delivered_items", "total_ms", "payload", "create_time"
 				) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				runID, seq, item.ID, item.Category, correct, evidenceHit, item.QSScore,
-				item.EngineTransport, item.EngineScope, item.CloudHits,
+				// 列名 "cloud_hits" 为跨版本数据兼容保留的历史键名（现值为本地检索命中数）。
+				item.EngineTransport, item.EngineScope, item.LocalHits,
 				item.RecallMS, item.DeliveredTokens, item.DeliveredItems, item.TotalMS, string(payload), now,
 			).Error; err != nil {
 				return fmt.Errorf("写入逐题明细失败（第 %d 题）: %w", seq, err)

@@ -725,3 +725,63 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 		t.Fatalf("all 窗口层归属：ep=%d bg=%d, want 2/3", wins["all"].EpisodicAdded, wins["all"].BackgroundAdded)
 	}
 }
+
+func TestROIFactsTopCitedUnitsIncludesReusedNoeticL3(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	memDB, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowUnix := time.Now().Unix()
+	if _, err := memDB.Exec(`
+		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
+		CREATE TABLE thin_vault_docs (
+			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
+			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
+		);
+		CREATE TABLE thin_vault_noetic (
+			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, inserted_at INTEGER, status TEXT,
+			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
+			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
+			assistant_id TEXT, incarnation_id TEXT
+		);
+		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memDB.Exec(`INSERT INTO thin_vault_docs VALUES ('ep_leaf_1', 'episodic', ?, ?, 'leaf evidence text', '["leaf evidence text"]', 'C6:L1:LOCAL#01', '', '[0]', 'Rolling-Memory')`, nowUnix-300, nowUnix-300); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memDB.Exec(`INSERT INTO thin_vault_noetic VALUES ('nt_gold_1', ?, ?, 'active', 'first recall cue', 'crystallized answer one', '["ep_leaf_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt1', '', 'zcode', 'inc1')`, nowUnix-60, nowUnix-180); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memDB.Exec(`INSERT INTO thin_vault_noetic VALUES ('nt_followup_2', ?, ?, 'active', 'second recall cue', 'crystallized answer two', '["ep_leaf_1","nt_gold_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt2', '', 'zcode', 'inc2')`, nowUnix-10, nowUnix-10); err != nil {
+		t.Fatal(err)
+	}
+	_ = memDB.Close()
+
+	got := queryROIFacts(context.Background(), path, roiFactsRequest{Scope: "mem:self"})
+	if got.Vault == nil {
+		t.Fatal("expected vault bundle")
+	}
+	byUnit := map[string]roiTopCitedUnit{}
+	for _, u := range got.TopCitedUnits {
+		byUnit[u.UnitID] = u
+	}
+	ntUnit, ok := byUnit["nt_gold_1"]
+	if !ok {
+		t.Fatalf("expected reused L3 Noetic unit nt_gold_1 in TopCitedUnits, got %+v", got.TopCitedUnits)
+	}
+	if ntUnit.Layer != "noetic" {
+		t.Fatalf("nt_gold_1 layer = %q, want noetic", ntUnit.Layer)
+	}
+	if ntUnit.Locus != "Rolling-Memory" {
+		t.Fatalf("nt_gold_1 locus = %q, want Rolling-Memory", ntUnit.Locus)
+	}
+	if ntUnit.CitationCount < 2 {
+		t.Fatalf("nt_gold_1 citation_count = %d, want >= 2 (re-consolidated + cited by nt_followup_2)", ntUnit.CitationCount)
+	}
+	if !strings.Contains(ntUnit.FullText, "first recall cue") || !strings.Contains(ntUnit.FullText, "crystallized answer one") {
+		t.Fatalf("unexpected nt_gold_1 full_text: %q", ntUnit.FullText)
+	}
+}

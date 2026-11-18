@@ -51,9 +51,6 @@ scope_from_workspace = true
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !cfg.Cloud.ScopeFromWorkspace {
-		t.Fatalf("ScopeFromWorkspace = false, want true")
-	}
 	if cfg.Scope != "Rolling-Memory" {
 		t.Fatalf("derived scope = %q, want Rolling-Memory", cfg.Scope)
 	}

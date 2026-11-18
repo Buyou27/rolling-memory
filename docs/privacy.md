@@ -17,7 +17,7 @@ This is not a policy promise: it is enforced by the architecture (the memory com
 | Local master key / vault metadata | Same local vault (directory `0700`, file `0600`) | **0** |
 | Recall indexes (SQLite FTS5 `trigram` + BM25) | Same local vault | **0** |
 
-- **Local mode is the default and the only mode in this release**: no cloud account, no registration, no background upload, no analytics, no crash reporting, no telemetry.
+- **This release is 100% local**: no cloud account, no registration, no background upload, no analytics, no crash reporting, no telemetry.
 - **Historical audience restrictions**: Do not rely on `private` labels or `reader=deliverable` to protect sensitive content across all sources. Review recall results before sharing them or sending them to a model.
 
 ---
@@ -87,11 +87,17 @@ go test ./...                                   # public suite: zero-plaintext /
 
 ---
 
-## 6. Cloud Capability Preview (Application-Based)
+## 6. Cloud Capability Preview (Application-Based · Advanced & Enterprise)
 
-Rolling Memory's cloud memory engine (the Rolling Autonoetic Memory Engine) is a separate capability that will open progressively on an **application basis**; online registration is closed. Email [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn) to apply (support: [support@psychologylake.org.cn](mailto:support@psychologylake.org.cn)). It is not part of this release: this release is pure local mode, and onboarding details are shared with approved applicants.
+The local plane in this repository is the complete, source-available product. Beyond it, a separate **cloud memory service** is offered on an **application basis** for advanced individual users and enterprise teams; it is not part of this release, and nothing here requires it.
 
-Because 100% of your raw data stays in your local vault, there is **zero vendor lock-in** at any point. We remain fully open to open-sourcing the cloud core engine once the team achieves sustainable backing — the full stance is in [DECLARATION.md](../DECLARATION.md).
+What the cloud capability stands for, at product level:
+
+- **Ciphertext-only by design**: everything that travels toward the cloud service is irreversibly encoded on your device first — **plaintext never leaves the local vault**, not even to the service itself;
+- **Stronger retrieval power**: the cloud plane adds higher-order retrieval operators and cross-device continuity that go beyond the on-device plane;
+- **Application-based onboarding**: online registration is closed; access is arranged by application.
+
+Because 100% of your raw data stays in your local vault, there is **zero vendor lock-in** at any point: the local plane remains complete on its own, and the cloud capability is purely additive. Email [pick@psychologylake.org.cn](mailto:pick@psychologylake.org.cn) to apply (support: [support@psychologylake.org.cn](mailto:support@psychologylake.org.cn)). Implementation details of the cloud plane are not published.
 
 ---
 

@@ -175,15 +175,15 @@ func (s *Store) AppendAssertion(req AppendAssertionRequest) (map[string]any, err
 		}
 	}
 
-	subjectKey := ids.KeyForNodeOrLiteral(derefID(req.SubjectID), derefString(subjectLiteralValue))
-	objectKey := ids.KeyForNodeOrLiteral(derefID(req.ObjectID), derefString(objectLiteralValue))
+	subjectKey := ids.KeyForNodeOrLiteral(derefString(req.SubjectID), derefString(subjectLiteralValue))
+	objectKey := ids.KeyForNodeOrLiteral(derefString(req.ObjectID), derefString(objectLiteralValue))
 	identity := ids.AssertionHash(ids.AssertionHashParts{
 		Scope:           req.Scope,
 		SubjectKey:      subjectKey,
 		RelID:           req.RelID,
 		ObjectKey:       objectKey,
 		Bare:            req.Bare,
-		HolderID:        derefID(req.HolderID),
+		HolderID:        derefString(req.HolderID),
 		Warrant:         req.Warrant,
 		AnchorTraceHash: req.AnchorTraceHash,
 		Audience:        effectiveAudience,
@@ -411,7 +411,7 @@ func (s *Store) recordConflicts(
 			continue
 		}
 		existingKey := ids.KeyForNodeOrLiteral(
-			derefID(mapPtrString(row, "object_id")),
+			derefString(mapPtrString(row, "object_id")),
 			mapString(row, "object_literal"),
 		)
 		if existingKey == objectKey {
@@ -484,13 +484,6 @@ func presentID(value *string) bool {
 
 func reqScopeOr(scope string) string {
 	return scope
-}
-
-func derefID(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func derefString(value *string) string {

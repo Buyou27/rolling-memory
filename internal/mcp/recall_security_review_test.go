@@ -47,7 +47,7 @@ func TestRecallDeliverySecurity(t *testing.T) {
 					}
 					text := "[user] quartz nebula evidence"
 					packet, _ := client.Vault.PackBlindPacket("ep_security", text, testNow)
-					if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_security", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+					if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_security", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 						t.Fatal(err)
 					}
 					if scenario == "unavailable" {
@@ -106,7 +106,7 @@ func TestRecallDeliveryReportsUpstreamTextTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := "quartz nebula evidence " + strings.Repeat("filler ", 1000)
-	if err := client.Vault.SaveLocalPlaintext("ep_long", testNow, text, nil, thinclient.CloudIngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("ep_long", testNow, text, nil, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())

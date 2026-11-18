@@ -42,18 +42,22 @@ const (
 	UserScope = "default"
 	// LegacyUserScope 历史默认记忆作用域（兼容存量数据联读）
 	LegacyUserScope = "mem:self"
-	// EvalScope LoCoMo 云端评测专属作用域，与真实用户数据物理隔离。
+	// EvalScope LoCoMo 评测专属作用域基名，与真实用户数据物理隔离；
+	// 现役评测 scope = 基名 + `-local-plain`（本地明文通道，见 evalScopeForSuite）。
 	EvalScope = "u10-mem-eval-locomo"
-	// 评测传输标识与对应模式一一绑定。
-	evalCloudTransport      = "ramesdk.pulse_cipher.open-memory-v1"
-	evalPulsePlainTransport = "ramesdk.pulse_plain.open-memory-v1"
+	// 评测传输标识：现役唯一合法值 = 本地明文离线通道（与 rmem internal/eval 的
+	// LocalPlainTransport 逐字同源）；两个历史脉冲通道取值只用于读取旧制品（只读兼容白名单），
+	// 本版本绝不再写出。
 	evalLocalPlainTransport = "ramesdk.local_plain.offline-v1"
-	// 三种 100% 对称独立注册的评测臂（脉冲密文 / 脉冲明文 / 本地明文）+ Oracle 金标上限。
-	EvalArmSDKPulseCipher = "sdk-pulse-cipher"
-	EvalArmSDKPulsePlain  = "sdk-pulse-plain"
-	EvalArmSDKLocalPlain  = "sdk-local-plain"
-	EvalArmOracle         = "oracle"
-
+	legacyCipherTransport   = "ramesdk.pulse_cipher.open-memory-v1"
+	legacyPlainTransport    = "ramesdk.pulse_plain.open-memory-v1"
+	// 现役唯一评测臂 = 本地明文（sdk-local-plain），另加 Oracle 金标上限诊断臂。
+	EvalArmSDKLocalPlain = "sdk-local-plain"
+	EvalArmOracle        = "oracle"
+	// 历史（已停用）脉冲臂与脉冲模式名：只读兼容取值（读取旧台账 / 旧制品时识别，
+	// 并据此 fail-closed 明确拒收），本版本不再产出、不再执行。
+	EvalArmSDKPulseCipher    = "sdk-pulse-cipher"
+	EvalArmSDKPulsePlain     = "sdk-pulse-plain"
 	EvalPulseModePulseCipher = "pulse_cipher"
 	EvalPulseModePulsePlain  = "pulse_plain"
 	EvalPulseModeLocalPlain  = "local_plain"
@@ -338,15 +342,14 @@ type EvalATMProtocolResponse struct {
 // EvalOverviewResponse 测评概览响应：含同表双域隔离、语料/协议溯源、基线、历史运行、AI 配置与题集。
 type EvalOverviewResponse struct {
 	Suite string `json:"suite"`
-	// Mode 是记忆引擎运行模式（local | cloud）：local 模式下评测只开放 local_plain 臂，
-	// 脉冲臂的协议与 SDK 实现保留供下一代接入（前端据此隐藏脉冲选项）。
+	// Mode 是评测运行模式：本版本恒为 local（本地明文通道，零脉冲 · 零云端请求）。
 	Mode string `json:"mode"`
 	// DBPath 为旧前端保留，值与 StorePath 相同。
 	// Deprecated: 新消费方使用 StorePath；这里是 JSON 明文金库而非 SQLite。
 	DBPath          string                  `json:"db_path"`
 	StorePath       string                  `json:"store_path"`
 	Readiness       EvalReadiness           `json:"readiness"`
-	Manifest        *EvalCloudManifest      `json:"manifest,omitempty"`
+	Manifest        *EvalManifest           `json:"manifest,omitempty"`
 	EvalDataDir     string                  `json:"eval_data_dir"`
 	CorpusTotalRows int                     `json:"corpus_total_rows"`
 	UserCounts      ScopeTableCounts        `json:"user_counts"`
@@ -499,16 +502,16 @@ type EvalQuestionResultItem struct {
 	// oracle 金标臂的历史口径。引擎自身是 raw-first（internal/eval/scoring.go:118），此键用于显式标注
 	// 交付序差异，避免读侧口径漂移。
 	ContextOrdering string `json:"context_ordering,omitempty"`
-	// 逐题引擎 provenance（评测模块自持的证据标签；远端服务只提供 scope × layer 的通用能力）：
+	// 逐题引擎 provenance（评测模块自持的证据标签；引擎只按 scope × layer 返回通用能力）：
 	//   - EngineTransport / EngineScope / EngineUpstream / LocalFallback 取自严格 recall 的 meta；
-	//   - CloudHits 本次云端命中数，RetrievalUnitIDs 本次交付的 Unit ID（用于与 /units 全集复算）；
+	//   - LocalHits 本次本地检索命中数（JSON 键名 cloud_hits 为跨版本契约），RetrievalUnitIDs 本次交付的 Unit ID；
 	//   - CorpusSHA256 本套件语料 manifest 摘要（只读；缺失时留空，不阻断评测）。
 	// 历史明细缺这些键时前端按未知渲染，不臆造。
 	EngineTransport  string   `json:"engine_transport,omitempty"`
 	EngineScope      string   `json:"engine_scope,omitempty"`
 	EngineUpstream   string   `json:"engine_upstream,omitempty"`
 	LocalFallback    *bool    `json:"local_fallback,omitempty"`
-	CloudHits        int      `json:"cloud_hits,omitempty"`
+	LocalHits        int      `json:"cloud_hits,omitempty"`
 	RetrievalUnitIDs []string `json:"retrieval_unit_ids,omitempty"`
 	CorpusSHA256     string   `json:"corpus_sha256,omitempty"`
 	// L0-3c 实际送入冻结答题载荷的交付计数（与未截断原始召回计数 Bands/Nodes/RawHits 对照）：
@@ -1588,9 +1591,11 @@ func resolveMemoryDBPath(home string) string {
 	return filepath.Join(home, ".local", "share", "rolling-memory", "memory.db")
 }
 
-// EvalCloudManifest 是 rmem eval 写入 <store>.manifest.json 的云端语料回执。
+// EvalManifest 是 rmem eval 写入 <store>.manifest.json 的语料回执。结构体名与 JSON 键名
+// （transport / endpoint / tenant_id / user_id / pulse_mode / ...）为跨版本数据兼容保持不变；
+// 本版本只接受本地明文通道的 manifest（transport/endpoint 均指向本地金库）。
 // LocalFallback 使用指针，确保字段缺失与显式 false 不会被混为一谈。
-type EvalCloudManifest struct {
+type EvalManifest struct {
 	Transport     string `json:"transport"`
 	Endpoint      string `json:"endpoint"`
 	TenantID      string `json:"tenant_id"`
@@ -1601,23 +1606,24 @@ type EvalCloudManifest struct {
 	CorpusSHA256  string `json:"corpus_sha256"`
 	Documents     int    `json:"documents"`
 	LocalFallback *bool  `json:"local_fallback"`
-	// PurgedUnits 是本次重算在重灌前清空的旧记忆条数（rebuild 口径按 /units 权威全集分批删除）；
+	// PurgedUnits 是本次重算在重灌前清空的旧记忆条数（rebuild 口径按本 store 权威全集清点删除）；
 	// 0 = 该 scope 原本为空或走的是复用/续灌路径。
 	PurgedUnits int `json:"purged_units,omitempty"`
 }
 
-// EvalReadiness 描述 manifest 与严格云端探针的当前状态。
+// EvalReadiness 描述 manifest 与本地严格探针的当前状态。
 type EvalReadiness struct {
-	Ready         bool               `json:"ready"`
-	Suite         string             `json:"suite"`
-	Scope         string             `json:"scope"`
-	StorePath     string             `json:"store_path"`
-	ManifestValid bool               `json:"manifest_valid"`
-	ProbeChecked  bool               `json:"probe_checked"`
-	CloudHits     int                `json:"cloud_hits"`
-	Error         string             `json:"error,omitempty"`
-	CheckedAt     string             `json:"checked_at,omitempty"`
-	Manifest      *EvalCloudManifest `json:"-"`
+	Ready         bool   `json:"ready"`
+	Suite         string `json:"suite"`
+	Scope         string `json:"scope"`
+	StorePath     string `json:"store_path"`
+	ManifestValid bool   `json:"manifest_valid"`
+	ProbeChecked  bool   `json:"probe_checked"`
+	// LocalHits 本 store 已有语料条数（JSON 键名 cloud_hits 为前端存量契约，跨版本兼容保留）。
+	LocalHits int           `json:"cloud_hits"`
+	Error     string        `json:"error,omitempty"`
+	CheckedAt string        `json:"checked_at,omitempty"`
+	Manifest  *EvalManifest `json:"-"`
 }
 
 type evalReadinessCacheEntry struct {
@@ -1642,11 +1648,11 @@ const (
 const evalIngestTimeout = 60 * time.Minute
 
 var (
-	cloudEvalCommand = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	evalCLICommand = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(ctx, bin, args...)
-		// 与 sync/background/recall 同口径：本地模式零外呼（剥离继承的 BRAIN 覆盖变量），
-		// 云端模式注入数据面凭据；评测臂（local_plain / pulse_*）自身的传输选择不变。
-		cmd.Env, _ = brainChildEnv(ctx)
+		// 子进程零云端覆盖变量：剥离可能从宿主继承的 BRAIN 端点/密钥（评测全程本地明文通道，
+		// 只读本地隔离 store；评测 LLM 通道由 answer/judge 的显式 HTTP 客户端承担，不在此子进程）。
+		cmd.Env = stripCloudBrainEnv(os.Environ())
 		out, err := cmd.Output()
 		if err != nil {
 			var exitErr *exec.ExitError
@@ -1662,37 +1668,21 @@ var (
 	evalPrepareLocks     = map[evalPrepareKey]*sync.Mutex{}
 )
 
+// evalPulseModeFromArm 归一化请求携带的评测臂 / 脉冲模式为现役唯一脉冲模式（local_plain）。
+// 历史脉冲臂取值保留可识别（供只读台账与明确拒收），但不改变归一化结果。
 func evalPulseModeFromArm(armMode, pulseMode string) string {
-	for _, raw := range []string{pulseMode, armMode} {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case EvalPulseModePulsePlain, EvalArmSDKPulsePlain:
-			return EvalPulseModePulsePlain
-		case EvalPulseModeLocalPlain, EvalArmSDKLocalPlain:
-			return EvalPulseModeLocalPlain
-		case EvalPulseModePulseCipher, EvalArmSDKPulseCipher:
-			return EvalPulseModePulseCipher
-		}
-	}
+	_ = armMode
+	_ = pulseMode
 	return EvalPulseModeLocalPlain
 }
 
 func evalScopeForSuite(suite string) string {
-	return evalScopeForSuiteAndMode(suite, EvalPulseModeLocalPlain)
-}
-
-func evalScopeForSuiteAndMode(suite, pulseMode string) string {
 	base := EvalScope
 	if normalizeSuite(suite) == SuiteATM {
 		base = ATMEvalScope
 	}
-	switch evalPulseModeFromArm("", pulseMode) {
-	case EvalPulseModePulsePlain:
-		return base + "-pulse-plain"
-	case EvalPulseModeLocalPlain:
-		return base + "-local-plain"
-	default:
-		return base
-	}
+	// 现役唯一评测通道 = 本地明文：scope 恒带 -local-plain 后缀（与 rmem internal/eval 同源）。
+	return base + "-local-plain"
 }
 
 // evalScopeSuiteModeGeneration 解析评测 scope 的 (suite, pulseMode, generation, ok)：
@@ -1752,36 +1742,28 @@ func evalScopeGeneration(scope string) string {
 	return gen
 }
 
-func evalScopePulseMode(scope string) string {
-	_, mode, _, ok := evalScopeSuiteModeGeneration(scope)
-	if !ok {
-		return EvalPulseModePulseCipher
-	}
-	return mode
-}
-
 // currentEvalScope 返回本 store 当前世代的 scope（manifest 是唯一真源）；
-// 尚未 prepare 时退回评测命名空间的基名（仅作展示/兼容字段，不代表已有云端语料）。
+// 尚未 prepare 时退回本地明文硬名的评测 scope（仅作展示/兼容字段，不代表已有语料）。
 func currentEvalScope(storePath, suite string) string {
-	if manifest, err := readCloudEvalManifest(storePath, suite); err == nil {
+	if manifest, err := readEvalManifest(storePath, suite); err == nil {
 		return manifest.Scope
 	}
-	return evalScopeForSuiteAndMode(suite, evalPulseModeFromStorePath(storePath))
+	return evalScopeForSuite(suite)
 }
 
+// normalizeEvalArm 归一化评测臂：现役只支持本地明文（sdk-local-plain，默认）与 oracle 金标上限诊断臂。
+// 历史脉冲臂名（sdk-pulse-cipher / sdk-pulse-plain）与兼容档位臂（zero / pro / max / ...）一律显式拒收。
 func normalizeEvalArm(armMode string) (string, error) {
 	arm := strings.ToLower(strings.TrimSpace(armMode))
 	switch arm {
 	case "", EvalArmSDKLocalPlain, EvalPulseModeLocalPlain:
 		return EvalArmSDKLocalPlain, nil
-	case EvalArmSDKPulseCipher, EvalPulseModePulseCipher:
-		return EvalArmSDKPulseCipher, nil
-	case EvalArmSDKPulsePlain, EvalPulseModePulsePlain:
-		return EvalArmSDKPulsePlain, nil
 	case EvalArmOracle:
 		return EvalArmOracle, nil
+	case EvalArmSDKPulseCipher, EvalArmSDKPulsePlain, EvalPulseModePulseCipher, EvalPulseModePulsePlain:
+		return "", fmt.Errorf("评测臂 %q 已停用：本版本评测只走本地明文通道（零脉冲 · 零云端请求），仅支持 sdk-local-plain（默认）或 oracle", armMode)
 	default:
-		return "", fmt.Errorf("评测臂 %q 非法；仅支持 sdk-local-plain（本地明文，默认）、sdk-pulse-cipher（脉冲密文，S2 试用）、sdk-pulse-plain（脉冲明文，S3 试用）或 oracle", armMode)
+		return "", fmt.Errorf("评测臂 %q 非法；仅支持 sdk-local-plain（本地明文，默认）或 oracle", armMode)
 	}
 }
 
@@ -1789,10 +1771,6 @@ func validateEvalRunRequest(req evalRunRequest) (string, error) {
 	rawArm := req.ArmMode
 	if strings.TrimSpace(rawArm) == "" && strings.TrimSpace(req.PulseMode) != "" {
 		rawArm = req.PulseMode
-	}
-	armMode, err := normalizeEvalArm(rawArm)
-	if err != nil {
-		return "", err
 	}
 	if strings.TrimSpace(req.Profile) != "" || strings.TrimSpace(req.NoeticMode) != "" {
 		return "", errors.New("profile/noetic_mode 为旧版字段，当前版本不再接受；请移除后重试")
@@ -1821,105 +1799,63 @@ func validateEvalRunRequest(req evalRunRequest) (string, error) {
 			return "", fmt.Errorf("未知 LoCoMo 档位 %q：仅支持 100 / 200 / 1540", req.Tier)
 		}
 	}
-	// 题集/档位契约校验优先；随后才是本地模式的评测臂闸（纯本地只开放 local_plain）。
-	if err := localPlainEvalArmError(evalPulseModeFromArm(armMode, req.PulseMode)); err != nil {
-		return "", err
-	}
-	return armMode, nil
+	// 题集/档位契约校验优先；随后才是评测臂闸（现役只开放本地明文臂）。
+	return normalizeEvalArm(rawArm)
 }
 
-// localPlainEvalArmError 在本地模式拒绝脉冲评测臂（纯本地发布面：零脉冲 · 零云端请求）。
-// 脉冲臂的协议、SDK 与引擎实现完整保留（cloud 模式既有路径不变），供下一代接入。
-func localPlainEvalArmError(pulseMode string) error {
-	if evalPulseModeFromArm("", pulseMode) == EvalPulseModeLocalPlain || !isLocalModeForHome(userHome()) {
-		return nil
-	}
-	return fmt.Errorf("本地模式仅支持 local_plain 评测臂（纯本地 · 零脉冲 · 零云端请求）；%s 需切换到 cloud 模式（脉冲协议与 SDK 实现保留，供下一代接入）", pulseMode)
-}
-
-// resolveEvalDBPathForSuite 返回默认 local_plain 臂的 suite 专属 JSON store。
+// resolveEvalDBPathForSuite 返回套件专属的本地明文评测 JSON store（跨版本路径保持不变）。
 func resolveEvalDBPathForSuite(home, suite string) string {
-	return resolveEvalDBPathForSuiteAndMode(home, suite, EvalPulseModeLocalPlain)
-}
-
-func resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode string) string {
 	base := "eval-locomo"
 	if normalizeSuite(suite) == SuiteATM {
 		base = "eval-atm"
 	}
-	switch evalPulseModeFromArm("", pulseMode) {
-	case EvalPulseModePulsePlain:
-		base += "-pulse-plain"
-	case EvalPulseModeLocalPlain:
-		base += "-local-plain"
-	}
-	return filepath.Join(home, ".local", "state", "rolling-memory", "eval", base+".json")
+	return filepath.Join(home, ".local", "state", "rolling-memory", "eval", base+"-local-plain.json")
 }
 
-func evalPulseModeFromStorePath(storePath string) string {
-	base := strings.ToLower(filepath.Base(strings.TrimSpace(storePath)))
-	switch {
-	case strings.Contains(base, "-pulse-plain"):
-		return EvalPulseModePulsePlain
-	case strings.Contains(base, "-local-plain"):
-		return EvalPulseModeLocalPlain
-	default:
-		return EvalPulseModePulseCipher
-	}
+// evalTransportForMode 返回评测传输标签：现役唯一通道 = 本地明文离线通道，
+// 故任何输入都返回本地标签（历史脉冲通道只作只读白名单，绝不产出）。
+func evalTransportForMode(_ string) string {
+	return evalLocalPlainTransport
 }
 
-func evalTransportForMode(pulseMode string) string {
-	switch pulseMode {
-	case EvalPulseModeLocalPlain:
-		return evalLocalPlainTransport
-	case EvalPulseModePulsePlain:
-		return evalPulsePlainTransport
-	case EvalPulseModePulseCipher:
-		return evalCloudTransport
-	default:
-		return ""
-	}
+// evalEndpointMatchesMode 判定评测端点是否为本地金库标识（现役唯一形态 local://...）。
+func evalEndpointMatchesMode(endpoint, _ string) bool {
+	return strings.HasPrefix(strings.TrimSpace(endpoint), "local://")
 }
 
-func evalEndpointMatchesMode(endpoint, pulseMode string) bool {
-	if pulseMode == EvalPulseModeLocalPlain {
-		return strings.HasPrefix(endpoint, "local://")
-	}
-	return (strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://")) && strings.Contains(endpoint, "/open/memory/v1")
-}
-
-func readCloudEvalManifest(storePath, suite string) (EvalCloudManifest, error) {
-	var manifest EvalCloudManifest
+// readEvalManifest 读取并校验本 store 的语料回执：只接受本地明文通道的 manifest
+// （transport / endpoint / pulse_mode 三处都必须指向本地金库，历史脉冲通道 fail-closed 拒绝）。
+func readEvalManifest(storePath, suite string) (EvalManifest, error) {
+	var manifest EvalManifest
 	raw, err := os.ReadFile(storePath + ".manifest.json")
 	if err != nil {
 		return manifest, err
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return manifest, fmt.Errorf("解析云端评测 manifest 失败: %w", err)
+		return manifest, fmt.Errorf("解析评测 manifest 失败: %w", err)
 	}
 	expectedSuite := normalizeSuite(suite)
-	expectedMode := evalPulseModeFromStorePath(storePath)
-	expectedTransport := evalTransportForMode(expectedMode)
-	if manifest.Transport != expectedTransport {
-		return manifest, fmt.Errorf("manifest.transport 必须为 %s", expectedTransport)
+	if manifest.Transport != evalLocalPlainTransport {
+		return manifest, fmt.Errorf("manifest.transport 必须为 %s（现役唯一评测通道 = 本地明文）", evalLocalPlainTransport)
 	}
-	if manifest.PulseMode != expectedMode {
-		return manifest, fmt.Errorf("manifest.pulse_mode=%q 与评测 store 模式 %q 不符", manifest.PulseMode, expectedMode)
+	if manifest.PulseMode != EvalPulseModeLocalPlain {
+		return manifest, fmt.Errorf("manifest.pulse_mode=%q 必须为 %s", manifest.PulseMode, EvalPulseModeLocalPlain)
 	}
 	if manifest.Suite != expectedSuite {
 		return manifest, fmt.Errorf("manifest.suite=%q 与请求 suite=%q 不符", manifest.Suite, expectedSuite)
 	}
-	// scope 必须同时匹配套件与 store 模式；世代号不限具体取值。
+	// scope 必须同时匹配套件与本地明文通道；世代号不限具体取值。
 	scopeSuite, scopeMode, _, ok := evalScopeSuiteModeGeneration(manifest.Scope)
-	if !ok || scopeSuite != expectedSuite || scopeMode != expectedMode {
-		return manifest, fmt.Errorf("manifest.scope=%q 与套件 %s 或模式 %s 不符", manifest.Scope, expectedSuite, expectedMode)
+	if !ok || scopeSuite != expectedSuite || scopeMode != EvalPulseModeLocalPlain {
+		return manifest, fmt.Errorf("manifest.scope=%q 与套件 %s 或本地明文通道不符", manifest.Scope, expectedSuite)
 	}
 	if manifest.LocalFallback == nil || *manifest.LocalFallback {
 		return manifest, errors.New("manifest.local_fallback 必须显式为 false")
 	}
-	if !evalEndpointMatchesMode(manifest.Endpoint, expectedMode) {
-		return manifest, fmt.Errorf("manifest.endpoint 与评测模式 %s 不符", expectedMode)
+	if !evalEndpointMatchesMode(manifest.Endpoint, EvalPulseModeLocalPlain) {
+		return manifest, errors.New("manifest.endpoint 必须是本地金库标识（local://...）")
 	}
+	// tenant_id / user_id 是本地评测隔离身份（与 scope 前缀 u10 同源），不代表任何云端账号。
 	if manifest.TenantID != "user" || manifest.UserID != "10" || manifest.Documents <= 0 {
 		return manifest, errors.New("manifest 必须匹配 tenant_id=user、user_id=10 且 documents 必须为正数")
 	}
@@ -1935,7 +1871,9 @@ func readCloudEvalManifest(storePath, suite string) (EvalCloudManifest, error) {
 	return manifest, nil
 }
 
-func validateCloudRecallMeta(recallRaw map[string]any, expectedScope string) error {
+// validateLocalRecallMeta 校验严格 recall 的 meta 块：传输 / 脉冲模式 / scope / 端点 / 隔离身份
+// 必须与本地明文通道一致（历史脉冲通道的 meta 一律 fail-closed 拒绝）。
+func validateLocalRecallMeta(recallRaw map[string]any, expectedScope string) error {
 	metaValue, ok := recallRaw["meta"]
 	if !ok {
 		return errors.New("recall.meta 缺失")
@@ -1944,18 +1882,17 @@ func validateCloudRecallMeta(recallRaw map[string]any, expectedScope string) err
 	if !ok {
 		return errors.New("recall.meta 必须是对象")
 	}
-	_, pulseMode, _, ok := evalScopeSuiteModeGeneration(expectedScope)
-	if !ok || asString(meta["engine_transport"]) != evalTransportForMode(pulseMode) {
-		return errors.New("recall.meta.engine_transport 与 scope 模式不匹配")
+	if asString(meta["engine_transport"]) != evalLocalPlainTransport {
+		return fmt.Errorf("recall.meta.engine_transport 必须为 %s", evalLocalPlainTransport)
 	}
-	if mode, ok := meta["pulse_mode"].(string); !ok || mode != pulseMode {
-		return errors.New("recall.meta.pulse_mode 与 scope 模式不匹配")
+	if mode, ok := meta["pulse_mode"].(string); !ok || mode != EvalPulseModeLocalPlain {
+		return fmt.Errorf("recall.meta.pulse_mode 必须为 %s", EvalPulseModeLocalPlain)
 	}
 	if asString(meta["engine_scope"]) != expectedScope {
 		return fmt.Errorf("recall.meta.engine_scope=%q 与专属 scope=%q 不符", asString(meta["engine_scope"]), expectedScope)
 	}
-	if !evalEndpointMatchesMode(asString(meta["engine_upstream"]), pulseMode) {
-		return errors.New("recall.meta.engine_upstream 与 scope 模式不匹配")
+	if !evalEndpointMatchesMode(asString(meta["engine_upstream"]), EvalPulseModeLocalPlain) {
+		return errors.New("recall.meta.engine_upstream 必须是本地金库标识（local://...）")
 	}
 	if asString(meta["tenant_id"]) != "user" {
 		return errors.New("recall.meta.tenant_id 必须为 user")
@@ -1974,7 +1911,9 @@ func validateCloudRecallMeta(recallRaw map[string]any, expectedScope string) err
 	return nil
 }
 
-func validateCloudEvalRawHits(recallRaw map[string]any, suite string, atmUnits map[string]atmEvalUnit) ([]string, error) {
+// validateEvalRawHits 校验 raw_hits 与命中计数（键名 cloud_hits 为跨版本契约，
+// 现值即本次本地检索命中数），并返回去重后的 UnitID 列表。
+func validateEvalRawHits(recallRaw map[string]any, suite string, atmUnits map[string]atmEvalUnit) ([]string, error) {
 	rawValue, ok := recallRaw["raw_hits"]
 	if !ok {
 		return nil, errors.New("recall.raw_hits 缺失")
@@ -1984,17 +1923,17 @@ func validateCloudEvalRawHits(recallRaw map[string]any, suite string, atmUnits m
 		return nil, errors.New("recall.raw_hits 必须是数组")
 	}
 	meta, _ := recallRaw["meta"].(map[string]any)
-	cloudHitsValue, ok := meta["cloud_hits"]
+	hitCountValue, ok := meta["cloud_hits"]
 	if !ok {
 		return nil, errors.New("recall.meta.cloud_hits 缺失")
 	}
-	switch cloudHitsValue.(type) {
+	switch hitCountValue.(type) {
 	case float64, int, int64:
 	default:
 		return nil, errors.New("recall.meta.cloud_hits 必须是数字")
 	}
-	if cloudHits := asInt(cloudHitsValue); cloudHits != len(rawHits) {
-		return nil, fmt.Errorf("recall.meta.cloud_hits=%d 与 raw_hits=%d 不一致", cloudHits, len(rawHits))
+	if hitCount := asInt(hitCountValue); hitCount != len(rawHits) {
+		return nil, fmt.Errorf("recall.meta.cloud_hits=%d 与 raw_hits=%d 不一致", hitCount, len(rawHits))
 	}
 	unitIDs := make([]string, 0, len(rawHits))
 	seen := make(map[string]struct{}, len(rawHits))
@@ -2010,7 +1949,7 @@ func validateCloudEvalRawHits(recallRaw map[string]any, suite string, atmUnits m
 			return nil, fmt.Errorf("recall.raw_hits[%d] 的 unit_id/session/trace 必须同为非空 UnitID", index)
 		}
 		if _, exists := seen[unitID]; exists {
-			return nil, fmt.Errorf("云端返回重复 UnitID %q", unitID)
+			return nil, fmt.Errorf("评测引擎返回重复 UnitID %q", unitID)
 		}
 		seen[unitID] = struct{}{}
 		if normalizeSuite(suite) == SuiteATM {
@@ -2018,7 +1957,7 @@ func validateCloudEvalRawHits(recallRaw map[string]any, suite string, atmUnits m
 				return nil, errors.New("ATM UnitID 映射未加载")
 			}
 			if _, exists := atmUnits[unitID]; !exists {
-				return nil, fmt.Errorf("云端返回未知 ATM UnitID %q", unitID)
+				return nil, fmt.Errorf("评测引擎返回未知 ATM UnitID %q", unitID)
 			}
 		}
 		unitIDs = append(unitIDs, unitID)
@@ -2026,11 +1965,11 @@ func validateCloudEvalRawHits(recallRaw map[string]any, suite string, atmUnits m
 	return unitIDs, nil
 }
 
-// runStrictCloudEvalRecall 走 rmem 的严格云端 recall。scope 一律取自本 store 的 manifest
-// 世代（每次新评测自动分配独立 scope），不再用固定 scope 常量。
-func runStrictCloudEvalRecall(ctx context.Context, bin, storePath, suite, query string, topK int, atmUnits map[string]atmEvalUnit) (map[string]any, []string, error) {
+// runLocalEvalRecall 走 rmem 的本地明文严格 recall（本地隔离 store + 离线双簇检索，零云端请求）。
+// scope 一律取自本 store 的 manifest 世代（每次新评测自动分配独立 scope），不再用固定 scope 常量。
+func runLocalEvalRecall(ctx context.Context, bin, storePath, suite, query string, topK int, atmUnits map[string]atmEvalUnit) (map[string]any, []string, error) {
 	if strings.TrimSpace(query) == "" {
-		return nil, nil, errors.New("云端评测 recall 需要非空查询")
+		return nil, nil, errors.New("本地评测 recall 需要非空查询")
 	}
 	if topK <= 0 {
 		topK = 96
@@ -2038,7 +1977,7 @@ func runStrictCloudEvalRecall(ctx context.Context, bin, storePath, suite, query 
 			topK = 50
 		}
 	}
-	manifest, err := readCloudEvalManifest(storePath, suite)
+	manifest, err := readEvalManifest(storePath, suite)
 	if err != nil {
 		return nil, nil, fmt.Errorf("评测语料未 prepare（无法确定本 store 的评测世代 scope）: %w", err)
 	}
@@ -2047,10 +1986,10 @@ func runStrictCloudEvalRecall(ctx context.Context, bin, storePath, suite, query 
 	// 会话损坏（管道断/序号错位）回退一次性 fork 路径重试同一查询，两腿响应结构同构。
 	if warm := warmEvalRecallSessionFrom(ctx); warm != nil {
 		if recallRaw, warmErr := warm.recall(query, topK); warmErr == nil {
-			if err := validateCloudRecallMeta(recallRaw, scope); err != nil {
+			if err := validateLocalRecallMeta(recallRaw, scope); err != nil {
 				return nil, nil, err
 			}
-			unitIDs, err := validateCloudEvalRawHits(recallRaw, suite, atmUnits)
+			unitIDs, err := validateEvalRawHits(recallRaw, suite, atmUnits)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2064,15 +2003,13 @@ func runStrictCloudEvalRecall(ctx context.Context, bin, storePath, suite, query 
 	var out []byte
 	var err2 error
 	for attempt := 1; attempt <= 3; attempt++ {
-		out, err2 = cloudEvalCommand(ctx, bin, args...)
+		out, err2 = evalCLICommand(ctx, bin, args...)
 		if err2 == nil || ctx.Err() != nil {
 			break
 		}
 		errMsg := err2.Error() + " " + string(out)
 		if !strings.Contains(errMsg, "signal: terminated") &&
 			!strings.Contains(errMsg, "signal: killed") &&
-			!strings.Contains(errMsg, "HTTP 429") &&
-			!strings.Contains(errMsg, "HTTP 503") &&
 			!strings.Contains(errMsg, "connection reset") {
 			break
 		}
@@ -2081,25 +2018,25 @@ func runStrictCloudEvalRecall(ctx context.Context, bin, storePath, suite, query 
 	if err2 != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail != "" {
-			return nil, nil, fmt.Errorf("云端 recall 失败: %w: %s", err2, detail)
+			return nil, nil, fmt.Errorf("本地 recall 失败: %w: %s", err2, detail)
 		}
-		return nil, nil, fmt.Errorf("云端 recall 失败: %w", err2)
+		return nil, nil, fmt.Errorf("本地 recall 失败: %w", err2)
 	}
 	var recallRaw map[string]any
 	if err := json.Unmarshal(out, &recallRaw); err != nil {
-		return nil, nil, fmt.Errorf("解析云端 recall JSON 失败: %w", err)
+		return nil, nil, fmt.Errorf("解析 recall JSON 失败: %w", err)
 	}
-	if err := validateCloudRecallMeta(recallRaw, scope); err != nil {
+	if err := validateLocalRecallMeta(recallRaw, scope); err != nil {
 		return nil, nil, err
 	}
-	unitIDs, err := validateCloudEvalRawHits(recallRaw, suite, atmUnits)
+	unitIDs, err := validateEvalRawHits(recallRaw, suite, atmUnits)
 	if err != nil {
 		return nil, nil, err
 	}
 	return recallRaw, unitIDs, nil
 }
 
-func readinessForManifest(manifest EvalCloudManifest, storePath string) EvalReadiness {
+func readinessForManifest(manifest EvalManifest, storePath string) EvalReadiness {
 	return EvalReadiness{
 		Suite: manifest.Suite, Scope: manifest.Scope, StorePath: storePath,
 		ManifestValid: true, Manifest: &manifest,
@@ -2146,13 +2083,13 @@ func parseEvalCLIVerifyFailure(out []byte, execErr error) *evalVerifyFailure {
 	return failure
 }
 
-func probeCloudEvalStore(ctx context.Context, bin, storePath, suite, query string, atmUnits map[string]atmEvalUnit) (EvalReadiness, error) {
+func probeLocalEvalStore(ctx context.Context, bin, storePath, suite, query string, atmUnits map[string]atmEvalUnit) (EvalReadiness, error) {
 	_ = query
 	_ = atmUnits
-	manifest, err := readCloudEvalManifest(storePath, suite)
+	manifest, err := readEvalManifest(storePath, suite)
 	if err != nil {
 		return EvalReadiness{
-			Suite: normalizeSuite(suite), Scope: evalScopeForSuiteAndMode(suite, evalPulseModeFromStorePath(storePath)), StorePath: storePath,
+			Suite: normalizeSuite(suite), Scope: evalScopeForSuite(suite), StorePath: storePath,
 			Error: err.Error(), CheckedAt: time.Now().Format(time.RFC3339),
 		}, err
 	}
@@ -2164,7 +2101,7 @@ func probeCloudEvalStore(ctx context.Context, bin, storePath, suite, query strin
 		dataDir = resolveATMDataDir(home, "")
 		tier = "hard"
 	}
-	out, err := cloudEvalCommand(ctx, bin, buildCloudEvalVerifyArgs(suite, tier, storePath, dataDir)...)
+	out, err := evalCLICommand(ctx, bin, buildEvalVerifyArgs(suite, tier, storePath, dataDir)...)
 	readiness.ProbeChecked = true
 	readiness.CheckedAt = time.Now().Format(time.RFC3339)
 	if err != nil {
@@ -2180,7 +2117,7 @@ func probeCloudEvalStore(ctx context.Context, bin, storePath, suite, query strin
 		cacheEvalReadiness(readiness)
 		return readiness, fmt.Errorf("解析 verify-prepare 回执失败: %w", err)
 	}
-	if err := validateCloudPrepareVerification(verification, readiness.Scope); err != nil {
+	if err := validateEvalPrepareVerification(verification, readiness.Scope); err != nil {
 		readiness.Error = err.Error()
 		cacheEvalReadiness(readiness)
 		return readiness, err
@@ -2193,16 +2130,16 @@ func probeCloudEvalStore(ctx context.Context, bin, storePath, suite, query strin
 		return readiness, err
 	}
 	readiness.Ready = true
-	readiness.CloudHits = manifest.Documents
+	readiness.LocalHits = manifest.Documents
 	cacheEvalReadiness(readiness)
 	return readiness, nil
 }
 
-func inspectCloudEvalReadiness(ctx context.Context, bin, storePath, suite, query string, atmUnits map[string]atmEvalUnit, force bool) (EvalReadiness, error) {
-	manifest, err := readCloudEvalManifest(storePath, suite)
+func inspectLocalEvalReadiness(ctx context.Context, bin, storePath, suite, query string, atmUnits map[string]atmEvalUnit, force bool) (EvalReadiness, error) {
+	manifest, err := readEvalManifest(storePath, suite)
 	if err != nil {
 		return EvalReadiness{
-			Suite: normalizeSuite(suite), Scope: evalScopeForSuiteAndMode(suite, evalPulseModeFromStorePath(storePath)), StorePath: storePath,
+			Suite: normalizeSuite(suite), Scope: evalScopeForSuite(suite), StorePath: storePath,
 			Error: err.Error(), CheckedAt: time.Now().Format(time.RFC3339),
 		}, err
 	}
@@ -2245,7 +2182,7 @@ func inspectCloudEvalReadiness(ctx context.Context, bin, storePath, suite, query
 							}()
 							bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 							defer cancel()
-							_, _ = probeCloudEvalStore(bgCtx, b, sp, su, q, units)
+							_, _ = probeLocalEvalStore(bgCtx, b, sp, su, q, units)
 						}(bin, storePath, suite, query, atmUnits)
 					}
 					evalReadinessCacheMu.Unlock()
@@ -2259,7 +2196,7 @@ func inspectCloudEvalReadiness(ctx context.Context, bin, storePath, suite, query
 			}
 		}
 	}
-	return probeCloudEvalStore(ctx, bin, storePath, suite, query, atmUnits)
+	return probeLocalEvalStore(ctx, bin, storePath, suite, query, atmUnits)
 }
 
 func evalPreparationMutex(suite, storePath string) *sync.Mutex {
@@ -2274,7 +2211,7 @@ func evalPreparationMutex(suite, storePath string) *sync.Mutex {
 	return mu
 }
 
-func buildCloudEvalPrepareArgs(suite, tier, storePath, dataDir string, rebuild bool) []string {
+func buildEvalPrepareArgs(suite, tier, storePath, dataDir string, rebuild bool) []string {
 	suite = normalizeSuite(suite)
 	if suite == SuiteATM {
 		tier = normalizeATMTier(tier)
@@ -2285,8 +2222,8 @@ func buildCloudEvalPrepareArgs(suite, tier, storePath, dataDir string, rebuild b
 	if suite == SuiteATM {
 		args = append(args, "--suite", "atm")
 	}
-	pulseMode := evalPulseModeFromStorePath(storePath)
-	args = append(args, "--pulse-mode", pulseMode)
+	// 现役唯一评测通道 = 本地明文；显式传参（引擎缺省同为 local_plain）。
+	args = append(args, "--pulse-mode", EvalPulseModeLocalPlain)
 	args = append(args,
 		"--tier", tier, "--limit", "1", "--answerer", "none", "--judge", "off", "--json",
 	)
@@ -2296,18 +2233,17 @@ func buildCloudEvalPrepareArgs(suite, tier, storePath, dataDir string, rebuild b
 	return args
 }
 
-func buildCloudEvalVerifyArgs(suite, tier, storePath, dataDir string) []string {
-	args := buildCloudEvalPrepareArgs(suite, tier, storePath, dataDir, false)
+func buildEvalVerifyArgs(suite, tier, storePath, dataDir string) []string {
+	args := buildEvalPrepareArgs(suite, tier, storePath, dataDir, false)
 	return append(args, "--verify-prepare")
 }
 
-func validateCloudPrepareVerification(payload map[string]any, expectedScope string) error {
+func validateEvalPrepareVerification(payload map[string]any, expectedScope string) error {
 	if verified, ok := payload["verified"].(bool); !ok || !verified {
 		return errors.New("verify-prepare 未返回 verified=true")
 	}
-	_, pulseMode, _, ok := evalScopeSuiteModeGeneration(expectedScope)
-	if !ok || asString(payload["transport"]) != evalTransportForMode(pulseMode) {
-		return errors.New("verify-prepare transport 与 scope 模式不匹配")
+	if asString(payload["transport"]) != evalLocalPlainTransport {
+		return fmt.Errorf("verify-prepare transport 必须为 %s（现役唯一评测通道 = 本地明文）", evalLocalPlainTransport)
 	}
 	engine, _ := payload["engine"].(map[string]any)
 	actualScope := asString(payload["scope"])
@@ -2320,35 +2256,35 @@ func validateCloudPrepareVerification(payload map[string]any, expectedScope stri
 	if fallback, ok := payload["local_fallback"].(bool); !ok || fallback {
 		return errors.New("verify-prepare.local_fallback 必须显式为 false")
 	}
-	if mode, ok := engine["pulse_mode"].(string); !ok || mode != pulseMode {
-		return errors.New("verify-prepare.engine.pulse_mode 与 scope 模式不匹配")
+	if mode, ok := engine["pulse_mode"].(string); !ok || mode != EvalPulseModeLocalPlain {
+		return fmt.Errorf("verify-prepare.engine.pulse_mode 必须为 %s", EvalPulseModeLocalPlain)
 	}
 	if asString(engine["tenant_id"]) != "user" || asString(engine["user_id"]) != "10" {
 		return errors.New("verify-prepare tenant/user 不匹配")
 	}
-	if !evalEndpointMatchesMode(asString(engine["endpoint"]), pulseMode) {
-		return errors.New("verify-prepare endpoint 与 scope 模式不匹配")
+	if !evalEndpointMatchesMode(asString(engine["endpoint"]), EvalPulseModeLocalPlain) {
+		return errors.New("verify-prepare endpoint 必须是本地金库标识（local://...）")
 	}
 	return nil
 }
 
-func prepareCloudEvalStore(ctx context.Context, bin, home, suite, tier, storePath, dataDir, probeQuery string, atmUnits map[string]atmEvalUnit, rebuild bool) (EvalReadiness, error) {
+func prepareLocalEvalStore(ctx context.Context, bin, home, suite, tier, storePath, dataDir, probeQuery string, atmUnits map[string]atmEvalUnit, rebuild bool) (EvalReadiness, error) {
 	mu := evalPreparationMutex(suite, storePath)
 	mu.Lock()
 	defer mu.Unlock()
 
 	if !rebuild {
-		readiness, err := probeCloudEvalStore(ctx, bin, storePath, suite, probeQuery, atmUnits)
+		readiness, err := probeLocalEvalStore(ctx, bin, storePath, suite, probeQuery, atmUnits)
 		if err == nil && readiness.Ready {
 			return readiness, nil
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			// 确定性语料失配（manifest 摘要/scope/条数与当前语料不符）：复用已不可能，
 			// CLI 的 Prepare 走 repair + 断点续灌自愈重灌，继续本动作而非卡死。
-			// 其余失效（网络/健康检查/需 --rebuild 的契约变更）保持 fail-closed 不重灌。
+			// 其余失效（进程被杀/需 --rebuild 的契约变更）保持 fail-closed 不重灌。
 			var verifyErr *evalVerifyFailure
 			if !errors.As(err, &verifyErr) || verifyErr.code != evalVerifyCodeManifestMismatch {
-				return readiness, fmt.Errorf("云端评测 prepare 失败，未触发重灌: %w", err)
+				return readiness, fmt.Errorf("本地评测 prepare 失败，未触发重灌: %w", err)
 			}
 		}
 	}
@@ -2360,8 +2296,8 @@ func prepareCloudEvalStore(ctx context.Context, bin, home, suite, tier, storePat
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
 		attemptRebuild := rebuild && attempt == 1
-		args := buildCloudEvalPrepareArgs(suite, tier, storePath, dataDir, attemptRebuild)
-		out, err = cloudEvalCommand(ctx, bin, args...)
+		args := buildEvalPrepareArgs(suite, tier, storePath, dataDir, attemptRebuild)
+		out, err = evalCLICommand(ctx, bin, args...)
 		if err == nil || ctx.Err() != nil {
 			break
 		}
@@ -2376,18 +2312,18 @@ func prepareCloudEvalStore(ctx context.Context, bin, home, suite, tier, storePat
 		return EvalReadiness{Suite: normalizeSuite(suite), Scope: evalScopeForSuite(suite), StorePath: storePath, Error: err.Error()},
 			fmt.Errorf("rmem eval prepare 失败: %w: %s", err, detail)
 	}
-	readiness, err := probeCloudEvalStore(ctx, bin, storePath, suite, probeQuery, atmUnits)
+	readiness, err := probeLocalEvalStore(ctx, bin, storePath, suite, probeQuery, atmUnits)
 	if err != nil {
 		return readiness, fmt.Errorf("prepare 后严格探针失败: %w", err)
 	}
 	if !readiness.Ready {
-		return readiness, errors.New("prepare 后严格探针仍未返回云端语料")
+		return readiness, errors.New("prepare 后严格探针仍未返回本地评测语料")
 	}
 	return readiness, nil
 }
 
-func requireCloudEvalManifestForSingle(storePath, suite string) (EvalCloudManifest, error) {
-	manifest, err := readCloudEvalManifest(storePath, suite)
+func requireEvalManifestForSingle(storePath, suite string) (EvalManifest, error) {
+	manifest, err := readEvalManifest(storePath, suite)
 	if err != nil {
 		return manifest, fmt.Errorf("评测语料未 prepare，single 模式不会自动 ingest: %w", err)
 	}
@@ -2476,8 +2412,7 @@ func evalOverviewHandler(c *gin.Context) {
 	}
 
 	home, _ := os.UserHomeDir()
-	pulseMode := evalPulseModeFromArm(req.ArmMode, req.PulseMode)
-	storePath := resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode)
+	storePath := resolveEvalDBPathForSuite(home, suite)
 	dataDir := resolveEvalDataDir(home)
 	scope := currentEvalScope(storePath, suite)
 	userCounts := ScopeTableCounts{}
@@ -2550,7 +2485,7 @@ func evalOverviewHandler(c *gin.Context) {
 	if len(allQuestions) > 0 {
 		probeQuery = allQuestions[0].Question
 	}
-	manifest, manifestErr := readCloudEvalManifest(storePath, suite)
+	manifest, manifestErr := readEvalManifest(storePath, suite)
 	if manifestErr != nil {
 		readiness.Error = manifestErr.Error()
 	} else {
@@ -2568,7 +2503,7 @@ func evalOverviewHandler(c *gin.Context) {
 		if bin == "" {
 			readiness.Error = "未找到 rolling-memory 引擎二进制"
 		} else {
-			readiness, _ = inspectCloudEvalReadiness(c.Request.Context(), bin, storePath, suite, probeQuery, atmUnits, false)
+			readiness, _ = inspectLocalEvalReadiness(c.Request.Context(), bin, storePath, suite, probeQuery, atmUnits, false)
 		}
 	}
 	if readiness.Manifest != nil {
@@ -2577,7 +2512,7 @@ func evalOverviewHandler(c *gin.Context) {
 
 	httpx.Success(c, httpx.WithData(EvalOverviewResponse{
 		Suite:           suite,
-		Mode:            rollingModeForHome(home),
+		Mode:            modeLocal,
 		DBPath:          storePath,
 		StorePath:       storePath,
 		Readiness:       readiness,
@@ -2625,12 +2560,12 @@ func evalIngestHandler(c *gin.Context) {
 	}
 	suite := normalizeSuite(req.Suite)
 	home, _ := os.UserHomeDir()
-	pulseMode := evalPulseModeFromArm(req.ArmMode, req.PulseMode)
-	if err := localPlainEvalArmError(pulseMode); err != nil {
-		httpx.Fail(c, httpx.WithCode(http.StatusBadRequest), httpx.WithMessage(err.Error()))
+	// 现役唯一评测通道 = 本地明文：脉冲臂名一律在任何外部动作之前 fail-closed 拒收。
+	if _, armErr := normalizeEvalArm(firstNonEmptyStr(req.ArmMode, req.PulseMode)); armErr != nil {
+		httpx.Fail(c, httpx.WithCode(http.StatusBadRequest), httpx.WithMessage(armErr.Error()))
 		return
 	}
-	storePath := resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode)
+	storePath := resolveEvalDBPathForSuite(home, suite)
 	dataDir := resolveEvalDataDir(home)
 	bin := resolveBinary(home)
 	if bin == "" {
@@ -2674,9 +2609,9 @@ func evalIngestHandler(c *gin.Context) {
 	defer cancel()
 	var readiness EvalReadiness
 	if action == "verify" {
-		readiness, err = probeCloudEvalStore(workCtx, bin, storePath, suite, probeQuery, atmUnits)
+		readiness, err = probeLocalEvalStore(workCtx, bin, storePath, suite, probeQuery, atmUnits)
 	} else {
-		readiness, err = prepareCloudEvalStore(workCtx, bin, home, suite, tier, storePath, dataDir, probeQuery, atmUnits, action == "rebuild")
+		readiness, err = prepareLocalEvalStore(workCtx, bin, home, suite, tier, storePath, dataDir, probeQuery, atmUnits, action == "rebuild")
 	}
 	if err != nil {
 		// 客户端可能已断开（长时 ingest 常见），错误必须同时进服务端日志，否则只剩一个丢失的响应体。
@@ -2684,9 +2619,9 @@ func evalIngestHandler(c *gin.Context) {
 		httpx.Fail(c, httpx.WithMessage(err.Error()))
 		return
 	}
-	log.Printf("[eval] ingest %s suite=%s elapsed=%s ready=%v documents=%d", action, suite, time.Since(startedAt).Round(time.Millisecond), readiness.Ready, readiness.CloudHits)
+	log.Printf("[eval] ingest %s suite=%s elapsed=%s ready=%v documents=%d", action, suite, time.Since(startedAt).Round(time.Millisecond), readiness.Ready, readiness.LocalHits)
 	if action == "prepare" || action == "rebuild" {
-		recordEvalIngestTelemetry(suite, pulseMode, time.Since(startedAt).Milliseconds())
+		recordEvalIngestTelemetry(suite, time.Since(startedAt).Milliseconds())
 	}
 	httpx.Success(c, httpx.WithData(gin.H{
 		"suite":       suite,
@@ -2782,7 +2717,7 @@ func manifestCorpusDigest(storePath string) string {
 	if ok && cached.size == info.Size() && cached.modTime.Equal(info.ModTime()) {
 		return cached.digest
 	}
-	var manifest EvalCloudManifest
+	var manifest EvalManifest
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil || json.Unmarshal(raw, &manifest) != nil {
 		return ""
@@ -2796,7 +2731,7 @@ func manifestCorpusDigest(storePath string) string {
 }
 
 // applyRecallProvenance 把严格 recall 的 meta / Unit ID / 语料摘要写到逐题明细。
-// 这是评测模块自己的证据标签，远端服务不参与：远端服务只按 tenant/scope 返回通用 Unit 集合，
+// 这是评测模块自己的证据标签，引擎不参与：引擎只按 scope 返回通用 Unit 集合，
 // 不使用也不理解任何评测字段。
 func applyRecallProvenance(item *EvalQuestionResultItem, recallRaw map[string]any, unitIDs []string, storePath string) {
 	if item == nil {
@@ -2815,8 +2750,9 @@ func applyRecallProvenance(item *EvalQuestionResultItem, recallRaw map[string]an
 		if fallback, ok := meta["local_fallback"].(bool); ok {
 			item.LocalFallback = &fallback
 		}
+		// JSON 键名 cloud_hits 为跨版本契约，现值即本次本地检索命中数。
 		if _, ok := meta["cloud_hits"]; ok {
-			item.CloudHits = asInt(meta["cloud_hits"])
+			item.LocalHits = asInt(meta["cloud_hits"])
 		}
 		if recallMS := asInt(meta["recall_ms"]); recallMS > 0 {
 			item.RecallMS = int64(recallMS)
@@ -2829,7 +2765,7 @@ func applyRecallProvenance(item *EvalQuestionResultItem, recallRaw map[string]an
 }
 
 // countDeliveredTokens 计算单题实际交付上下文的 tokenz-r Token 数：
-//   - 优先累加 CLI runCloudEvalRecall 用 internal/tokenzr.Count 精确算出的 raw_hits[i]["tokens"]（前 deliveredCount 条）；
+//   - 优先累加 CLI 评测 recall 路径用 tokenz-r 精确算出的 raw_hits[i]["tokens"]（前 deliveredCount 条）；
 //   - 若为 Oracle 模式或旧产物无逐条 tokens 字段，则按 tokenz-r 128k 词表同源密度计算。
 func countDeliveredTokens(recallRaw map[string]any, deliveredCount int, fallbackText string) int {
 	if recallRaw != nil && deliveredCount > 0 {
@@ -2919,7 +2855,7 @@ func computeDeliveryTelemetry(items []EvalQuestionResultItem) (avgRecallMS, p95R
 	return
 }
 
-// markOracleProvenance Oracle 臂只使用金标证据，不属于任何云端引擎成绩；
+// markOracleProvenance Oracle 臂只使用金标证据，不属于任何引擎检索成绩；
 // 仍显式标注 transport/scope/local_fallback，避免前端把空字段误读成证据缺失。
 func markOracleProvenance(item *EvalQuestionResultItem, scope string, hits int, storePath string) {
 	if item == nil {
@@ -2930,7 +2866,7 @@ func markOracleProvenance(item *EvalQuestionResultItem, scope string, hits int, 
 	item.EngineUpstream = "oracle-gold"
 	fallback := false
 	item.LocalFallback = &fallback
-	item.CloudHits = hits
+	item.LocalHits = hits
 	item.CorpusSHA256 = manifestCorpusDigest(storePath)
 }
 
@@ -3133,33 +3069,33 @@ var (
 	evalIngestTelemetryMS = map[string]int64{}
 )
 
-func evalIngestTelemetryPath(suite, pulseMode string) string {
+func evalIngestTelemetryPath(suite string) string {
 	home, _ := os.UserHomeDir()
-	return resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode) + ".ingest-telemetry.json"
+	return resolveEvalDBPathForSuite(home, suite) + ".ingest-telemetry.json"
 }
 
-// recordEvalIngestTelemetry 记录一次语料导入耗时（键 = suite|pulseMode，写穿至磁盘）。
-func recordEvalIngestTelemetry(suite, pulseMode string, ms int64) {
+// recordEvalIngestTelemetry 记录一次语料导入耗时（键 = suite，写穿至磁盘）。
+func recordEvalIngestTelemetry(suite string, ms int64) {
 	if ms <= 0 {
 		return
 	}
 	evalIngestTelemetryMu.Lock()
 	defer evalIngestTelemetryMu.Unlock()
-	evalIngestTelemetryMS[suite+"|"+pulseMode] = ms
+	evalIngestTelemetryMS[suite] = ms
 	payload, err := json.Marshal(map[string]int64{"ingest_ms": ms})
 	if err == nil {
-		_ = os.WriteFile(evalIngestTelemetryPath(suite, pulseMode), payload, 0o644)
+		_ = os.WriteFile(evalIngestTelemetryPath(suite), payload, 0o644)
 	}
 }
 
 // lastEvalIngestMS 读取最近一次语料导入耗时（热缓存未命中回落磁盘，均无回 0）。
-func lastEvalIngestMS(suite, pulseMode string) int64 {
+func lastEvalIngestMS(suite string) int64 {
 	evalIngestTelemetryMu.Lock()
 	defer evalIngestTelemetryMu.Unlock()
-	if ms := evalIngestTelemetryMS[suite+"|"+pulseMode]; ms > 0 {
+	if ms := evalIngestTelemetryMS[suite]; ms > 0 {
 		return ms
 	}
-	raw, err := os.ReadFile(evalIngestTelemetryPath(suite, pulseMode))
+	raw, err := os.ReadFile(evalIngestTelemetryPath(suite))
 	if err != nil {
 		return 0
 	}
@@ -3168,7 +3104,7 @@ func lastEvalIngestMS(suite, pulseMode string) int64 {
 		return 0
 	}
 	if ms := payload["ingest_ms"]; ms > 0 {
-		evalIngestTelemetryMS[suite+"|"+pulseMode] = ms
+		evalIngestTelemetryMS[suite] = ms
 		return ms
 	}
 	return 0
@@ -3506,8 +3442,8 @@ func buildReproCLICommand(tier, armMode, storePath string, rawLimit int, useAgen
 	args := []string{"rmem", "eval", "--eval-store", portableCLIStorePath(storePath), "--tier", normalizeTier(tier)}
 	if strings.EqualFold(strings.TrimSpace(armMode), EvalArmOracle) {
 		args = append(args, "--oracle")
-	} else if pm := evalPulseModeFromArm(armMode, evalPulseModeFromStorePath(storePath)); pm != EvalPulseModePulseCipher {
-		args = append(args, "--pulse-mode", pm)
+	} else {
+		args = append(args, "--pulse-mode", EvalPulseModeLocalPlain)
 	}
 	if useAgents {
 		args = append(args, "--answerer", "llm", "--judge", "llm")
@@ -3588,9 +3524,9 @@ func executeSingleQuestionEval(ctx context.Context, bin, storePath string, q Eva
 			rawLines = append(rawLines, fmt.Sprintf("gold-%d · %s", idx+1, trimmed))
 		}
 		resItem.RawHits = len(contextLines)
-		recallRaw = map[string]any{"mode": "oracle", "scope": EvalScope, "evidence_texts": q.EvidenceTexts, "formatted": formattedItems}
+		recallRaw = map[string]any{"mode": "oracle", "scope": evalScopeForSuite(SuiteLoCoMo), "evidence_texts": q.EvidenceTexts, "formatted": formattedItems}
 	} else {
-		strictRaw, unitIDs, err := runStrictCloudEvalRecall(ctx, bin, storePath, SuiteLoCoMo, q.Question, rawLimit, nil)
+		strictRaw, unitIDs, err := runLocalEvalRecall(ctx, bin, storePath, SuiteLoCoMo, q.Question, rawLimit, nil)
 		if err != nil {
 			return resItem, nil, err
 		}
@@ -3921,8 +3857,7 @@ func startStreamingEvalJob(home string, req evalRunRequest) (EvalJobStatus, erro
 		return EvalJobStatus{}, errors.New("未找到 rolling-memory 引擎二进制")
 	}
 	suite := normalizeSuite(req.Suite)
-	pulseMode := evalPulseModeFromArm(req.ArmMode, req.PulseMode)
-	storePath := resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode)
+	storePath := resolveEvalDBPathForSuite(home, suite)
 	dataDir := resolveEvalDataDir(home)
 	tier := normalizeTier(req.Tier)
 	if suite == SuiteATM {
@@ -4108,7 +4043,7 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 		}
 		// 优先复用已校验通过的隔离评测语料（耗时 <1s），仅在未准备或校验未过时自动构建，
 		// 避免每次点运行都强制全量重灌 11,034 / 5,882 条文档导致长时间卡在 0%。
-		readiness, err := prepareCloudEvalStore(ctx, bin, home, suite, req.Tier, storePath, dataDir, probeQuery, atmUnits, false)
+		readiness, err := prepareLocalEvalStore(ctx, bin, home, suite, req.Tier, storePath, dataDir, probeQuery, atmUnits, false)
 		if err != nil {
 			if ctx.Err() == nil && claimEvalFailure(ctx, jobID) {
 				finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, nil, time.Since(started).Seconds(), evalTaskStatusFailed, err.Error())
@@ -4118,7 +4053,7 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 		evalJobMu.Lock()
 		if evalJobState.JobID == jobID && evalJobState.Status == "running" {
 			appendJobLog(fmt.Sprintf("隔离评测语料已就绪：scope=%s · 回收旧单元=%d 条 · documents=%d · probe_hits=%d",
-				readiness.Scope, readiness.Manifest.PurgedUnits, readiness.Manifest.Documents, readiness.CloudHits))
+				readiness.Scope, readiness.Manifest.PurgedUnits, readiness.Manifest.Documents, readiness.LocalHits))
 		}
 		evalJobMu.Unlock()
 	}
@@ -4144,7 +4079,7 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 			// 一次性 fork 路径，读数口径同构）。
 			workerCtx := ctx
 			if armMode != EvalArmOracle {
-				if manifest, mErr := readCloudEvalManifest(storePath, suite); mErr == nil {
+				if manifest, mErr := readEvalManifest(storePath, suite); mErr == nil {
 					if warm, wErr := startWarmEvalRecallSession(ctx, bin, storePath, manifest.Scope); wErr == nil {
 						defer warm.Close()
 						workerCtx = withWarmEvalRecallSession(ctx, warm)
@@ -4379,8 +4314,7 @@ func buildEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelCon
 		}
 	}
 	protoID := FrozenProtocolID
-	pulseMode := evalPulseModeFromArm(armMode, req.PulseMode)
-	storePath := resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode)
+	storePath := resolveEvalDBPathForSuite(home, suite)
 	reproCmd := buildReproCLICommand(tier, armMode, storePath, rawLimit, req.UseAgents)
 	if suite == SuiteATM {
 		protoID = ATMProtocolID
@@ -4492,16 +4426,8 @@ func normalizeEvalRunRequest(home string, req *evalRunRequest) error {
 		req.EvalStore = ""
 	}
 	if requested := strings.TrimSpace(req.EvalStore); requested != "" {
-		cleanReq := filepath.Clean(requested)
-		allowed := false
-		for _, pm := range []string{EvalPulseModePulseCipher, EvalPulseModePulsePlain, EvalPulseModeLocalPlain} {
-			if cleanReq == filepath.Clean(resolveEvalDBPathForSuiteAndMode(home, req.Suite, pm)) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			expected := resolveEvalDBPathForSuiteAndMode(home, req.Suite, evalPulseModeFromArm(req.ArmMode, req.PulseMode))
+		expected := resolveEvalDBPathForSuite(home, req.Suite)
+		if filepath.Clean(requested) != filepath.Clean(expected) {
 			return fmt.Errorf("eval_store 必须使用本套件固定隔离路径 %s", expected)
 		}
 	}
@@ -4705,12 +4631,11 @@ func evalRunHandler(c *gin.Context) {
 		var recallRaw map[string]any
 		var err error
 		suite := normalizeSuite(req.Suite)
-		pulseMode := evalPulseModeFromArm(armMode, req.PulseMode)
-		// scope 取自本 store 的 manifest 世代（每次新评测自动分配独立 scope）；Oracle 臂无云端世代。
-		targetScope := evalScopeForSuiteAndMode(suite, pulseMode)
-		storePath := resolveEvalDBPathForSuiteAndMode(home, suite, pulseMode)
+		// scope 取自本 store 的 manifest 世代（每次新评测自动分配独立 scope）；Oracle 臂无评测世代。
+		targetScope := evalScopeForSuite(suite)
+		storePath := resolveEvalDBPathForSuite(home, suite)
 		if armMode != EvalArmOracle {
-			manifest, manifestErr := requireCloudEvalManifestForSingle(storePath, suite)
+			manifest, manifestErr := requireEvalManifestForSingle(storePath, suite)
 			if manifestErr != nil {
 				httpx.Fail(c, httpx.WithMessage(manifestErr.Error()))
 				return
@@ -5474,11 +5399,11 @@ func executeSingleATMQuestionEval(ctx context.Context, bin, storePath string, q 
 			})
 		}
 		recallRaw = map[string]any{
-			"mode": "oracle", "scope": ATMEvalScope, "raw_hits": rawHits,
+			"mode": "oracle", "scope": evalScopeForSuite(SuiteATM), "raw_hits": rawHits,
 			"retrieval_unit_ids": retIDs, "formatted": []string{},
 		}
 	} else {
-		strictRaw, unitIDs, err := runStrictCloudEvalRecall(ctx, bin, storePath, SuiteATM, q.Question, rawLimit, atmUnits)
+		strictRaw, unitIDs, err := runLocalEvalRecall(ctx, bin, storePath, SuiteATM, q.Question, rawLimit, atmUnits)
 		if err != nil {
 			return resItem, nil, err
 		}
@@ -5487,7 +5412,7 @@ func executeSingleATMQuestionEval(ctx context.Context, bin, storePath string, q 
 	}
 	resItem.RecallMS = time.Since(recallStart).Milliseconds()
 	if armMode == EvalArmOracle {
-		markOracleProvenance(&resItem, ATMEvalScope, len(retIDs), storePath)
+		markOracleProvenance(&resItem, evalScopeForSuite(SuiteATM), len(retIDs), storePath)
 	} else {
 		applyRecallProvenance(&resItem, recallRaw, retIDs, storePath)
 	}
@@ -5690,8 +5615,8 @@ func buildATMReproCLICommand(tier, armMode, storePath string, rawLimit int, useA
 	args := []string{"rmem", "eval", "--eval-store", portableCLIStorePath(storePath), "--suite", "atm", "--tier", normalizeATMTier(tier)}
 	if strings.EqualFold(strings.TrimSpace(armMode), EvalArmOracle) {
 		args = append(args, "--oracle")
-	} else if pm := evalPulseModeFromArm(armMode, evalPulseModeFromStorePath(storePath)); pm != EvalPulseModePulseCipher {
-		args = append(args, "--pulse-mode", pm)
+	} else {
+		args = append(args, "--pulse-mode", EvalPulseModeLocalPlain)
 	}
 	if useAgents {
 		args = append(args, "--answerer", "llm", "--judge", "llm")

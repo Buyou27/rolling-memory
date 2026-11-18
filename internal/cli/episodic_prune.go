@@ -42,20 +42,34 @@ type EpisodicPruneReceipt struct {
 
 // EpisodicPruneReport is the machine-readable receipt of one prune pass.
 type EpisodicPruneReport struct {
-	Mode          string   `json:"mode"` // dry_run | apply
-	Scanned       int      `json:"scanned"`
-	Verified      int      `json:"verified"`
-	Relocatable   int      `json:"relocatable"`
-	Absent        int      `json:"absent"`
-	Unreadable    int      `json:"unreadable"`
-	Removed       int      `json:"removed"`
-	Kept          int      `json:"kept"`
-	NoeticRemoved int      `json:"noetic_removed,omitempty"`
-	LocusHealed   int      `json:"locus_healed,omitempty"`
-	Limit         int      `json:"limit"`
-	Receipt       string   `json:"receipt,omitempty"`
-	Candidates    []string `json:"candidates,omitempty"`
-	Warnings      []string `json:"warnings,omitempty"`
+	Mode               string   `json:"mode"` // dry_run | apply
+	Scanned            int      `json:"scanned"`
+	Verified           int      `json:"verified"`
+	Relocatable        int      `json:"relocatable"`
+	Reanchorable       int      `json:"reanchorable,omitempty"`
+	Reanchored         int      `json:"reanchored,omitempty"`
+	CrossSourceSkipped int      `json:"cross_source_skipped,omitempty"`
+	Absent             int      `json:"absent"`
+	Unreadable         int      `json:"unreadable"`
+	Removed            int      `json:"removed"`
+	Kept               int      `json:"kept"`
+	NoeticRemoved      int      `json:"noetic_removed,omitempty"`
+	LocusHealed        int      `json:"locus_healed,omitempty"`
+	Limit              int      `json:"limit"`
+	Receipt            string   `json:"receipt,omitempty"`
+	Candidates         []string `json:"candidates,omitempty"`
+	Warnings           []string `json:"warnings,omitempty"`
+}
+
+// EpisodicPruneOptions carries one prune pass's switches. The zero value keeps the
+// conservative defaults: dry-run, source-unreadable rows always kept, and drifted rows
+// re-anchored only inside their own source.
+type EpisodicPruneOptions struct {
+	Limit               int
+	Apply               bool
+	Confirmed           bool
+	IncludeUnreadable   bool
+	ReanchorCrossSource bool
 }
 
 // pruneEpisodicUnits retires episodic rows whose content the current turn
@@ -63,7 +77,20 @@ type EpisodicPruneReport struct {
 // rows whose underlying transcript or session is gone). Dry-run by default; apply
 // requires --yes and also heals relocatable or unindexed pointers in-place.
 func pruneEpisodicUnits(ctx context.Context, memory *api.Memory, limit int, apply, confirmed bool, includeUnreadable ...bool) (EpisodicPruneReport, error) {
-	pruneUnreadable := len(includeUnreadable) > 0 && includeUnreadable[0]
+	return pruneEpisodicUnitsWithOptions(ctx, memory, EpisodicPruneOptions{
+		Limit:             limit,
+		Apply:             apply,
+		Confirmed:         confirmed,
+		IncludeUnreadable: len(includeUnreadable) > 0 && includeUnreadable[0],
+	})
+}
+
+// pruneEpisodicUnitsWithOptions is pruneEpisodicUnits with the full switch set; the
+// CLI surface feeds it so explicit flags cannot silently widen a pass.
+func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *api.Memory, opts EpisodicPruneOptions) (EpisodicPruneReport, error) {
+	limit := opts.Limit
+	apply, confirmed := opts.Apply, opts.Confirmed
+	pruneUnreadable := opts.IncludeUnreadable
 	report := EpisodicPruneReport{Mode: "dry_run", Limit: limit}
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return report, errors.New("episodic prune requires an open local store")
@@ -127,10 +154,49 @@ func pruneEpisodicUnits(ctx context.Context, memory *api.Memory, limit int, appl
 		}
 		switch tc.Vault.ClassifyAndHealEpisodicUnit(scope, item.docID, item.refPointer, item.occurredAt, apply) {
 		case thinclient.EpisodicContentAbsent:
+			// Deletion must prove the content is gone, not merely that its old coordinate
+			// stopped addressing it: a turn renumbering inside the same file makes a row
+			// classify absent while its sealed content is alive elsewhere in that file.
+			// The same-source digest rescan re-anchors such rows first; only rows it also
+			// cannot place are provably absent and eligible for retirement. The probe is
+			// read-only; only apply writes.
+			if newRef, reErr := tc.Vault.ReanchorSameSourceByDigest(scope, item.docID, item.refPointer, item.occurredAt, apply); reErr == nil && newRef != "" {
+				if apply {
+					report.Reanchored++
+				} else {
+					report.Reanchorable++
+				}
+				continue
+			}
 			report.Absent++
 			absent = append(absent, item)
 		case thinclient.EpisodicContentRelocatable:
 			report.Relocatable++
+			// A relocatable row still has its content, sealed under a digest, but its
+			// stored coordinate drifted (source enumeration changed between imports).
+			// Re-anchor only inside the row's own source by default: an identical
+			// content in another session is an unattributed alternate that delivery
+			// refuses, so crossing sessions requires the explicit opt-in. The probe is
+			// read-only; only apply writes.
+			if !opts.ReanchorCrossSource {
+				if _, actualRef, pErr := tc.Vault.LoadVerifiedEpisodicPointerSource(item.docID, item.refPointer); pErr == nil && !sameEpisodicSourceSession(item.refPointer, actualRef) {
+					report.CrossSourceSkipped++
+					continue
+				}
+			}
+			newRef, reErr := tc.Vault.ReanchorRelocatedEpisodicUnit(scope, item.docID, item.refPointer, item.occurredAt, apply)
+			switch {
+			case reErr != nil:
+				if apply && len(report.Warnings) < 20 {
+					report.Warnings = append(report.Warnings, fmt.Sprintf("episodic re-anchor %s: %v", item.docID, reErr))
+				}
+			case newRef == "":
+				// Resolves at its own coordinate or moved underneath the caller.
+			case apply:
+				report.Reanchored++
+			default:
+				report.Reanchorable++
+			}
 		case thinclient.EpisodicContentVerified:
 			report.Verified++
 		default:
@@ -149,7 +215,7 @@ func pruneEpisodicUnits(ctx context.Context, memory *api.Memory, limit int, appl
 			report.Candidates = append(report.Candidates, item.docID+"\t"+item.refPointer)
 		}
 		report.Warnings = append(report.Warnings,
-			"dry run: pass --apply --yes to retire provably-absent units; rows that still resolve or whose source is unavailable are always kept")
+			"dry run: pass --apply --yes to retire provably-absent units and re-anchor drifted pointers; rows that still resolve or whose source is unavailable are always kept; cross-source alternates are skipped unless --reanchor-cross-source")
 		return report, nil
 	}
 
@@ -398,6 +464,14 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 func (a *application) printEpisodicPrune(report EpisodicPruneReport) {
 	a.printf("episodic prune (%s): scanned %d · verified %d · relocatable %d · provably absent %d · unavailable %d · removed %d · kept %d\n",
 		report.Mode, report.Scanned, report.Verified, report.Relocatable, report.Absent, report.Unreadable, report.Removed, report.Kept)
+	if report.Mode == "apply" {
+		a.printf("re-anchor: %d drifted pointer(s) re-pointed and re-sealed\n", report.Reanchored)
+	} else if report.Reanchorable > 0 {
+		a.printf("re-anchor: %d drifted pointer(s) ready to re-point (apply to heal)\n", report.Reanchorable)
+	}
+	if report.CrossSourceSkipped > 0 {
+		a.printf("re-anchor: %d drifted pointer(s) skipped (verified content lives in another session; pass --reanchor-cross-source to include them)\n", report.CrossSourceSkipped)
+	}
 	for _, item := range report.Candidates {
 		a.printf("  candidate: %s\n", strings.ReplaceAll(item, "\t", " "))
 	}

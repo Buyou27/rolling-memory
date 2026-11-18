@@ -5,163 +5,128 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
-// startFakeHydrateDaemon 在临时 Unix socket 上模拟引擎守护进程的 `/v1/hydrate` 端点，
-// 返回 socket 路径、收到的请求体通道与调用计数。
-func startFakeHydrateDaemon(t *testing.T, reply func(refs []string) map[string]string) (string, *atomic.Int64, *[]map[string]any) {
-	t.Helper()
-	sockDir, err := os.MkdirTemp("/tmp", "rm-admin-hyd-")
-	if err != nil {
-		t.Fatalf("mkdir socket dir: %v", err)
-	}
-	sockPath := filepath.Join(sockDir, "engine.sock")
-	listener, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatalf("listen unix: %v", err)
-	}
-	var calls atomic.Int64
-	var payloadMu sync.Mutex
-	var payloads []map[string]any
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/hydrate", func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		var payload map[string]any
-		_ = json.Unmarshal(body, &payload)
-		payloadMu.Lock()
-		payloads = append(payloads, payload)
-		payloadMu.Unlock()
-		var refs []string
-		var items []hydrateRef
-		if rawItems, ok := payload["items"].([]any); ok {
-			for _, item := range rawItems {
-				if m, ok := item.(map[string]any); ok {
-					ref := asString(m["ref"])
-					refs = append(refs, ref)
-					items = append(items, hydrateRef{DocID: asString(m["doc_id"]), Ref: ref})
-				}
-			}
-		}
-		texts := reply(refs)
-		out := map[string]any{"ok": true}
-		list := make([]map[string]any, 0, len(items))
-		for _, item := range items {
-			if text, ok := texts[item.Ref]; ok && text != "" && item.DocID != "" {
-				list = append(list, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "actual_ref": item.Ref, "text": text, "verified": true})
-			} else {
-				list = append(list, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "error": "unavailable"})
-			}
-		}
-		out["texts"] = list
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(listener) }()
-	t.Cleanup(func() {
-		_ = srv.Close()
-		_ = os.RemoveAll(sockDir)
-	})
-	return sockPath, &calls, &payloads
+// engineCall 记录一次 engine 内部通道调用（op、参数与请求 JSON）。
+type engineCall struct {
+	op      string
+	args    []string
+	request map[string]any
 }
 
-func startHydrateContractDaemon(t *testing.T, handler http.HandlerFunc) string {
+// stubEngineRunner 用桩替换 engineCommandRunner，并保证 resolveBinary 解析得到占位二进制：
+// 生产实现（exec 产品二进制）在单测中绝不执行，所有请求/应答断言都落在桩上。
+func stubEngineRunner(t *testing.T, reply func(call engineCall) (string, error)) *[]engineCall {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "rm-admin-contract-")
-	if err != nil {
-		t.Fatal(err)
+	shim := filepath.Join(t.TempDir(), "rolling-memory-stub")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write engine shim: %v", err)
 	}
+	t.Setenv("ROLLING_MEMORY_BIN", shim)
+	var calls []engineCall
+	previous := engineCommandRunner
+	t.Cleanup(func() { engineCommandRunner = previous })
+	engineCommandRunner = func(_ context.Context, bin, op string, args []string, request []byte) ([]byte, error) {
+		if strings.TrimSpace(bin) == "" {
+			t.Errorf("engine runner called without a resolved binary")
+		}
+		var payload map[string]any
+		if len(request) > 0 {
+			_ = json.Unmarshal(request, &payload)
+		}
+		call := engineCall{op: op, args: append([]string(nil), args...), request: payload}
+		calls = append(calls, call)
+		out, err := reply(call)
+		return []byte(out), err
+	}
+	return &calls
+}
+
+// trapDaemonSocket 把 ROLLING_MEMORY_DAEMON_SOCKET 指向一个只计数的 Unix socket。
+// 桩替换 engineCommandRunner 后，对它出现的任何连接都意味着控制台内又出现了裸 socket
+// 客户端（未核验连接）——测试据此对回潮零容忍。
+func trapDaemonSocket(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "rm-admin-trap-")
+	if err != nil {
+		t.Fatalf("mkdir trap dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := filepath.Join(dir, "engine.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("listen trap socket: %v", err)
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/hydrate", handler)
-	server := &http.Server{Handler: mux}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close(); _ = os.RemoveAll(dir) })
-	return path
+	t.Cleanup(func() { _ = listener.Close() })
+	var connections atomic.Int64
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connections.Add(1)
+			_ = conn.Close()
+		}
+	}()
+	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", path)
+	return &connections
 }
 
-// startFakeDocumentsDaemon 在临时 Unix socket 上模拟引擎守护进程的 `/v1/documents` 端点，
-// 返回 socket 路径与调用计数。reply 中出现的 unit id 即为守护进程裁决可读（答案正文），
-// 未出现即裁决不可读（应答 error，控制台按「正文暂不可读」降级）。
-func startFakeDocumentsDaemon(t *testing.T, reply func(unitIDs []string) map[string]string) (string, *atomic.Int64) {
+// engineReplyJSON 组装一个 engine 通道应答。
+func engineReplyJSON(t *testing.T, payload map[string]any) string {
 	t.Helper()
-	sockDir, err := os.MkdirTemp("/tmp", "rm-admin-doc-")
+	raw, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("mkdir socket dir: %v", err)
+		t.Fatalf("marshal engine reply: %v", err)
 	}
-	sockPath := filepath.Join(sockDir, "engine.sock")
-	listener, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatalf("listen unix: %v", err)
+	return string(raw)
+}
+
+func engineRequestItems(t *testing.T, call engineCall) []map[string]any {
+	t.Helper()
+	rawItems, _ := call.request["items"].([]any)
+	items := make([]map[string]any, 0, len(rawItems))
+	for _, raw := range rawItems {
+		item, _ := raw.(map[string]any)
+		items = append(items, item)
 	}
-	var calls atomic.Int64
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/documents", func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		var payload struct {
-			Items []struct {
-				UnitID string `json:"unit_id"`
-			} `json:"items"`
-		}
-		_ = json.Unmarshal(body, &payload)
-		var unitIDs []string
-		for _, item := range payload.Items {
-			unitIDs = append(unitIDs, item.UnitID)
-		}
-		texts := reply(unitIDs)
-		list := make([]map[string]any, 0, len(unitIDs))
-		for _, id := range unitIDs {
-			if text, ok := texts[id]; ok {
-				list = append(list, map[string]any{"unit_id": id, "raw_text": text})
-				continue
-			}
-			list = append(list, map[string]any{"unit_id": id, "error": "source unavailable"})
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "docs": list})
-	})
-	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(listener) }()
-	t.Cleanup(func() {
-		_ = srv.Close()
-		_ = os.RemoveAll(sockDir)
-	})
-	return sockPath, &calls
+	return items
 }
 
 // TestBackgroundChunkRowUsesDaemonBody 锁定 L1 分块列表行的正文口径：
-// 批量预热经守护进程 /v1/documents 一次解析并把源文件正文写进 content，
+// 批量预热经 `engine documents` 一次解析并把源文件正文写进 content，
 // 未裁决的行（源文件被移动/删除）保留来源位置预览并显式标记 body_unavailable。
 func TestBackgroundChunkRowUsesDaemonBody(t *testing.T) {
 	readableID := "bg:readable#0"
 	goneID := "bg:gone#0"
-	sockPath, calls := startFakeDocumentsDaemon(t, func(unitIDs []string) map[string]string {
-		out := map[string]string{}
-		for _, id := range unitIDs {
-			if id == readableID {
-				out[id] = "# Emergency Failover Runbook\nExecute command `aurora-ctl drain --graceful`."
-			}
+	connections := trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
+		if call.op != "documents" {
+			t.Errorf("unexpected engine op %q", call.op)
 		}
-		return out
+		docs := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			id := asString(item["unit_id"])
+			if id == readableID {
+				docs = append(docs, map[string]any{"unit_id": id, "raw_text": "# Emergency Failover Runbook\nExecute command `aurora-ctl drain --graceful`."})
+				continue
+			}
+			docs = append(docs, map[string]any{"unit_id": id, "error": "source unavailable"})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "docs": docs}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	home := t.TempDir()
 
 	readableRow := map[string]any{
@@ -186,13 +151,16 @@ func TestBackgroundChunkRowUsesDaemonBody(t *testing.T) {
 	if !rowGone.BodyUnavailable || rowGone.Content != "[docs/retired.md#L1-3] (/ws/docs/retired.md)" {
 		t.Fatalf("source-gone chunk row = %+v, want location preview flagged body_unavailable", rowGone)
 	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("daemon calls = %d, want a single warm batch", got)
+	if got := len(*calls); got != 1 {
+		t.Fatalf("engine calls = %d, want a single warm batch", got)
 	}
-	// 缓存命中后重复构造行不得再打守护进程。
+	// 缓存命中后重复构造行不得再打 engine 通道。
 	_ = layerRowFromSQL(readableRow, home)
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("cached chunk row must not call the daemon again, calls = %d", got)
+	if got := len(*calls); got != 1 {
+		t.Fatalf("cached chunk row must not call the engine again, calls = %d", got)
+	}
+	if got := connections.Load(); got != 0 {
+		t.Fatalf("raw socket connections = %d, want 0", got)
 	}
 }
 
@@ -235,11 +203,15 @@ func TestLayersGetBackgroundChunkReturnsDaemonBody(t *testing.T) {
 		return envelope.Data.Row
 	}
 
-	// ① 守护进程可用：content 为分块正文。
-	sockPath, _ := startFakeDocumentsDaemon(t, func(unitIDs []string) map[string]string {
-		return map[string]string{"bg:detail#0": "# Deployment Plan\nStep 1: drain the aurora gateway."}
+	// ① 引擎通道可用：content 为分块正文。
+	connections := trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		docs := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			docs = append(docs, map[string]any{"unit_id": asString(item["unit_id"]), "raw_text": "# Deployment Plan\nStep 1: drain the aurora gateway."})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "docs": docs}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	row := decodeRow(callPluginHandler(t, layersGetHandler,
 		"/admin/plugin/rolling-memory/layers/get", `{"id":"bg:detail#0"}`))
 	if row.BodyUnavailable || !strings.Contains(row.Content, "drain the aurora gateway") {
@@ -249,17 +221,19 @@ func TestLayersGetBackgroundChunkReturnsDaemonBody(t *testing.T) {
 		t.Fatalf("layers/get chunk row lost its source location: %+v", row)
 	}
 
-	// ② 读取引擎不可用（socket 缺失且守护进程未起）：位置预览 + body_unavailable，绝不冒充正文。
+	// ② 读取引擎不可用（守护路由停用）：位置预览 + body_unavailable，绝不冒充正文。
 	// 先清掉 ① 写入的正文缓存，否则这里会命中缓存拿不到「不可读」路径。
 	hydrateMu.Lock()
 	delete(hydrateCache, hydrateCacheKey(hydrateFlavorLocalDoc, home, "bg:detail#0"))
 	hydrateMu.Unlock()
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", "")
 	t.Setenv("ROLLING_MEMORY_DAEMON", "0")
 	row = decodeRow(callPluginHandler(t, layersGetHandler,
 		"/admin/plugin/rolling-memory/layers/get", `{"id":"bg:detail#0"}`))
 	if !row.BodyUnavailable || row.Content != "[docs/plan.md#L1-9] (/ws/docs/plan.md)" {
 		t.Fatalf("engine-down chunk row = %+v, want location preview flagged body_unavailable", row)
+	}
+	if got := connections.Load(); got != 0 {
+		t.Fatalf("raw socket connections = %d, want 0", got)
 	}
 }
 
@@ -281,10 +255,14 @@ func TestMemoryDetailBackgroundChunkReturnsDaemonBody(t *testing.T) {
 	}
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 
-	sockPath, _ := startFakeDocumentsDaemon(t, func(unitIDs []string) map[string]string {
-		return map[string]string{"bg:mem#0": "Meeting notes: rotate the optical transceivers on Friday."}
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		docs := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			docs = append(docs, map[string]any{"unit_id": asString(item["unit_id"]), "raw_text": "Meeting notes: rotate the optical transceivers on Friday."})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "docs": docs}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -301,54 +279,62 @@ func TestMemoryDetailBackgroundChunkReturnsDaemonBody(t *testing.T) {
 	}
 }
 
-// TestHydratedPointerPrefersDaemonCanonicalText verifies each read through the daemon.
+// TestHydratedPointerPrefersDaemonCanonicalText verifies every read goes through the
+// verified engine channel and reverifies the source per request.
 func TestHydratedPointerPrefersDaemonCanonicalText(t *testing.T) {
 	ref := "@ref:zcode:sess_fixture:msg_turn_1#1"
-	sockPath, calls, payloads := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		out := map[string]string{}
-		for _, r := range refs {
-			if r == ref {
-				out[r] = "[assistant] 规范分段正文"
+	connections := trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			entry := map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"])}
+			if asString(item["ref"]) == ref {
+				entry["actual_ref"] = ref
+				entry["text"] = "[assistant] 规范分段正文"
+				entry["verified"] = true
 			}
+			texts = append(texts, entry)
 		}
-		return out
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	home := t.TempDir()
 
 	text, ok := hydratedEpisodicPointerLive(home, filepath.Join(home, "memory.db"), "doc-one", ref)
 	if !ok || text != "[assistant] 规范分段正文" {
-		t.Fatalf("daemon hydration = (%q, %v), want canonical text", text, ok)
+		t.Fatalf("engine hydration = (%q, %v), want canonical text", text, ok)
 	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("daemon calls = %d, want 1", got)
+	if got := len(*calls); got != 1 {
+		t.Fatalf("engine calls = %d, want 1", got)
 	}
 	if _, ok := hydratedEpisodicPointerLive(home, filepath.Join(home, "memory.db"), "doc-one", ref); !ok {
 		t.Fatalf("second verified read failed")
 	}
-	if got := calls.Load(); got != 2 {
+	if got := len(*calls); got != 2 {
 		t.Fatalf("each read must reverify the source, calls = %d", got)
 	}
-	if len(*payloads) != 2 {
-		t.Fatalf("payloads = %d, want 2", len(*payloads))
+	if (*calls)[0].op != "hydrate" {
+		t.Fatalf("hydration op = %q", (*calls)[0].op)
 	}
-	items, _ := (*payloads)[0]["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("items = %d, want 1", len(items))
+	items := engineRequestItems(t, (*calls)[0])
+	if len(items) != 1 || asString(items[0]["doc_id"]) != "doc-one" || asString(items[0]["ref"]) != ref {
+		t.Fatalf("request identity = %+v", items)
 	}
-	item, _ := items[0].(map[string]any)
-	if item["doc_id"] != "doc-one" || item["ref"] != ref {
-		t.Fatalf("request identity = %+v", item)
+	if got := connections.Load(); got != 0 {
+		t.Fatalf("raw socket connections = %d, want 0", got)
 	}
 }
 
 // TestWarmHydrateBatchVerifiesEachDocument tests mixed, duplicate, and missing identities.
 func TestWarmHydrateBatchVerifiesEachDocument(t *testing.T) {
 	ref := "@ref:zcode:sess:msg#0"
-	sockPath, calls, payloads := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		return map[string]string{ref: "[user] verified"}
+	trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": ref, "actual_ref": ref, "text": "[user] verified", "verified": true})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	home := t.TempDir()
 	rows := []map[string]any{
 		{"id": "doc-a", "content": ref},
@@ -358,8 +344,8 @@ func TestWarmHydrateBatchVerifiesEachDocument(t *testing.T) {
 		{"id": "doc-missing", "content": "@ref:jsonl:/missing:0#0"},
 	}
 	warmHydrateZCodePointersBatch(home, filepath.Join(home, "memory.db"), rows)
-	if calls.Load() != 1 {
-		t.Fatalf("calls = %d", calls.Load())
+	if len(*calls) != 1 {
+		t.Fatalf("calls = %d", len(*calls))
 	}
 	for i := 0; i < 3; i++ {
 		if text, ok := hydratedPointerRowText(rows[i]); !ok || text != "[user] verified" {
@@ -371,7 +357,7 @@ func TestWarmHydrateBatchVerifiesEachDocument(t *testing.T) {
 			t.Fatalf("unavailable row = %q", text)
 		}
 	}
-	items, _ := (*payloads)[0]["items"].([]any)
+	items := engineRequestItems(t, (*calls)[0])
 	if len(items) != 3 {
 		t.Fatalf("items = %+v, want distinct doc/ref pairs", items)
 	}
@@ -380,6 +366,10 @@ func TestWarmHydrateBatchVerifiesEachDocument(t *testing.T) {
 func TestHydrateFailsClosedWhenDaemonMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", filepath.Join(home, "missing.sock"))
+	calls := stubEngineRunner(t, func(engineCall) (string, error) {
+		t.Error("engine channel must not run when the daemon socket is missing")
+		return "", nil
+	})
 	ref := "@ref:jsonl:" + filepath.Join(home, "transcript.jsonl") + ":0#0"
 	if err := os.WriteFile(filepath.Join(home, "transcript.jsonl"), []byte(`{"type":"user","message":{"role":"user","content":"secret"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -387,24 +377,19 @@ func TestHydrateFailsClosedWhenDaemonMissing(t *testing.T) {
 	if text, ok := hydratedEpisodicPointerLive(home, filepath.Join(home, "memory.db"), "doc", ref); ok || text != "" {
 		t.Fatalf("missing daemon = (%q, %v)", text, ok)
 	}
+	if len(*calls) != 0 {
+		t.Fatalf("engine calls = %d, want 0", len(*calls))
+	}
 }
 
 func TestHydrateDaemonRejectsUntrustedResults(t *testing.T) {
 	ref := "@ref:zcode:session:message#0"
-	var calls atomic.Int64
-	path := startHydrateContractDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		var req struct {
-			Items []hydrateRef `json:"items"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Error(err)
-			return
-		}
+	trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
 		var results []map[string]any
-		for _, item := range req.Items {
-			result := map[string]any{"doc_id": item.DocID, "ref": item.Ref, "actual_ref": item.Ref, "text": "secret", "verified": true}
-			switch item.DocID {
+		for _, item := range engineRequestItems(t, call) {
+			result := map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": asString(item["ref"]), "text": "secret", "verified": true}
+			switch asString(item["doc_id"]) {
 			case "good":
 			case "unverified":
 				delete(result, "verified")
@@ -423,12 +408,11 @@ func TestHydrateDaemonRejectsUntrustedResults(t *testing.T) {
 			}
 			results = append(results, result)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "texts": results})
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": results}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", path)
 	home := t.TempDir()
 	dbPath := filepath.Join(home, "vault.db")
-	if got, ok := hydrateRefsViaDaemon(home, dbPath, nil); ok || len(got) != 0 || calls.Load() != 0 {
+	if got, ok := hydrateRefsViaDaemon(home, dbPath, nil); ok || len(got) != 0 || len(*calls) != 0 {
 		t.Fatalf("empty batch = %v, %v", got, ok)
 	}
 	ids := []string{"good", "unverified", "error", "wrong-id", "wrong-ref", "no-actual", "relocated", "duplicate", ""}
@@ -440,31 +424,27 @@ func TestHydrateDaemonRejectsUntrustedResults(t *testing.T) {
 	if !ok || len(got) != 1 || got[hydrateRef{DocID: "good", Ref: ref}] != "secret" {
 		t.Fatalf("verified results = %+v, handled=%v", got, ok)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("batch calls = %d", calls.Load())
+	if len(*calls) != 1 {
+		t.Fatalf("batch calls = %d", len(*calls))
 	}
 }
 
 func TestHydrateRevalidatesChangedSourceAndIdentity(t *testing.T) {
 	ref := "@ref:zcode:session:message#0"
+	trapDaemonSocket(t)
 	var valid atomic.Bool
 	valid.Store(true)
-	path := startHydrateContractDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Items []hydrateRef `json:"items"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
 		var results []map[string]any
-		for _, item := range req.Items {
-			if item.DocID == "doc-a" && item.Ref == ref && valid.Load() {
-				results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "actual_ref": ref, "text": "indexed original", "verified": true})
+		for _, item := range engineRequestItems(t, call) {
+			if asString(item["doc_id"]) == "doc-a" && asString(item["ref"]) == ref && valid.Load() {
+				results = append(results, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": ref, "text": "indexed original", "verified": true})
 			} else {
-				results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "error": "content or identity mismatch"})
+				results = append(results, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "content or identity mismatch"})
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "texts": results})
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": results}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", path)
 	home := t.TempDir()
 	dbPath := filepath.Join(home, "memory.db")
 	if text, ok := hydratedEpisodicPointerLive(home, dbPath, "doc-a", ref); !ok || text != "indexed original" {
@@ -487,24 +467,20 @@ func TestHydrateRevalidatesChangedSourceAndIdentity(t *testing.T) {
 
 func TestCachedROIBundleRevalidatesEpisodicEvidence(t *testing.T) {
 	ref := "@ref:zcode:session:message#0"
+	trapDaemonSocket(t)
 	var valid atomic.Bool
 	valid.Store(true)
-	path := startHydrateContractDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Items []hydrateRef `json:"items"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
 		var results []map[string]any
-		for _, item := range req.Items {
-			if valid.Load() && item.DocID == "doc-a" && item.Ref == ref {
-				results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "actual_ref": ref, "text": "authenticated source", "verified": true})
+		for _, item := range engineRequestItems(t, call) {
+			if valid.Load() && asString(item["doc_id"]) == "doc-a" && asString(item["ref"]) == ref {
+				results = append(results, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": ref, "text": "authenticated source", "verified": true})
 			} else {
-				results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "error": "source changed"})
+				results = append(results, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "source changed"})
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "texts": results})
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": results}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", path)
 	t.Setenv("HOME", t.TempDir())
 	memoryPath := filepath.Join(t.TempDir(), "vault.db")
 	bundle := vaultAnalyticsBundle{
@@ -530,52 +506,19 @@ func TestCachedROIBundleRevalidatesEpisodicEvidence(t *testing.T) {
 	}
 }
 
-func BenchmarkHydrateDaemonBatch(b *testing.B) {
-	dir, err := os.MkdirTemp("/tmp", "rm-admin-bench-")
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "engine.sock")
-	listener, err := net.Listen("unix", path)
-	if err != nil {
-		b.Fatal(err)
-	}
-	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Items []hydrateRef `json:"items"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		results := make([]map[string]any, 0, len(req.Items))
-		for _, item := range req.Items {
-			results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "actual_ref": item.Ref, "text": "verified body", "verified": true})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "texts": results})
-	})}
-	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
-	b.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", path)
-	b.Setenv("ROLLING_MEMORY_DAEMON", "1")
-	refs := make([]hydrateRef, 64)
-	for i := range refs {
-		refs[i] = hydrateRef{DocID: fmt.Sprintf("doc-%d", i), Ref: fmt.Sprintf("@ref:zcode:session:msg-%d#0", i)}
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		result, ok := hydrateRefsViaDaemon(dir, filepath.Join(dir, "vault.db"), refs)
-		if !ok || len(result) != len(refs) {
-			b.Fatalf("results=%d handled=%v", len(result), ok)
-		}
-	}
-}
-
 func TestPointerRowSnapshotDoesNotCacheVerifiedText(t *testing.T) {
 	home := t.TempDir()
 	dbPath := filepath.Join(home, "vault.db")
 	ref := "@ref:zcode:session:message#0"
 	seedVault(t, dbPath, `INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('doc-a', 'episodic', 1, '`+ref+`', 'addr')`)
-	sock, _, _ := startFakeHydrateDaemon(t, func([]string) map[string]string { return map[string]string{ref: "verified"} })
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sock)
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": asString(item["ref"]), "text": "verified", "verified": true})
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
+	})
 	first, err := cachedVaultPointerDocRows(dbPath, layerListQuery{})
 	if err != nil || len(first) != 1 {
 		t.Fatalf("pointer rows = %+v, %v", first, err)
@@ -616,22 +559,25 @@ func TestLargePointerSearchFindsLateVerifiedMatch(t *testing.T) {
 	}
 	_ = db.Close()
 	targetRef := "@ref:zcode:session:msg-512#0"
-	sock, calls, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		out := make(map[string]string, len(refs))
-		for _, ref := range refs {
-			out[ref] = "ordinary"
+	trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			text := "ordinary"
+			if asString(item["ref"]) == targetRef {
+				text = "needle verified"
+			}
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": asString(item["ref"]), "text": text, "verified": true})
 		}
-		out[targetRef] = "needle verified"
-		return out
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sock)
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	rows, total, err := queryLayerRows(dbPath, layerListQuery{layer: episodicLayer, keyword: "needle", limit: 20}, home)
 	if err != nil || total != 1 || len(rows) != 1 || rows[0].ID != "doc-512" {
 		t.Fatalf("large search = %+v, %d, %v", rows, total, err)
 	}
-	if calls.Load() != 9 {
-		t.Fatalf("batch calls=%d, want 9", calls.Load())
+	if len(*calls) != 9 {
+		t.Fatalf("batch calls=%d, want 9", len(*calls))
 	}
 	memories, err := queryMemoriesFromDB(dbPath, MemoriesQueryRequest{Layer: episodicLayer, Keyword: "needle", Page: 1, PageSize: 20})
 	if err != nil || memories.Total != 1 || len(memories.Items) != 1 || memories.Items[0].ID != "doc-512" {
@@ -646,24 +592,20 @@ func TestListSearchAndDashboardDoNotReuseStalePointerText(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	ref := "@ref:zcode:session:message#0"
 	seedVault(t, dbPath, `INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('doc-a', 'episodic', 1700000000, '`+ref+`', 'addr')`)
+	trapDaemonSocket(t)
 	var valid atomic.Bool
 	valid.Store(true)
-	sock := startHydrateContractDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Items []hydrateRef `json:"items"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
 		var results []map[string]any
-		for _, item := range req.Items {
-			if valid.Load() && item.DocID == "doc-a" && item.Ref == ref {
-				results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "actual_ref": ref, "text": "unique searchable source", "verified": true})
+		for _, item := range engineRequestItems(t, call) {
+			if valid.Load() && asString(item["doc_id"]) == "doc-a" && asString(item["ref"]) == ref {
+				results = append(results, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": ref, "text": "unique searchable source", "verified": true})
 			} else {
-				results = append(results, map[string]any{"doc_id": item.DocID, "ref": item.Ref, "error": "source changed"})
+				results = append(results, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "source changed"})
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "texts": results})
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": results}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sock)
 	query := layerListQuery{layer: episodicLayer, keyword: "searchable", limit: 20}
 	rows, total, err := queryLayerRows(dbPath, query, home)
 	if err != nil || total != 1 || len(rows) != 1 || rows[0].Content != "unique searchable source" {
@@ -695,16 +637,18 @@ func TestListSearchAndDashboardDoNotReuseStalePointerText(t *testing.T) {
 func TestTerminalStreamLinesHydratePointers(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ref := "@ref:zcode:sess_term:msg_term_1#0"
-	sockPath, _, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		out := map[string]string{}
-		for _, r := range refs {
-			if r == ref {
-				out[r] = "[user] 终端回显正文"
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			if asString(item["ref"]) == ref {
+				texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": ref, "actual_ref": ref, "text": "[user] 终端回显正文", "verified": true})
+				continue
 			}
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "unavailable"})
 		}
-		return out
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 
 	dbPath := filepath.Join(t.TempDir(), "memory.db")
 	db, err := sql.Open("sqlite", "file:"+dbPath)
@@ -739,16 +683,18 @@ func TestTerminalStreamLinesHydratePointers(t *testing.T) {
 // 指针行取规范水合正文，非指针行维持「蒸馏优先、原文兜底」口径。
 func TestGraphDisplayTextHydratesPointers(t *testing.T) {
 	ref := "@ref:zcode:sess_graph:msg_graph_1#1"
-	sockPath, _, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		out := map[string]string{}
-		for _, r := range refs {
-			if r == ref {
-				out[r] = "[assistant] 图谱规范正文"
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			if asString(item["ref"]) == ref {
+				texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": ref, "actual_ref": ref, "text": "[assistant] 图谱规范正文", "verified": true})
+				continue
 			}
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "unavailable"})
 		}
-		return out
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	home := t.TempDir()
 
 	txt, span := hydrateEpisodicDisplayText(home, filepath.Join(home, "memory.db"), "doc-one", ref, "")
@@ -765,16 +711,18 @@ func TestGraphDisplayTextHydratesPointers(t *testing.T) {
 func TestVaultFollowupDocsWarmUncachedPointers(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ref := "@ref:zcode:sess_follow:msg_follow_1#1"
-	sockPath, _, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		out := map[string]string{}
-		for _, r := range refs {
-			if r == ref {
-				out[r] = "[assistant] 审计语料正文"
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			if asString(item["ref"]) == ref {
+				texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": ref, "actual_ref": ref, "text": "[assistant] 审计语料正文", "verified": true})
+				continue
 			}
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "unavailable"})
 		}
-		return out
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 
 	dbPath := filepath.Join(t.TempDir(), "memory.db")
 	db, err := sql.Open("sqlite", "file:"+dbPath)
@@ -810,14 +758,15 @@ func TestVaultFollowupDocsWarmUncachedPointers(t *testing.T) {
 // 展示面回「来源缺口」占位（与产品 recent 同一措辞）。
 func TestUnresolvableRefShowsGapMarker(t *testing.T) {
 	ref := "@ref:zcode:sess_pruned:msg_pruned_1#0"
-	sockPath, _, _ := startFakeHydrateDaemon(t, func(refs []string) map[string]string {
-		out := map[string]string{}
-		for _, r := range refs {
-			out[r] = "" // 规范判定：宿主原文已清理，不可水合
+	trapDaemonSocket(t)
+	stubEngineRunner(t, func(call engineCall) (string, error) {
+		texts := []map[string]any{}
+		for _, item := range engineRequestItems(t, call) {
+			// 规范判定：宿主原文已清理，不可水合。
+			texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "error": "source unavailable"})
 		}
-		return out
+		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
 	t.Setenv("HOME", t.TempDir())
 	home := t.TempDir()
 
@@ -829,5 +778,143 @@ func TestUnresolvableRefShowsGapMarker(t *testing.T) {
 	}
 	if got := hydrateVaultTextForDisplay(filepath.Join(home, "memory.db"), "doc-one", "普通正文"); got != "普通正文" {
 		t.Fatalf("plain text must pass through, got %q", got)
+	}
+}
+
+// TestConsoleDaemonChannelNeverDialsRawSocket 锁定修复要点：控制台的 recall/hydrate/
+// documents/invalidate 四个面一律经 engine 内部通道，绝不向配置的 socket 发起裸连接
+// （陷阱 socket 全程零连接）。多出的连接即意味着未核验 socket 客户端回潮。
+func TestConsoleDaemonChannelNeverDialsRawSocket(t *testing.T) {
+	connections := trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
+		switch call.op {
+		case "recall":
+			return engineReplyJSON(t, map[string]any{"ok": true, "result": map[string]any{"absent": false, "meta": map[string]any{"elapsed_ms": 42}}}), nil
+		case "hydrate":
+			texts := []map[string]any{}
+			for _, item := range engineRequestItems(t, call) {
+				texts = append(texts, map[string]any{"doc_id": asString(item["doc_id"]), "ref": asString(item["ref"]), "actual_ref": asString(item["ref"]), "text": "verified body", "verified": true})
+			}
+			return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
+		case "documents":
+			docs := []map[string]any{}
+			for _, item := range engineRequestItems(t, call) {
+				docs = append(docs, map[string]any{"unit_id": asString(item["unit_id"]), "raw_text": "chunk body"})
+			}
+			return engineReplyJSON(t, map[string]any{"ok": true, "docs": docs}), nil
+		case "invalidate":
+			return engineReplyJSON(t, map[string]any{"ok": true, "notified": true}), nil
+		}
+		return "", errors.New("unexpected engine op " + call.op)
+	})
+	home := t.TempDir()
+	dbPath := filepath.Join(home, "memory.db")
+
+	raw, handled, err := tryConsoleDaemonRecall(
+		context.Background(), home, dbPath, "mem:self", "owner", "full",
+		8, 60, 12000, 2, 5, "检索性能", "Rolling-Memory", false, false, "", "", "",
+	)
+	if err != nil || !handled || raw == nil {
+		t.Fatalf("tryConsoleDaemonRecall = (%v, %v, %v), want handled", raw, handled, err)
+	}
+	if cue := asString((*calls)[0].request["cue"]); cue != "[Rolling-Memory] 检索性能" {
+		t.Fatalf("engine payload cue = %q, want anchored cue", cue)
+	}
+	if noCrystallize, _ := (*calls)[0].request["no_crystallize"].(bool); !noCrystallize {
+		t.Fatalf("engine payload no_crystallize = %v, want true", (*calls)[0].request["no_crystallize"])
+	}
+	if text, ok := hydratedEpisodicPointerLive(home, dbPath, "doc-one", "@ref:zcode:sess:msg#0"); !ok || text != "verified body" {
+		t.Fatalf("hydrate = (%q, %v)", text, ok)
+	}
+	if text, ok := hydratedLocalDocumentLive(home, "bg:raw#0"); !ok || text != "chunk body" {
+		t.Fatalf("documents = (%q, %v)", text, ok)
+	}
+	invalidateDaemonViaSocket(home)
+
+	ops := map[string]int{}
+	for _, call := range *calls {
+		ops[call.op]++
+	}
+	for _, op := range []string{"recall", "hydrate", "documents", "invalidate"} {
+		if ops[op] == 0 {
+			t.Fatalf("engine op %q never ran: %+v", op, ops)
+		}
+	}
+	if got := connections.Load(); got != 0 {
+		t.Fatalf("raw socket connections = %d, want 0 (console must only use the engine channel)", got)
+	}
+}
+
+// TestConsoleDaemonChannelFailuresDegrade 锁定负控：engine 子进程退出非 0 或输出非法
+// JSON 时，四个面全部回既有降级路径（hydrate = 不可读、recall = 交回 CLI 回退），
+// 绝不静默改用未核验 socket 或伪造正文。
+func TestConsoleDaemonChannelFailuresDegrade(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply func(engineCall) (string, error)
+	}{
+		{"engine_exit_nonzero", func(engineCall) (string, error) { return "", errors.New("exit status 1") }},
+		{"engine_invalid_json", func(engineCall) (string, error) { return "not json", nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			connections := trapDaemonSocket(t)
+			stubEngineRunner(t, tc.reply)
+			home := t.TempDir()
+			dbPath := filepath.Join(home, "vault.db")
+
+			if text, ok := hydratedEpisodicPointerLive(home, dbPath, "doc-one", "@ref:zcode:sess:msg#0"); ok || text != "" {
+				t.Fatalf("pointer hydration = (%q, %v), want unavailable", text, ok)
+			}
+			if text, ok := hydratedLocalDocumentLive(home, "bg:x#0"); ok || text != "" {
+				t.Fatalf("document read = (%q, %v), want unavailable", text, ok)
+			}
+			raw, handled, err := tryConsoleDaemonRecall(
+				context.Background(), home, dbPath, "mem:self", "owner", "full",
+				8, 60, 12000, 2, 5, "x", "", false, false, "", "", "",
+			)
+			if handled || err != nil || raw != nil {
+				t.Fatalf("recall must fall back to the CLI path, got (%v, %v, %v)", raw, handled, err)
+			}
+			invalidateDaemonViaSocket(home)
+			if got := connections.Load(); got != 0 {
+				t.Fatalf("raw socket connections = %d, want 0", got)
+			}
+		})
+	}
+}
+
+// TestEngineCaptureBoundsChildOutput 钉住生产运行器的有界捕获：超限后继续排空
+// （子进程不阻塞在写管道上）但不再存储，由调用方按协议失败处理。
+func TestEngineCaptureBoundsChildOutput(t *testing.T) {
+	capture := &engineCapture{limit: 8}
+	if n, err := capture.Write([]byte("12345")); n != 5 || err != nil || capture.overflow {
+		t.Fatalf("first write = (%d, %v, overflow=%v)", n, err, capture.overflow)
+	}
+	if n, err := capture.Write([]byte("6789")); n != 4 || err != nil || !capture.overflow {
+		t.Fatalf("second write = (%d, %v, overflow=%v)", n, err, capture.overflow)
+	}
+	if n, err := capture.Write([]byte("more")); n != 4 || err != nil || capture.buffer.Len() != 8 {
+		t.Fatalf("drain write = (%d, %v) buffer=%d", n, err, capture.buffer.Len())
+	}
+	if capture.buffer.String() != "12345678" {
+		t.Fatalf("captured = %q", capture.buffer.String())
+	}
+}
+
+// TestAdminDaemonHelpersHaveNoRawSocketClient 源码门禁：控制台守护调用面的两个文件
+// 不得再出现裸 socket 客户端原语（回潮即红）。
+func TestAdminDaemonHelpersHaveNoRawSocketClient(t *testing.T) {
+	for _, name := range []string{"memory.go", "roi_facts.go"} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		source := string(raw)
+		for _, forbidden := range []string{"net.Dialer", "net.Dial(", "DialContext", `"unix"`} {
+			if strings.Contains(source, forbidden) {
+				t.Fatalf("%s still contains a raw daemon socket client: %q", name, forbidden)
+			}
+		}
 	}
 }

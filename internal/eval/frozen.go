@@ -105,10 +105,11 @@ type Item struct {
 	Content string `json:"content"`
 }
 
-// JudgeVerdict 判官回执：闭集 CORRECT / WRONG（+ 一句理由）。
+// JudgeVerdict 判官回执：闭集 CORRECT / WRONG（+ 一句理由）；Label 供对抗三态档携带标签。
 type JudgeVerdict struct {
 	Correct bool   `json:"correct"`
 	Reason  string `json:"reason"`
+	Label   string `json:"label,omitempty"`
 }
 
 // ParseFrozenJudgeVerdict 出参解析：取首个 `{` 到末个 `}`

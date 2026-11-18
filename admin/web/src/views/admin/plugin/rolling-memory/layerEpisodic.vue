@@ -19,7 +19,7 @@
             </div>
             <div class="stat-item primary">
                 <span class="stat-label">{{ t('plugin.rolling-memory.episodic.cellsLabel') }}</span>
-                <span class="stat-value">{{ stats.episodic_cell_count || 0 }}</span>
+                <span class="stat-value">{{ stats.episodic_cluster_count || 0 }}</span>
             </div>
             <div class="stat-item" :class="epiAlign.harness_unsynced_turns > 0 ? 'warning' : 'info'">
                 <span class="stat-label">{{ t('plugin.rolling-memory.overview.harnessesTitle') }}</span>

@@ -21,7 +21,7 @@
                             <div class="fs-preview-tip">
                                 <strong>{{ isEn ? 'Next-Gen Agent Memory Preview' : '下一代 AI Agent 记忆范式预览' }}</strong>
                                 <p>{{ isEn ? '0-LLM · 0-Vector · Zero-Plaintext Cloud Leakage.' : '0-LLM · 0-Vector · 0-明文云端泄漏。' }}</p>
-                                <p>{{ isEn ? 'Pulse Mode exploration & closed beta applications are now open.' : '脉冲模式探索与封闭试用申请现已开放。' }}</p>
+                                <p>{{ isEn ? 'Cloud memory service preview & applications are now open.' : '云端记忆服务预览与申请现已开放。' }}</p>
                             </div>
                         </template>
                         <span class="fs-preview-badge" @click="scrollToPulseSection()">
@@ -755,7 +755,7 @@ interface GraphPayload {
         suite: string
         scope: string
         total_units: number
-        total_cells: number
+        total_clusters: number
         total_noetic: number
         transport: string
     }

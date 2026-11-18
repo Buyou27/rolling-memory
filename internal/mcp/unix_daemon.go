@@ -1194,6 +1194,17 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		current, getErr := lazy.Get()
 		if getErr != nil || current == nil {
+			// A pinned daemon keeps serving its validated memory; when the on-disk
+			// configuration can no longer be validated or no longer matches the
+			// pinned identity (e.g., an obsolete mode left over from an upgrade),
+			// that state is a configuration conflict, not an unavailable memory.
+			if cfg, cfgErr := config.Load(config.LoadOptions{}); cfgErr != nil {
+				http.Error(w, "daemon configuration changed", http.StatusConflict)
+				return
+			} else if id, idErr := unixDaemonConfigID(cfg); idErr != nil || id != health.ConfigID {
+				http.Error(w, "daemon configuration changed", http.StatusConflict)
+				return
+			}
 			http.Error(w, "daemon memory unavailable", http.StatusServiceUnavailable)
 			return
 		}

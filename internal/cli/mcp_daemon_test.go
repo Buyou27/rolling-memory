@@ -177,7 +177,7 @@ func TestMCPLocalRejectsLegacyDaemon(t *testing.T) {
 		t.Fatalf("unexpected calls: mcp=%d HTTP=%d shutdown=%d", forwarded.Load(), outbound.Load(), shutdown.Load())
 	}
 	result = runInput(t, request, "mcp", "--mode", "cloud")
-	if result.code == 0 || !strings.Contains(result.stderr, "requires local mode") {
+	if result.code == 0 || (!strings.Contains(result.stderr, "requires local mode") && !strings.Contains(result.stderr, "mode must be one of ('local')")) {
 		t.Fatalf("non-local MCP mode must fail closed: %+v", result)
 	}
 	if forwarded.Load() != 0 || outbound.Load() != 0 || shutdown.Load() != 0 {

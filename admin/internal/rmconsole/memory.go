@@ -7,11 +7,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"math"
-	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -161,24 +159,25 @@ type MemoryDetailResponse struct {
 
 // RecallQueryRequest 独立检索召回工作台请求。
 type RecallQueryRequest struct {
-	Query         string   `json:"q"`
-	Scope         string   `json:"scope"`
-	Profile       string   `json:"profile"`
-	Reader        string   `json:"reader"`      // owner | deliverable
-	ResultMode    string   `json:"result_mode"` // full | probe
-	PresenceLocus string   `json:"locus"`       // 可选在场空间路径（触发软势能场近场共振加权）
-	Carrier       string   `json:"carrier"`     // 可选在场 Harness 载体
-	Incarnation   string   `json:"incarnation"` // 可选在场 Agent 分身角色
-	Bands         int      `json:"bands"`
-	Nodes         int      `json:"nodes"`
-	Chars         int      `json:"chars"`
-	Depth         int      `json:"depth"`
-	IncludeRaw    bool     `json:"include_raw"`
-	RawLimit      int      `json:"raw_limit"`
-	MinConfidence *float64 `json:"min_confidence"` // 结果集内按置信度二次过滤
-	SortBy        string   `json:"sort_by"`        // score | confidence | time
-	Workspace     string   `json:"workspace"`      // 可选工作区锚（= 入库 locus）：同工作区证据置前、其余不删
-	Crystallize   bool     `json:"crystallize"`    // 是否把本次检索写成 L3 Noetic；默认 false（调试台只读）
+	Query          string   `json:"q"`
+	Scope          string   `json:"scope"`
+	Profile        string   `json:"profile"`
+	Reader         string   `json:"reader"`      // owner | deliverable
+	ResultMode     string   `json:"result_mode"` // full | probe
+	PresenceLocus  string   `json:"locus"`       // 可选在场空间路径（触发软势能场近场共振加权）
+	Carrier        string   `json:"carrier"`     // 可选在场 Harness 载体
+	Incarnation    string   `json:"incarnation"` // 可选在场 Agent 分身角色
+	Bands          int      `json:"bands"`
+	Nodes          int      `json:"nodes"`
+	Chars          int      `json:"chars"`
+	Depth          int      `json:"depth"`
+	IncludeRaw     bool     `json:"include_raw"`
+	RawLimit       int      `json:"raw_limit"`
+	MinConfidence  *float64 `json:"min_confidence"`  // 结果集内按置信度二次过滤
+	SortBy         string   `json:"sort_by"`         // score | confidence | time
+	Workspace      string   `json:"workspace"`       // 可选工作区锚（= 入库 locus）：同工作区证据置前、其余不删
+	Crystallize    bool     `json:"crystallize"`     // 是否把本次检索写成 L3 Noetic；默认 false（调试台只读）
+	DeliveryWindow string   `json:"delivery_window"` // 智能交付窗口档位：0-16（默认）| 0-32 | 0-64
 }
 
 // RecallHitItem 扁平化召回记忆单元条目（带置信度、综合检索得分、所属带与链、四维时空分身坐标、逐字证据锚切片）。
@@ -248,6 +247,7 @@ type RecallQueryResponse struct {
 	AvailableCarriers     []FacetCount    `json:"available_carriers"`
 	Workspace             string          `json:"workspace"`
 	Crystallized          bool            `json:"crystallized"`
+	DeliveryWindow        string          `json:"delivery_window"`
 }
 
 func sqlQuote(s string) string {
@@ -1417,6 +1417,87 @@ func resolveDaemonSocketPath(home string) string {
 	return filepath.Join(stateHome, "rolling-memory", "engine.sock")
 }
 
+// engine 内部通道：控制台不再自带 socket 客户端（裸 socket 无法证明对端就是本机引擎，
+// 同 UID 伪 socket 或旧配置守护进程会被冒认），一律 exec 产品二进制的
+// `engine <op> --json`，由产品侧完成已核验连接（peer 凭据 + 守护身份握手）；守护进程
+// 不可用或校验失败时由调用方按既有降级路径处置，绝不回退到未核验 socket。
+const (
+	// engineRecallExecSlack 在请求自身预算之外为子进程启动与守护自举预留的余量。
+	engineRecallExecSlack = 15 * time.Second
+	// engineDataExecTimeout 限定单次 hydrate/documents 子进程调用的整体时长。
+	engineDataExecTimeout = 20 * time.Second
+	// engineInvalidateExecTimeout 限定一次缓存失效通知的整体时长（尽力而为）。
+	engineInvalidateExecTimeout = 3 * time.Second
+	// engineResponseLimit 限定一次 engine 应答的捕获上限（守护进程自身按 8 MiB 截断
+	// HTTP 体，超出即判协议失败），避免异常子进程撑爆控制台内存。
+	engineResponseLimit = 16 << 20
+	// engineStderrLimit 限定诊断输出的保留字节数。
+	engineStderrLimit = 64 << 10
+)
+
+// engineCommandRunner 执行一次 `engine <op> --json` 内部通道：请求 JSON 走 stdin、
+// 响应 JSON 走 stdout，返回 stdout 原文供调用方按引擎应答形状解析（子进程以退出码
+// 区分成败；退出码非 0 时 stdout 仍可能携带 {"ok":false,...} 应答）。生产实现 exec
+// 产品二进制；测试注入桩替换。
+var engineCommandRunner = runEngineCommand
+
+// engineCapture 有界捕获子进程输出：超过上限继续排空但不存储，避免子进程卡在写管道上。
+type engineCapture struct {
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (capture *engineCapture) Write(chunk []byte) (int, error) {
+	room := capture.limit - capture.buffer.Len()
+	if room <= 0 {
+		capture.overflow = true
+		return len(chunk), nil
+	}
+	if len(chunk) <= room {
+		_, _ = capture.buffer.Write(chunk)
+		return len(chunk), nil
+	}
+	_, _ = capture.buffer.Write(chunk[:room])
+	capture.overflow = true
+	return len(chunk), nil
+}
+
+func runEngineCommand(ctx context.Context, bin, op string, args []string, request []byte) ([]byte, error) {
+	if strings.TrimSpace(bin) == "" {
+		return nil, errors.New("rolling-memory binary not found")
+	}
+	// 测试二进制只允许显式指定的产品二进制：单测不得意外执行开发机上安装的真实产品二进制。
+	if adminTestBinary() && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_BIN")) == "" {
+		return nil, errors.New("engine channel requires an explicit ROLLING_MEMORY_BIN under test binaries")
+	}
+	cmd := exec.CommandContext(ctx, bin, append([]string{"engine", op, "--json"}, args...)...)
+	cmd.Stdin = bytes.NewReader(request)
+	stdout := &engineCapture{limit: engineResponseLimit}
+	stderr := &engineCapture{limit: engineStderrLimit}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd.Env = stripCloudBrainEnv(os.Environ())
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return stdout.buffer.Bytes(), ctx.Err()
+		}
+		message := strings.TrimSpace(stderr.buffer.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return stdout.buffer.Bytes(), errors.New(message)
+	}
+	if stdout.overflow {
+		return stdout.buffer.Bytes(), errors.New("engine response exceeds the size limit")
+	}
+	return stdout.buffer.Bytes(), nil
+}
+
+func adminTestBinary() bool {
+	exe := filepath.Base(os.Args[0])
+	return strings.HasSuffix(exe, ".test") || strings.Contains(exe, ".test.")
+}
+
 var (
 	daemonBootstrapMu      sync.Mutex
 	daemonBootstrapLastTry time.Time
@@ -1450,9 +1531,11 @@ func triggerConsoleDaemonBootstrap(home, dbPath string) {
 	}(home, dbPath)
 }
 
-// tryConsoleDaemonRecall 直连本机唯一常驻守护进程的 Unix Domain Socket（`~/.local/state/rolling-memory/engine.sock`），
-// 命中已在 RAM 中预热的 522MB 语料快照（~80-120ms），省去每次检索 fork 一次性 CLI 子进程与冷扫 SQLite 的 1.5-2.5s 开销；
-// 若守护进程尚未启动或 socket 不可达，返回 handled=false 由下方 CLI 子进程保底执行（同时异步自举拉起守护进程）。
+// tryConsoleDaemonRecall 经产品二进制的 `engine recall` 内部通道请求本机唯一常驻守护进程
+// （已核验连接：同 UID peer 凭据 + 守护身份握手在子进程内完成），命中已在 RAM 中预热的
+// 语料快照（~80-120ms），省去每次检索 fork 一次性 CLI 子进程与冷扫 SQLite 的 1.5-2.5s
+// 开销；若守护进程尚未启动、socket 不可达或校验失败，返回 handled=false 由下方 CLI
+// 子进程保底执行（同时异步自举拉起守护进程），绝不回退到未核验 socket。
 func tryConsoleDaemonRecall(
 	ctx context.Context, home, dbPath, scope, reader, resultMode string,
 	bands, nodes, chars, depth, rawLimit int, q, workspace string,
@@ -1462,8 +1545,18 @@ func tryConsoleDaemonRecall(
 		strings.EqualFold(strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON")), "false") {
 		return nil, false, nil
 	}
+	// 测试二进制默认不路由守护进程（与引擎侧 ShouldUseUnixDaemon 同一不变量），
+	// 除非显式指定 socket 覆盖，避免单测串到开发机上的真实实例。
+	if adminTestBinary() && strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON_SOCKET")) == "" {
+		return nil, false, nil
+	}
 	sockPath := resolveDaemonSocketPath(home)
 	if _, err := os.Stat(sockPath); err != nil {
+		triggerConsoleDaemonBootstrap(home, dbPath)
+		return nil, false, nil
+	}
+	bin := resolveBinary(home)
+	if bin == "" {
 		triggerConsoleDaemonBootstrap(home, dbPath)
 		return nil, false, nil
 	}
@@ -1502,30 +1595,9 @@ func tryConsoleDaemonRecall(
 	if err != nil {
 		return nil, false, nil
 	}
-	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	client := &http.Client{
-		Timeout: time.Duration(budget)*time.Millisecond + 5*time.Second,
-		Transport: &http.Transport{
-			DialContext: func(dCtx context.Context, _, _ string) (net.Conn, error) {
-				return dialer.DialContext(dCtx, "unix", sockPath)
-			},
-			DisableKeepAlives: true,
-		},
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/v1/recall", bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, false, nil
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		triggerConsoleDaemonBootstrap(home, dbPath)
-		return nil, false, nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, false, nil
-	}
+	opCtx, cancel := context.WithTimeout(ctx, time.Duration(budget)*time.Millisecond+engineRecallExecSlack)
+	defer cancel()
+	out, execErr := engineCommandRunner(opCtx, bin, "recall", []string{"--db", dbPath}, bodyBytes)
 	var dResp struct {
 		OK          bool           `json:"ok"`
 		EngineError bool           `json:"engine_error"`
@@ -1533,13 +1605,18 @@ func tryConsoleDaemonRecall(
 		Result      map[string]any `json:"result"`
 		Probe       map[string]any `json:"probe"`
 	}
-	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil || json.Unmarshal(rawBody, &dResp) != nil {
+	if json.Unmarshal(out, &dResp) != nil {
+		if execErr != nil {
+			triggerConsoleDaemonBootstrap(home, dbPath)
+		}
 		return nil, false, nil
 	}
 	if !dResp.OK {
 		if dResp.EngineError && dResp.Error != "" {
 			return nil, true, fmt.Errorf("%s", dResp.Error)
+		}
+		if execErr != nil {
+			triggerConsoleDaemonBootstrap(home, dbPath)
 		}
 		return nil, false, nil
 	}
@@ -1641,30 +1718,6 @@ func recallQueryHandler(c *gin.Context) {
 	if resultMode != "probe" {
 		resultMode = "full"
 	}
-	bands := req.Bands
-	if bands <= 0 {
-		bands = 8
-	}
-	if bands > 50 {
-		bands = 50
-	}
-	nodes := req.Nodes
-	if nodes <= 0 {
-		nodes = 60
-	}
-	chars := req.Chars
-	if chars <= 0 {
-		chars = 12000
-	}
-	depth := req.Depth
-	if depth <= 0 {
-		depth = 2
-	}
-	rawLimit := req.RawLimit
-	if rawLimit <= 0 {
-		rawLimit = 5
-	}
-
 	home, _ := os.UserHomeDir()
 	dbPath := resolveMemoryDBPath(home)
 	bin := resolveBinary(home)
@@ -1678,6 +1731,51 @@ func recallQueryHandler(c *gin.Context) {
 	widgetMu.RUnlock()
 	sw := parseConfigSwitches(filepath.Join(home, ".config", "rolling-memory", "config.toml"), wEnabled)
 	effectiveProfile := "rame"
+	activeWin := sw.DeliveryWindow
+	if activeWin == "" {
+		activeWin = "0-16"
+	}
+	switch strings.ToLower(strings.TrimSpace(req.DeliveryWindow)) {
+	case "auto", "0-16", "16":
+		activeWin = "0-16"
+	case "0-32", "32":
+		activeWin = "0-32"
+	case "0-64", "64":
+		activeWin = "0-64"
+	}
+	winCap := 16
+	switch activeWin {
+	case "0-32":
+		winCap = 32
+	case "0-64":
+		winCap = 64
+	}
+
+	bands := req.Bands
+	if strings.TrimSpace(req.DeliveryWindow) != "" {
+		bands = winCap
+	} else if bands <= 0 {
+		bands = winCap
+	}
+	if bands > 64 {
+		bands = 64
+	}
+	nodes := req.Nodes
+	if nodes <= 0 {
+		nodes = 60
+	}
+	chars := req.Chars
+	if chars <= 0 {
+		chars = 64000
+	}
+	depth := req.Depth
+	if depth <= 0 {
+		depth = 2
+	}
+	rawLimit := req.RawLimit
+	if rawLimit <= 0 {
+		rawLimit = bands
+	}
 
 	facets := queryFacets(dbPath, scope)
 
@@ -1706,6 +1804,7 @@ func recallQueryHandler(c *gin.Context) {
 			AvailableIncarnations: facets.Incarnations,
 			AvailableCarriers:     facets.Carriers,
 			Workspace:             workspace,
+			DeliveryWindow:        activeWin,
 		}))
 		return
 	}
@@ -1724,9 +1823,9 @@ func recallQueryHandler(c *gin.Context) {
 		args := recallQueryArgs(dbPath, cliScope, reader, resultMode, bands, nodes, chars, depth, rawLimit, q, workspace, req.IncludeRaw, req.Crystallize)
 
 		cmd := exec.CommandContext(c.Request.Context(), bin, args...)
-		// 本地模式零外呼：剥离继承的云端覆盖变量（子进程只读本地明文金库）；
-		// 云端模式在凭据齐备时注入端点与数据面签名钥（用户身份仍由子进程自行解析）。
-		cmd.Env, _ = brainChildEnv(c.Request.Context())
+		// 子进程零云端覆盖变量：不注入任何远端端点/凭据（检索只读本地明文金库；
+		// 用户身份由子进程自行解析）。
+		cmd.Env = stripCloudBrainEnv(os.Environ())
 		if loc := strings.TrimSpace(req.PresenceLocus); loc != "" {
 			cmd.Env = append(cmd.Env, "ROLLING_MEMORY_PRESENCE_LOCUS="+loc)
 		}
@@ -1755,6 +1854,7 @@ func recallQueryHandler(c *gin.Context) {
 		ActiveMode:            sw.Mode,
 		ActiveProfile:         effectiveProfile,
 		ConfigProfile:         effectiveProfile,
+		DeliveryWindow:        activeWin,
 		Absent:                raw["absent"] == true,
 		Legs:                  map[string]int{},
 		Gaps:                  map[string]int{},
@@ -2057,6 +2157,9 @@ type DashboardResponse struct {
 	NodeSpark                []int                `json:"node_spark"`
 	LastRecallMS             int                  `json:"last_recall_ms"`
 	AvgRecallMS              int                  `json:"avg_recall_ms"`
+	LatencyP50MS             int                  `json:"latency_p50_ms"`
+	LatencyMaxMS             int                  `json:"latency_max_ms"`
+	LatencySamples           int                  `json:"latency_samples"`
 	LatencyTrend             float64              `json:"latency_trend"`
 	LatencySpark             []int                `json:"latency_spark"`
 	TotalHookEvents          int                  `json:"total_hook_events"`
@@ -2375,16 +2478,14 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 		if start < 0 {
 			start = 0
 		}
-		sum := 0
 		slice := latencies[start:]
-		for _, v := range slice {
-			sum += v
-		}
-		resp.AvgRecallMS = sum / len(slice)
-		if resp.AvgRecallMS > 0 {
-			diff := float64(resp.LastRecallMS-resp.AvgRecallMS) * 100.0 / float64(resp.AvgRecallMS)
-			resp.LatencyTrend = float64(int(diff*10)) / 10
-		}
+		last, avg, p50, max := recallLatencyStats(slice)
+		resp.LastRecallMS = last
+		resp.AvgRecallMS = avg
+		resp.LatencyP50MS = p50
+		resp.LatencyMaxMS = max
+		resp.LatencySamples = len(slice)
+		resp.LatencyTrend = recallLatencyTrend(p50, avg)
 		sparkStart := len(latencies) - 12
 		if sparkStart >= 0 {
 			resp.LatencySpark = append([]int{}, latencies[sparkStart:]...)
@@ -2606,16 +2707,13 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 	}
 	if len(recallLedger.latencies) > 0 {
 		latencies := recallLedger.latencies
-		resp.LastRecallMS = latencies[len(latencies)-1]
-		sum := 0
-		for _, v := range latencies {
-			sum += v
-		}
-		resp.AvgRecallMS = sum / len(latencies)
-		if resp.AvgRecallMS > 0 {
-			diff := float64(resp.LastRecallMS-resp.AvgRecallMS) * 100.0 / float64(resp.AvgRecallMS)
-			resp.LatencyTrend = float64(int(diff*10)) / 10
-		}
+		last, avg, p50, max := recallLatencyStats(latencies)
+		resp.LastRecallMS = last
+		resp.AvgRecallMS = avg
+		resp.LatencyP50MS = p50
+		resp.LatencyMaxMS = max
+		resp.LatencySamples = len(latencies)
+		resp.LatencyTrend = recallLatencyTrend(p50, avg)
 		sparkStart := len(latencies) - 12
 		if sparkStart >= 0 {
 			resp.LatencySpark = append([]int{}, latencies[sparkStart:]...)
@@ -2722,8 +2820,8 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 		L3Added:    l3_30[23:],
 	}
 
-	runningAssert := maxInt(resp.ActiveAssertions-sumInts(assert30[18:]), 1)
-	runningTrace := maxInt(resp.UserTraces-sumInts(l2_30[18:]), 1)
+	runningAssert := max(resp.ActiveAssertions-sumInts(assert30[18:]), 1)
+	runningTrace := max(resp.UserTraces-sumInts(l2_30[18:]), 1)
 	for i := 0; i < 12; i++ {
 		runningAssert += assert30[18+i]
 		runningTrace += l2_30[18+i]
@@ -2941,8 +3039,8 @@ func runEfficacySnapshot(key efficacyKey, scope string, timeout time.Duration) (
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
-	// 本地模式零外呼：不给派生 CLI 注入任何云端覆盖变量（云端模式注入数据面凭据）。
-	cmd.Env, _ = brainChildEnv(ctx)
+	// 子进程零云端覆盖变量：不注入任何远端端点/凭据（疗效快照只统计本地明文金库）。
+	cmd.Env = stripCloudBrainEnv(os.Environ())
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
@@ -3063,14 +3161,10 @@ func tryLoadPersistedROILedger(home, dbPath, scope, harnessFilter string, limit 
 	out["thin_vault_cells"] = tvCells
 	out["thin_vault_noetic"] = tvNoetic
 	out["upstream_engine"] = "Rolling Autonoetic Memory Engine (the memory engine)"
-	// 读数如实标注来源：本地模式恒报本地明文金库坐标，绝不把云端地址 / 用户 ID 当成本地读数呈现。
-	if isLocalModeForHome(home) {
-		out["upstream_user_id"] = ""
-		out["upstream_endpoint"] = "local://vault"
-	} else {
-		out["upstream_user_id"] = defaultUpstreamDevUserID
-		out["upstream_endpoint"] = defaultCloudServerURL + "/open/memory/v1"
-	}
+	// 读数如实标注来源：控制台恒报本地明文金库坐标（local://vault），
+	// 绝不把云端地址 / 用户 ID 当成本地读数呈现。
+	out["upstream_user_id"] = ""
+	out["upstream_endpoint"] = "local://vault"
 	return out, true, upToDate
 }
 
@@ -3310,13 +3404,6 @@ func evalRadarValues(rec EvalRunRecord) []float64 {
 	}
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func sumInts(arr []int) int {
 	s := 0
 	for _, v := range arr {
@@ -3514,17 +3601,15 @@ func graphHandler(c *gin.Context) {
 		return
 	}
 	home, _ := os.UserHomeDir()
-	// 本地模式下记忆图谱为预览功能（真实图谱在下一代提供），
-	// 统一展示预置的 LoCoMo 3D 记忆图谱数据，零云端外呼且不暴露未成形的本地平面表。
-	if isLocalModeForHome(home) {
-		if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
-			httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
-			return
-		}
-		if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
-			httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
-			return
-		}
+	// 记忆图谱为预览功能（真实图谱在下一代提供），统一展示预置的 LoCoMo 3D 记忆图谱数据，
+	// 零云端外呼且不暴露未成形的本地平面表；预置快照不可用时回落到本地金库合并路径。
+	if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
+		httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
+		return
+	}
+	if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
+		httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
+		return
 	}
 	dbPath := resolveMemoryDBPath(home)
 	httpx.Success(c, httpx.WithData(buildMemoryGraphWithLayers(dbPath, req.Scope, req.Limit, req.Keyword, req.Layers, req.LayerWeights)))
@@ -3536,15 +3621,13 @@ func graphExpandHandler(c *gin.Context) {
 		return
 	}
 	home, _ := os.UserHomeDir()
-	if isLocalModeForHome(home) {
-		if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
-			httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
-			return
-		}
-		if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
-			httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
-			return
-		}
+	if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
+		httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
+		return
+	}
+	if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
+		httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
+		return
 	}
 	dbPath := resolveMemoryDBPath(home)
 	httpx.Success(c, httpx.WithData(expandMemoryGraph(dbPath, req.Scope, req.SeedKeys, req.Depth, req.Limit)))
@@ -3567,181 +3650,6 @@ func normalizeAdminMemoryLayer(raw string) string {
 		// L2 Episodic 承接 Harness 对话记录与未知/空层回退。
 		return "episodic"
 	}
-}
-
-type upstreamGraphNodeWire struct {
-	ID           string   `json:"id"`
-	RawID        string   `json:"raw_id"`
-	NodeType     string   `json:"node_type"`
-	Layer        string   `json:"layer"`
-	LayerWeight  float64  `json:"layer_weight"`
-	ParentID     string   `json:"parent_id"`
-	AddressURI   string   `json:"address_uri"`
-	Weight       float64  `json:"weight"`
-	MemberCount  int      `json:"member_count"`
-	OccurredAt   int64    `json:"occurred_at"`
-	CitedUnitIDs []string `json:"cited_unit_ids"`
-	Degree       int      `json:"degree"`
-}
-
-type upstreamGraphEdgeWire struct {
-	Source string  `json:"source"`
-	Target string  `json:"target"`
-	Kind   string  `json:"kind"`
-	Layer  string  `json:"layer"`
-	Weight float64 `json:"weight"`
-}
-
-type upstreamGraphResponseWire struct {
-	Success      bool                    `json:"success"`
-	Scope        string                  `json:"scope"`
-	UserID       string                  `json:"user_id"`
-	Layers       []string                `json:"layers"`
-	LayerWeights map[string]float64      `json:"layer_weights"`
-	Nodes        []upstreamGraphNodeWire `json:"nodes"`
-	Edges        []upstreamGraphEdgeWire `json:"edges"`
-}
-
-var (
-	upGraphCacheMu      sync.RWMutex
-	upGraphCachedWire   *upstreamGraphResponseWire
-	upGraphCachedAt     time.Time
-	upGraphRefreshing   bool
-	upGraphCacheTTL     = 15 * time.Second
-	upGraphFastWaitTime = 180 * time.Millisecond
-)
-
-func doFetchUpstreamBlindGraphHTTP(layers []string, weights map[string]float64, limit int) (*upstreamGraphResponseWire, error) {
-	st := loadCloudAccountState()
-	_ = ensureSignedKey(context.Background(), &st)
-	baseURL, apiKey := resolveBrainEndpoint(st)
-	if baseURL == "" || apiKey == "" {
-		return nil, fmt.Errorf("云端记忆签名钥未配置：请先登录云端账户（数据面直连凭据由控制面签发）")
-	}
-	endpoint := baseURL + "/open/memory/v1/graph"
-	if strings.HasSuffix(baseURL, "/open/memory/v1") {
-		endpoint = baseURL + "/graph"
-	}
-	// Identity must match the thin client's own resolution: the namespace is the
-	// TENANT, the user is the account's numeric id (upstream `users.id`), and the
-	// assistant defaults. Sending the namespace as `user_id` folded the composed
-	// scope onto `ast:default` (no incarnation), so the upstream graph came back
-	// empty for the canonical `ast:default:inc:<uid>` partition.
-	tenantID := strings.TrimSpace(st.Namespace)
-	userID := accountNumericUserID(st)
-	if userID == "" {
-		userID = defaultUpstreamDevUserID
-	}
-
-	reqBody := map[string]any{
-		"tenant_id": tenantID,
-		"user_id":   userID,
-		"limit":     limit,
-		"max_nodes": limit,
-	}
-	if len(layers) > 0 {
-		reqBody["layers"] = layers
-	}
-	if len(weights) > 0 {
-		reqBody["layer_weights"] = weights
-	}
-	rawReq, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(rawReq)))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	if tenantID != "" {
-		httpReq.Header.Set("X-Rolling-Memory-Tenant", tenantID)
-	}
-	httpReq.Header.Set("X-Rolling-Memory-User", userID)
-	httpReq.Header.Set("X-Rolling-Memory-Assistant", "default")
-
-	httpResp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer httpResp.Body.Close()
-	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream graph status %d", httpResp.StatusCode)
-	}
-	var wire upstreamGraphResponseWire
-	if err := json.NewDecoder(httpResp.Body).Decode(&wire); err != nil {
-		return nil, err
-	}
-	return &wire, nil
-}
-
-// fetchUpstreamBlindGraph 采用 Stale-While-Revalidate + 180ms 软预算机制获取上游拓扑：
-//   - 若内存已有未过期快照，0ms 直接返回；
-//   - 若已过期但已有旧快照，立即返回旧快照并在后台单协程异步刷新；
-//   - 若首次无快照，最多等待 180ms（若上游正在跑重型评测则后台继续拉取，当前请求先用本地金库极速渲染）。
-func fetchUpstreamBlindGraph(layers []string, weights map[string]float64, limit int) (*upstreamGraphResponseWire, error) {
-	upGraphCacheMu.RLock()
-	cached := upGraphCachedWire
-	age := time.Since(upGraphCachedAt)
-	refreshing := upGraphRefreshing
-	upGraphCacheMu.RUnlock()
-
-	if cached != nil && age < upGraphCacheTTL {
-		return cached, nil
-	}
-
-	triggerAsync := func() chan *upstreamGraphResponseWire {
-		ch := make(chan *upstreamGraphResponseWire, 1)
-		upGraphCacheMu.Lock()
-		if upGraphRefreshing {
-			upGraphCacheMu.Unlock()
-			close(ch)
-			return ch
-		}
-		upGraphRefreshing = true
-		upGraphCacheMu.Unlock()
-
-		go func() {
-			wire, err := doFetchUpstreamBlindGraphHTTP(layers, weights, limit)
-			upGraphCacheMu.Lock()
-			upGraphRefreshing = false
-			if err == nil && wire != nil {
-				upGraphCachedWire = wire
-				upGraphCachedAt = time.Now()
-			}
-			upGraphCacheMu.Unlock()
-			if err == nil && wire != nil {
-				ch <- wire
-			}
-			close(ch)
-		}()
-		return ch
-	}
-
-	if cached != nil {
-		if !refreshing {
-			_ = triggerAsync()
-		}
-		return cached, nil
-	}
-
-	ch := triggerAsync()
-	select {
-	case w := <-ch:
-		if w != nil {
-			return w, nil
-		}
-	case <-time.After(upGraphFastWaitTime):
-	}
-	upGraphCacheMu.RLock()
-	defer upGraphCacheMu.RUnlock()
-	if upGraphCachedWire != nil {
-		return upGraphCachedWire, nil
-	}
-	return nil, fmt.Errorf("upstream graph warming up in background")
 }
 
 // ==================== 图谱两相构建：领域装配 × 视图渲染 ====================
@@ -3907,11 +3815,8 @@ func buildMemoryGraphWithLayers(dbPath, reqScope string, limit int, keyword stri
 
 // assembleGraphDomain 装配与请求形状无关的三层图谱领域（SQL → 合并 → 地址容器裁剪 → 粒子富化 → 全域总数）。
 func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weightsKey string, graphFingerprint string) *graphDomain {
-	// The display limit truncates the canvas, never the domain total: the upstream
-	// topology is always fetched in full (the engine caps one response at 1000 nodes),
-	// so the merged EventTotal/LinkTotal stay limit-independent and one stale-while-
-	// revalidate snapshot serves every limit.
-	upMaxNodes := -1
+	// 图谱恒由本地明文金库（thin_vault_docs / thin_vault_noetic）合并构建，零云端拓扑拉取：
+	// EventTotal/LinkTotal 只随本地金库变化，与显示限额无关。
 	effWeights := map[string]float64{
 		"background": 1.0,
 		"episodic":   1.0,
@@ -4108,106 +4013,10 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 		})
 	}
 
-	// 2. 调用上游 `/open/memory/v1/graph` 获取实时拓扑（仅保留有本地明文金库支撑的 Unit 节点）。
-	// 本地模式是零外呼硬边界：不取云端拓扑，直接由本地金库合并逻辑构建图谱。
-	sourceName := "open-memory-v1"
-	if isLocalModeForHome(graphHome) {
-		sourceName = "local-vault"
-	} else if upWire, err := fetchUpstreamBlindGraph(nil, effWeights, upMaxNodes); err == nil && upWire != nil {
-		for _, un := range upWire.Nodes {
-			nKey := strings.TrimSpace(un.ID)
-			if nKey == "" {
-				continue
-			}
-			layer := normalizeAdminMemoryLayer(un.Layer)
-			kind := "unit"
-			summary := un.RawID
-			span := ""
-			anchor := un.AddressURI
-			obsText := formatUnixTime(un.OccurredAt, false)
-			var aliases []string
+	// 2. 图谱恒由本地明文金库合并构建：控制台账面零云端外呼，不拉取任何远端拓扑。
+	sourceName := "local-vault"
 
-			if un.NodeType == "cell" || un.NodeType == "super_cell" || strings.HasPrefix(nKey, "cell:") {
-				kind = "cell"
-				if summary == "" {
-					summary = strings.TrimPrefix(nKey, "cell:")
-				}
-				span = fmt.Sprintf("the memory-engine dynamic memory-address container\nAddress URI: %s", un.AddressURI)
-			} else {
-				rawID := strings.TrimSpace(un.RawID)
-				if rawID == "" {
-					rawID = strings.TrimPrefix(nKey, "unit:")
-				}
-				if nm, isNoetic := localNoetics[rawID]; isNoetic {
-					layer = "noetic"
-					summary = clipRunes(nm.queryText, 44)
-					span = "Q: " + nm.queryText + "\nA: " + nm.answerText
-					if anchor == "" {
-						anchor = nm.noeticID
-					}
-					if nm.occurredAt > 0 {
-						obsText = formatUnixTime(nm.occurredAt, false)
-					}
-					aliases = []string{nm.noeticID}
-				} else if dm, hasLocal := localDocs[rawID]; hasLocal {
-					if dm.layer != "" {
-						layer = dm.layer
-					}
-					txt, spanTxt := graphDisplayText(dm)
-					summary = clipRunes(txt, 44)
-					span = spanTxt
-					if anchor == "" {
-						anchor = dm.addressURI
-					}
-					if dm.occurredAt > 0 {
-						obsText = formatUnixTime(dm.occurredAt, false)
-					}
-					aliases = []string{rawID}
-				} else {
-					// 跳过本地明文金库中不存在的盲态孤儿测试 ID，确保图谱每个记忆单元 100% 具备可读明文
-					continue
-				}
-			}
-
-			w := un.Weight
-			if w <= 0 {
-				w = effWeights[layer]
-			}
-			addNode(GraphNodeItem{
-				ID:         deterministicIntID(nKey),
-				NodeKey:    nKey,
-				Summary:    summary,
-				Kind:       kind,
-				Layer:      layer,
-				Certainty:  certaintyTier(1.0),
-				Intention:  layer,
-				Status:     "active",
-				Confidence: 1.0,
-				ObservedAt: obsText,
-				Anchor:     anchor,
-				Span:       span,
-				Aliases:    aliases,
-				Degree:     maxInt(un.Degree, 1),
-				Weight:     w,
-			})
-		}
-		for _, ue := range upWire.Edges {
-			rel := strings.TrimSpace(ue.Kind)
-			if rel == "" {
-				rel = "member_of"
-			}
-			layer := normalizeAdminMemoryLayer(ue.Layer)
-			w := ue.Weight
-			if w <= 0 {
-				w = effWeights[layer]
-			}
-			addEdge(ue.Source, ue.Target, rel, layer, ue.Source+"->"+ue.Target, rel, w)
-		}
-	} else {
-		sourceName = "thin-vault"
-	}
-
-	// 3. 合并本地 thin_vault_docs 与 thin_vault_noetic 中尚未被上游返回的单元与记忆地址容器
+	// 3. 合并本地 thin_vault_docs 与 thin_vault_noetic 的单元与记忆地址容器
 	for _, did := range localDocOrder {
 		dm := localDocs[did]
 		uNodeKey := "unit:" + dm.docID
@@ -4322,7 +4131,7 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 				Anchor:     anchor,
 				Span:       span,
 				Aliases:    []string{nm.noeticID},
-				Degree:     maxInt(len(nm.citedUnitIDs), 1),
+				Degree:     max(len(nm.citedUnitIDs), 1),
 				Weight:     effWeights["noetic"],
 			})
 		}
@@ -5076,8 +4885,8 @@ func segmentHanRunByEndogenousDP(run []rune, st *graphHanCorpusStats) [][]rune {
 			biScore := 1.20
 			if st != nil && st.totalHan > 0 {
 				bc := st.biCount[[2]rune{r1, r2}]
-				u1 := maxInt(1, st.uniCount[r1])
-				u2 := maxInt(1, st.uniCount[r2])
+				u1 := max(1, st.uniCount[r1])
+				u2 := max(1, st.uniCount[r2])
 				pmiArg := float64(st.totalHan*bc) / float64(u1*u2)
 				// 高频复现双字与高互信息双字获得内生凝聚加成；被高频虚字（u1 或 u2 极大且 bc==1）跨界粘连的伪双字自动降权
 				biScore = 1.0 + math.Log1p(float64(bc)) + 0.45*math.Log1p(pmiArg) - 0.18*math.Log1p(float64(u1+u2)/16.0)
@@ -5542,7 +5351,7 @@ func enrichGraphWithAtomsAndMolecules(
 	// 计算拓扑内原子的平均静质量基准 meanMass，用于内生识别高惊奇度实义原子（零停用词表）
 	var sumAtomMass float64
 	for _, rec := range atomMap {
-		df := maxInt(1, len(rec.units))
+		df := max(1, len(rec.units))
 		sumAtomMass += math.Log(1.0 + nDocs/float64(df))
 	}
 	meanAtomMass := 1.5
@@ -5556,7 +5365,7 @@ func enrichGraphWithAtomsAndMolecules(
 		if rec == nil {
 			return 0, 0, false
 		}
-		df := maxInt(1, len(rec.units))
+		df := max(1, len(rec.units))
 		massNats = math.Log(1.0 + nDocs/float64(df))
 		shannonGain := math.Log1p(rec.priorBits / 4.0)
 		// 对全图出现率超过 18% 的泛化背景词施加连续软阻尼（带样本置信核 scaleN = N/(N+16)，防小图误伤共享主题词）
@@ -5707,9 +5516,9 @@ func enrichGraphWithAtomsAndMolecules(
 			df = 1
 		}
 		en, massNats, _ := atomEnergyOf(rec.h)
-		cellSpan := maxInt(1, len(rec.cells))
+		cellSpan := max(1, len(rec.cells))
 		potential := en * (1.0 + 0.25*math.Log1p(float64(cellSpan)))
-		weight := potential * (1.0 + 0.35*math.Log1p(float64(maxInt(1, tf))))
+		weight := potential * (1.0 + 0.35*math.Log1p(float64(max(1, tf))))
 		return GraphAtomParticle{
 			Token:     rec.surface,
 			HashHex:   fmt.Sprintf("%08x", uint32(rec.h)),
@@ -6187,8 +5996,8 @@ func handleTerminalAction(home string, req TerminalRequest) TerminalResponse {
 		args, cmdKey = terminalExecArgs(cmdKey, dbPath)
 		resp.Command = "rolling-memory " + strings.Join(args, " ")
 		termCmd := exec.Command(bin, args...)
-		// 终端子命令同样遵守本地模式零外呼硬边界（云端模式注入数据面凭据）。
-		termCmd.Env, _ = brainChildEnv(context.Background())
+		// 终端子命令同样只读本地明文金库（子进程零云端覆盖变量）。
+		termCmd.Env = stripCloudBrainEnv(os.Environ())
 		out, err := termCmd.CombinedOutput()
 		if err != nil {
 			resp.ExitCode = 1
@@ -6217,6 +6026,10 @@ func terminalExecArgs(cmdKey, dbPath string) ([]string, string) {
 		return []string{"check", "--db", dbPath, "--json"}, "check"
 	case "recent":
 		return []string{"recent", "--db", dbPath, "--limit", "10", "--json"}, "recent"
+	case "prune":
+		// 只读预演（分类 + 可重锚计数）；执行回收与自愈走「回收与自愈」入口的显式确认路径，
+		// 终端不提供破坏性一键命令。
+		return []string{"sync", "prune", "--db", dbPath, "--json"}, "sync prune"
 	default:
 		return []string{"status", "--db", dbPath, "--json"}, "status"
 	}

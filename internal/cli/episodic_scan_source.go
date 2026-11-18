@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/api"
@@ -219,6 +220,43 @@ func streamEpisodicScanSource(ctx context.Context, source episodicScanSource, sc
 	})
 }
 
+// emitEpisodicScanSegmentUnits derives the units of one enumerated segment and
+// hands each candidate to visit with its running unit ordinal. The streaming turn
+// reader and the frozen-parse reader both call it, so `#<k>` and the emitted
+// candidates cannot drift between the two paths.
+func emitEpisodicScanSegmentUnits(ctx context.Context, source episodicScanSource, scope, prefix string, turnStart, unitIdx int, segment episodic.Segment, timestamp int64, completed bool, visit func(unitIdx int, turnStartIdx int, turn candidateEpisodicTurn) error) (int, error) {
+	for _, unit := range episodicunit.SegmentUnits(scope, prefix, segment, timestamp, completed) {
+		if err := ctx.Err(); err != nil {
+			return unitIdx, err
+		}
+		occurredAt := segment.OccurredAt
+		if occurredAt > 1e11 {
+			occurredAt /= 1000
+		}
+		if occurredAt < 0 {
+			occurredAt = 0
+		}
+		turn := candidateEpisodicTurn{
+			HarnessID:  source.HarnessID,
+			SessionID:  source.SessionID,
+			Locus:      source.Locus,
+			LocusKnown: source.LocusKnown,
+			DocID:      unit.DocID,
+			RefPointer: unit.RefPointer,
+			TurnRef:    prefix,
+			Text:       unit.Text,
+			OccurredAt: occurredAt,
+			Completed:  unit.Completed,
+		}
+		curIdx := unitIdx
+		unitIdx++
+		if err := visit(curIdx, turnStart, turn); err != nil {
+			return unitIdx, err
+		}
+	}
+	return unitIdx, nil
+}
+
 func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource, scope, startTurnRef string, startTurnIdx int, visit func(unitIdx int, turnStartIdx int, turn candidateEpisodicTurn) error) (int, error) {
 	if !source.LocusKnown {
 		switch source.Kind {
@@ -232,38 +270,6 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 		}
 	}
 	idx := 0
-	emitUnits := func(prefix string, turnStart int, segment episodic.Segment, timestamp int64, completed bool) error {
-		for _, unit := range episodicunit.SegmentUnits(scope, prefix, segment, timestamp, completed) {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			occurredAt := segment.OccurredAt
-			if occurredAt > 1e11 {
-				occurredAt /= 1000
-			}
-			if occurredAt < 0 {
-				occurredAt = 0
-			}
-			turn := candidateEpisodicTurn{
-				HarnessID:  source.HarnessID,
-				SessionID:  source.SessionID,
-				Locus:      source.Locus,
-				LocusKnown: source.LocusKnown,
-				DocID:      unit.DocID,
-				RefPointer: unit.RefPointer,
-				TurnRef:    prefix,
-				Text:       unit.Text,
-				OccurredAt: occurredAt,
-				Completed:  unit.Completed,
-			}
-			curIdx := idx
-			idx++
-			if err := visit(curIdx, turnStart, turn); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	switch source.Kind {
 	case "jsonl":
 		source.SessionID = harness.TranscriptSessionID(source.HarnessID, source.Path)
@@ -271,8 +277,10 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 			prefix := fmt.Sprintf("@ref:jsonl:%s:%d", source.Path, turn.Index)
 			turnStart := idx
 			for _, segment := range turn.Segments {
-				if err := emitUnits(prefix, turnStart, segment, turn.OccurredAt, closed); err != nil {
-					return err
+				var emitErr error
+				idx, emitErr = emitEpisodicScanSegmentUnits(ctx, source, scope, prefix, turnStart, idx, segment, turn.OccurredAt, closed, visit)
+				if emitErr != nil {
+					return emitErr
 				}
 			}
 			return nil
@@ -313,8 +321,10 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 			prefix := fmt.Sprintf("@ref:zcode:%s:%s", source.SessionID, turn.UserMsgID)
 			turnStart := idx
 			for _, segment := range turn.Segments {
-				if err := emitUnits(prefix, turnStart, segment, ts, completed); err != nil {
-					return err
+				var emitErr error
+				idx, emitErr = emitEpisodicScanSegmentUnits(ctx, source, scope, prefix, turnStart, idx, segment, ts, completed, visit)
+				if emitErr != nil {
+					return emitErr
 				}
 			}
 			return nil
@@ -323,6 +333,79 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 	default:
 		return 0, fmt.Errorf("unknown episodic source %q", source.Kind)
 	}
+}
+
+// streamEpisodicScanSnapshotFrom enumerates one JSONL source's units from a frozen
+// parse: the same unit derivation, pointer prefixes and candidates as
+// streamEpisodicScanSourceFrom, without re-reading or re-decompressing the
+// transcript. A cursor resume point (`startTurnRef` / `startTurnIdx`) restarts the
+// enumeration at the saved turn with its saved unit ordinal when the ref names this
+// source's own pointer grammar and the turn still exists in the frozen parse;
+// otherwise enumeration restarts at turn 0 with ordinal 0, so the caller's
+// `unitIdx < start` skip observes exactly the units the streaming reader would have
+// produced.
+func streamEpisodicScanSnapshotFrom(ctx context.Context, source episodicScanSource, scope string, snapshot *episodic.SourceSnapshot, startTurnRef string, startTurnIdx int, visit func(unitIdx int, turnStartIdx int, turn candidateEpisodicTurn) error) (int, error) {
+	if !source.LocusKnown {
+		source.Locus, source.LocusKnown = resolveJSONLTranscriptLocus(source.Path)
+	}
+	source.SessionID = harness.TranscriptSessionID(source.HarnessID, source.Path)
+	idx := 0
+	firstTurn := 0
+	if startTurnIdx > 0 {
+		prefix := "@ref:jsonl:" + source.Path + ":"
+		if resume := strings.TrimSpace(startTurnRef); strings.HasPrefix(resume, prefix) {
+			if turn, convErr := strconv.Atoi(strings.TrimPrefix(resume, prefix)); convErr == nil && turn >= 0 && turn < snapshot.Turns() {
+				firstTurn, idx = turn, startTurnIdx
+			}
+		}
+	}
+	for turn := firstTurn; turn < snapshot.Turns(); turn++ {
+		if err := ctx.Err(); err != nil {
+			return idx, err
+		}
+		segments, ok := snapshot.Segments(turn)
+		if !ok {
+			continue
+		}
+		occurredAt, _ := snapshot.OccurredAt(turn)
+		completed := snapshot.Completed(turn)
+		prefix := fmt.Sprintf("@ref:jsonl:%s:%d", source.Path, turn)
+		turnStart := idx
+		for _, segment := range segments {
+			var emitErr error
+			idx, emitErr = emitEpisodicScanSegmentUnits(ctx, source, scope, prefix, turnStart, idx, segment, occurredAt, completed, visit)
+			if emitErr != nil {
+				return idx, emitErr
+			}
+		}
+	}
+	return idx, nil
+}
+
+// episodicScanSourceSnapshot builds the one frozen parse this page's iteration of a
+// JSONL source runs on: every pointer verification of the page then answers from it
+// in O(1) instead of re-reading the transcript per unit. A non-JSONL source, or a
+// parse that fails (oversize, corrupt, cancelled), yields nil and the caller keeps
+// the streaming path unchanged.
+func episodicScanSourceSnapshot(ctx context.Context, source episodicScanSource) *episodic.SourceSnapshot {
+	if source.Kind != "jsonl" {
+		return nil
+	}
+	snapshot, err := episodic.NewSourceSnapshotContext(ctx, source.Path)
+	if err != nil {
+		return nil
+	}
+	return snapshot
+}
+
+// episodicScanUnits streams one source's units: from the frozen parse when snapshot
+// is non-nil, from the live readers otherwise. Both produce the same unit sequence
+// (the same ordinals, prefixes and candidates) for a JSONL source.
+func episodicScanUnits(ctx context.Context, source episodicScanSource, scope string, snapshot *episodic.SourceSnapshot, startTurnRef string, startTurnIdx int, visit func(unitIdx int, turnStartIdx int, turn candidateEpisodicTurn) error) (int, error) {
+	if snapshot != nil && source.Kind == "jsonl" {
+		return streamEpisodicScanSnapshotFrom(ctx, source, scope, snapshot, startTurnRef, startTurnIdx, visit)
+	}
+	return streamEpisodicScanSourceFrom(ctx, source, scope, startTurnRef, startTurnIdx, visit)
 }
 
 // zcodeTurnCompleted checks the final message before the next user message that
@@ -434,8 +517,8 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *api.Memory, home str
 		}
 		sources = append(sources, found...)
 	}
-	next, more, scanErr := visitEpisodicSources(ctx, sources, scope, cursor, reconcileDefaultLimit, func(turn candidateEpisodicTurn) error {
-		return saveEpisodicSourceTurn(ctx, db, tc.Vault, scope, deletedEpi, turn)
+	next, more, scanErr := visitEpisodicSourcesVerified(ctx, sources, scope, cursor, reconcileDefaultLimit, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+		return saveEpisodicSourceTurnVerified(ctx, db, tc.Vault, scope, deletedEpi, turn, snapshot)
 	})
 	if discoveryErr != nil {
 		next.RetrySources = true
@@ -465,7 +548,19 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *api.Memory, home str
 	return errors.Join(discoveryErr, scanErr)
 }
 
+// saveEpisodicSourceTurn stores one scanned turn with the live pointer
+// verification (`SaveLocalEpisodicPointerIndexed`).
 func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn) error {
+	return saveEpisodicSourceTurnVerified(ctx, db, base, scope, deletedEpi, turn, nil)
+}
+
+// saveEpisodicSourceTurnVerified stores one scanned turn whose pointer was
+// enumerated from the page's frozen parse (`snapshot`, nil when the streaming
+// fallback produced the turn): every write verifies its pointer against that one
+// parse instead of re-reading and re-decompressing the transcript per unit. The
+// turn bookkeeping, tombstone handling and error classification are identical to
+// the live path.
+func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinclient.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn, snapshot *episodic.SourceSnapshot) error {
 	if episodicunit.DocID(scope, turn.Text) != turn.DocID {
 		return fmt.Errorf("episodic source scan %s: content identity mismatch", turn.DocID)
 	}
@@ -485,7 +580,7 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 			// Authenticate the existing pointer before adding another occurrence.
 			// An unavailable legacy source must not block unrelated transcripts.
 			if strings.HasPrefix(stored, "@ref:") && !vault.HasLocalEpisodicIndex(turn.DocID, stored) {
-				if _, err := vault.EnsureLocalEpisodicIndex(scope, turn.DocID, stored, turn.Text); err != nil {
+				if _, err := vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, turn.DocID, stored, turn.Text); err != nil {
 					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
 						return nil
 					}
@@ -495,8 +590,7 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 					return err
 				}
 			}
-			packet, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-			if sErr := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); sErr != nil {
+			if sErr := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); sErr != nil {
 				if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
 					return nil
 				}
@@ -507,7 +601,7 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 			}
 		} else {
 			if !vault.HasLocalEpisodicIndex(turn.DocID, turn.RefPointer) {
-				if _, err = vault.EnsureLocalEpisodicIndex(scope, turn.DocID, turn.RefPointer, turn.Text); err != nil {
+				if _, err = vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, turn.DocID, turn.RefPointer, turn.Text); err != nil {
 					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
 						return nil
 					}
@@ -522,8 +616,7 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 				return err
 			}
 			if sourceRecorded == 0 {
-				packet, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-				if err := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); err != nil {
+				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); err != nil {
 					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
 						return nil
 					}
@@ -542,8 +635,7 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	packet, _ := vault.PackBlindPacket(turn.DocID, turn.Text, turn.OccurredAt)
-	if err := vault.SaveLocalEpisodicPointerIndexed(turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, packet, thinclient.CloudIngestResponse{}); err != nil {
+	if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); err != nil {
 		if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
 			return nil
 		}
@@ -558,6 +650,22 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 // visitEpisodicSources advances only after each successful visit. Changes during
 // a page are retried, and completed cycles revisit earlier source occurrences.
 func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, visit func(candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
+	return visitEpisodicSourcePages(ctx, sources, scope, cursor, limit, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+		return visit(turn)
+	})
+}
+
+// visitEpisodicSourcesVerified is visitEpisodicSources with the page's frozen parse
+// of the visited turn's source handed to the callback, so one save can verify each
+// pointer in O(1) against the same view the iteration used instead of re-reading
+// the transcript per unit. The snapshot is non-nil exactly for JSONL turns whose
+// source parse was constructed for this page; a nil snapshot means the streaming
+// fallback produced the turn.
+func visitEpisodicSourcesVerified(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, visit func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
+	return visitEpisodicSourcePages(ctx, sources, scope, cursor, limit, visit)
+}
+
+func visitEpisodicSourcePages(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, visit func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
 	if limit <= 0 {
 		return cursor, false, fmt.Errorf("episodic scan page requires a positive limit")
 	}
@@ -588,6 +696,20 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 			hadSourceErr = true
 			continue
 		}
+		// One frozen parse per source per page drives the whole page of this source:
+		// the anchor probe, the turn iteration and the per-unit save verification all
+		// answer from it (one read instead of one re-read per unit). The snapshot is
+		// kept for the source's page and closed before the next source; a source whose
+		// parse fails (oversize, corrupt, cancelled) keeps the streaming path
+		// byte-for-byte, and a non-JSONL source has none.
+		entryCursor := cursor
+		snapshot := episodicScanSourceSnapshot(ctx, source)
+		closeSnapshot := func() {
+			if snapshot != nil {
+				_ = snapshot.Close()
+				snapshot = nil
+			}
+		}
 		start := 0
 		grew := false
 		if key == cursor.Source && cursor.Index > 0 {
@@ -595,7 +717,7 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 			grew = cursor.Grew
 			if stamp != cursor.Stamp && cursor.Stamp != "" && source.Kind != "zcode" {
 				var anchorMatched bool
-				cnt, sErr := streamEpisodicScanSource(ctx, source, scope, func(i int, turn candidateEpisodicTurn) error {
+				cnt, sErr := episodicScanUnits(ctx, source, scope, snapshot, "", 0, func(i int, _ int, turn candidateEpisodicTurn) error {
 					if i == start-1 {
 						anchorMatched = (turn.DocID == cursor.LastDocID)
 						return errEpisodicScanPageStop
@@ -604,9 +726,11 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 				})
 				if sErr != nil && !errors.Is(sErr, errEpisodicScanPageStop) {
 					if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+						closeSnapshot()
 						cursor.RetrySources = true
 						return cursor, true, errors.Join(sourceErr, sErr)
 					}
+					closeSnapshot()
 					sourceErr = errors.Join(sourceErr, sErr)
 					hadSourceErr = true
 					continue
@@ -616,6 +740,7 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 					grew = false
 				} else {
 					if srcIdx+1 < len(ordered) && cursor.Grew {
+						closeSnapshot()
 						continue
 					}
 					grew = true
@@ -638,7 +763,7 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 		}
 		lastVisitedIdx := start
 		stoppedForLimit := false
-		_, sErr := streamEpisodicScanSourceFrom(ctx, source, scope, startTurnRef, startTurnIdx, func(i int, turnStart int, turn candidateEpisodicTurn) error {
+		_, sErr := episodicScanUnits(ctx, source, scope, snapshot, startTurnRef, startTurnIdx, func(i int, turnStart int, turn candidateEpisodicTurn) error {
 			if i < start {
 				return nil
 			}
@@ -646,7 +771,7 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 				stoppedForLimit = true
 				return errEpisodicScanPageStop
 			}
-			if err := visit(turn); err != nil {
+			if err := visit(snapshot, turn); err != nil {
 				if !errors.Is(err, errEpisodicSourceItem) {
 					visitCallErr = err
 					return errEpisodicScanPageStop
@@ -677,19 +802,34 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 			return nil
 		})
 		if visitCallErr != nil {
+			closeSnapshot()
 			cursor.RetrySources = true
 			return cursor, true, errors.Join(sourceErr, visitCallErr)
 		}
 		if sErr != nil && !errors.Is(sErr, errEpisodicScanPageStop) {
 			if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+				closeSnapshot()
 				cursor.RetrySources = true
 				return cursor, true, errors.Join(sourceErr, sErr)
 			}
+			closeSnapshot()
 			sourceErr = errors.Join(sourceErr, sErr)
 			hadSourceErr = true
 			cursor.RetrySources = true
 			continue
 		}
+		if snapshot != nil && snapshot.Stale() {
+			// The frozen parse no longer describes the source: the file changed while
+			// the page was running, so the page's saves were verified against a view the
+			// source has left. The page fails and the cursor does not advance past it —
+			// the same failure class as a source that changed mid-stream — and the next
+			// page re-observes and retries from this checkpoint (saves are idempotent).
+			closeSnapshot()
+			cursor = entryCursor
+			cursor.RetrySources = true
+			return cursor, true, errors.Join(sourceErr, fmt.Errorf("episodic source changed during scan: %s", source.Path))
+		}
+		closeSnapshot()
 		after, err := episodicScanSourceStamp(source)
 		if err != nil {
 			sourceErr = errors.Join(sourceErr, err)

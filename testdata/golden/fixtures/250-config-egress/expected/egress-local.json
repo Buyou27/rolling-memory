@@ -15,12 +15,12 @@
     },
     {
       "denied": true,
-      "error": "local mode blocks non-loopback egress to api.example.com; switch to cloud mode explicitly if this is intended",
+      "error": "local mode blocks non-loopback egress to api.example.com; only the configured evaluation model endpoint may leave the machine",
       "url": "https://api.example.com/v1/chat/completions"
     },
     {
       "denied": true,
-      "error": "local mode blocks non-loopback egress to 203.0.113.10; switch to cloud mode explicitly if this is intended",
+      "error": "local mode blocks non-loopback egress to 203.0.113.10; only the configured evaluation model endpoint may leave the machine",
       "url": "http://203.0.113.10:9/v1"
     },
     {
@@ -30,7 +30,7 @@
     },
     {
       "denied": true,
-      "error": "local mode blocks non-loopback egress to unknown host; switch to cloud mode explicitly if this is intended",
+      "error": "local mode blocks non-loopback egress to unknown host; only the configured evaluation model endpoint may leave the machine",
       "url": "http://"
     }
   ],

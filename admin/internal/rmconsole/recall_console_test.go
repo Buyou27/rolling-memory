@@ -2,10 +2,6 @@ package rollingmemory
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestRecallQueryArgsReadOnlyByDefault 钉住检索调试台的两条契约：
@@ -54,34 +49,16 @@ func TestRecallQueryArgsCarryConsoleBudget(t *testing.T) {
 	}
 }
 
-// TestTryConsoleDaemonRecallOverUnixSocket 钉住控制台直连本机守护进程 Unix Socket：
-// 当 engine.sock 在线时，零 CLI 子进程直接通过 /v1/recall 拿到召回结果并透传工作区锚。
-func TestTryConsoleDaemonRecallOverUnixSocket(t *testing.T) {
-	sockPath := filepath.Join("/tmp", fmt.Sprintf("rm-console-test-%d.sock", time.Now().UnixNano()))
-	_ = os.Remove(sockPath)
-	t.Cleanup(func() { _ = os.Remove(sockPath) })
-	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", sockPath)
-
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatalf("listen unix %s: %v", sockPath, err)
-	}
-	defer ln.Close()
-
-	var gotPayload map[string]any
-	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/v1/recall" || r.Method != http.MethodPost {
-				http.NotFound(w, r)
-				return
-			}
-			_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"absent":false,"meta":{"elapsed_ms":42},"bands":[{"id":"b1"}]}}`))
-		}),
-	}
-	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+// TestTryConsoleDaemonRecallOverEngineChannel 钉住控制台检索走产品二进制的已核验
+// engine 内部通道：命中时零裸 socket 连接直接拿到召回结果并透传工作区锚与只读开关。
+func TestTryConsoleDaemonRecallOverEngineChannel(t *testing.T) {
+	connections := trapDaemonSocket(t)
+	calls := stubEngineRunner(t, func(call engineCall) (string, error) {
+		if call.op != "recall" {
+			t.Errorf("unexpected engine op %q", call.op)
+		}
+		return engineReplyJSON(t, map[string]any{"ok": true, "result": map[string]any{"absent": false, "meta": map[string]any{"elapsed_ms": 42}, "bands": []any{map[string]any{"id": "b1"}}}}), nil
+	})
 
 	raw, handled, err := tryConsoleDaemonRecall(
 		context.Background(), "/tmp", "/tmp/m.db", "mem:self", "owner", "full",
@@ -90,11 +67,14 @@ func TestTryConsoleDaemonRecallOverUnixSocket(t *testing.T) {
 	if err != nil || !handled || raw == nil {
 		t.Fatalf("tryConsoleDaemonRecall = (%v, %v, %v), want handled", raw, handled, err)
 	}
-	if gotCue, _ := gotPayload["cue"].(string); gotCue != "[Rolling-Memory] 检索性能" {
-		t.Fatalf("daemon payload cue = %q, want anchored cue", gotCue)
+	if gotCue := asString((*calls)[0].request["cue"]); gotCue != "[Rolling-Memory] 检索性能" {
+		t.Fatalf("engine payload cue = %q, want anchored cue", gotCue)
 	}
-	if gotNoCryst, _ := gotPayload["no_crystallize"].(bool); !gotNoCryst {
-		t.Fatalf("daemon payload no_crystallize = %v, want true", gotNoCryst)
+	if gotNoCryst, _ := (*calls)[0].request["no_crystallize"].(bool); !gotNoCryst {
+		t.Fatalf("engine payload no_crystallize = %v, want true", (*calls)[0].request["no_crystallize"])
+	}
+	if got := connections.Load(); got != 0 {
+		t.Fatalf("raw socket connections = %d, want 0", got)
 	}
 }
 
