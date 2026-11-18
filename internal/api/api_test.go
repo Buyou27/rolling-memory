@@ -15,7 +15,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 

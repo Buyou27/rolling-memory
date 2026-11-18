@@ -21,9 +21,9 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/evalns"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/text"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
@@ -234,13 +234,17 @@ func (m *Memory) thinClientRemember(req RememberRequest) (map[string]any, error)
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("thinclient remember requires non-empty content")
 	}
-	docID := "rm_" + ids.SHA256Hex(scope + "\x00" + session + "\x00" + text)[:24]
+	// One unit is bounded by the shared tokenz-r chunk rung: a long paste is
+	// ingested as several content-addressed units (identical chunks collapse),
+	// while a text that fits the rung keeps its historical single-unit id.
+	chunks := tokenzr.ChunkBySentences(text, tokenzr.DefaultChunkTokens)
 	if req.Dry {
 		return map[string]any{
 			"ok":        true,
 			"dry":       true,
 			"scope":     scope,
 			"extractor": thinclient.EngineName,
+			"chunks":    len(chunks),
 		}, nil
 	}
 	tc, err := m.ThinClient()
@@ -249,38 +253,57 @@ func (m *Memory) thinClientRemember(req RememberRequest) (map[string]any, error)
 	}
 	now := clock.Unix()
 	occ := ids.ParseTime(req.OccurredAt, ids.ParseTimeOptions{TimeRef: &now, Default: now})
-	resp, err := tc.Remember(context.Background(), docID, text, occ)
-	if err != nil {
-		return nil, err
+	written := make([]any, 0, len(chunks))
+	seen := make(map[string]struct{}, len(chunks))
+	var first thinclient.IngestResponse
+	for index, chunk := range chunks {
+		docID := "rm_" + ids.SHA256Hex(scope + "\x00" + session + "\x00" + chunk)[:24]
+		if _, duplicate := seen[docID]; duplicate {
+			continue
+		}
+		seen[docID] = struct{}{}
+		resp, err := tc.Remember(context.Background(), docID, chunk, occ)
+		if err != nil {
+			return nil, fmt.Errorf("thinclient remember chunk %d/%d: %w", index+1, len(chunks), err)
+		}
+		if len(written) == 0 {
+			first = resp
+		}
+		written = append(written, map[string]any{
+			"id":          docID,
+			"address_uri": resp.AddressURI,
+			"waveform":    resp.WaveformBar,
+			"reason":      "thin_vault_ingested",
+			"chunk_index": index,
+		})
 	}
+	if len(written) == 0 {
+		return nil, fmt.Errorf("thinclient remember produced no unit")
+	}
+	firstID := written[0].(map[string]any)["id"].(string)
 	return map[string]any{
-		"ok":        true,
-		"dry":       false,
-		"scope":     scope,
-		"extractor": thinclient.EngineName,
-		"written": []any{
-			map[string]any{
-				"id":          docID,
-				"address_uri": resp.AddressURI,
-				"waveform":    resp.WaveformBar,
-				"reason":      "thin_vault_ingested",
-			},
-		},
+		"ok":            true,
+		"dry":           false,
+		"scope":         scope,
+		"extractor":     thinclient.EngineName,
+		"written":       written,
 		"skipped":       []any{},
 		"superseded":    []any{},
 		"supplemented":  []any{},
 		"conflicts":     0,
 		"anchor_failed": 0,
 		"trace": map[string]any{
-			"hash":     docID,
+			"hash":     firstID,
 			"session":  session,
 			"inserted": true,
+			"chunks":   len(written),
 		},
 		"meta": map[string]any{
 			"engine":      thinclient.EngineName,
-			"address_uri": resp.AddressURI,
-			"coord64":     resp.AddressCoord64,
-			"waveform":    resp.WaveformBar,
+			"address_uri": first.AddressURI,
+			"coord64":     first.AddressCoord64,
+			"waveform":    first.WaveformBar,
+			"chunks":      len(written),
 			"elapsed_ms":  int(clock.MonotonicMS() - started),
 		},
 	}, nil

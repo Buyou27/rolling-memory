@@ -89,7 +89,6 @@ func (st *rmClusterState) rmProximityAndSynergy(c *rmCandidate, groups map[uint6
 	}
 	entries := st.docEntriesOf(c.unit)
 	var prox, syn float64
-	const invE2 = 1.0 / (math.E * math.E)
 	for i, a := range c.matches {
 		ma := groups[a.group]
 		for _, b := range c.matches[i+1:] {
@@ -346,11 +345,7 @@ func (c *rmCandidate) stage2Bounds(unitStructGate []float64, u int32, groups map
 	if c.lex > 0 {
 		compBound = invE * invE * c.lex * (1.0 - math.Exp(-c.lex/total))
 	}
-	gate := 1.0
-	if len(unitStructGate) > int(u) {
-		gate = unitStructGate[u]
-	}
-	structBound = gate * matched * (1.0 + invE)
+	structBound = gateAt(unitStructGate, u) * matched * (1.0 + invE)
 	if c.structureSet {
 		structBound = c.structure
 	}
@@ -382,7 +377,6 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 	focalRawSum := sc.focalRawSum[:idx.N]
 	focalBuilt := sc.focalBuilt[:idx.N]
 	highDFThresh := idx.HighDFThreshold()
-	const compScale = invE * invE
 
 	buildFocal := func(u int32, c *rmCandidate) ([]rmFocalTermWeight, float64) {
 		if focalBuilt[u] {
@@ -559,7 +553,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		}
 		pAnchor := 1.0 - math.Exp(-c.lex/total)
 		etaNovel := compNovel / (compTot + muQ)
-		return qRem + compScale*c.lex*pAnchor*etaNovel
+		return qRem + invE2*c.lex*pAnchor*etaNovel
 	}
 	queue := sc.heapQueue[:0]
 	for _, u := range sc.dirtyUnits {
@@ -576,7 +570,6 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 			structureSet: false,
 		})
 	}
-	subFloor := 1.0 - invE
 	profCache := sc.selectProfCache
 	if profCache != nil {
 		clear(profCache)
@@ -601,11 +594,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		if !best.structureSet || best.epoch != len(out) {
 			if !best.structureSet {
 				if !c.structureSet {
-					gate := 1.0
-					if len(unitStructGate) > int(best.unit) {
-						gate = unitStructGate[best.unit]
-					}
-					c.structure = gate * st.computeStructuredIncrement(idx, sc, c, groups, total)
+					c.structure = gateAt(unitStructGate, best.unit) * st.computeStructuredIncrement(idx, sc, c, groups, total)
 					c.structureSet = true
 				}
 				best.structureSet = true
@@ -700,11 +689,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 					// couple the damping dose to the UnitID sort order, so
 					// materialize it with the exact refresh formula first.
 					if !nbC.structureSet {
-						gate := 1.0
-						if len(unitStructGate) > int(nb) {
-							gate = unitStructGate[nb]
-						}
-						nbC.structure = gate * st.computeStructuredIncrement(idx, sc, nbC, groups, total)
+						nbC.structure = gateAt(unitStructGate, nb) * st.computeStructuredIncrement(idx, sc, nbC, groups, total)
 						nbC.structureSet = true
 					}
 					nbHop := nbC.stSpread + nbC.stCorrob

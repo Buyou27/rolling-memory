@@ -438,6 +438,10 @@ func TestWriteDefaultAndSetConfigValue(t *testing.T) {
 	isolateHome(t)
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "config.toml")
+	// This test pins the literal template text; XDG-adapted writes have their
+	// own test (TestWriteDefaultKeepsXDGResolvedPaths).
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
 	written, err := WriteDefault(path)
 	if err != nil {
 		t.Fatalf("WriteDefault: %v", err)

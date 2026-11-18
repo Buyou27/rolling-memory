@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/api"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 // A turn band must show what the user asked even when retrieval only matched a later

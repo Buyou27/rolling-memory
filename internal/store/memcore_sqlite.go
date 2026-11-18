@@ -12,7 +12,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
 )
 
 // SQLiteBackend implements memcore.StoreBackend on top of the local SQLite Store.

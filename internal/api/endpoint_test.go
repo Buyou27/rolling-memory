@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 func TestLocalModeNeverContactsBrain(t *testing.T) {

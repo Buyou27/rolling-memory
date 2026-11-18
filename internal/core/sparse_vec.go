@@ -429,66 +429,101 @@ type VectorPairDecomposition struct {
 	Cosine                float64 // 稀疏向量 L2 余弦相似度 <u, v> / (||u||_2 * ||v||_2) in [0, 1]
 }
 
+// sparsePairAccum 是「两个升序稀疏支撑的二项式对偶分解」的唯一公式真源（无语义、零分配）。
+// 两个适配器（unitGroupProfile.items 与 SparseVector.Entries）只按各自结构喂
+// (id 顺序, weight, isCore)，全部判据、累积与覆盖率公式只在下面实现一次，
+// 避免同一数学出现两份实现后各自漂移。
+type sparsePairAccum struct {
+	sharedGroups  int
+	sharedU       float64
+	sharedV       float64
+	sharedMin     float64
+	selfExcess    float64
+	peerExcess    float64
+	selfSalientEx float64
+	peerSalientEx float64
+	dot           float64
+}
+
+// addSelf 记 u 侧独有坐标：残差能量全额计入，核心且超过特征能级 μ 的部分计入显著残差。
+func (a *sparsePairAccum) addSelf(w float64, core bool, mu float64) {
+	a.selfExcess += w
+	if core && w > mu {
+		a.selfSalientEx += w - mu
+	}
+}
+
+// addPeer 记 v 侧独有坐标，语义与 addSelf 对称。
+func (a *sparsePairAccum) addPeer(w float64, core bool, mu float64) {
+	a.peerExcess += w
+	if core && w > mu {
+		a.peerSalientEx += w - mu
+	}
+}
+
+// addShared 记共享坐标：双侧能量和、木桶下确界与 L2 内积项。
+func (a *sparsePairAccum) addShared(wu, wv float64) {
+	a.sharedGroups++
+	a.sharedU += wu
+	a.sharedV += wv
+	a.sharedMin += math.Min(wu, wv)
+	a.dot += wu * wv
+}
+
+// finalize 结算覆盖率、调和覆盖度与余弦（唯一公式）。余弦仅在双方向量范数均已知时计算；
+// 只做逐簇相对比较（无范数）的调用方传 0 即可，Cosine 保持 0。
+func (a *sparsePairAccum) finalize(totalU, totalV, normU, normV float64) VectorPairDecomposition {
+	d := VectorPairDecomposition{
+		SharedGroups:          a.sharedGroups,
+		SharedUNats:           a.sharedU,
+		SharedVNats:           a.sharedV,
+		SharedMinNats:         a.sharedMin,
+		SelfExcessNats:        a.selfExcess,
+		PeerExcessNats:        a.peerExcess,
+		SelfSalientExcessNats: a.selfSalientEx,
+		PeerSalientExcessNats: a.peerSalientEx,
+	}
+	if totalU > 0 {
+		d.SelfCoverage = math.Min(1.0, a.sharedU/totalU)
+	}
+	if totalV > 0 {
+		d.PeerCoverage = math.Min(1.0, a.sharedV/totalV)
+	}
+	if d.SelfCoverage+d.PeerCoverage > 0 {
+		d.HarmonicCoverage = 2.0 * d.SelfCoverage * d.PeerCoverage / (d.SelfCoverage + d.PeerCoverage)
+	}
+	if a.dot > 0 && normU > 0 && normV > 0 {
+		d.Cosine = math.Min(1.0, a.dot/(normU*normV))
+	}
+	return d
+}
+
 // DecomposeSparsePair 对任意两个 SparseVector 执行双指针 O(nnz(u)+nnz(v)) 对偶分解。
 func DecomposeSparsePair(u, v SparseVector) VectorPairDecomposition {
-	var d VectorPairDecomposition
 	eu, ev := u.Entries, v.Entries
-	var dot float64
+	var acc sparsePairAccum
 	i, j := 0, 0
 	for i < len(eu) && j < len(ev) {
 		gu, gv := eu[i].ID, ev[j].ID
 		if gu < gv {
-			w := eu[i].WeightNats
-			d.SelfExcessNats += w
-			if eu[i].IsCore && w > u.RenyiMuNats {
-				d.SelfSalientExcessNats += w - u.RenyiMuNats
-			}
+			acc.addSelf(eu[i].WeightNats, eu[i].IsCore, u.RenyiMuNats)
 			i++
 		} else if gu > gv {
-			w := ev[j].WeightNats
-			d.PeerExcessNats += w
-			if ev[j].IsCore && w > v.RenyiMuNats {
-				d.PeerSalientExcessNats += w - v.RenyiMuNats
-			}
+			acc.addPeer(ev[j].WeightNats, ev[j].IsCore, v.RenyiMuNats)
 			j++
 		} else {
-			wu, wv := eu[i].WeightNats, ev[j].WeightNats
-			d.SharedGroups++
-			d.SharedUNats += wu
-			d.SharedVNats += wv
-			d.SharedMinNats += math.Min(wu, wv)
-			dot += wu * wv
+			acc.addShared(eu[i].WeightNats, ev[j].WeightNats)
 			i++
 			j++
 		}
 	}
 	for ; i < len(eu); i++ {
-		w := eu[i].WeightNats
-		d.SelfExcessNats += w
-		if eu[i].IsCore && w > u.RenyiMuNats {
-			d.SelfSalientExcessNats += w - u.RenyiMuNats
-		}
+		acc.addSelf(eu[i].WeightNats, eu[i].IsCore, u.RenyiMuNats)
 	}
 	for ; j < len(ev); j++ {
-		w := ev[j].WeightNats
-		d.PeerExcessNats += w
-		if ev[j].IsCore && w > v.RenyiMuNats {
-			d.PeerSalientExcessNats += w - v.RenyiMuNats
-		}
+		acc.addPeer(ev[j].WeightNats, ev[j].IsCore, v.RenyiMuNats)
 	}
-	if u.TotalMassNats > 0 {
-		d.SelfCoverage = math.Min(1.0, d.SharedUNats/u.TotalMassNats)
-	}
-	if v.TotalMassNats > 0 {
-		d.PeerCoverage = math.Min(1.0, d.SharedVNats/v.TotalMassNats)
-	}
-	if d.SelfCoverage+d.PeerCoverage > 0 {
-		d.HarmonicCoverage = 2.0 * d.SelfCoverage * d.PeerCoverage / (d.SelfCoverage + d.PeerCoverage)
-	}
-	if dot > 0 && u.NormL2 > 0 && v.NormL2 > 0 {
-		d.Cosine = math.Min(1.0, dot/(u.NormL2*v.NormL2))
-	}
-	return d
+	return acc.finalize(u.TotalMassNats, v.TotalMassNats, u.NormL2, v.NormL2)
 }
 
 // ConditionedReadout 表示稀疏能量向量在给定「查询场 Q × 已选集合覆盖状态 S_{k-1}」下的
@@ -676,39 +711,11 @@ func (e *Engine) TermEnergyVector(termID uint64) (TermEnergyProfile, bool) {
 		kappa = ((n - 1.0) / (n + 2.0)) * math.Max(0, 1.0-(dObs-1.0)/denom)
 	}
 
-	var partnerEntries []SparseEntry
-	for i, pk := range st.phraseKeys {
-		var partner uint64
-		if pk.a == termID {
-			partner = pk.b
-		} else if pk.b == termID {
-			partner = pk.a
-		} else {
-			continue
-		}
-		pPosts := st.phraseUnits[st.phraseRowPtr[i]:st.phraseRowPtr[i+1]]
-		if len(pPosts) == 0 {
-			continue
-		}
-		wb, okB := st.effWeightOf(partner)
-		if !okB || wb <= 0 {
-			wb, _ = idx.TermMass(partner)
-		}
-		if wb <= 0 {
-			continue
-		}
-		joint := math.Log1p((float64(idx.N) - float64(len(pPosts)) + 0.5) / (float64(len(pPosts)) + 0.5))
-		bindMass := math.Min(effW, wb) * joint / (1.0 + joint)
-		pDF := idx.TermDF(partner)
-		partnerEntries = append(partnerEntries, SparseEntry{
-			ID:           partner,
-			WeightNats:   bindMass,
-			SelfInfoNats: joint,
-			TF:           int32(len(pPosts)),
-			DF:           pDF,
-			IsCore:       pDF <= highDFThresh,
-		})
-	}
+	// 搭档扫描：主序 (a, b) 二分命中 a==termID 的键（复用 phrasePostings 前缀
+	// 桶），对偶序 (b, a) 二分命中 b==termID 的键（partnerIdx 前缀桶）。两区间
+	// 互不相交（自搭配 a==b 在 dyad 提取期即排除），BuildSparseVector 按 ID
+	// 升序去重收尾。全键集上仅做 O(log) 次定位，不再逐键全扫。
+	partnerEntries := st.partnerEntriesInto(idx, termID, effW, highDFThresh)
 
 	return TermEnergyProfile{
 		TermID:              termID,
@@ -721,6 +728,88 @@ func (e *Engine) TermEnergyVector(termID uint64) (TermEnergyProfile, bool) {
 		PartnerVector:       BuildSparseVector(partnerEntries),
 		UnitVector:          BuildSparseVector(unitEntries),
 	}, true
+}
+
+// partnerEntriesInto 收集词项 termID 的全部短语搭档稀疏项：主序 (a, b) 前缀桶
+// 二分定位 a==termID 的连续区间（搭档 p > termID），对偶序 partnerIdx (b, a)
+// 前缀桶二分定位 b==termID 的连续区间（搭档 p < termID）；键规范序 a<=b 且自
+// 搭档在 dyad 提取期排除，故两臂搭档集互不相交，臂内按键序天然升序。postings
+// 双臂共享 phraseUnits，零第二副本。前缀表未构建的零值态退回全键扫（与
+// phrasePostings 同一防御语义），宁慢不错。
+func (st *rmClusterState) partnerEntriesInto(idx *Index, termID uint64, effW float64, highDFThresh int) []SparseEntry {
+	keys := st.phraseKeys
+	if len(keys) == 0 {
+		return nil
+	}
+	entries := make([]SparseEntry, 0, 16)
+	emit := func(partner uint64, postings []int32) {
+		if len(postings) == 0 {
+			return
+		}
+		wb, okB := st.effWeightOf(partner)
+		if !okB || wb <= 0 {
+			wb, _ = idx.TermMass(partner)
+		}
+		if wb <= 0 {
+			return
+		}
+		joint := math.Log1p((float64(idx.N) - float64(len(postings)) + 0.5) / (float64(len(postings)) + 0.5))
+		bindMass := math.Min(effW, wb) * joint / (1.0 + joint)
+		pDF := idx.TermDF(partner)
+		entries = append(entries, SparseEntry{
+			ID:           partner,
+			WeightNats:   bindMass,
+			SelfInfoNats: joint,
+			TF:           int32(len(postings)),
+			DF:           pDF,
+			IsCore:       pDF <= highDFThresh,
+		})
+	}
+	bIdx := int(termID >> 52)
+	// a 侧臂：桶内键按 (a, b) 升序，二分下界后顺序消费 a==termID 连缀段。
+	lo, hi := int(st.phrasePrefixPtr[bIdx]), int(st.phrasePrefixPtr[bIdx+1])
+	if hi == 0 && st.phrasePrefixPtr[4096] == 0 {
+		lo, hi = 0, len(keys)
+	}
+	armHi := hi
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if keys[mid].a < termID {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	for lo < armHi && keys[lo].a == termID {
+		k := keys[lo]
+		emit(k.b, st.phraseUnits[st.phraseRowPtr[lo]:st.phraseRowPtr[lo+1]])
+		lo++
+	}
+	// b 侧臂：对偶序桶内键按 (b, a) 升序，同式二分下界后顺序消费 b==termID 连缀段。
+	if len(st.partnerIdx) == 0 {
+		for i, pk := range keys {
+			if pk.b == termID {
+				emit(pk.a, st.phraseUnits[st.phraseRowPtr[i]:st.phraseRowPtr[i+1]])
+			}
+		}
+		return entries
+	}
+	lo, hi = int(st.partnerPrefixPtr[bIdx]), int(st.partnerPrefixPtr[bIdx+1])
+	armHi = hi
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if keys[st.partnerIdx[mid]].b < termID {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	for lo < armHi && keys[st.partnerIdx[lo]].b == termID {
+		k := keys[st.partnerIdx[lo]]
+		emit(k.a, st.phraseUnits[st.phraseRowPtr[st.partnerIdx[lo]]:st.phraseRowPtr[st.partnerIdx[lo]+1]])
+		lo++
+	}
+	return entries
 }
 
 // PhraseEnergyProfile 表达单个「共现词组 / 短语（PhraseDyad）」在当前语料参照系 M_N 下的动态能量画像：

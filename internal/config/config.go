@@ -80,6 +80,13 @@ log = "~/.local/state/rolling-memory/rolling-memory.log"
 name = "local"
 allow_loopback_llm = true
 
+[daemon]
+# Background engine daemon memory cap (Go soft memory limit).
+# auto = 1/8 of physical RAM, clamped to 1GiB-4GiB.
+# off  = no explicit cap (a GOMEMLIMIT environment value still applies).
+# Explicit sizes accept B / KiB / MiB / GiB / TiB, e.g. "512MiB" or "2GiB".
+memory_limit = "auto"
+
 [llm]
 # none = deterministic local extractor (no model call)
 # openai = any OpenAI-compatible /chat/completions endpoint
@@ -287,6 +294,13 @@ type StorageConfig struct {
 	Profile string
 }
 
+// DaemonConfig holds background engine daemon settings ([daemon] section).
+type DaemonConfig struct {
+	// MemoryLimit is the canonical soft memory limit: "auto", "off" or a
+	// size such as "2GiB". It is applied when the daemon starts.
+	MemoryLimit string
+}
+
 // Config is the resolved runtime configuration.
 type Config struct {
 	Path             string
@@ -300,6 +314,7 @@ type Config struct {
 	Recall           RecallConfig
 	Hooks            HooksConfig
 	Storage          StorageConfig
+	Daemon           DaemonConfig
 	Identity         IdentityConfig
 	Eval             EvalConfig
 }
@@ -348,6 +363,7 @@ func Load(opts LoadOptions) (*Config, error) {
 	llmTable := table(data, "llm")
 	recallTable := table(data, "recall")
 	hooksTable := table(data, "hooks")
+	daemonTable := table(data, "daemon")
 	identityTable := table(data, "identity")
 	evalTable := table(data, "eval")
 	// 跨版本兼容键：`[cloud.sync] scope_from_workspace` 仍是控制台判定的输入，
@@ -457,6 +473,15 @@ func Load(opts LoadOptions) (*Config, error) {
 		storageProfile = pyString(value)
 	}
 
+	daemonMemoryLimitRaw := pyString(envOr(env, "ROLLING_MEMORY_DAEMON_MEMORY_LIMIT",
+		getDefault(daemonTable, "memory_limit", MemoryLimitAuto)))
+	daemonMemoryLimit, _, daemonMemoryLimitOK := ParseMemoryLimit(daemonMemoryLimitRaw)
+	if !daemonMemoryLimitOK {
+		// Keep the raw value so Validate reports it precisely instead of
+		// silently falling back to auto.
+		daemonMemoryLimit = strings.TrimSpace(daemonMemoryLimitRaw)
+	}
+
 	resolvedDB := resolveConfigPath(pyString(dbValue), portableRoot, DefaultDBPath(), "~/.local/share/rolling-memory/memory.db")
 	resolvedLog := resolveConfigPath(pyString(logValue), portableRoot, filepath.Join(DefaultStateDir(), "rolling-memory.log"), "~/.local/state/rolling-memory/rolling-memory.log")
 
@@ -475,6 +500,7 @@ func Load(opts LoadOptions) (*Config, error) {
 		Recall:           recallConfig,
 		Hooks:            hooksConfig,
 		Storage:          StorageConfig{Profile: storageProfile},
+		Daemon:           DaemonConfig{MemoryLimit: daemonMemoryLimit},
 		Identity:         identityConfig,
 		Eval:             evalConfig,
 	}
@@ -509,6 +535,10 @@ func (c *Config) Validate() error {
 	}
 	if _, _, ok := NormalizeDeliveryWindow(c.Recall.DeliveryWindow, "0-16"); !ok {
 		return newConfigError("recall.delivery_window must be one of ('auto', '0-16', '0-32', '0-64'), got %s", pyRepr(c.Recall.DeliveryWindow))
+	}
+	if _, _, ok := ParseMemoryLimit(c.Daemon.MemoryLimit); !ok {
+		return newConfigError("daemon.memory_limit must be 'auto', 'off' or a size between %s and %s (e.g. '512MiB', '2GiB'), got %s",
+			formatMemorySize(ExplicitMemoryLimitFloor), formatMemorySize(ExplicitMemoryLimitCeiling), pyRepr(c.Daemon.MemoryLimit))
 	}
 	for _, value := range []int{
 		c.Recall.Bands,
@@ -709,6 +739,9 @@ func (c *Config) PublicDict() map[string]any {
 			"activation_record": c.Recall.ActivationRecord,
 			"activation_rank":   c.Recall.ActivationRank,
 		},
+		"daemon": map[string]any{
+			"memory_limit": c.Daemon.MemoryLimit,
+		},
 	}
 }
 
@@ -834,6 +867,8 @@ func WriteDefault(path string) (string, error) {
 		text := DefaultConfigText
 		if isPortableConfigTarget(path) {
 			text = PortableDefaultConfigText()
+		} else {
+			text = applyXDGPathDefaults(text)
 		}
 		if err := writeFileAtomic(path, []byte(text), 0o600); err != nil {
 			return "", err
@@ -842,6 +877,24 @@ func WriteDefault(path string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// applyXDGPathDefaults rewrites the template's `~` database and log paths to
+// the XDG-resolved defaults when XDG_DATA_HOME / XDG_STATE_HOME are set. Without
+// this, creating the config file would move the vault compared with the
+// no-config defaults and change the daemon configuration identity.
+func applyXDGPathDefaults(text string) string {
+	if os.Getenv("XDG_DATA_HOME") != "" {
+		text = strings.Replace(text,
+			`db = "~/.local/share/rolling-memory/memory.db"`,
+			`db = "`+DefaultDBPath()+`"`, 1)
+	}
+	if os.Getenv("XDG_STATE_HOME") != "" {
+		text = strings.Replace(text,
+			`log = "~/.local/state/rolling-memory/rolling-memory.log"`,
+			`log = "`+filepath.Join(DefaultStateDir(), "rolling-memory.log")+`"`, 1)
+	}
+	return text
 }
 
 // PortableDefaultConfigText returns DefaultConfigText adapted for a portable USB
@@ -889,6 +942,16 @@ func SetConfigValue(path, dotted, rawValue string) (string, error) {
 	}
 	section := dotted[:position]
 	key := dotted[position+1:]
+	// Typed keys validate and canonicalize before the line edit so an invalid
+	// value never reaches the file.
+	if section == "daemon" && key == "memory_limit" {
+		canonical, _, ok := ParseMemoryLimit(rawValue)
+		if !ok {
+			return "", newConfigError("daemon.memory_limit must be 'auto', 'off' or a size between %s and %s (e.g. '512MiB', '2GiB'), got %s",
+				formatMemorySize(ExplicitMemoryLimitFloor), formatMemorySize(ExplicitMemoryLimitCeiling), pyRepr(trimSpace(rawValue)))
+		}
+		rawValue = canonical
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", err

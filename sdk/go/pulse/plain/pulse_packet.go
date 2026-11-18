@@ -4,7 +4,6 @@
 package plain
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1090,24 +1089,6 @@ func wireBitsForDict(dictN int) int {
 	return bits.Len(uint(dictN - 1))
 }
 
-// EncodeWirePayload encodes flat slots and sentence frames into the canonical base64 payload.
-func EncodeWirePayload(slots []BlindTokenTerm, frames [][]BlindTokenTerm) (string, error) {
-	raw, err := EncodeWireBytes(slots, frames)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(raw), nil
-}
-
-// DecodeWirePayload decodes a canonical base64 payload back into flat slots and sentence frames.
-func DecodeWirePayload(b64 string) ([]BlindTokenTerm, [][]BlindTokenTerm, error) {
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil, nil, fmt.Errorf("codec: decode wire base64: %w", err)
-	}
-	return DecodeWireBytes(raw)
-}
-
 // EncodeWireBytes encodes flat slots and sentence frames into the compact binary stream
 // (lossless over the {H, RawBitsX10, ClassFlags} atom surface; Role 不进线格式、由伴随位
 // 与奇偶声明在消费端重推导).
@@ -1140,10 +1121,10 @@ func EncodeWireBytes(slots []BlindTokenTerm, frames [][]BlindTokenTerm) ([]byte,
 		}
 	}
 	if len(slots) > wireMaxSlotN {
-		return nil, fmt.Errorf("codec: slotN=%d exceeds capacity", len(slots))
+		return nil, fmt.Errorf("codec: slotN=%d exceeds capacity %d; split the unit into chunks before packing", len(slots), wireMaxSlotN)
 	}
 	if len(sent) > wireMaxSentN {
-		return nil, fmt.Errorf("codec: sentN=%d exceeds capacity", len(sent))
+		return nil, fmt.Errorf("codec: sentN=%d exceeds capacity %d; split the unit with tokenzr.ChunkBySentences (<=8192 tokens)", len(sent), wireMaxSentN)
 	}
 	for i, a := range slots {
 		if a.ClassFlags > wireMaxF {
@@ -1171,7 +1152,7 @@ func EncodeWireBytes(slots []BlindTokenTerm, frames [][]BlindTokenTerm) ([]byte,
 		}
 	}
 	if len(dict) > wireMaxDictN {
-		return nil, fmt.Errorf("codec: dictN exceeds %d", wireMaxDictN)
+		return nil, fmt.Errorf("codec: dictN=%d exceeds %d distinct atom keys per unit; split the unit with tokenzr.ChunkBySentences (<=8192 tokens)", len(dict), wireMaxDictN)
 	}
 
 	dictPos := make(map[wireAtomKey]int, len(dict))

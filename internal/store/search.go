@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
 )
 
 type nodeCore struct {

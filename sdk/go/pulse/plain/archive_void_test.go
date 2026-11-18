@@ -3,7 +3,10 @@
 
 package plain
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // fakeIndex 是 ArchiveVoidProbe 测试用的极简全档倒排视图。
 type fakeIndex struct {
@@ -154,5 +157,24 @@ func TestTrueCarrierWidthSeparation(t *testing.T) {
 		if ratio < c.min || ratio > c.max {
 			t.Fatalf("%s/%s ratio = %.2f, want in [%.2f,%.2f]", c.piece, c.host, ratio, c.min, c.max)
 		}
+	}
+}
+
+// TestHyphenPartsResolvedRequiresEveryPart 钉住语种无关裁决：连字符复合词的
+// 部件不按字符数跳过，单字符部件缺库内证据即判未解析（宁漏勿错）。
+func TestHyphenPartsResolvedRequiresEveryPart(t *testing.T) {
+	te := NewTermExtractor(nil)
+	idx := newFakeIndex(1000, []map[uint64]bool{
+		corpusDoc(t, te, "frame", "photo"),
+	})
+	const ubiquitous = 1000 / math.E
+	if !te.hyphenPartsResolved(idx, "photo-frame", ubiquitous) {
+		t.Fatal("both parts are in-corpus and rare; compound must resolve")
+	}
+	if te.hyphenPartsResolved(idx, "a-frame", ubiquitous) {
+		t.Fatal("absent single-letter part must not be skipped by a character-count gate")
+	}
+	if te.hyphenPartsResolved(idx, "2024-05", ubiquitous) {
+		t.Fatal("parts without letters must not resolve")
 	}
 }

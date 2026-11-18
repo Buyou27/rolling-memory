@@ -171,6 +171,8 @@ func (a *application) dispatch() int {
 		return a.fail(api.ExportUnavailable())
 	case "engine":
 		return a.runEngine()
+	case "daemon":
+		return a.runDaemon()
 	case "eval":
 		return a.runEval()
 	case "wave":

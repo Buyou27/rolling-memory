@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/api"
-	"github.com/rocareer/rolling-memory/internal/recall"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 )
 

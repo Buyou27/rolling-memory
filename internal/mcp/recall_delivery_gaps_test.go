@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {

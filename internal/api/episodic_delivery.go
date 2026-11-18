@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 // episodicTurnGroup is one harness turn's hits plus the turn's ordered segments.

@@ -192,6 +192,13 @@ func (e *Engine) GroupHitsByClusterFractalWithQuery(hits []Hit, perGroupCap int,
 	}
 	idx := e.Index
 	st := e.ensureClusterState()
+	// Episode rosters are grouped once per delivery call instead of rescanning
+	// the whole episode column per group; members stay in ascending unit order,
+	// exactly the order EpisodeRosterOf returns.
+	var episodeRosters [][]int32
+	if st != nil {
+		episodeRosters = buildEpisodeRosterSnapshot(st.episodeOf, st.episodeCount)
+	}
 	delivered := make(map[string]bool, len(hits))
 	for _, h := range hits {
 		delivered[h.UnitID] = true
@@ -213,11 +220,13 @@ func (e *Engine) GroupHitsByClusterFractalWithQuery(hits []Hit, perGroupCap int,
 		var roster []int32
 		for _, uid := range groups[gi].UnitIDs {
 			if u, ok := idx.LookupUnit(uid); ok {
-				if roster = e.EpisodeRosterOf(u); roster != nil {
+				if ep := episodeIDAt(st.episodeOf, u); ep >= 0 && int(ep) < len(episodeRosters) {
+					roster = episodeRosters[ep]
 					break
 				}
 			}
 		}
+
 		var chainPeers []int32
 		if st != nil {
 			for _, uid := range groups[gi].UnitIDs {
@@ -268,6 +277,50 @@ func (e *Engine) GroupHitsByClusterFractalWithQuery(hits []Hit, perGroupCap int,
 	return groups
 }
 
+// episodeIDAt reads the endogenous episodic component of unit u with a
+// bounds-safe lookup: out-of-range units and units without a clock (sentinel
+// -1) both report -1.
+func episodeIDAt(episodeOf []int32, u int32) int32 {
+	if u < 0 || int(u) >= len(episodeOf) {
+		return -1
+	}
+	return episodeOf[u]
+}
+
+// buildEpisodeRosterSnapshot groups the episode column into per-component unit
+// rosters. Counting pass sizes each roster exactly, the fill pass keeps
+// ascending unit-index order — the order EpisodeRosterOf returns — so batch
+// consumers get the identical view without rescanning the column per
+// component. The slice index is the component id; components without members
+// stay nil.
+func buildEpisodeRosterSnapshot(episodeOf []int32, episodeCount int) [][]int32 {
+	if len(episodeOf) == 0 || episodeCount <= 0 {
+		return nil
+	}
+	counts := make([]int32, episodeCount)
+	for _, ep := range episodeOf {
+		if ep < 0 || int(ep) >= episodeCount {
+			continue
+		}
+		counts[ep]++
+	}
+	rosters := make([][]int32, episodeCount)
+	for ep, c := range counts {
+		if c > 0 {
+			rosters[ep] = make([]int32, c)
+		}
+	}
+	pos := make([]int32, episodeCount)
+	for v, ep := range episodeOf {
+		if ep < 0 || int(ep) >= episodeCount {
+			continue
+		}
+		rosters[ep][pos[ep]] = int32(v)
+		pos[ep]++
+	}
+	return rosters
+}
+
 // EpisodeRosterOf returns the full unit roster of the endogenous episodic
 // component containing unit u (read-only delivery helper; empty when u carries
 // no component). The roster is the component's complete population, not the
@@ -278,10 +331,10 @@ func (e *Engine) EpisodeRosterOf(u int32) []int32 {
 		return nil
 	}
 	st := e.ensureClusterState()
-	if int(u) >= len(st.episodeOf) {
+	if st == nil {
 		return nil
 	}
-	ep := st.episodeOf[u]
+	ep := episodeIDAt(st.episodeOf, u)
 	if ep < 0 {
 		return nil
 	}
@@ -292,4 +345,33 @@ func (e *Engine) EpisodeRosterOf(u int32) []int32 {
 		}
 	}
 	return roster
+}
+
+// EpisodeIDOf returns the endogenous episodic component id of unit u (the
+// component index in EpisodeRosters), or -1 when the unit carries no clock or
+// u is out of range.
+func (e *Engine) EpisodeIDOf(u int32) int32 {
+	if e == nil || e.Index == nil {
+		return -1
+	}
+	st := e.ensureClusterState()
+	if st == nil {
+		return -1
+	}
+	return episodeIDAt(st.episodeOf, u)
+}
+
+// EpisodeRosters returns the per-component unit rosters in one linear pass over
+// the episode column (slice index = component id, members in ascending unit
+// order). It is the batch form of EpisodeRosterOf for callers that resolve many
+// units in one request, so the column is scanned once instead of once per unit.
+func (e *Engine) EpisodeRosters() [][]int32 {
+	if e == nil || e.Index == nil {
+		return nil
+	}
+	st := e.ensureClusterState()
+	if st == nil {
+		return nil
+	}
+	return buildEpisodeRosterSnapshot(st.episodeOf, st.episodeCount)
 }

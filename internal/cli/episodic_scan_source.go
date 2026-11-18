@@ -22,8 +22,8 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/speech"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
 )
 
 type episodicScanSource struct {

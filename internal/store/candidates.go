@@ -13,7 +13,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 

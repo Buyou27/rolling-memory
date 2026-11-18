@@ -574,3 +574,59 @@ systemUpdate:
     applySuccessNoop: All components are already up to date
     restartingNotice: Console assets updated; restarting console and reloading page...
 
+
+system:
+    title: Memory Service
+    sub: System management for the local engine daemon — start/stop/restart, memory cap, cache and disk maintenance
+    refreshBtn: Refresh
+    daemonTitle: Engine Daemon
+    daemonSub: The single heavy local process holding the index and disk warm tier; the next recall restarts it on demand
+    running: Running
+    stopped: Stopped
+    pidLbl: PID
+    uptimeLbl: Uptime
+    heapLbl: Heap
+    limitLbl: Effective Memory Cap
+    sourceLbl: Cap Source
+    startBtn: Start Daemon
+    stopBtn: Stop Daemon
+    restartBtn: Restart Daemon
+    daemonHint: Stopping blocks nothing — the next recall or background sync starts it again automatically
+    confirmTitle: Please Confirm
+    stopConfirm: Stopping the daemon frees several GB of memory; the next recall needs a fresh warm-up (tens of seconds). Continue?
+    restartConfirm: Restarting the daemon briefly interrupts running recalls and re-warms the engine. Continue?
+    actionDoneToast: Daemon action completed
+    memoryTitle: Memory Cap
+    memorySub: Soft heap cap for the engine; auto derives 1/8 of physical RAM (1GiB–4GiB)
+    memoryAutoOption: auto (adaptive)
+    memoryOffOption: off (no cap)
+    saveBtn: Save Cap
+    memoryHint: Takes effect after a daemon restart; a custom size such as 768MiB is accepted
+    memoryConfigLbl: Configured
+    memoryEffectiveLbl: Effective Now
+    savedToast: Memory cap saved
+    restartNowConfirm: Cap saved. Restart the daemon now to apply it immediately?
+    restartLater: Restart Later
+    sourceAuto: Adaptive
+    sourceExplicit: Configured
+    sourceEnv: Environment
+    sourceOff: No Cap
+    sourceUnavailable: Memory Probe Unavailable
+    cacheTitle: Cache
+    cacheSub: In-memory index snapshots and read caches are regenerable; clearing never touches stored memory
+    clearBtn: Clear Cache
+    cacheHint: The next recall warms it automatically; use this only to free memory or diagnose
+    clearedToast: Cache cleared
+    spaceTitle: Disk Maintenance
+    spaceSub: Old-version backups, regenerable caches and vault free pages; scanning is read-only
+    scanBtn: Scan Space
+    cleanBtn: Clean Backups & Caches
+    compactBtn: Compact Vault
+    totalLbl: Reclaimable Total
+    backupsLbl: Old Backups
+    cachesLbl: Regenerable Caches
+    compactLbl: Vault Free Pages
+    freedLbl: Freed This Run
+    cleanConfirm: Removes expired backups and regenerable caches (stored memory is untouched). Continue?
+    compactConfirm: Compaction stops the daemon, rebuilds the database file and restarts it; recall is unavailable meanwhile. Continue?
+    doneToast: Maintenance completed

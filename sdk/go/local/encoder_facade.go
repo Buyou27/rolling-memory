@@ -8,9 +8,7 @@ package local
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
@@ -54,55 +52,14 @@ func blindFormFlagMarks(line string, words []string) []uint8 {
 // 头字节相等性由 codec 差分测试双向钉死）。
 const wireFlagWideF uint8 = 1 << 1
 
-// DeriveBlindPepper extracts a rotation-invariant tenant blind pepper from a short-lived
-// `mem2.<payload_b64>.<sig>` data-plane signed key, or returns secret unchanged for
-// static keys/phrases.
-func DeriveBlindPepper(secret []byte) []byte {
-	trimmed := strings.TrimSpace(string(secret))
-	if strings.HasPrefix(trimmed, "mem2.") {
-		if parts := strings.Split(trimmed, "."); len(parts) == 3 {
-			if raw, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
-				var claims struct {
-					Tid  string `json:"tid"`
-					UID  string `json:"uid"`
-					Bpep string `json:"bpep,omitempty"`
-				}
-				if json.Unmarshal(raw, &claims) == nil && strings.TrimSpace(claims.Tid) != "" {
-					if len(claims.Bpep) == 64 {
-						valid := true
-						for _, r := range claims.Bpep {
-							if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-								valid = false
-								break
-							}
-						}
-						if valid {
-							return []byte(claims.Bpep)
-						}
-					}
-					return []byte("rame-tenant-vault:" + strings.TrimSpace(claims.Tid) + ":" + strings.TrimSpace(claims.UID))
-				}
-			}
-		}
-	}
-	return secret
-}
-
-func CarrierUnits(r rune) uint16             { return plain.CarrierUnits(r) }
-func SplitSentences(text string) []string    { return plain.SplitSentences(text) }
-func SplitWords(sent string) []string        { return plain.SplitWords(sent) }
-func FTS5TrigramSegmenter(s string) []string { return plain.FTS5TrigramSegmenter(s) }
+func CarrierUnits(r rune) uint16          { return plain.CarrierUnits(r) }
+func SplitSentences(text string) []string { return plain.SplitSentences(text) }
+func SplitWords(sent string) []string     { return plain.SplitWords(sent) }
 func ExtractStructuredDateHarmonics(sent string) []string {
 	return plain.ExtractStructuredDateHarmonics(sent)
 }
-func BlindFormFlagMarks(line string, words []string) []uint8 {
-	return plain.BlindFormFlagMarks(line, words)
-}
 func FormatPlaintextWithMeta(rawText string, meta UnitMeta) string {
 	return plain.FormatPlaintextWithMeta(rawText, meta)
-}
-func ComposeSubUnitID(parentID, kind string, index int) string {
-	return plain.ComposeSubUnitID(parentID, kind, index)
 }
 func ResolveSubUnitIDAndText(parentID string, su SubUnit, kindCounts map[string]int) (subID, kind, txt string, idx int, ok bool) {
 	return plain.ResolveSubUnitIDAndText(parentID, su, kindCounts)
@@ -113,20 +70,8 @@ func ExtractInlineSymbolUnits(sentence string) []string {
 func ExtractSEAsianUnitWords(sentence string) []string {
 	return plain.ExtractSEAsianUnitWords(sentence)
 }
-func LookupISO3166GeoHarmonicPair(token string) (string, string) {
-	return plain.LookupISO3166GeoHarmonicPair(token)
-}
-func LookupISO3166GeoHarmonics(token string) []string {
-	return plain.LookupISO3166GeoHarmonics(token)
-}
-func LookupUnitDimensionHarmonicPair(token string) (string, string) {
-	return plain.LookupUnitDimensionHarmonicPair(token)
-}
 func LookupClosedSetHarmonics(token string) []string {
 	return plain.LookupClosedSetHarmonics(token)
-}
-func CombineHarmonicExpanders(es ...HarmonicExpander) HarmonicExpander {
-	return plain.CombineHarmonicExpanders(es...)
 }
 
 // BlindEncoder 是 plain.BlindEncoder 的传输适配包装：编码、分词与打包语义 100%
@@ -139,11 +84,7 @@ type BlindEncoder struct {
 }
 
 func NewBlindEncoder(secret []byte) *BlindEncoder {
-	return &BlindEncoder{enc: plain.NewBlindEncoder(DeriveBlindPepper(secret))}
-}
-
-func NewBlindEncoderFromRawKey(rawKey [32]byte) *BlindEncoder {
-	return &BlindEncoder{enc: plain.NewBlindEncoderFromRawKey(rawKey)}
+	return &BlindEncoder{enc: plain.NewBlindEncoder(secret)}
 }
 
 func (e *BlindEncoder) KeyedHash64(token string) uint64 { return e.enc.KeyedHash64(token) }
@@ -247,22 +188,6 @@ func framesFromPlain(frames [][]plain.BlindTokenTerm) [][]BlindTokenAtom {
 	return out
 }
 
-// packetToPlain 逐字段映射公开 DTO；本地 DTO 无 Locus 字段（恒零值），
-// plain 打包路径也不设置 Locus，转换无信息损失。
-func packetToPlain(p BlindPulsePacket) plain.BlindPulsePacket {
-	return plain.BlindPulsePacket{
-		TenantID: p.TenantID, Scope: p.Scope, UserID: p.UserID,
-		AssistantID: p.AssistantID, IncarnationID: p.IncarnationID,
-		UnitID: p.UnitID, Layer: p.Layer, CitedUnitIDs: p.CitedUnitIDs,
-		OccurredAt: p.OccurredAt, NarratedAt: p.NarratedAt, IngestedAt: p.IngestedAt,
-		AuthorHash: p.AuthorHash, DocHash: p.DocHash, BlockHash: p.BlockHash,
-		LineStart: p.LineStart, LineEnd: p.LineEnd,
-		Slots: atomsToPlain(p.Slots), SentenceFrames: framesToPlain(p.SentenceFrames),
-		DenoiseRatio: p.DenoiseRatio, MinKeepSentences: p.MinKeepSentences, WaveRadix: p.WaveRadix,
-		AtomsB64: p.AtomsB64, RawText: p.RawText, PulseMode: p.PulseMode,
-	}
-}
-
 func packetFromPlain(p plain.BlindPulsePacket) BlindPulsePacket {
 	return BlindPulsePacket{
 		TenantID: p.TenantID, Scope: p.Scope, UserID: p.UserID,
@@ -316,11 +241,6 @@ func (e *BlindEncoder) PackCompositePackets(parentID string, parentText string, 
 		out = append(out, wireReadyPacket(p))
 	}
 	return out, subToParent
-}
-
-// EvaluatePulseSignal computes a 100% plaintext-free 5-dimension segmentation quality report.
-func EvaluatePulseSignal(pkt BlindPulsePacket) PulseSignalReport {
-	return plain.EvaluatePulseSignal(packetToPlain(pkt))
 }
 
 // EncodeWirePayload encodes flat slots and sentence frames into the canonical `atoms_b64` payload.

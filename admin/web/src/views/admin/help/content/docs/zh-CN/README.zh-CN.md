@@ -214,6 +214,7 @@ rmem eval --tier 1540 --answerer none --judge off --top-k 20
 | **[常见问答 (`faq.md`)](faq.md)** | 与 `grep` / `ripgrep`、向量 RAG、LLM 抽取服务以及静态 `AGENTS.md` 的区别与配合方式 | [docs/faq.md](../faq.md) |
 | **[评测与复现 (`benchmarks.md`)](benchmarks.md)** | LoCoMo 与剑桥 ATM-Bench 本地复现命令、评测协议校验与原始 JSONL 复算说明 | [docs/benchmarks.md](../benchmarks.md) |
 | **[MCP 契约 (`mcp.md`)](mcp.md)** | `recall` 工具的输入参数、返回结构与后台自动收录机制 | [docs/mcp.md](../mcp.md) |
+| **[配置参考 (`configuration.md`)](configuration.md)** | 配置文件位置与优先级、常用配置（交付窗口、引擎内存上限）、环境变量，以及控制台「系统管理 → 记忆服务」的等价操作 | [docs/configuration.md](../configuration.md) |
 | **[多宿主接入 (`harness.md`)](harness.md)** | 各大 AI 编程助手的一键安装与 `install --check` 状态检查 | [docs/harness.md](../harness.md) |
 | **[U 盘便携模式 (`usb-portable.md`)](usb-portable.md)** | 将记忆库放在移动存储设备上的初始化与安全卸载方式 | [docs/usb-portable.md](../usb-portable.md) |
 | **[Web 管理控制台 (`plugin-console.md`)](plugin-console.md)** | 本地管理面板、记忆浏览、状态监控与评测实验室说明，以及 3D 记忆图谱**预览**（内置 LoCoMo 示例） | [docs/plugin-console.md](../plugin-console.md) |

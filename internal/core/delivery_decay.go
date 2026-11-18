@@ -89,3 +89,52 @@ func NaturalDecayEnergiesPrefixCount(energies []float64, maxItems int) int {
 	}
 	return count
 }
+
+// CoverageFloorPrefixCount returns the largest rank among firstCoverRanks, where
+// firstCoverRanks carries, per salient query group, the 1-based rank of the first
+// ranked candidate that formally covers it. Entries outside (0, maxItems] are
+// ignored, and a group covered nowhere inside the inspected pool contributes no
+// entry at all: the candidate scope cannot certify whole-archive absence, and
+// padding to the cap would add evidence-free items. The result is therefore the
+// shortest prefix that first covers every salient group covered anywhere inside
+// the pool, or 0 when no group is covered.
+func CoverageFloorPrefixCount(firstCoverRanks []int, maxItems int) int {
+	if maxItems <= 0 {
+		return 0
+	}
+	floor := 0
+	for _, rank := range firstCoverRanks {
+		if rank <= 0 || rank > maxItems {
+			continue
+		}
+		if rank > floor {
+			floor = rank
+		}
+	}
+	return floor
+}
+
+// NaturalDecayCoveragePrefixCount couples the zero-floor natural decay envelope
+// with the salient-coverage floor: the delivered prefix is the longer of the
+// decay window and the coverage floor. A window must not close while a salient
+// query group that some in-pool candidate covers has not yet been delivered,
+// because the prefix is then still formally incomplete relative to the query —
+// stopping there would cut a complementary record purely because the peak's
+// energy scale dominates it.
+//
+// The coupling is fail-open by construction: it only extends a window, and every
+// extension lands on a candidate that itself carries new formal coverage of the
+// query, so no evidence-free item is ever added through this path. Zero
+// collision keeps the empty window (silence dominates): a formal cover cannot
+// exist without a positive collision, so firstCoverRanks is empty in that state
+// and the guard below makes the ordering explicit regardless of caller input.
+func NaturalDecayCoveragePrefixCount(hits []Hit, firstCoverRanks []int, maxItems int) int {
+	decay := NaturalDecayPrefixCount(hits, maxItems)
+	if decay == 0 {
+		return 0
+	}
+	if floor := CoverageFloorPrefixCount(firstCoverRanks, maxItems); floor > decay {
+		return floor
+	}
+	return decay
+}

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Remembering a long text now stores it as several sentence-aligned memory units of at most 8,192 tokens each (identical chunks collapse), so oversized pastes stay recallable and never hit the single-payload ceiling; a text that fits within one unit keeps its existing memory id.
+
 ## [0.0.4] - 2026-11-18
 
 ### Changed

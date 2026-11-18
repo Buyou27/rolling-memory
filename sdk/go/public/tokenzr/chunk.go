@@ -15,6 +15,14 @@ import (
 // chunk is bounded by 8192 tokens unless a single sentence alone exceeds it;
 // callers may pass any positive threshold below DefaultChunkTokens (e.g. 1024
 // for background file chunks) to slice at a finer granularity.
+//
+// The rung also guards the RMBP wire caps: the wire header stores distinct atom
+// keys and sentence frames as uint16 (65535 each), and a chunk at this rung
+// carries at most 8192 tokens, so sentence frames stay <= 8192 and distinct atom
+// keys stay below the cap even when every word expands into stem/subword atoms.
+// A single sentence that alone exceeds the rung breaks the bound by contract (it
+// is never truncated); such a payload is rejected loud at wire encode instead of
+// being silently clipped.
 const DefaultChunkTokens = 8192
 
 // ChunkLadder enumerates the standard seven-level tokenz-r token budget rungs.

@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
 

@@ -65,12 +65,6 @@ func ensureStdMap() {
 	})
 }
 
-// StandardTagMap returns the Part-I-only (international standard: ISO-3166/8601/4217 & SI/IEC) lookup map.
-func StandardTagMap() map[string][][2]string {
-	ensureStdMap()
-	return stdMap
-}
-
 // LookupFirstStandardTag resolves the first 1st-order international standard closed-set tag (Part I only).
 func LookupFirstStandardTag(low string) string {
 	if low == "" {

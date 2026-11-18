@@ -628,22 +628,28 @@ func (sc *rmQueryScratch) nextSentGen(maxSent int) uint32 {
 }
 
 type rmClusterState struct {
-	docRowPtr          []uint32
-	docEntriesFlat     []rmDocEntry
-	posPool            []uint32
-	postings           map[uint64][]rmPostingEntry
-	termKeys           []uint64
-	termPrefixPtr      [4097]uint32
-	termRowPtr         []uint32
-	postingPool        []rmPostingEntry
-	termEffWeight      []float64
-	termProperRatio    []float64
-	termParentGroup    []uint64
-	termIsPrimary      []uint8
-	phraseKeys         []rmDyad
-	phrasePrefixPtr    [4097]uint32
-	phraseRowPtr       []uint32
-	phraseUnits        []int32
+	docRowPtr       []uint32
+	docEntriesFlat  []rmDocEntry
+	posPool         []uint32
+	postings        map[uint64][]rmPostingEntry
+	termKeys        []uint64
+	termPrefixPtr   [4097]uint32
+	termRowPtr      []uint32
+	postingPool     []rmPostingEntry
+	termEffWeight   []float64
+	termProperRatio []float64
+	termParentGroup []uint64
+	termIsPrimary   []uint8
+	phraseKeys      []rmDyad
+	phrasePrefixPtr [4097]uint32
+	phraseRowPtr    []uint32
+	phraseUnits     []int32
+	// partnerIdx 是 phraseKeys 的对偶线性扩张（dual linear extension）：按 (b, a)
+	// 排序的键序在主键序中的下标序列。主序 (a, b) 只索引 a 侧搭档；b 侧搭档
+	// 借 partnerIdx + partnerPrefixPtr 二分定位，postings 仍共享 phraseUnits，
+	// 零第二副本。生命周期与 rmClusterState 一致，零落盘（支持层⊥权重层）。
+	partnerIdx         []int32
+	partnerPrefixPtr   [4097]uint32
 	effWeight          map[uint64]float64
 	properRatio        map[uint64]float64
 	parentGroup        map[uint64]uint64
@@ -970,6 +976,32 @@ func (st *rmClusterState) buildPrefixTables(n int) {
 		}
 	}
 	st.phrasePrefixPtr[4096] = pn
+
+	// 对偶序 (b, a) 前缀表：与主序共用同一键集，仅在 partnerIdx 上重排。
+	// 构建 O(P log P)（P = |phraseKeys|），单次成本，之后 b 侧搭档定位为
+	// 前缀桶 + 桶内二分，O(log) per lookup。
+	if pn > 0 {
+		order := make([]int32, pn)
+		for i := range order {
+			order[i] = int32(i)
+		}
+		sort.Slice(order, func(i, j int) bool {
+			kx, ky := pKeys[order[i]], pKeys[order[j]]
+			if kx.b != ky.b {
+				return kx.b < ky.b
+			}
+			return kx.a < ky.a
+		})
+		st.partnerIdx = order
+		var qCur uint32
+		for b := 0; b < 4096; b++ {
+			st.partnerPrefixPtr[b] = qCur
+			for qCur < pn && int(pKeys[order[qCur]].b>>52) == b {
+				qCur++
+			}
+		}
+		st.partnerPrefixPtr[4096] = pn
+	}
 
 	dKeys := st.dayCosKeys
 	dn := uint32(len(dKeys))
@@ -2436,6 +2468,10 @@ func (st *rmClusterState) temporalAffinity(idx *Index, a, b int32) float64 {
 	if st.meanGap <= 0 {
 		return 0
 	}
+	// 近核取常数危险率 1/meanGap 的指数生存函数 e^{-x}（x = |Δt|/meanGap，即
+	// Poisson 零假设下间隔超过 |Δt| 的概率）；硬窗阶跃替换经同池配对判负
+	// （ATM 1,044 题：r@10 净 -19 题、composite -0.89），连续形态承重，勿以
+	// 阶跃/窗口替代。
 	worldAff := math.Exp(-gap / st.meanGap)
 	if st.totalDaysM > 0 && int(a) < len(st.ordPos) && int(b) < len(st.ordPos) {
 		oa, ob := st.ordPos[a], st.ordPos[b]

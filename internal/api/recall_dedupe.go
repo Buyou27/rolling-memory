@@ -8,9 +8,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/text"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
 )
 
 // dedupeResolvedHitsByContent preserves every source. Even byte-identical text

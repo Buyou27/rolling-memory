@@ -14,7 +14,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
 )
 
 // Health is the read-time health projection (zero storage, zero LLM).

@@ -4,7 +4,9 @@
 package core
 
 import (
+	"fmt"
 	"math"
+	"math/rand"
 	"testing"
 )
 
@@ -229,5 +231,284 @@ func TestSparseVectorFourTierDynamicEnergyAndAdversarialProofs(t *testing.T) {
 	rCov := EvaluateConditionedReadout(uProf2.GroupVector, qGroups, 4.0, 2.0, 1.0, map[uint64]float64{hAlice: 1.0, hKyoto: 1.0, hKiln: 1.0, hGlaze: 1.0})
 	if rFresh.QueryCoverage != 1.0 || rCov.SurvivalAddressingNats >= rFresh.SurvivalAddressingNats {
 		t.Fatalf("expected survival decay under non-zero coverage: fresh=%+v cov=%+v", rFresh, rCov)
+	}
+}
+
+// TestSparsePairDecompositionSingleSourceEquivalence 钉死「profile 适配器」与
+// 「SparseVector 适配器」共用同一套二项式分解公式：两条路径的全部结算量必须逐位相等
+// （余弦除外——profile 不携带 L2 范数，按约定恒为 0）。
+func TestSparsePairDecompositionSingleSourceEquivalence(t *testing.T) {
+	rng := rand.New(rand.NewSource(20261118))
+	buildProf := func(n int) unitGroupProfile {
+		items := make([]unitGroupItem, 0, n)
+		var tot, sq float64
+		var group uint64
+		for i := 0; i < n; i++ {
+			group += uint64(rng.Intn(3) + 1) // 严格升序坐标
+			w := rng.Float64() * 10
+			if i%4 == 0 {
+				w = 0.5 + float64(rng.Intn(3)) // 制造并列与低权重边界
+			}
+			items = append(items, unitGroupItem{group: group, weight: w, isCore: rng.Intn(2) == 0})
+			tot += w
+			sq += w * w
+		}
+		var mu float64
+		if tot > 0 {
+			mu = sq / tot
+		}
+		return unitGroupProfile{items: items, totalMass: tot, muMass: mu}
+	}
+	check := func(name string, pu, pv unitGroupProfile) {
+		ix := intersectGroupProfiles(pu, pv, false)
+		d := DecomposeSparsePair(pu.toSparseVector(), pv.toSparseVector())
+		if ix.SharedGroups != d.SharedGroups ||
+			ix.SharedMinNats != d.SharedMinNats ||
+			ix.SelfExcessNats != d.SelfExcessNats ||
+			ix.PeerExcessNats != d.PeerExcessNats ||
+			ix.SelfSalientExcessNats != d.SelfSalientExcessNats ||
+			ix.PeerSalientExcessNats != d.PeerSalientExcessNats ||
+			ix.SelfCoverage != d.SelfCoverage ||
+			ix.PeerCoverage != d.PeerCoverage ||
+			ix.HarmonicCoverage != d.HarmonicCoverage {
+			t.Fatalf("%s: adapter mismatch\n profile=%+v\n vector=%+v", name, ix.VectorPairDecomposition, d)
+		}
+		if ix.Cosine != 0 {
+			t.Fatalf("%s: profile adapter must not report cosine, got %v", name, ix.Cosine)
+		}
+		if ix.SelfCoverage+(1-ix.SelfCoverage) != 1.0 || ix.PeerCoverage+(1-ix.PeerCoverage) != 1.0 {
+			t.Fatalf("%s: binomial completeness violated", name)
+		}
+	}
+	check("both-empty", unitGroupProfile{}, unitGroupProfile{})
+	check("one-side-empty", unitGroupProfile{}, buildProf(6))
+	check("single-shared",
+		unitGroupProfile{items: []unitGroupItem{{group: 7, weight: 3, isCore: true}}, totalMass: 3, muMass: 3},
+		unitGroupProfile{items: []unitGroupItem{{group: 7, weight: 3, isCore: true}}, totalMass: 3, muMass: 3})
+	disjoint := buildProf(6)
+	for i := range disjoint.items {
+		disjoint.items[i].group += 1000
+	}
+	check("disjoint", buildProf(6), disjoint)
+	same := buildProf(8)
+	check("self-identical", same, same)
+	for i := 0; i < 60; i++ {
+		check(fmt.Sprintf("random-%d", i), buildProf(rng.Intn(20)), buildProf(rng.Intn(20)))
+	}
+}
+
+// TestIntersectGroupProfilesZeroAlloc 钉死筛选热路径零分配：无掩码路径必须 0 allocs/op，
+// 掩码路径只允许两份掩码切片。
+func TestIntersectGroupProfilesZeroAlloc(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	mk := func(n int) unitGroupProfile {
+		items := make([]unitGroupItem, n)
+		var tot, sq float64
+		for i := range items {
+			w := 1 + rng.Float64()*5
+			items[i] = unitGroupItem{group: uint64(i + 1), weight: w, isCore: i%2 == 0}
+			tot += w
+			sq += w * w
+		}
+		return unitGroupProfile{items: items, totalMass: tot, muMass: sq / tot}
+	}
+	pu, pv := mk(24), mk(24)
+	if got := testing.AllocsPerRun(200, func() { _ = intersectGroupProfiles(pu, pv, false) }); got != 0 {
+		t.Fatalf("no-mask decomposition must be zero-alloc, got %v allocs/op", got)
+	}
+	vu, vv := pu.toSparseVector(), pv.toSparseVector()
+	if got := testing.AllocsPerRun(200, func() { _ = DecomposeSparsePair(vu, vv) }); got != 0 {
+		t.Fatalf("vector decomposition must be zero-alloc, got %v allocs/op", got)
+	}
+}
+
+// mkDyadCorpusFixture 构造小规模带随机 PhraseDyad 结构的语料：每个单元随机抽
+// 2–6 个词项并生成同句邻近共现，用于搭档扫描等价与红队证伪。
+func mkDyadCorpusFixture(rng *rand.Rand, nDocs int) []Doc {
+	vocab := make([]uint64, 64)
+	for i := range vocab {
+		// 高 12 位打满不同前缀桶，覆盖跨桶二分路径。
+		vocab[i] = (uint64(i) + 1) << 50
+	}
+	docs := make([]Doc, nDocs)
+	for d := 0; d < nDocs; d++ {
+		nTerms := 2 + rng.Intn(5)
+		terms := map[uint64]Term{}
+		counts := map[uint64]int{}
+		pos := map[uint64][]TermPosition{}
+		for s := 0; s < nTerms; s++ {
+			h := vocab[rng.Intn(len(vocab))]
+			terms[h] = Term{Bits: uint16(30 + rng.Intn(40)), Flags: 1 << 0, Group: h, Role: RolePrimary}
+			counts[h] = 1 + rng.Intn(3)
+			for c := 0; c < counts[h]; c++ {
+				pos[h] = append(pos[h], TermPosition{Sentence: 0, Slot: s*4 + c})
+			}
+		}
+		docs[d] = Doc{
+			UnitID:     fmt.Sprintf("u-%03d", d),
+			OccurredAt: int64(1712000000 + d*3600),
+			Terms:      terms,
+			Counts:     counts,
+			Positions:  pos,
+		}
+	}
+	return docs
+}
+
+// slowFullScanPartnerEntries 是早期实现的对拍参照：逐键全扫 phraseKeys，命中任一侧
+// 即结算，与历史 TermEnergyVector 全扫语义逐位一致。
+func slowFullScanPartnerEntries(idx *Index, st *rmClusterState, termID uint64, effW float64, highDFThresh int) []SparseEntry {
+	var entries []SparseEntry
+	for i, pk := range st.phraseKeys {
+		var partner uint64
+		if pk.a == termID {
+			partner = pk.b
+		} else if pk.b == termID {
+			partner = pk.a
+		} else {
+			continue
+		}
+		postings := st.phraseUnits[st.phraseRowPtr[i]:st.phraseRowPtr[i+1]]
+		if len(postings) == 0 {
+			continue
+		}
+		wb, okB := st.effWeightOf(partner)
+		if !okB || wb <= 0 {
+			wb, _ = idx.TermMass(partner)
+		}
+		if wb <= 0 {
+			continue
+		}
+		joint := math.Log1p((float64(idx.N) - float64(len(postings)) + 0.5) / (float64(len(postings)) + 0.5))
+		bindMass := math.Min(effW, wb) * joint / (1.0 + joint)
+		pDF := idx.TermDF(partner)
+		entries = append(entries, SparseEntry{
+			ID:           partner,
+			WeightNats:   bindMass,
+			SelfInfoNats: joint,
+			TF:           int32(len(postings)),
+			DF:           pDF,
+			IsCore:       pDF <= highDFThresh,
+		})
+	}
+	return entries
+}
+
+// TestPartnerScanDualIndexEquivalence 对拍「旧全扫 vs 新双臂二分」：所有词项 ×
+// 多随机语料，PartnerVector 必须逐位全等（红队反例：跨前缀桶的 b 侧搭档、零搭档
+// 词、全库唯一词、高重复词族、以及只有 b 侧入键的词项）。
+func TestPartnerScanDualIndexEquivalence(t *testing.T) {
+	for seed := int64(1); seed <= 5; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		docs := mkDyadCorpusFixture(rng, 12)
+		idx := BuildIndex(docs)
+		eng := NewEngine(idx)
+		st := eng.ensureClusterState()
+		highDF := idx.HighDFThreshold()
+		for h := range idx.DF {
+			effW, ok := st.effWeightOf(h)
+			if !ok || effW <= 0 {
+				effW, _ = idx.TermMass(h)
+			}
+			fast := st.partnerEntriesInto(idx, h, effW, highDF)
+			slow := slowFullScanPartnerEntries(idx, st, h, effW, highDF)
+			fastVec, slowVec := BuildSparseVector(fast), BuildSparseVector(slow)
+			if fastVec.Len() != slowVec.Len() {
+				t.Fatalf("seed %d term %x: nnz fast=%d slow=%d", seed, h, fastVec.Len(), slowVec.Len())
+			}
+			for i := range fastVec.Entries {
+				fe, se := fastVec.Entries[i], slowVec.Entries[i]
+				if fe.ID != se.ID || fe.WeightNats != se.WeightNats || fe.TF != se.TF || fe.DF != se.DF || fe.IsCore != se.IsCore {
+					t.Fatalf("seed %d term %x: entry %d mismatch fast=%+v slow=%+v", seed, h, i, fe, se)
+				}
+			}
+			// 前缀表零值态（b 侧退化全扫）也必须等价。
+			var saved [4097]uint32
+			saved = st.partnerPrefixPtr
+			st.partnerIdx = nil
+			st.partnerPrefixPtr = [4097]uint32{}
+			fallback := st.partnerEntriesInto(idx, h, effW, highDF)
+			fbVec := BuildSparseVector(fallback)
+			if fbVec.Len() != slowVec.Len() {
+				t.Fatalf("seed %d term %x: fallback nnz=%d slow=%d", seed, h, fbVec.Len(), slowVec.Len())
+			}
+			for i := range fbVec.Entries {
+				if fbVec.Entries[i] != slowVec.Entries[i] {
+					t.Fatalf("seed %d term %x: fallback entry %d mismatch", seed, h, i)
+				}
+			}
+			st.partnerIdx, st.partnerPrefixPtr = nil, saved
+			st.partnerIdx = nil
+		}
+	}
+}
+
+// TestPartnerScanAdversarialEdges 钉死红队反例：① 只在 b 侧入键的词项（主序桶
+// 必 miss）；② 零搭档词项（两臂皆空）；③ 全库只出现一次的孤本词（df=1，搭档
+// 存在但 partner 侧权重回退链路）；④ 键哈希前缀桶越界端点（>>52 == 0 与 4095）。
+func TestPartnerScanAdversarialEdges(t *testing.T) {
+	mkDoc := func(id string, terms map[uint64]Term, counts map[uint64]int, pos map[uint64][]TermPosition) Doc {
+		return Doc{UnitID: id, OccurredAt: 1712000000, Terms: terms, Counts: counts, Positions: pos}
+	}
+	// 键规范序 a<=b ⇒ 搭档 p>termID 走 a 侧、p<termID 走 b 侧。hHighB 只有以
+	// b 侧身份入键的搭档（hTiny < hHighB ⇒ 键 (hTiny, hHighB)）；hAlone 零
+	// 搭档；hEdge1/hEdge4095 覆盖 >>52 前缀桶两端（0 撞 termID==0 哨兵故从 1 起）。
+	hTiny, hHighB, hAlone := uint64(1), uint64(0xd4000000000000), uint64(0x30000000000000)
+	hEdge1, hEdge4095 := uint64(1)<<52, uint64(4095)<<52
+	docs := []Doc{
+		mkDoc("e-1", map[uint64]Term{
+			hTiny:  {Bits: 40, Group: hTiny, Role: RolePrimary},
+			hHighB: {Bits: 40, Group: hHighB, Role: RolePrimary},
+			hAlone: {Bits: 40, Group: hAlone, Role: RolePrimary},
+		}, map[uint64]int{hTiny: 1, hHighB: 1, hAlone: 1}, map[uint64][]TermPosition{
+			hTiny:  {{Sentence: 0, Slot: 1}},
+			hHighB: {{Sentence: 0, Slot: 2}},
+			hAlone: {{Sentence: 0, Slot: 8}},
+		}),
+		mkDoc("e-2", map[uint64]Term{
+			hEdge1:    {Bits: 40, Group: hEdge1, Role: RolePrimary},
+			hEdge4095: {Bits: 40, Group: hEdge4095, Role: RolePrimary},
+		}, map[uint64]int{hEdge1: 1, hEdge4095: 1}, map[uint64][]TermPosition{
+			hEdge1:    {{Sentence: 0, Slot: 1}},
+			hEdge4095: {{Sentence: 0, Slot: 2}},
+		}),
+	}
+	idx := BuildIndex(docs)
+	eng := NewEngine(idx)
+	st := eng.ensureClusterState()
+
+	// hHighB 的唯一搭档 hTiny < hHighB ⇒ 键 (hTiny, hHighB)，hHighB 只在 b 侧。
+	highProf, ok := eng.TermEnergyVector(hHighB)
+	if !ok {
+		t.Fatal("hHighB profile expected")
+	}
+	if _, has := highProf.PartnerVector.Lookup(hTiny); !has {
+		t.Fatalf("hHighB must find b-side partner hTiny, got %+v", highProf.PartnerVector.Entries)
+	}
+	// hAlone 无任何搭档。
+	aloneProf, _ := eng.TermEnergyVector(hAlone)
+	if aloneProf.PartnerVector.Len() != 0 {
+		t.Fatalf("hAlone must have zero partners, got %+v", aloneProf.PartnerVector.Entries)
+	}
+	// 桶端点 >>52 = 1 与 4095 互为搭档，双方都能从任一侧找到对方。
+	e1Prof, ok1 := eng.TermEnergyVector(hEdge1)
+	e4095Prof, ok4095 := eng.TermEnergyVector(hEdge4095)
+	if !ok1 || !ok4095 {
+		t.Fatal("edge-bucket profiles expected")
+	}
+	if _, has := e1Prof.PartnerVector.Lookup(hEdge4095); !has {
+		t.Fatalf("bucket-1 term must find bucket-4095 partner: %+v", e1Prof.PartnerVector.Entries)
+	}
+	if _, has := e4095Prof.PartnerVector.Lookup(hEdge1); !has {
+		t.Fatalf("bucket-4095 term must find bucket-1 partner: %+v", e4095Prof.PartnerVector.Entries)
+	}
+	// b 侧退化全扫（partnerIdx 空）在边界桶上同样等价。
+	for _, h := range []uint64{hTiny, hHighB, hEdge1, hEdge4095} {
+		effW, _ := st.effWeightOf(h)
+		fast := BuildSparseVector(st.partnerEntriesInto(idx, h, effW, idx.HighDFThreshold()))
+		slow := BuildSparseVector(slowFullScanPartnerEntries(idx, st, h, effW, idx.HighDFThreshold()))
+		if fast.Len() != slow.Len() || (fast.Len() > 0 && fast.Entries[0] != slow.Entries[0]) {
+			t.Fatalf("edge term %x: fast=%+v slow=%+v", h, fast.Entries, slow.Entries)
+		}
 	}
 }

@@ -126,8 +126,18 @@ func (s scoredEventUnitSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 // localSlotZ is the closed-form single-sided geometric series sum of the
 // intra-sentence slot kernel exp(-(d-1)/e) over d >= 1:
-// Z_local = 1 / (1 - exp(-1/e)) ≈ 3.24887015.
+// Z_local = 1 / (1 - exp(-1/e)) ≈ 3.24886952.
 var localSlotZ = 1.0 / (1.0 - math.Exp(-invE))
+
+// harmonicCoverage 是双向覆盖的调和平均 2·C_self·C_peer/(C_self+C_peer)；
+// 自和大于 0 才计算（NaN 比较恒假落回 0，与各现场原守卫方向一致），
+// 关系构建、事件簇背书与交付边补滤共用本函数。
+func harmonicCoverage(selfCov, peerCov float64) float64 {
+	if selfCov+peerCov > 0 {
+		return 2.0 * selfCov * peerCov / (selfCov + peerCov)
+	}
+	return 0
+}
 
 // UnitRelationPeer represents one peer unit v evaluated against a focal unit u
 // in the five-question autonoetic relation space (Identity, Similarity,
@@ -358,17 +368,16 @@ func (st *rmClusterState) buildUnitGroupProfileWithPos(idx *Index, sc *rmQuerySc
 	return unitGroupProfile{items: items, totalMass: tot, muMass: mu}
 }
 
+// pairIntersectionStats 是 profile 级二项式对偶分解结果 + 逐坐标共享掩码。
+// 分解量本身由 sparsePairAccum 唯一公式核结算（与 DecomposeSparsePair 同一套公式）。
 type pairIntersectionStats struct {
-	sharedU, sharedV, sharedMin  float64
-	selfExcess, peerExcess       float64
-	selfSalientEx, peerSalientEx float64
-	selfCov, peerCov, harmCov    float64
-	sharedGroups                 int
-	sharedMaskU, sharedMaskV     []bool
+	VectorPairDecomposition
+	sharedMaskU, sharedMaskV []bool
 }
 
 // intersectGroupProfiles performs the canonical two-pointer set decomposition
-// (u ∩ v, u \ v, v \ u) shared by all five autonoetic questions.
+// (u ∩ v, u \ v, v \ u) shared by all five autonoetic questions. 该适配器只做
+// 结构遍历与掩码记录，判据与累积全部委托 sparsePairAccum（零分配、无第二套公式）。
 func intersectGroupProfiles(profU, profV unitGroupProfile, recordMasks bool) pairIntersectionStats {
 	var st pairIntersectionStats
 	iu, iv := profU.items, profV.items
@@ -376,28 +385,18 @@ func intersectGroupProfiles(profU, profV unitGroupProfile, recordMasks bool) pai
 		st.sharedMaskU = make([]bool, len(iu))
 		st.sharedMaskV = make([]bool, len(iv))
 	}
+	var acc sparsePairAccum
 	i, j := 0, 0
 	for i < len(iu) && j < len(iv) {
 		gu, gv := iu[i].group, iv[j].group
 		if gu < gv {
-			w := iu[i].weight
-			st.selfExcess += w
-			if iu[i].isCore && w > profU.muMass {
-				st.selfSalientEx += w - profU.muMass
-			}
+			acc.addSelf(iu[i].weight, iu[i].isCore, profU.muMass)
 			i++
 		} else if gu > gv {
-			w := iv[j].weight
-			st.peerExcess += w
-			if iv[j].isCore && w > profV.muMass {
-				st.peerSalientEx += w - profV.muMass
-			}
+			acc.addPeer(iv[j].weight, iv[j].isCore, profV.muMass)
 			j++
 		} else {
-			st.sharedGroups++
-			st.sharedU += iu[i].weight
-			st.sharedV += iv[j].weight
-			st.sharedMin += math.Min(iu[i].weight, iv[j].weight)
+			acc.addShared(iu[i].weight, iv[j].weight)
 			if recordMasks {
 				st.sharedMaskU[i] = true
 				st.sharedMaskV[j] = true
@@ -407,28 +406,13 @@ func intersectGroupProfiles(profU, profV unitGroupProfile, recordMasks bool) pai
 		}
 	}
 	for ; i < len(iu); i++ {
-		w := iu[i].weight
-		st.selfExcess += w
-		if iu[i].isCore && w > profU.muMass {
-			st.selfSalientEx += w - profU.muMass
-		}
+		acc.addSelf(iu[i].weight, iu[i].isCore, profU.muMass)
 	}
 	for ; j < len(iv); j++ {
-		w := iv[j].weight
-		st.peerExcess += w
-		if iv[j].isCore && w > profV.muMass {
-			st.peerSalientEx += w - profV.muMass
-		}
+		acc.addPeer(iv[j].weight, iv[j].isCore, profV.muMass)
 	}
-	if profU.totalMass > 0 {
-		st.selfCov = math.Min(1.0, st.sharedU/profU.totalMass)
-	}
-	if profV.totalMass > 0 {
-		st.peerCov = math.Min(1.0, st.sharedV/profV.totalMass)
-	}
-	if st.selfCov+st.peerCov > 0 {
-		st.harmCov = 2.0 * st.selfCov * st.peerCov / (st.selfCov + st.peerCov)
-	}
+	// unitGroupProfile 不携带 L2 范数：范数传 0，余弦保持 0（该路径按逐簇相对量比较）。
+	st.VectorPairDecomposition = acc.finalize(profU.totalMass, profV.totalMass, 0, 0)
 	return st
 }
 
@@ -437,7 +421,6 @@ func intersectGroupProfiles(profU, profV unitGroupProfile, recordMasks bool) pai
 // already selected co-event leader s, guarded by P4 (continuous echo purity) and
 // P6 (multi-feature scene support >= 3 shared groups).
 func evalBurstCloneRedundancyFromProfiles(profS, profNb unitGroupProfile, aff float64) float64 {
-	subFloor := 1.0 - invE
 	// Single-term overlap is coincidence and 2-term overlap is a phrase; at least
 	// 3 distinct feature groups must co-occur to treat two records as scene clones.
 	const minCloneGroups = 3
@@ -446,12 +429,12 @@ func evalBurstCloneRedundancyFromProfiles(profS, profNb unitGroupProfile, aff fl
 	}
 	ix := intersectGroupProfiles(profS, profNb, false)
 	sceneFloor := math.E * math.Min(profS.muMass, profNb.muMass)
-	if ix.sharedGroups < minCloneGroups || ix.sharedMin < sceneFloor || ix.selfCov < invE || ix.peerCov < subFloor {
+	if ix.SharedGroups < minCloneGroups || ix.SharedMinNats < sceneFloor || ix.SelfCoverage < invE || ix.PeerCoverage < subFloor {
 		return 0
 	}
-	novelRatio := math.Min(1.0, ix.peerSalientEx/profNb.totalMass)
+	novelRatio := math.Min(1.0, ix.PeerSalientExcessNats/profNb.totalMass)
 	echoPurity := (1.0 - novelRatio) * (1.0 - novelRatio)
-	return aff * ix.harmCov * ix.peerCov * echoPurity
+	return aff * ix.HarmonicCoverage * ix.PeerCoverage * echoPurity
 }
 
 // evalUnrelatedBystanderBorrowFromProfiles evaluates Negative Duality 2-
@@ -462,8 +445,6 @@ func evalBurstCloneRedundancyFromProfiles(profS, profNb unitGroupProfile, aff fl
 // spacetime Hop energy (nbHop > nbDirect/e), its borrowed cross-record inflation
 // is continuously damped.
 func evalUnrelatedBystanderBorrowFromProfiles(profS, profNb unitGroupProfile, aff, rawCos, sStrength, nbStrength, nbDirect, nbHop float64) float64 {
-	const invE2 = invE * invE
-	subFloor := 1.0 - invE
 	if rawCos < 0 {
 		rawCos = 0
 	}
@@ -471,7 +452,7 @@ func evalUnrelatedBystanderBorrowFromProfiles(profS, profNb unitGroupProfile, af
 		return 0
 	}
 	ix := intersectGroupProfiles(profS, profNb, false)
-	if ix.peerCov >= invE2 {
+	if ix.PeerCoverage >= invE2 {
 		return 0
 	}
 	nbTot := nbDirect + nbHop
@@ -640,19 +621,19 @@ func (e *Engine) evalPairFromProfilesQ(st *rmClusterState, u int32, profU unitGr
 		}
 	}
 
-	selfExplain := computeDirectedLocalExplainWork(e.queryScratch, st, profU, ix.sharedMaskU, ix.sharedMin, ix.peerSalientEx, profV.muMass, qSet)
-	peerExplain := computeDirectedLocalExplainWork(e.queryScratch, st, profV, ix.sharedMaskV, ix.sharedMin, ix.selfSalientEx, profU.muMass, qSet)
+	selfExplain := computeDirectedLocalExplainWork(e.queryScratch, st, profU, ix.sharedMaskU, ix.SharedMinNats, ix.PeerSalientExcessNats, profV.muMass, qSet)
+	peerExplain := computeDirectedLocalExplainWork(e.queryScratch, st, profV, ix.sharedMaskV, ix.SharedMinNats, ix.SelfSalientExcessNats, profU.muMass, qSet)
 
 	return UnitRelationPeer{
 		UnitID:              idx.UnitIDs[v],
 		Unit:                v,
-		SharedNats:          ix.sharedMin,
-		SelfExcessNats:      ix.selfExcess,
-		PeerExcessNats:      ix.peerExcess,
-		SelfSalientExcess:   ix.selfSalientEx,
-		PeerSalientExcess:   ix.peerSalientEx,
-		SelfCoverage:        ix.selfCov,
-		PeerCoverage:        ix.peerCov,
+		SharedNats:          ix.SharedMinNats,
+		SelfExcessNats:      ix.SelfExcessNats,
+		PeerExcessNats:      ix.PeerExcessNats,
+		SelfSalientExcess:   ix.SelfSalientExcessNats,
+		PeerSalientExcess:   ix.PeerSalientExcessNats,
+		SelfCoverage:        ix.SelfCoverage,
+		PeerCoverage:        ix.PeerCoverage,
 		SubjectCosine:       subjCos,
 		TemporalAffinity:    tempAff,
 		SelfExplainWorkNats: selfExplain,
@@ -715,18 +696,13 @@ func (e *Engine) InspectUnitRelations(unitID string, topK int) (UnitRelationProf
 	}
 	sortInt32Asc(cands)
 
-	identityFloor := 1.0 - invE*invE
-
 	for _, v := range cands {
 		profV := e.buildUnitGroupProfile(st, v, highDFThresh)
 		if len(profV.items) == 0 {
 			continue
 		}
 		peer := e.evalPairFromProfiles(st, u, profU, v, profV)
-		var harmCov float64
-		if peer.SelfCoverage+peer.PeerCoverage > 0 {
-			harmCov = 2.0 * peer.SelfCoverage * peer.PeerCoverage / (peer.SelfCoverage + peer.PeerCoverage)
-		}
+		harmCov := harmonicCoverage(peer.SelfCoverage, peer.PeerCoverage)
 
 		// Conditioned Binomial Decomposition over P_couple(u,v) * (C_u + R_u)(C_v + R_v):
 		//   C_u = SelfCoverage ∈ [0,1], R_u = 1 - C_u (u's residual fraction)
@@ -892,7 +868,6 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 	}
 
 	qSet := buildQueryGroundSet(qTerms)
-	identityFloor := 1.0 - invE*invE
 	visited := map[int32]bool{u0: true}
 	seenChainGroups := make(map[uint64]bool, len(profCur.items)*2+len(qSet))
 	for _, it := range profCur.items {
@@ -1044,11 +1019,6 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 // endorsement from a leading co-event seed s to a candidate u within the primary
 // event cluster, shared by both Phase-2.5 cluster endorsement and marginal filtering.
 func intraEventEndorseGain(rel UnitRelationPeer, aff, harmCov, eventRatio, satDecay, gap, microOcc, seedBurstOcc float64) float64 {
-	const (
-		invE2         = invE * invE
-		subFloor      = 1.0 - invE
-		identityFloor = 1.0 - invE2
-	)
 	if gap <= 0 || aff < subFloor || harmCov < invE || harmCov >= identityFloor ||
 		rel.SelfCoverage < invE || rel.PeerCoverage < invE || rel.SubjectCosine < invE2 ||
 		rel.PeerExplainWorkNats <= math.Sqrt(math.E)*rel.SelfExplainWorkNats || rel.PeerExplainWorkNats <= invE {
@@ -1113,20 +1083,11 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 	if e == nil || idx == nil || st == nil || sc == nil || len(sc.coreUnits) < 2 || total <= 0 {
 		return
 	}
-	const (
-		invE2         = invE * invE
-		subFloor      = 1.0 - invE
-		identityFloor = 1.0 - invE2
-	)
 	evalStage2E := func(u int32) float64 {
 		c := &candidates[u]
 		base, _, _ := c.stage2Bounds(unitStructGate, u, groups, total)
 		if !c.structureSet {
-			gate := 1.0
-			if len(unitStructGate) > int(u) {
-				gate = unitStructGate[u]
-			}
-			c.structure = gate * st.computeStructuredIncrement(idx, sc, c, groups, total)
+			c.structure = gateAt(unitStructGate, u) * st.computeStructuredIncrement(idx, sc, c, groups, total)
 			c.structureSet = true
 		}
 		return base + c.structure
@@ -1264,10 +1225,7 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 				continue
 			}
 			rel := e.evalPairFromProfilesQ(st, s, eventUnits[k].prof, u, profU, qSet)
-			harmCov := 0.0
-			if rel.SelfCoverage+rel.PeerCoverage > 0 {
-				harmCov = 2.0 * rel.SelfCoverage * rel.PeerCoverage / (rel.SelfCoverage + rel.PeerCoverage)
-			}
+			harmCov := harmonicCoverage(rel.SelfCoverage, rel.PeerCoverage)
 			if gain := intraEventEndorseGain(rel, aff, harmCov, eventUnits[k].energy/maxE, satDecay, eventUnits[k].energy-eventUnits[i].energy, microOcc, eventUnits[k].microOcc); gain > best {
 				best = gain
 			}
@@ -1322,9 +1280,6 @@ func (e *Engine) ApplyUnitRelationMarginalFilter(hits []Hit, qTerms map[uint64]T
 	st := e.ensureClusterState()
 	e.ensureQueryScratch(idx.N, st.clusterN).resetProfilePools()
 	highDFThresh := idx.HighDFThreshold()
-	subFloor := 1.0 - invE
-	identityFloor := 1.0 - invE*invE
-
 	units := make([]int32, len(hits))
 	profiles := make([]unitGroupProfile, len(hits))
 	valid := make([]bool, len(hits))
@@ -1381,10 +1336,7 @@ func (e *Engine) ApplyUnitRelationMarginalFilter(hits []Hit, qTerms map[uint64]T
 				continue
 			}
 			rel := e.evalPairFromProfilesQ(st, s, profiles[j], u, profU, qSet)
-			harmCov := 0.0
-			if rel.SelfCoverage+rel.PeerCoverage > 0 {
-				harmCov = 2.0 * rel.SelfCoverage * rel.PeerCoverage / (rel.SelfCoverage + rel.PeerCoverage)
-			}
+			harmCov := harmonicCoverage(rel.SelfCoverage, rel.PeerCoverage)
 			if (hits[i].Hop1 == 0 && hits[i].Hop2 == 0) || (harmCov >= identityFloor && rel.PeerSalientExcess == 0) {
 				if sc := evalBurstCloneRedundancyFromProfiles(profiles[j], profU, aff); sc > maxClone {
 					maxClone = sc

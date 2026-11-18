@@ -273,7 +273,7 @@ func bootstrapSQLite(db *gorm.DB) error {
 			(15, 14, 'node', '查看', 'auth/rule/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(20, 3, 'menu', '管理员日志管理', 'auth/log', 'auth/log', 'lucide-scroll-text', 'tab', '', '/src/views/admin/auth/log/index.vue', 1, '', '', 96, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(21, 20, 'node', '查看', 'auth/log/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-			(22, NULL, 'dir', '常规管理', 'routine', 'routine', 'lucide-settings', '', '', '', 1, '', '', 969, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(22, NULL, 'dir', '系统管理', 'routine', 'routine', 'lucide-settings', '', '', '', 1, '', '', 969, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(23, 22, 'menu', '系统配置', 'routine/config', 'routine/config', 'lucide-wrench', 'tab', '', '/src/views/admin/routine/config/index.vue', 1, '', '', 99, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(24, 23, 'node', '查看', 'routine/config/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(25, 23, 'node', '更新', 'routine/config/update', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
@@ -427,6 +427,16 @@ func bootstrapSQLite(db *gorm.DB) error {
 			(166, 101, 'node', '执行在线安全升级（SHA-256 校验）', 'plugin/rolling-memory/system/update/apply', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "weigh" = 970 WHERE "name" = 'auth' AND "type" = 'dir' AND "weigh" = 998`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "weigh" = 969 WHERE "name" = 'routine' AND "type" = 'dir' AND "weigh" = 997`).Error
+	// 「常规管理」频道改名为「系统管理」：只迁移仍是出厂标题的行，用户自定义标题保持不动。
+	_ = db.Exec(`UPDATE "admin_rules" SET "title" = '系统管理' WHERE "name" = 'routine' AND "type" = 'dir' AND "title" = '常规管理'`).Error
+	// 「记忆服务」页挂在系统管理频道下：守护进程启停/重启、内存上限、缓存与磁盘维护。
+	// 路由由 rmconsole 静态挂载（不经插件闸），因此菜单与节点不绑定插件状态。
+	_ = db.Exec(`INSERT OR IGNORE INTO "admin_rules" ("id", "pid", "type", "title", "name", "path", "icon", "open_type", "url", "component", "keepalive", "extend", "remark", "weigh", "status", "plugin", "updated_at", "created_at") VALUES
+			(350, 22, 'menu', '记忆服务', 'plugin/rolling-memory/system', 'plugin/rolling-memory/system', 'lucide-server-cog', 'tab', '', '/src/views/admin/plugin/rolling-memory/system.vue', 1, '', '守护进程启停与重启、内存上限、缓存清理与磁盘维护', 98, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(351, 350, 'node', '查看记忆服务', 'plugin/rolling-memory/system/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(352, 350, 'node', '控制守护进程', 'plugin/rolling-memory/system/daemon', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(353, 350, 'node', '设置内存上限', 'plugin/rolling-memory/system/memory-limit', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(354, 350, 'node', '清理缓存', 'plugin/rolling-memory/system/cache', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "weigh" = 968 WHERE "name" = 'plugin-center' AND "type" = 'dir' AND "weigh" = 989`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "weigh" = 100, "title" = '检索调试' WHERE "name" = 'plugin/rolling-memory/recall' AND "weigh" = 95 AND "title" = '检索召回'`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "title" = '执行检索调试查询' WHERE "name" = 'plugin/rolling-memory/recall/query' AND "title" = '执行检索召回查询'`).Error

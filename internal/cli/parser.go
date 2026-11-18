@@ -974,9 +974,20 @@ func BuildParser() *Parser {
 		},
 	}
 
+	daemonCmd := &command{
+		Name: "daemon", Path: []string{"daemon"},
+		Help:    "control the shared local engine daemon (status, start, stop, restart)",
+		Options: commonOptions(), SubDest: "daemon_action", DefaultSub: "status",
+	}
+	daemonCmd.Subcommands = []*command{
+		{Name: "status", Path: []string{"daemon", "status"}, Options: commonOptions()},
+		{Name: "start", Path: []string{"daemon", "start"}, Options: commonOptions()},
+		{Name: "stop", Path: []string{"daemon", "stop"}, Options: commonOptions()},
+		{Name: "restart", Path: []string{"daemon", "restart"}, Options: commonOptions()},
+	}
+
 	installCmd := &command{
-		Name: "install", Path: []string{"install"},
-		Help: "wire this memory core into agent harnesses (skill + MCP + optional hooks/instructions)",
+		Name: "install", Path: []string{"install"}, Help: "wire this memory core into agent harnesses (skill + MCP + optional hooks/instructions)",
 		Options: []*Option{
 			flagOption([]string{"--list"}, "list", false, "show the harness adapter table"),
 			flagOption([]string{"--dry-run"}, "dry_run", false,
@@ -1119,7 +1130,7 @@ func BuildParser() *Parser {
 		importCmd, exportCmd, syncCmd, backgroundCmd, mcpCmd, hookCmd,
 		statusCmd, doctorCmd, checkCmd, reindexCmd, installCmd, evalCmd,
 		ejectCmd, efficacyCmd, waveCmd, panelCmd, updateCmd, upgradeCmd,
-		maintainCmd, engineCmd,
+		maintainCmd, daemonCmd, engineCmd,
 	}
 	for _, sub := range root.Subcommands {
 		sub.Path = []string{sub.Name}

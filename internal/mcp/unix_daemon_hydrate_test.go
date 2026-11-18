@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	_ "modernc.org/sqlite"
 )
 

@@ -22,6 +22,8 @@ import rawPluginConsoleZh from './content/docs/zh-CN/plugin-console.md?raw'
 import rawPluginConsoleEn from './content/docs/plugin-console.md?raw'
 import rawConsoleTerminalZh from './content/docs/zh-CN/console-terminal.md?raw'
 import rawConsoleTerminalEn from './content/docs/console-terminal.md?raw'
+import rawConfigurationZh from './content/docs/zh-CN/configuration.md?raw'
+import rawConfigurationEn from './content/docs/configuration.md?raw'
 import rawPrivacyZh from './content/docs/zh-CN/privacy.md?raw'
 import rawPrivacyEn from './content/docs/privacy.md?raw'
 import rawTokenEconomicsZh from './content/docs/zh-CN/token-economics.md?raw'
@@ -462,6 +464,39 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
         ],
         rawZh: rawConsoleTerminalZh,
         rawEn: rawConsoleTerminalEn,
+    },
+    {
+        id: 'docs-configuration',
+        scope: 'docs',
+        repoFullName: 'rocareer/rolling-memory',
+        path: 'docs/configuration.md',
+        icon: 'lucide-sliders-horizontal',
+        category: 'guide',
+        badgeZh: '配置参考',
+        badgeEn: 'Configuration',
+        url: `${MAIN_REPO_URL}/blob/main/docs/configuration.md`,
+        shortTitleZh: '配置参考（常用配置收拢）',
+        shortTitleEn: 'Configuration Reference',
+        titleZh: 'docs/zh-CN/configuration.md · 配置参考：路径、交付窗口、内存上限与控制台端口',
+        titleEn: 'docs/configuration.md · Configuration Reference: paths, delivery window, memory cap and console ports',
+        summaryZh:
+            '把常用配置收拢在一处：配置文件位置与优先级、存储与身份、召回交付窗口、后台引擎内存上限（auto/off/尺寸）、常用环境变量，以及控制台「系统管理 → 记忆服务」的等价操作与验证命令。',
+        summaryEn:
+            'All commonly used settings in one place: config file location and precedence, storage and identity, recall delivery window, the engine memory cap (auto / off / explicit size), the common environment variables, and the equivalent System → Memory Service controls with verification commands.',
+        sectionsZh: [
+            '配置文件位置与优先级（命令行 → 环境变量 → config.toml → 默认值）',
+            '常用配置：存储与身份、召回交付窗口、后台引擎内存上限、存储档位',
+            '常用环境变量子集：路径、分区、交付窗口、内存上限、控制台端口',
+            '控制台等价操作与验证：系统管理 → 记忆服务、rmem daemon status、rmem config --json',
+        ],
+        sectionsEn: [
+            'Config file location and precedence (flags → environment → config.toml → defaults)',
+            'Common settings: storage and identity, recall delivery window, engine memory cap, storage profile',
+            'Common environment variable subset: paths, scope, delivery window, memory cap, console ports',
+            'Equivalent console controls and verification: System → Memory Service, rmem daemon status, rmem config --json',
+        ],
+        rawZh: rawConfigurationZh,
+        rawEn: rawConfigurationEn,
     },
     {
         id: 'docs-benchmarks',

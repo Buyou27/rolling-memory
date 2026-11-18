@@ -14,7 +14,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
 )
 
 // HierarchicalLCPScore computes the language-agnostic, domain-neutral Longest Common Prefix (LCP)

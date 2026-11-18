@@ -44,12 +44,6 @@ func UnpackTermRoleExt(re uint8) (TermRole, uint16) {
 	return termdoc.UnpackTermRoleExt(re)
 }
 
-// PackInferredOrdinalDay packs an inferred ordinal day into the (Sent, Slot)
-// composite carried by query-side closed-beacon terms with no postings.
-func PackInferredOrdinalDay(day int64) (uint16, uint16) {
-	return termdoc.PackInferredOrdinalDay(day)
-}
-
 // UnpackInferredOrdinalDay unpacks the (Sent, Slot) inferred-day carrier.
 func UnpackInferredOrdinalDay(sent, slot uint16) int64 {
 	return termdoc.UnpackInferredOrdinalDay(sent, slot)

@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
 // TestThinBrainRememberStripsProtocolEnvelopes pins the write-side denoise contract:
@@ -325,5 +327,102 @@ func TestThinBrainRecallAssemblesSegmentHitsPerTurn(t *testing.T) {
 	}
 	if result.Gaps["source_unavailable"] == 0 {
 		t.Fatalf("missing source gap: %+v", result.Gaps)
+	}
+}
+
+// TestThinBrainRememberChunksLongText pins the write-path unit-size contract: a
+// text wider than the tokenz-r chunk rung is ingested as several content-addressed
+// units (repeat calls are idempotent), while a text that fits the rung keeps its
+// historical single-unit id.
+func TestThinBrainRememberChunksLongText(t *testing.T) {
+	memory := newVaultOnlyMemory(t)
+
+	var b strings.Builder
+	for i := 0; i < 900; i++ {
+		fmt.Fprintf(&b, "Chapter %04d: shipment %04d left the depot for route %04d. ", i, i, i)
+	}
+	long := strings.TrimSpace(b.String())
+	if got := tokenzr.Count(long); got <= tokenzr.DefaultChunkTokens {
+		t.Fatalf("fixture must exceed the chunk rung: %d tokens", got)
+	}
+	receipt, err := memory.Remember(api.RememberRequest{Content: &long, Session: "s1"})
+	if err != nil {
+		t.Fatalf("remember long text: %v", err)
+	}
+	written, _ := receipt["written"].([]any)
+	if len(written) < 2 {
+		t.Fatalf("long text must be split into several units, got %d: %+v", len(written), receipt)
+	}
+	unitIDs := make(map[string]bool, len(written))
+	for _, item := range written {
+		unit, _ := item.(map[string]any)
+		id, _ := unit["id"].(string)
+		if id == "" || unitIDs[id] {
+			t.Fatalf("unit ids must be non-empty and distinct: %+v", written)
+		}
+		unitIDs[id] = true
+	}
+	trace, _ := receipt["trace"].(map[string]any)
+	firstID, _ := written[0].(map[string]any)["id"].(string)
+	if trace["hash"] != firstID || trace["chunks"] != len(written) {
+		t.Fatalf("trace must point at the first chunk and count all units: %+v", trace)
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(unitIDs)), ",")
+	args := make([]any, 0, len(unitIDs))
+	for id := range unitIDs {
+		args = append(args, id)
+	}
+	rows, err := memory.Store.DB().Query(
+		`SELECT raw_text FROM thin_vault_docs WHERE doc_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		t.Fatalf("read stored units: %v", err)
+	}
+	defer rows.Close()
+	stored := 0
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan stored unit: %v", err)
+		}
+		stored++
+		if got := tokenzr.Count(raw); got > tokenzr.DefaultChunkTokens {
+			t.Fatalf("stored unit exceeds the chunk rung: %d tokens", got)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate stored units: %v", err)
+	}
+	if stored != len(unitIDs) {
+		t.Fatalf("stored %d units for %d ids", stored, len(unitIDs))
+	}
+
+	again, err := memory.Remember(api.RememberRequest{Content: &long, Session: "s1"})
+	if err != nil {
+		t.Fatalf("remember long text again: %v", err)
+	}
+	writtenAgain, _ := again["written"].([]any)
+	if len(writtenAgain) != len(written) {
+		t.Fatalf("repeat ingest changed unit count: %d -> %d", len(written), len(writtenAgain))
+	}
+	for i := range writtenAgain {
+		if writtenAgain[i].(map[string]any)["id"] != written[i].(map[string]any)["id"] {
+			t.Fatalf("repeat ingest changed unit id at %d", i)
+		}
+	}
+
+	short := "Glasgow hotel cost 120 GBP per night."
+	shortReceipt, err := memory.Remember(api.RememberRequest{Content: &short, Session: "s1"})
+	if err != nil {
+		t.Fatalf("remember short text: %v", err)
+	}
+	shortWritten, _ := shortReceipt["written"].([]any)
+	if len(shortWritten) != 1 {
+		t.Fatalf("short text must stay one unit: %+v", shortReceipt)
+	}
+	scope, _ := shortReceipt["scope"].(string)
+	wantID := "rm_" + ids.SHA256Hex(scope + "\x00" + "s1" + "\x00" + short)[:24]
+	if got := shortWritten[0].(map[string]any)["id"]; got != wantID {
+		t.Fatalf("single-unit id drifted: got %v want %s", got, wantID)
 	}
 }

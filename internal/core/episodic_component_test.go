@@ -4,6 +4,7 @@
 package core
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -279,4 +280,155 @@ func TestEpisodicWarmDomainCrossMidnightCosine(t *testing.T) {
 	if got, want := citeSt.docSubjectCos(citeIdx, nil, ca, cb), 1/math.E; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("untimed cited pair cosine = %v, want citation floor %v", got, want)
 	}
+}
+
+// TestEpisodeRostersBatchMatchesPerUnitScan pins the batch roster snapshot to
+// the single-unit view: for every unit the component id and the member list
+// must match EpisodeRosterOf bit-for-bit, including ascending order, the
+// untimed sentinel and out-of-range units.
+func TestEpisodeRostersBatchMatchesPerUnitScan(t *testing.T) {
+	const base = int64(1700000000)
+	var docs []Doc
+	// Four bursts of six units, 6h apart, with intra-burst spacing well below
+	// tau_episode so each burst stays one component.
+	for b := 0; b < 4; b++ {
+		start := base + int64(b)*6*3600
+		for i := 0; i < 6; i++ {
+			docs = append(docs, epTestDoc(fmt.Sprintf("burst-%d-%d", b, i), start+int64(i)*20))
+		}
+	}
+	docs = append(docs, epTestDoc("untimed-a", 0), epTestDoc("untimed-b", 0))
+	idx := BuildIndex(docs)
+	eng := NewEngine(idx)
+	st := eng.ensureClusterState()
+	rosters := eng.EpisodeRosters()
+	if len(rosters) != st.episodeCount {
+		t.Fatalf("EpisodeRosters len = %d, want episodeCount %d", len(rosters), st.episodeCount)
+	}
+	covered := 0
+	for ep, roster := range rosters {
+		if len(roster) == 0 {
+			t.Fatalf("episode %d has no members", ep)
+		}
+		for i, u := range roster {
+			if i > 0 && roster[i-1] >= u {
+				t.Fatalf("episode %d roster not strictly ascending: %v", ep, roster)
+			}
+			if got := st.episodeOf[u]; got != int32(ep) {
+				t.Fatalf("episode %d contains unit %d labeled %d", ep, u, got)
+			}
+		}
+		covered += len(roster)
+	}
+	if covered != 24 {
+		t.Fatalf("rosters cover %d units, want 24 timed units", covered)
+	}
+	for u := 0; u < idx.N; u++ {
+		want := eng.EpisodeRosterOf(int32(u))
+		ep := eng.EpisodeIDOf(int32(u))
+		if ep < 0 {
+			if want != nil {
+				t.Fatalf("unit %d untimed but roster = %v", u, want)
+			}
+			continue
+		}
+		got := rosters[ep]
+		if len(got) != len(want) {
+			t.Fatalf("unit %d roster len = %d, want %d", u, len(got), len(want))
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Fatalf("unit %d roster[%d] = %d, want %d", u, i, got[i], want[i])
+			}
+		}
+	}
+	if got := eng.EpisodeIDOf(-1); got != -1 {
+		t.Fatalf("EpisodeIDOf(-1) = %d, want -1", got)
+	}
+	if got := eng.EpisodeIDOf(int32(idx.N)); got != -1 {
+		t.Fatalf("EpisodeIDOf(N) = %d, want -1", got)
+	}
+	if got := eng.EpisodeRosterOf(int32(idx.N)); got != nil {
+		t.Fatalf("EpisodeRosterOf(N) = %v, want nil", got)
+	}
+}
+
+// TestEpisodeRostersDriveFractalFiberAnnex checks the delivery annex still uses
+// the episode roster: every fiber comes from the delivered group's component,
+// no unit is duplicated across fibers/chain/hits, and the annex is drawn from
+// the same roster the batch snapshot exposes.
+func TestEpisodeRostersDriveFractalFiberAnnex(t *testing.T) {
+	const base = int64(1700000000)
+	var docs []Doc
+	for i := 0; i < 5; i++ {
+		docs = append(docs, epTestDoc(fmt.Sprintf("fiber-%d", i), base+int64(i)*20))
+	}
+	docs = append(docs, epTestDoc("decoy", base+86400*30))
+	idx := BuildIndex(docs)
+	eng := NewEngine(idx)
+	first := idx.UnitOf["fiber-0"]
+	ep := eng.EpisodeIDOf(first)
+	if ep < 0 {
+		t.Fatal("expected a timed episode for fiber-0")
+	}
+	roster := eng.EpisodeRosters()[ep]
+	inRoster := make(map[string]bool, len(roster))
+	for _, u := range roster {
+		inRoster[idx.UnitIDs[u]] = true
+	}
+	hits := []Hit{{UnitID: "fiber-0", Energy: 34.5}}
+	groups := eng.GroupHitsByClusterFractalWithQuery(hits, DefaultEpisodeFiberCap, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	seen := map[string]bool{"fiber-0": true}
+	for _, step := range groups[0].ExplanationChain {
+		if seen[step.UnitID] {
+			t.Fatalf("chain step %s duplicated", step.UnitID)
+		}
+		seen[step.UnitID] = true
+	}
+	for _, fid := range groups[0].FiberUnitIDs {
+		if seen[fid] {
+			t.Fatalf("fiber %s duplicated across chain/hits", fid)
+		}
+		if !inRoster[fid] {
+			t.Fatalf("fiber %s is not a member of episode %d (%v)", fid, ep, roster)
+		}
+		seen[fid] = true
+	}
+	for _, u := range roster {
+		if !seen[idx.UnitIDs[u]] {
+			t.Fatalf("episode member %s missing from fibers/chain/hits", idx.UnitIDs[u])
+		}
+	}
+	if hits[0].UnitID != "fiber-0" || hits[0].Energy != 34.5 {
+		t.Fatalf("0-ULP violation on hits slice: %+v", hits)
+	}
+}
+
+// BenchmarkEpisodeRosterBatch contrasts the per-unit roster scan with the
+// single-pass batch snapshot used by graph/delivery callers.
+func BenchmarkEpisodeRosterBatch(b *testing.B) {
+	const units = 2048
+	docs := make([]Doc, units)
+	for i := range docs {
+		docs[i] = epTestDoc(fmt.Sprintf("bench-%04d", i), 1700000000+int64(i/32)*6*3600+int64(i%32)*20)
+	}
+	eng := NewEngine(BuildIndex(docs))
+	eng.ensureClusterState()
+	b.Run("per-unit", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			for u := 0; u < units; u++ {
+				_ = eng.EpisodeRosterOf(int32(u))
+			}
+		}
+	})
+	b.Run("batch", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = eng.EpisodeRosters()
+		}
+	})
 }

@@ -201,11 +201,13 @@ func (a *TermExtractor) resolvedStemDF(idx QueryIndexView, low string, primaryDF
 }
 
 // hyphenPartsResolved 报告连字符复合词的每个部件是否都能在库解析。
+// 无字母部件（纯数字/标点）不参与解析；单字符部件不按字符数特判，交由库内
+// df/词干证据裁决——部件缺证即判未解析（宁漏勿错），保持语种无关。
 func (a *TermExtractor) hyphenPartsResolved(idx QueryIndexView, low string, ubiquitous float64) bool {
 	parts := strings.Split(low, "-")
 	seen := 0
 	for _, part := range parts {
-		if len([]rune(part)) < 2 || !hasLetter(part) {
+		if !hasLetter(part) {
 			continue
 		}
 		seen++

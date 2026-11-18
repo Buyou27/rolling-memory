@@ -118,3 +118,62 @@ func TestNaturalDecayEnergiesPrefixCountScaleInvariance(t *testing.T) {
 		t.Fatalf("zero energies must yield an empty window, got %d", got)
 	}
 }
+
+func TestCoverageFloorPrefixCount(t *testing.T) {
+	cases := []struct {
+		name     string
+		ranks    []int
+		maxItems int
+		want     int
+	}{
+		{name: "empty ranks", ranks: nil, maxItems: 64, want: 0},
+		{name: "zero cap", ranks: []int{4}, maxItems: 0, want: 0},
+		{name: "ignores nonpositive", ranks: []int{0, -3}, maxItems: 64, want: 0},
+		{name: "ignores beyond cap", ranks: []int{70}, maxItems: 64, want: 0},
+		{name: "takes the largest first-cover", ranks: []int{1, 2, 4}, maxItems: 64, want: 4},
+		{name: "clamped to cap", ranks: []int{3, 64}, maxItems: 64, want: 64},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CoverageFloorPrefixCount(tc.ranks, tc.maxItems); got != tc.want {
+				t.Fatalf("CoverageFloorPrefixCount = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNaturalDecayCoveragePrefixCountExtendsOnlyAndKeepsSilence(t *testing.T) {
+	// Zero collision keeps the empty window even if a caller passes ranks:
+	// a formal cover cannot exist without a positive collision.
+	silent := []Hit{{UnitID: "a"}, {UnitID: "b"}}
+	if got := NaturalDecayCoveragePrefixCount(silent, []int{3}, 64); got != 0 {
+		t.Fatalf("zero collision must keep silence, got %d", got)
+	}
+
+	// The partial-coverage case: the decay envelope closes at 2, but a salient
+	// group is first covered by the rank-4 candidate (the only one carrying the
+	// missing concept), so the coupled window extends to 4.
+	hits := []Hit{
+		{UnitID: "peak", Energy: 398.5, Direct: 380.1},
+		{UnitID: "r2", Energy: 276.8, Direct: 276.4},
+		{UnitID: "r3", Energy: 120.0, Direct: 119.3},
+		{UnitID: "complement", Energy: 118.1, Direct: 117.0},
+		{UnitID: "r5", Energy: 40.0, Direct: 39.0},
+	}
+	decay := NaturalDecayPrefixCount(hits, 64)
+	if decay != 2 {
+		t.Fatalf("decay window = %d, want 2", decay)
+	}
+	if got, want := NaturalDecayCoveragePrefixCount(hits, []int{1, 2, 4}, 64), 4; got != want {
+		t.Fatalf("coupled window = %d, want %d (extends to the first complement cover)", got, want)
+	}
+	// The floor never shrinks a window that already covers everything: when the
+	// largest first-cover rank sits inside the decay window, the decay count wins.
+	if got, want := NaturalDecayCoveragePrefixCount(hits, []int{1, 2}, 64), 2; got != want {
+		t.Fatalf("coupled window = %d, want %d (floor inside the decay window)", got, want)
+	}
+	// Ranks beyond the item cap cannot stretch the window past the cap.
+	if got, want := NaturalDecayCoveragePrefixCount(hits, []int{1, 2, 90}, 64), 2; got != want {
+		t.Fatalf("coupled window = %d, want %d (out-of-cap rank ignored)", got, want)
+	}
+}

@@ -8,6 +8,16 @@ import (
 	"sort"
 )
 
+// gateAt 返回单元 u 的结构门；门表缺失或越界时恒 1.0（无锚信息不衰减）。
+// 此前评分、筛选、背书与外挂钩五处内联的带守卫取门式收敛到本函数；
+// 门表已按 idx.N 截断现场的无守卫直接索引不受影响。
+func gateAt(unitStructGate []float64, u int32) float64 {
+	if len(unitStructGate) > int(u) {
+		return unitStructGate[u]
+	}
+	return 1.0
+}
+
 func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, topK int) []Hit {
 	idx := e.Index
 	st := e.ensureClusterState()
@@ -1156,8 +1166,11 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 	sortInt32Asc(activeEpisodes)
 	sc.activeEpisodes = activeEpisodes
-	// tightBurstAffinityFloor (~0.9514, exp(-e^-3)) is the temporal affinity
-	// threshold above which two records are treated as a near-simultaneous burst.
+	// tightBurstAffinityFloor (~0.9514) is the engineering-calibrated temporal
+	// affinity threshold above which two records are treated as a
+	// near-simultaneous burst. It is not exp(-1/e^3): that double is
+	// 0.9514319929004534 and differs by 8.3e-8; the literal keeps the
+	// historical calibration value bit-for-bit.
 	const tightBurstAffinityFloor = 0.9514319102438668
 	burstAffFloor := tightBurstAffinityFloor
 	for _, ep := range activeEpisodes {
@@ -1543,8 +1556,6 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 	if idx == nil || len(candidates) == 0 || len(qTerms) < 3 {
 		return
 	}
-	const invE2 = 1.0 / (math.E * math.E)
-
 	evalPass := func(hashes []uint64, groupOf map[uint64]uint64, groupW map[uint64]float64, groupDF map[uint64]int, useExtra bool, minPop int, requireMid bool) {
 		if len(groupW) < minPop || sc == nil {
 			return

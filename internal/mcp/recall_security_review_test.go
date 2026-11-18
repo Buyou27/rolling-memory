@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 // TestRecallDeliverySecurity exercises the real MCP dispatch and verifies that

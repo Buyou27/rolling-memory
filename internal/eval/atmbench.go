@@ -782,6 +782,23 @@ func ComputeATMOfficialCompositeBps(main1013R10, hard31R10 float64) float64 {
 	return PyRound(10000.0*(0.70*main1013R10+0.30*hard31R10), 2)
 }
 
+// rankedCoreHits re-wraps the eval-layer ranked hits into the kernel hit view
+// (total collision energy plus the candidate's own collision energy).
+func rankedCoreHits(hits []local.ResolvedHit, retIDs []string) []core.Hit {
+	ranked := make([]core.Hit, 0, len(hits))
+	for i := range hits {
+		if i >= len(retIDs) {
+			break
+		}
+		ranked = append(ranked, core.Hit{
+			UnitID: retIDs[i],
+			Energy: hits[i].FinalWeight,
+			Direct: hits[i].DirectWeight,
+		})
+	}
+	return ranked
+}
+
 // SelectATMAdaptiveDelivery selects the smart adaptive delivery prefix from ranked
 // hits with the kernel's zero-floor natural decay envelope (`core.NaturalDecayPrefixCount`):
 // the window is the longest prefix whose total collision energy stays at or above
@@ -802,18 +819,24 @@ func SelectATMAdaptiveDelivery(hits []local.ResolvedHit, retIDs []string, maxIte
 	if maxItems <= 0 {
 		maxItems = 64
 	}
-	ranked := make([]core.Hit, 0, len(hits))
-	for i := range hits {
-		if i >= len(retIDs) {
-			break
-		}
-		ranked = append(ranked, core.Hit{
-			UnitID: retIDs[i],
-			Energy: hits[i].FinalWeight,
-			Direct: hits[i].DirectWeight,
-		})
+	return core.NaturalDecayPrefixCount(rankedCoreHits(hits, retIDs), maxItems)
+}
+
+// SelectATMAdaptiveDeliveryCoverage couples the natural decay envelope with the
+// kernel's salient-coverage floor (`core.NaturalDecayCoveragePrefixCount`): when a
+// salient query group is first covered by a candidate ranked beyond the decay
+// cutoff but inside the item cap, the window extends to include it. The rule only
+// extends a window (fail-open) and every extension lands on a candidate that
+// itself carries new formal coverage of the query, so no evidence-free item is
+// ever added through this path; zero collision keeps the empty window.
+func SelectATMAdaptiveDeliveryCoverage(hits []local.ResolvedHit, retIDs []string, maxItems int, firstCoverRanks []int) int {
+	if len(retIDs) == 0 || len(hits) == 0 {
+		return 0
 	}
-	return core.NaturalDecayPrefixCount(ranked, maxItems)
+	if maxItems <= 0 {
+		maxItems = 64
+	}
+	return core.NaturalDecayCoveragePrefixCount(rankedCoreHits(hits, retIDs), firstCoverRanks, maxItems)
 }
 
 // FormatATMEvidencePayload 按 ATM-Bench 官方 MMRag 规范将 Top-K 证据格式化为答题输入。
@@ -1140,6 +1163,11 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 				allHit10 := len(q.EvidenceIDs) > 0 && r10 >= 1.0-1e-9
 
 				qRetrieveK := SelectATMAdaptiveDelivery(rawHits, retIDs, retrieveK)
+				if coverageFloorEnabled() && !opts.Oracle && qRetrieveK > 0 {
+					if firstCoverRanks := engine.salientFirstCoverRanks(q.Question, retIDs, retrieveK); len(firstCoverRanks) > 0 {
+						qRetrieveK = SelectATMAdaptiveDeliveryCoverage(rawHits, retIDs, retrieveK, firstCoverRanks)
+					}
+				}
 				if opts.Oracle {
 					qRetrieveK = len(retIDs)
 				}

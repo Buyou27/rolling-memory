@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 // TestNoeticCitationEvidenceDropsBareNarrationMarker 钉住结晶引证的清洗契约：交付渲染

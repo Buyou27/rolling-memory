@@ -21,7 +21,7 @@ import (
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/evalns"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	local "github.com/rocareer/rolling-memory/sdk/go/local"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 	_ "modernc.org/sqlite"

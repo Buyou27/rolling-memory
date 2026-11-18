@@ -11,7 +11,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/mcp"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 // backgroundSkipNote renders the exclusion tail of a human summary line: how many files were

@@ -574,3 +574,59 @@ systemUpdate:
     applySuccessNoop: 所有组件均已是最新，无需替换
     restartingNotice: 控制台组件已更新，正在后台平滑重启并刷新页面...
 
+
+system:
+    title: 记忆服务
+    sub: 本地引擎守护进程的系统管理面：启停与重启、内存上限、缓存与磁盘维护
+    refreshBtn: 刷新状态
+    daemonTitle: 引擎守护进程
+    daemonSub: 本地唯一重型进程，承载索引与磁盘温层；关闭后下一次检索会自动拉起
+    running: 运行中
+    stopped: 未运行
+    pidLbl: 进程号
+    uptimeLbl: 运行时长
+    heapLbl: 堆内存
+    limitLbl: 生效内存上限
+    sourceLbl: 上限来源
+    startBtn: 启动守护进程
+    stopBtn: 停止守护进程
+    restartBtn: 重启守护进程
+    daemonHint: 停止后不阻塞任何操作：下一次检索或后台同步会按需自动拉起
+    confirmTitle: 请确认
+    stopConfirm: 停止守护进程会释放约数 GB 内存，下一次检索需重新预热（数十秒）。继续？
+    restartConfirm: 重启守护进程会短暂中断正在进行的检索并重新预热。继续？
+    actionDoneToast: 守护进程操作完成
+    memoryTitle: 内存上限
+    memorySub: 引擎堆内存软上限；auto 按物理内存的 1/8 自适应（1GiB–4GiB）
+    memoryAutoOption: auto（按内存自适应）
+    memoryOffOption: off（不限制）
+    saveBtn: 保存上限
+    memoryHint: 保存后需重启守护进程生效；也可直接填写尺寸，如 768MiB
+    memoryConfigLbl: 配置值
+    memoryEffectiveLbl: 运行中生效值
+    savedToast: 内存上限已保存
+    restartNowConfirm: 上限已保存。现在重启守护进程立即生效吗？
+    restartLater: 稍后重启
+    sourceAuto: 自适应
+    sourceExplicit: 配置指定
+    sourceEnv: 环境变量
+    sourceOff: 不限制
+    sourceUnavailable: 无法探测内存
+    cacheTitle: 缓存
+    cacheSub: 内存索引快照与读缓存均可再生成，清理不会改动任何记忆原文
+    clearBtn: 清理缓存
+    cacheHint: 清理后由下一次检索自动预热，仅在排查异常或释放内存时使用
+    clearedToast: 缓存已清理
+    spaceTitle: 磁盘维护
+    spaceSub: 旧版本备份、可再生成缓存与金库空闲页；扫描为只读体检
+    scanBtn: 扫描空间
+    cleanBtn: 清理备份与缓存
+    compactBtn: 金库瘦身
+    totalLbl: 可回收合计
+    backupsLbl: 旧版本备份
+    cachesLbl: 可再生成缓存
+    compactLbl: 金库空闲页
+    freedLbl: 本次释放
+    cleanConfirm: 将删除过期备份与可再生成缓存（不影响记忆原文）。继续？
+    compactConfirm: 金库瘦身会停止守护进程、重建数据库文件并复位，期间检索不可用。继续？
+    doneToast: 维护完成

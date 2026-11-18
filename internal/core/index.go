@@ -144,7 +144,14 @@ const (
 	// consumers that previously duplicated the literal (eval health doctor).
 	HighDFFraction = 0.1353352832366127
 	// minHighDFFloor prevents single-digit micro-corpora from collapsing the
-	// high-DF threshold to 0 or 1.
+	// high-DF threshold to 0 or 1. The literal is the correctly rounded e^2
+	// (bit-identical to math.Exp(2)); math.E*math.E evaluates one ulp lower,
+	// so keep the literal and do not rewrite it as a constant expression.
+	// It is the reciprocal mirror of HighDFFraction, but 1/HighDFFraction
+	// evaluates one ulp below the literal in both const and runtime forms,
+	// so the two constants must not be single-sourced from each other.
+	// The floor only governs n < e^4 (~54.6) documents; above that the ratio
+	// branch wins and the floor is analytically inert.
 	minHighDFFloor = 7.38905609893065
 )
 

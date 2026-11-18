@@ -5,8 +5,6 @@ package cli_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -94,11 +92,12 @@ func TestDaemonRecallDoesNotRetryAfterDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(cfg)
+	// The identity must come from the production helper so this fixture keeps
+	// matching when non-semantic configuration fields are excluded from it.
+	configID, err := mcp.DaemonConfigID(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(raw)
 	listener, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +105,7 @@ func TestDaemonRecallDoesNotRetryAfterDisconnect(t *testing.T) {
 	var calls atomic.Int64
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/health" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "pid": os.Getpid(), "db": cfg.DB, "identity_version": 1, "mode": "local", "pulse_mode": "local_plain", "config_id": hex.EncodeToString(digest[:])})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "pid": os.Getpid(), "db": cfg.DB, "identity_version": 1, "mode": "local", "pulse_mode": "local_plain", "config_id": configID})
 			return
 		}
 		calls.Add(1)

@@ -11,6 +11,19 @@ import (
 // invE 是普适常数 e 的倒数：一跳透射率取 invE，二跳取 invE²（逐跳几何衰减）。
 const invE = 1.0 / math.E
 
+// 透射率与亲和地板三件套的包级唯一声明；此前评分、关系与筛选各函数内的
+// 同名局部副本已删除，引用处直接解析到本声明。三种历史写法（局部
+// 1.0/(E·E)、局部 invE*invE、运行时 1.0-invE 与 1.0-invE*invE）与本声明
+// 在 float64 下逐位相同，收敛不改变任何数值。
+const (
+	// invE2 是二跳透射率 e^{-2}。
+	invE2 = invE * invE
+	// subFloor 是同事件邻居扫描的亲和地板 1-1/e。
+	subFloor = 1.0 - invE
+	// identityFloor 是克隆/旁观者判定的同源上限 1-e^{-2}。
+	identityFloor = 1.0 - invE2
+)
+
 // 单次查询的扩散计算预算（非评分参数）按种子能量组消费。
 // 跨过预算边界的等能量组完整展开，因此预算是软上限。
 const (
@@ -533,6 +546,28 @@ func (e *Engine) DeleteDocs(unitIDs ...string) int {
 		}
 	}
 	if len(delSet) == 0 {
+		return 0
+	}
+	// No-op deletes must not pay the O(N) export/rebuild: probe the base index
+	// and the delta overlay directly and return early when no requested ID is
+	// resident. A resident ID keeps the full path (masked base units included,
+	// because they still live in the base index).
+	present := false
+	for id := range delSet {
+		if e.Index != nil {
+			if _, ok := e.Index.LookupUnit(id); ok {
+				present = true
+				break
+			}
+		}
+		if e.deltaEngine != nil && e.deltaEngine.Index != nil {
+			if _, ok := e.deltaEngine.Index.LookupUnit(id); ok {
+				present = true
+				break
+			}
+		}
+	}
+	if !present {
 		return 0
 	}
 	existing := e.ExportDocs()

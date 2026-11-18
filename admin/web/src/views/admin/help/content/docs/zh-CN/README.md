@@ -20,6 +20,7 @@
 | **[usb-portable.md](usb-portable.md)** | U 盘便携模式指南：现实适用前提（跨电脑开发同一项目）、`rmem init --portable` 一键制盘、挂载点漂移自愈锚点与 `rmem eject` 安全拔盘 | [docs/usb-portable.md](../usb-portable.md) |
 | **[plugin-console.md](plugin-console.md)** | Web 管理控制台指南：本地管理面板、WebSocket 实时流、粗略 ROI 趋势估算模块、体验评价 Hook 开关、记忆图谱与评测实验室 | [docs/plugin-console.md](../plugin-console.md) |
 | **[console-terminal.md](console-terminal.md)** | Web 控制台内置命令行（终端）使用指南：入口与界面构成、recall/Hook 实时流与水合正文回显、快捷命令与常用命令对照表（status / doctor / recent / check / `sync prune` 只读预演）、白名单执行与显式确认边界 | [docs/console-terminal.md](../console-terminal.md) |
+| **[configuration.md](configuration.md)** | 配置参考：配置文件位置与优先级、常用 `[core]` / `[recall]` / `[daemon]` 配置（含引擎内存上限 `auto` / `off` / 明确尺寸）、常用环境变量，以及控制台「系统管理 → 记忆服务」的等价操作 | [docs/configuration.md](../configuration.md) |
 | **[benchmarks.md](benchmarks.md)** | 基准复现与独立核验指南：自备语料与 `SHA-256` pin、LoCoMo 与剑桥大学 ATM-Bench 本地复现命令、评测协议校验与原始 JSONL 复算 | [docs/benchmarks.md](../benchmarks.md) |
 | **[privacy.md](privacy.md)** | **隐私与本地数据说明**：哪些数据永不离开本机、本地金库纵深防御、一键自证命令，以及云端能力的申请制预览 | [docs/privacy.md](../privacy.md) |
 | **[essays/memory-retrieval-is-not-similarity-search.md](essays/memory-retrieval-is-not-similarity-search.md)** | 理念随笔：为什么相似度不该做记忆检索的主键——对称的相似度与不对称的问答、复读对相似度的膨胀、记忆问题的事件结构，以及把模型版本嵌进记忆格式的长期代价 | [docs/essays/memory-retrieval-is-not-similarity-search.md](../essays/memory-retrieval-is-not-similarity-search.md) |

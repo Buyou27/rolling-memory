@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -26,8 +27,8 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/text"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
 )
 
 const (
@@ -143,6 +144,23 @@ type UnixHealthResponse struct {
 	Mode            string `json:"mode"`
 	PulseMode       string `json:"pulse_mode"`
 	ConfigID        string `json:"config_id"`
+	// Runtime footprint and memory-limit reporting for the system console.
+	// MemLimitBytes is 0 when no explicit soft limit is in force;
+	// MemLimitSource is one of auto / explicit / env / off / unavailable.
+	StartedAtUnix  int64  `json:"started_at"`
+	UptimeSec      int64  `json:"uptime_sec"`
+	HeapAllocBytes uint64 `json:"heap_alloc_bytes"`
+	HeapSysBytes   uint64 `json:"heap_sys_bytes"`
+	TotalRAMBytes  int64  `json:"total_ram_bytes"`
+	MemLimitBytes  int64  `json:"mem_limit_bytes"`
+	MemLimitSource string `json:"mem_limit_source"`
+	MemLimitConfig string `json:"mem_limit_config"`
+}
+
+// DaemonConfigID exposes the daemon configuration identity so diagnostics can
+// compare a caller's resolved configuration with the running daemon's.
+func DaemonConfigID(cfg *config.Config) (string, error) {
+	return unixDaemonConfigID(cfg)
 }
 
 func unixDaemonConfigID(cfg *config.Config) (string, error) {
@@ -153,6 +171,10 @@ func unixDaemonConfigID(cfg *config.Config) (string, error) {
 	if resolved.Path == "" || resolved.DB == "" || resolved.Log == "" {
 		return "", errors.New("daemon configuration identity is incomplete")
 	}
+	// The daemon memory cap is a process resource knob, not a retrieval-semantics
+	// input: exclude it from the identity so that saving a new cap can still
+	// reach the running daemon and restart it instead of failing the handshake.
+	resolved.Daemon = config.DaemonConfig{}
 	var err error
 	if resolved.Path, err = filepath.Abs(resolved.Path); err != nil {
 		return "", err
@@ -176,9 +198,24 @@ func unixDaemonHealth(cfg *config.Config, exeMTime int64) (UnixHealthResponse, e
 	if err != nil {
 		return UnixHealthResponse{}, err
 	}
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	limit := currentDaemonMemoryState()
+	startedAt := limit.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
 	return UnixHealthResponse{
 		OK: true, PID: os.Getpid(), DB: cfg.DB, ExeModTimeNS: exeMTime,
 		IdentityVersion: daemonIdentityVersion, Mode: cfg.Mode, PulseMode: "local_plain", ConfigID: id,
+		StartedAtUnix:  startedAt.Unix(),
+		UptimeSec:      int64(time.Since(startedAt).Seconds()),
+		HeapAllocBytes: stats.HeapAlloc,
+		HeapSysBytes:   stats.Sys,
+		TotalRAMBytes:  limit.TotalRAM,
+		MemLimitBytes:  limit.LimitBytes,
+		MemLimitSource: limit.LimitSource,
+		MemLimitConfig: limit.ConfigValue,
 	}, nil
 }
 
@@ -679,6 +716,12 @@ func ensureUnixDaemon(sockPath string, cfg *config.Config) error {
 	return ensureUnixDaemonContext(context.Background(), sockPath, cfg)
 }
 
+// EnsureUnixDaemonContext is the context-aware variant of EnsureUnixDaemon for
+// callers (CLI daemon start, console) that need a bounded wait.
+func EnsureUnixDaemonContext(ctx context.Context, sockPath string, cfg *config.Config) error {
+	return ensureUnixDaemonContext(ctx, sockPath, cfg)
+}
+
 func ensureUnixDaemonContext(ctx context.Context, sockPath string, cfg *config.Config) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1100,6 +1143,9 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 			return err
 		}
 	}
+	// Apply the configured soft memory limit before the engine snapshot warms
+	// up so the collector target covers the whole daemon lifetime.
+	ApplyMemoryLimit(daemonCfg)
 	health, err := unixDaemonHealth(daemonCfg, myMTime)
 	if err != nil {
 		return err

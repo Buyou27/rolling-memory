@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/recall"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 func TestThinDeliveryRawCapAfterBandSelection(t *testing.T) {

@@ -26,9 +26,9 @@ import (
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/recall"
+	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
-	"github.com/rocareer/rolling-memory/internal/thinclient"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
