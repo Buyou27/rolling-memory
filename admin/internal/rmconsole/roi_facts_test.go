@@ -660,6 +660,9 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 	// even when the suite runs just after midnight (now-120s would cross days).
 	now := time.Now()
 	now = time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
+	previousClock := roiFactsClock
+	roiFactsClock = func() time.Time { return now }
+	t.Cleanup(func() { roiFactsClock = previousClock })
 	nowUnix := now.Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);

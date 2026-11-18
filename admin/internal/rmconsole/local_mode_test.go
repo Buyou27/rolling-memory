@@ -142,6 +142,13 @@ func TestWidgetAndGraphHandlersMakeZeroCloudCalls(t *testing.T) {
 	}
 
 	InvalidateLocomoPublicCorpusCache()
+	// 桩替换执行器后，resolveBinary 仍须解析到一个占位二进制：CI 环境没有
+	// 安装产品二进制，不能依赖开发机 ~/.local/bin 的存在。
+	shim := filepath.Join(t.TempDir(), "rolling-memory-stub")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write engine shim: %v", err)
+	}
+	t.Setenv("ROLLING_MEMORY_BIN", shim)
 	previousRunner := engineCommandRunner
 	engineCommandRunner = func(_ context.Context, _ string, op string, _ []string, _ []byte) ([]byte, error) {
 		if op != "graph" {

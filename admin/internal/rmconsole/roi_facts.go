@@ -1305,8 +1305,12 @@ func refreshROIEpisodicTexts(memoryPath string, bundle vaultAnalyticsBundle) vau
 	return bundle
 }
 
+// roiFactsClock 是金库事实账本的取时来源：单测把「现在」钉在本地正午，
+// 使窗口与今日桶断言不随真实时刻（尤其跨日、跨时区）漂移。
+var roiFactsClock = time.Now
+
 func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string) {
-	now := time.Now()
+	now := roiFactsClock()
 	sig := roiVaultBundleSignature(memoryPath, now)
 	out := vaultAnalyticsBundle{
 		vaultWindows:  []roiFactWindow{},

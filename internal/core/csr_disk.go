@@ -649,6 +649,12 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 	}
 
 	bodyCRC := crc32.Checksum(buf[zcsrRMHeaderSize:], zcsrCRCTable)
+	// 调用方可能已释放堆上倒排映射（Index.ReleaseTransientUnitMaps）：此时 PostingDigest
+	// 仍是「按需未算」的 0。段头摘要必须与读者从 CSR 列式状态重算的值一致，否则整段
+	// 自校验必然失败；这里用本次序列化的列式状态补算一次（O(倒排)，与写段同阶）。
+	if len(idx.Postings) == 0 && idx.PostingDigest == 0 && len(st.postingPool) > 0 {
+		idx.PostingDigest = computePostingDigestFromCSR(st.termKeys, st.termRowPtr, st.postingPool, st.docRowPtr, st.docEntriesFlat, st.posPool, st.widePos)
+	}
 	corpusDigest := ComputeCorpusDigest(idx)
 
 	copy(buf[0:4], zcsrMagic)

@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-19
+
+### Changed
+
+- **Single retrieval index per memory**: each memory's retrieval terms are derived once when it is saved and stored next to its text in the vault's document store, which is what the engine serves at query time. The in-memory snapshot and the on-disk index cache are keyed by that store's revision counters, so a warm index keeps being reused as new memories arrive, and the packed-atom codec that previously had to be decoded again at read time was removed.
+- The memory console, in-app help centre, and benchmark/privacy documentation now describe the shipped deterministic cluster kernel instead of the retired FTS5/BM25 lexical index, and the evaluation page no longer mentions a retired cloud endpoint.
+
 ### Fixed
 
+- Opening a vault created by an earlier version now derives its existing memories from their own sources — stored text, mounted files, or the original session — before the first recall runs, so an upgrade never leaves recall pointing at an empty corpus. The one-time pass is recorded in the vault, skips units the user deleted, and later opens start immediately.
 - Background episodic maintenance now runs one pass at a time per process and stops long transcript scans as soon as its lease is revoked, so several connected hosts no longer stack repeated reads of the same session file or pin a CPU core after a session goes idle.
-- The memory console, in-app help centre, and benchmark/privacy documentation now describe the shipped deterministic cluster kernel instead of the retired FTS5/BM25 lexical index, and the evaluation page no longer mentions a retired cloud endpoint.
 
 ## [0.0.5] - 2026-11-19
 

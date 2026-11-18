@@ -40,6 +40,13 @@ jobs:
           go test ./internal/golden -count=1
           go test -race ./internal/... -count=1
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: admin/web/package-lock.json
+
       - name: Admin console build & tests (when present)
         run: |
           if [ -d admin ]; then

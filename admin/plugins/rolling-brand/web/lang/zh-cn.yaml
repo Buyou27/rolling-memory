@@ -11,6 +11,6 @@ heroDescription: "波场 × 星系 · 语种无关 · 语义无关 · 模型无�
 pointRouterTitle: "极致高效 · < 10 ms 毫秒级相干召回"
 pointRouterDesc: "波场 × 星系寻址驱动 L1 · L2 · L3 三层记忆瞬时共振"
 pointEvalTitle: "极致安全 · 0 明文出网的本地金库"
-pointEvalDesc: "原始明文与 256-bit 密钥锁死本机 SQLite，仅传 10 字节盲化脉冲"
+pointEvalDesc: "原始明文与 256-bit 密钥始终留在本机 SQLite 数据库，全程离线"
 pointAuditTitle: "极致经济 · 0 向量 × 0 大模型税"
 pointAuditDesc: "告别向量膨胀与后台 LLM 抽取账单，LoCoMo 1,540 题全量实测 85.26%"

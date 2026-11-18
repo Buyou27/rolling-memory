@@ -135,6 +135,9 @@ func TestApplySwitchToggleValidation(t *testing.T) {
 
 func TestCollectDashboardData(t *testing.T) {
 	home := t.TempDir()
+	// liveSoftwareVersion 会回退读取 $HOME/Rolling-Memory/VERSION；把 HOME 钉在
+	// 临时目录，避免开发机上另一份源码树的版本号污染断言。
+	t.Setenv("HOME", home)
 	logDir := filepath.Join(home, ".local", "state", "rolling-memory")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatalf("mkdir logDir: %v", err)
