@@ -1419,6 +1419,15 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		}
 	}
 
+	// 全档倒排零记载凭证与完备度：整个档案（非候选集抽样）的确定性事实，
+	// 供调用方在证据不足时据实拒答。只作事实陈述，不触发截断或排序改变。
+	if tc.Vault != nil && query != "" {
+		if certs, report, ok := tc.Vault.ArchiveVoidProbe(query); ok && (len(certs) > 0 || report.FullMass > 0) {
+			meta["void_certificates"] = certs
+			meta["coverage"] = report
+		}
+	}
+
 	indexIncomplete := 0
 	if _, local := tc.Transport.(*thinclient.LocalVaultTransport); local && tc.Vault != nil {
 		index, indexErr := tc.Vault.EpisodicIndexFaultDiagnostics()

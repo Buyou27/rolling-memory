@@ -1,6 +1,9 @@
 {
   "active_assertions": 0,
   "config": {
+    "daemon": {
+      "memory_limit": "auto"
+    },
     "db": "<DB>",
     "egress": "loopback-only",
     "llm": {

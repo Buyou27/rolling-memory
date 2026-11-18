@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remembering a long text now stores it as several sentence-aligned memory units of at most 8,192 tokens each (identical chunks collapse), so oversized pastes stay recallable and never hit the single-payload ceiling; a text that fits within one unit keeps its existing memory id.
 
+### Fixed
+
+- Long-text units and text/code background files now keep the source text verbatim, including indentation and the whitespace at a cut point, and each one's token bound is checked against the exact text it stores rather than per-sentence estimates. A unit can no longer quietly exceed the 8,192-token rung through cross-boundary re-tokenisation; a single sentence that alone exceeds it is still kept whole instead of being cut.
+- Spreadsheet background files use the same exact-fit budget rule when a sheet is split into row blocks, and a row that alone exceeds the budget is kept whole instead of being cut.
+
 ## [0.0.4] - 2026-11-18
 
 ### Changed

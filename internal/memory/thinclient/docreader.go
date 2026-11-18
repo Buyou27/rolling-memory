@@ -273,13 +273,15 @@ func finalizeDocumentChunks(absPath string, relPath string, rawBlocks []rawChunk
 	curLine := 1
 	for _, blk := range rawBlocks {
 		// Keep one rendered line per source line (blank lines included) so the
-		// chunk body stays 1:1 with the file's own line numbering.
+		// chunk body stays 1:1 with the file's own line numbering. Lines are kept
+		// verbatim: indentation and intra-line whitespace are part of the source
+		// (a YAML block or an indented code listing reads wrong without them), so
+		// trimming only decides whether a chunk holds any content at all.
 		hasContent := false
 		cleaned := make([]string, 0, len(blk.lines))
 		for _, l := range blk.lines {
-			t := strings.TrimSpace(l)
-			cleaned = append(cleaned, t)
-			if t != "" {
+			cleaned = append(cleaned, l)
+			if strings.TrimSpace(l) != "" {
 				hasContent = true
 			}
 		}
@@ -465,61 +467,90 @@ func readXlsxChunks(absPath string, relPath string) ([]DocumentChunk, error) {
 		if sheetTitle == "" {
 			sheetTitle = fmt.Sprintf("Sheet%d", idx+1)
 		}
+		blocks = append(blocks, groupSheetRowsIntoBlocks(sheetTitle, rows)...)
+	}
+	return finalizeDocumentChunks(absPath, relPath, blocks), nil
+}
 
-		headerCols := rows[0]
-		var curLines []string
-		curTokens := 0
-		startRow := 1
-		for rIdx, row := range rows {
-			var lineParts []string
-			for cIdx, val := range row {
-				val = strings.TrimSpace(val)
-				if val == "" {
-					continue
-				}
-				if rIdx > 0 && cIdx < len(headerCols) && strings.TrimSpace(headerCols[cIdx]) != "" {
-					lineParts = append(lineParts, strings.TrimSpace(headerCols[cIdx])+": "+val)
-				} else {
-					lineParts = append(lineParts, val)
-				}
+// groupSheetRowsIntoBlocks renders one worksheet into chunk blocks. Every row is
+// rendered as one self-describing line (`[Sheet Row N] header: value | ...`); the
+// first row additionally supplies the column names later rows are labelled with.
+// Rows share the text-file budget rule through tokenzr.FitLineRun, so a row block
+// can never overshoot the budget even when a join costs more than its parts (line
+// token counts are not additive), and a row that alone exceeds the budget stays
+// whole. Anchors keep the 1-based worksheet row range of the block.
+func groupSheetRowsIntoBlocks(sheetTitle string, rows [][]string) []rawChunkBlock {
+	if len(rows) == 0 {
+		return nil
+	}
+	headerCols := rows[0]
+	var blocks []rawChunkBlock
+	var curLines []string
+	var curRows []int
+	curTokens := 0
+	startRow := 1
+	// flush emits the current buffer. anchorEnd carries the caller's row-range end
+	// for the fully-fitting case (0 asks for the last rendered row); when the exact
+	// budget check peels trailing rows back, the peeled remainder opens the next
+	// block from its own first row.
+	flush := func(nextStart, anchorEnd int) {
+		for len(curLines) > 0 {
+			fit := tokenzr.FitLineRun(curLines, 0, TargetChunkTokens)
+			if fit < 1 {
+				fit = 1
 			}
-			if len(lineParts) == 0 {
-				continue
-			}
-			lineStr := fmt.Sprintf("[%s Row %d] %s", sheetTitle, rIdx+1, strings.Join(lineParts, " | "))
-			w := measureLineTokens(lineStr)
-			if curTokens+w > TargetChunkTokens && len(curLines) > 0 {
-				endRow := rIdx
-				if endRow < startRow {
-					endRow = startRow
-				}
-				blocks = append(blocks, rawChunkBlock{
-					anchor:    fmt.Sprintf("%s:r%d-%d", sheetTitle, startRow, rIdx),
-					lines:     curLines,
-					lineStart: startRow,
-					lineEnd:   endRow,
-				})
-				curLines = nil
-				curTokens = 0
-				startRow = rIdx + 1
-			}
-			curLines = append(curLines, lineStr)
-			curTokens += w
-		}
-		if len(curLines) > 0 {
-			endRow := len(rows)
-			if endRow < startRow {
-				endRow = startRow
+			endRow := anchorEnd
+			if fit < len(curLines) || endRow <= 0 {
+				endRow = curRows[fit-1]
 			}
 			blocks = append(blocks, rawChunkBlock{
-				anchor:    fmt.Sprintf("%s:r%d-%d", sheetTitle, startRow, len(rows)),
-				lines:     curLines,
+				anchor:    fmt.Sprintf("%s:r%d-%d", sheetTitle, startRow, endRow),
+				lines:     append([]string(nil), curLines[:fit]...),
 				lineStart: startRow,
 				lineEnd:   endRow,
 			})
+			curLines = append([]string(nil), curLines[fit:]...)
+			curRows = append([]int(nil), curRows[fit:]...)
+			curTokens = 0
+			for _, line := range curLines {
+				curTokens += measureLineTokens(strings.TrimSpace(line))
+			}
+			if len(curRows) > 0 {
+				startRow = curRows[0]
+				continue
+			}
+			startRow = nextStart
 		}
 	}
-	return finalizeDocumentChunks(absPath, relPath, blocks), nil
+	for rIdx, row := range rows {
+		var lineParts []string
+		for cIdx, val := range row {
+			val = strings.TrimSpace(val)
+			if val == "" {
+				continue
+			}
+			if rIdx > 0 && cIdx < len(headerCols) && strings.TrimSpace(headerCols[cIdx]) != "" {
+				lineParts = append(lineParts, strings.TrimSpace(headerCols[cIdx])+": "+val)
+			} else {
+				lineParts = append(lineParts, val)
+			}
+		}
+		if len(lineParts) == 0 {
+			continue
+		}
+		lineStr := fmt.Sprintf("[%s Row %d] %s", sheetTitle, rIdx+1, strings.Join(lineParts, " | "))
+		w := measureLineTokens(lineStr)
+		if curTokens+w > TargetChunkTokens && len(curLines) > 0 {
+			flush(rIdx+1, rIdx)
+		}
+		curLines = append(curLines, lineStr)
+		curRows = append(curRows, rIdx+1)
+		curTokens += w
+	}
+	if len(curLines) > 0 {
+		flush(len(rows)+1, len(rows))
+	}
+	return blocks
 }
 
 func parseXlsxSharedStrings(r io.Reader) []string {

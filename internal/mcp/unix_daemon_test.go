@@ -1553,15 +1553,23 @@ func TestUnixDaemonLeasePreservesReplacedOwnedAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = listener.Close()
-	if err := os.Remove(lease.anchor); err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := net.Listen("unix", lease.anchor)
+	// Build the replacement at a scratch path first and rename it into place:
+	// binding in place right after the unlink can reuse the removed entry's
+	// inode number (routine on Linux filesystems), which would make the
+	// replacement indistinguishable from the pinned socket on dev+inode alone.
+	replacementPath := lease.anchor + ".replacement"
+	replacement, err := net.Listen("unix", replacementPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	replacement.(*net.UnixListener).SetUnlinkOnClose(false)
 	_ = replacement.Close()
+	if err := os.Remove(lease.anchor); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, lease.anchor); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.Lstat(lease.anchor)
 	if err != nil {
 		t.Fatal(err)

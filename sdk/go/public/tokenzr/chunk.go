@@ -28,6 +28,20 @@ const DefaultChunkTokens = 8192
 // ChunkLadder enumerates the standard seven-level tokenz-r token budget rungs.
 var ChunkLadder = [7]int{128, 256, 512, 1024, 2048, 4096, 8192}
 
+// ChunkerVersion pins the chunk-text contract: the sentence-boundary class, the
+// exact budget check and the per-piece fidelity rules. Chunk text is an identity
+// input for every content-addressed unit derived from it (episodic docIDs,
+// background file bodies), so changing any of those rules changes stored
+// identities. Hosts must treat a version bump as a re-index migration, never as a
+// silent upgrade.
+const ChunkerVersion = 1
+
+// headingSoftBreakDivisor closes a line chunk that has already filled one third
+// of its budget before a Markdown heading, so the heading opens the next chunk
+// together with its body. It is a layout heuristic only: it moves a split point
+// by at most one heading and never changes ranking or the token budget itself.
+const headingSoftBreakDivisor = 3
+
 // NormalizeChunkTokens normalizes a caller-supplied chunk token threshold into
 // the valid range (0, DefaultChunkTokens]: values <= 0 or > DefaultChunkTokens
 // resolve to DefaultChunkTokens (8192), while any positive threshold below
@@ -40,7 +54,9 @@ func NormalizeChunkTokens(maxTokens int) int {
 }
 
 // LineChunk represents one contiguous 1-based line-range slice produced by
-// ChunkLines, preserving 1:1 line coordinates with the source document.
+// ChunkLines, preserving 1:1 line coordinates with the source document. Lines
+// hold the source text verbatim (indentation included); TokenCount is the exact
+// count of their newline-joined body.
 type LineChunk struct {
 	ChunkIndex int      `json:"chunk_index"`
 	Anchor     string   `json:"anchor"`
@@ -52,41 +68,56 @@ type LineChunk struct {
 
 // ChunkBySentences splits text into lossless chunks of at most
 // NormalizeChunkTokens(maxTokens) tokens, cutting strictly at sentence
-// boundaries. A single sentence that alone exceeds the budget is kept intact
-// so no sentence is ever truncated mid-way.
+// boundaries. The returned pieces concatenate back to text byte for byte: no
+// piece is trimmed and no separator is dropped. Every assembled piece is checked
+// against the budget exactly, because token counts are not additive across a
+// boundary. A single sentence that alone exceeds the budget is kept intact so no
+// sentence is ever truncated mid-way.
 func ChunkBySentences(text string, maxTokens int) []string {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	budget := NormalizeChunkTokens(maxTokens)
-	if len(trimmed) <= budget || Count(trimmed) <= budget {
-		return []string{trimmed}
+	if Count(text) <= budget {
+		return []string{text}
 	}
-	sentences := SplitSentencesKeepingDelimiters(trimmed)
+	sentences := SplitSentencesKeepingDelimiters(text)
 	if len(sentences) == 0 {
-		return []string{trimmed}
+		return []string{text}
 	}
 	chunks := make([]string, 0, 4)
-	var current strings.Builder
-	currentTokens := 0
-	for _, sentence := range sentences {
-		sentenceTokens := Count(sentence)
-		if currentTokens > 0 && currentTokens+sentenceTokens > budget {
-			chunks = append(chunks, strings.TrimSpace(current.String()))
-			current.Reset()
-			currentTokens = 0
-		}
-		current.WriteString(sentence)
-		currentTokens += sentenceTokens
-	}
-	if tail := strings.TrimSpace(current.String()); tail != "" {
-		chunks = append(chunks, tail)
+	for start := 0; start < len(sentences); {
+		end := sentenceChunkEnd(sentences, start, budget)
+		chunks = append(chunks, strings.Join(sentences[start:end], ""))
+		start = end
 	}
 	if len(chunks) == 0 {
-		return []string{trimmed}
+		return []string{text}
 	}
 	return chunks
+}
+
+// sentenceChunkEnd returns the exclusive end index of the chunk starting at
+// start: the longest run of sentences whose per-sentence token sum stays within
+// budget, peeled back until the exact joined text fits as well. The sum is only a
+// fast bound; the assembled chunk is the judge, because a join can cost more
+// tokens than its parts (e.g. "hqar. " + "uebl" = 5 + 1 -> 7). A single sentence
+// that alone exceeds the budget is returned on its own.
+func sentenceChunkEnd(sentences []string, start, budget int) int {
+	estimate := 0
+	end := start
+	for end < len(sentences) {
+		tokens := Count(sentences[end])
+		if end > start && estimate+tokens > budget {
+			break
+		}
+		estimate += tokens
+		end++
+	}
+	for end > start+1 && Count(strings.Join(sentences[start:end], "")) > budget {
+		end--
+	}
+	return end
 }
 
 // SplitSentencesKeepingDelimiters segments text into sentence pieces while
@@ -130,8 +161,13 @@ func SplitSentencesKeepingDelimiters(text string) []string {
 		start = i
 	}
 	if start < len(text) {
-		if piece := text[start:]; strings.TrimSpace(piece) != "" {
-			out = append(out, piece)
+		tail := text[start:]
+		if strings.TrimSpace(tail) != "" || len(out) == 0 {
+			out = append(out, tail)
+		} else {
+			// A whitespace-only tail belongs to the piece before it; keeping it
+			// there is what makes the concatenation reproduce text exactly.
+			out[len(out)-1] += tail
 		}
 	}
 	return out
@@ -139,8 +175,11 @@ func SplitSentencesKeepingDelimiters(text string) []string {
 
 // ChunkLines groups source lines into contiguous chunks bounded by
 // NormalizeChunkTokens(maxTokens) tokens while preserving 1:1 1-based line
-// coordinates (LineStart..LineEnd) and soft-breaking at Markdown headings once
-// at least one-third of the chunk budget is filled.
+// coordinates (LineStart..LineEnd). Lines are stored verbatim so indentation and
+// intra-line whitespace survive, and the budget is enforced on the exact
+// newline-joined body rather than on the per-line estimates. A Markdown heading
+// opens a new chunk once the current one has filled one third of its budget, and
+// a single line that alone exceeds the budget is kept whole instead of truncated.
 func ChunkLines(lines []string, maxTokens int, anchorPrefix string) []LineChunk {
 	if len(lines) == 0 {
 		return nil
@@ -149,48 +188,82 @@ func ChunkLines(lines []string, maxTokens int, anchorPrefix string) []LineChunk 
 	if anchorPrefix == "" {
 		anchorPrefix = "L"
 	}
-	var out []LineChunk
-	var curLines []string
-	curTokens := 0
-	startIdx := 1
-
-	for idx, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		tokens := Count(trimmed)
-		isHeading := strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "## ") || strings.HasPrefix(trimmed, "### ")
-		if (curTokens+tokens > budget || (isHeading && curTokens >= budget/3)) && len(curLines) > 0 {
-			endIdx := idx
-			if endIdx < startIdx {
-				endIdx = startIdx
-			}
-			out = append(out, LineChunk{
-				ChunkIndex: len(out),
-				Anchor:     anchorPrefix + strconv.Itoa(startIdx) + "-" + strconv.Itoa(idx),
-				Lines:      curLines,
-				LineStart:  startIdx,
-				LineEnd:    endIdx,
-				TokenCount: curTokens,
-			})
-			curLines = nil
-			curTokens = 0
-			startIdx = idx + 1
-		}
-		curLines = append(curLines, trimmed)
-		curTokens += tokens
-	}
-	if len(curLines) > 0 {
-		endIdx := len(lines)
-		if endIdx < startIdx {
-			endIdx = startIdx
-		}
+	out := make([]LineChunk, 0, 4)
+	for start := 0; start < len(lines); {
+		end := lineChunkEnd(lines, start, budget)
+		chunkLines := append([]string(nil), lines[start:end]...)
 		out = append(out, LineChunk{
 			ChunkIndex: len(out),
-			Anchor:     anchorPrefix + strconv.Itoa(startIdx) + "-" + strconv.Itoa(len(lines)),
-			Lines:      curLines,
-			LineStart:  startIdx,
-			LineEnd:    endIdx,
-			TokenCount: curTokens,
+			Anchor:     anchorPrefix + strconv.Itoa(start+1) + "-" + strconv.Itoa(end),
+			Lines:      chunkLines,
+			LineStart:  start + 1,
+			LineEnd:    end,
+			TokenCount: Count(strings.Join(chunkLines, "\n")),
 		})
+		start = end
 	}
 	return out
+}
+
+// FitLineRun returns the exclusive end index of the longest run of lines starting
+// at start whose newline-joined body fits the normalized tokenz-r budget exactly.
+// Per-line estimates bound the scan (counted on trimmed text, so indentation is
+// layout rather than content) and the exact joined body decides, peeling trailing
+// lines back when a join costs more than its parts; a single line that alone
+// exceeds the budget is returned on its own. Producers that mint their own anchors
+// (spreadsheet row ranges, for example) share this decision instead of
+// re-implementing the budget.
+func FitLineRun(lines []string, start int, maxTokens int) int {
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(lines) {
+		return len(lines)
+	}
+	budget := NormalizeChunkTokens(maxTokens)
+	estimate := 0
+	end := start
+	for end < len(lines) {
+		tokens := Count(strings.TrimSpace(lines[end]))
+		if end > start && estimate+tokens > budget {
+			break
+		}
+		estimate += tokens
+		end++
+	}
+	return fitLineRunEnd(lines, start, end, budget)
+}
+
+// fitLineRunEnd peels end back until the exact joined body fits, keeping at least
+// one line (the single-line exception).
+func fitLineRunEnd(lines []string, start, end, budget int) int {
+	for end > start+1 && Count(strings.Join(lines[start:end], "\n")) > budget {
+		end--
+	}
+	return end
+}
+
+// lineChunkEnd returns the exclusive end index of the chunk starting at start. The
+// run is the exact budget fit; a Markdown heading inside it opens a new chunk once
+// the current one has filled one headingSoftBreakDivisor-th of the budget.
+func lineChunkEnd(lines []string, start, budget int) int {
+	end := FitLineRun(lines, start, budget)
+	estimate := 0
+	for i := start; i < end; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		tokens := Count(trimmed)
+		if i > start && isMarkdownHeading(trimmed) && estimate >= budget/headingSoftBreakDivisor {
+			return fitLineRunEnd(lines, start, i, budget)
+		}
+		estimate += tokens
+	}
+	return end
+}
+
+// isMarkdownHeading reports whether a trimmed line opens a Markdown ATX section at
+// levels one to three. Deeper levels and setext underlines are treated as body
+// text; that only moves a split point, never content.
+func isMarkdownHeading(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "## ") ||
+		strings.HasPrefix(trimmed, "### ")
 }

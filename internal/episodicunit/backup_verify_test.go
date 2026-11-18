@@ -145,8 +145,14 @@ func TestBackupUnitVerificationIsReadOnlyAndFailClosed(t *testing.T) {
 			}
 		})
 	}
-	longSegment := episodic.Segment{Role: episodic.RoleUser, Text: strings.Repeat("fixture sentence. ", TokenBudget), Index: 0}
-	units := SegmentUnits("mem:test", "@ref:zcode:s1:m3", longSegment, 1, true)
+	// The unit text must come from the source itself: the ZCode reader trims part
+	// text, so a hand-built segment would derive different chunk text (and thus a
+	// different docID) than the verification path does.
+	segments, err := episodic.ZCodeTurnSegments(db, "s1", "m3")
+	if err != nil || len(segments) != 1 {
+		t.Fatalf("read long fixture segment: n=%d err=%v", len(segments), err)
+	}
+	units := SegmentUnits("mem:test", "@ref:zcode:s1:m3", segments[0], 1, true)
 	if len(units) < 2 {
 		t.Fatal("fixture did not produce multiple chunks")
 	}

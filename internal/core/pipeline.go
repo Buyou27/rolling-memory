@@ -515,11 +515,17 @@ func (e *Engine) AppendDocs(docs []Doc) {
 	if e == nil || len(docs) == 0 {
 		return
 	}
-	existing := e.ExportDocs()
-	combined := make([]Doc, 0, len(existing)+len(docs))
-	combined = append(combined, existing...)
-	combined = append(combined, docs...)
-	rebuilt := BuildIndex(combined)
+	// CSR snapshot rebuild: feed the live cluster state plus delta directly,
+	// skipping the O(N) ExportDocs Doc materialization. Falls back to the
+	// ExportDocs path when no cluster state is available.
+	rebuilt := e.buildIndexWithDelta(docs)
+	if rebuilt == nil {
+		existing := e.ExportDocs()
+		combined := make([]Doc, 0, len(existing)+len(docs))
+		combined = append(combined, existing...)
+		combined = append(combined, docs...)
+		rebuilt = BuildIndex(combined)
+	}
 	if e.mmapUnmap != nil {
 		_ = e.Close()
 	}

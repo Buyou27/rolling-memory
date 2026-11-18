@@ -298,8 +298,9 @@ func BuildIndex(docs []Doc) *Index {
 		idx.UnitOf[id] = int32(unit)
 		doc := latest[id]
 		idx.UnitMeta[unit] = doc.Meta()
-		hasExplicitPos := len(doc.Positions) > 0
-		if hasExplicitPos {
+		in := indexDocInserter{idx: idx, unit: int32(unit), termCap: len(doc.Terms)}
+		in.explicitPos = len(doc.Positions) > 0
+		if in.explicitPos {
 			posMap := make(map[uint64][]TermPosition, len(doc.Positions))
 			for h, pl := range doc.Positions {
 				if len(pl) > 0 {
@@ -313,62 +314,225 @@ func BuildIndex(docs []Doc) *Index {
 			idx.UnitPositions[unit] = posMap
 		}
 		for hash, atom := range doc.Terms {
-			occ := doc.Counts[hash]
-			if occ < 1 {
-				occ = 1
-			} else if occ > math.MaxInt32 {
-				occ = math.MaxInt32
-			}
-			idx.Postings[hash] = append(idx.Postings[hash], Posting{Unit: int32(unit), Occ: int32(occ)})
-			idx.DF[hash]++
-			if !hasExplicitPos && atom.Sent > 0 && atom.Slot > 0 {
-				if idx.UnitPositions[unit] == nil {
-					idx.UnitPositions[unit] = make(map[uint64][]TermPosition, len(doc.Terms))
-				}
-				idx.UnitPositions[unit][hash] = []TermPosition{{Sentence: int(atom.Sent - 1), Slot: int(atom.Slot - 1)}}
-			}
-			if idx.UnitBits[unit] == nil {
-				idx.UnitBits[unit] = make(map[uint64]uint16, len(doc.Terms))
-			}
-			if atom.Bits > 0 {
-				if atom.Bits > idx.TermBits[hash] {
-					idx.TermBits[hash] = atom.Bits
-				}
-				if atom.Bits > idx.UnitBits[unit][hash] {
-					idx.UnitBits[unit][hash] = atom.Bits
-				}
-			} else if _, exists := idx.UnitBits[unit][hash]; !exists {
-				idx.UnitBits[unit][hash] = 0
-			}
-			if idx.UnitFlags[unit] == nil {
-				idx.UnitFlags[unit] = make(map[uint64]uint8, len(doc.Terms))
-			}
-			idx.UnitFlags[unit][hash] |= atom.Flags
-			if atom.Flags != 0 {
-				idx.TermFlags[hash] |= atom.Flags
-			}
-			if atom.Group != 0 {
-				if idx.UnitGroups[unit] == nil {
-					idx.UnitGroups[unit] = make(map[uint64]uint64, len(doc.Terms))
-				}
-				idx.UnitGroups[unit][hash] = atom.Group
-			}
-			if re := PackTermRoleExt(atom.Role, atom.ExtFlags); re != 0 {
-				if idx.UnitRoleExt[unit] == nil {
-					idx.UnitRoleExt[unit] = make(map[uint64]uint8, len(doc.Terms))
-				}
-				idx.UnitRoleExt[unit][hash] = re
-			}
-			if atom.ExtFlags&^0x07 != 0 {
-				if idx.UnitExtFlags[unit] == nil {
-					idx.UnitExtFlags[unit] = make(map[uint64]uint16, 4)
-				}
-				idx.UnitExtFlags[unit][hash] |= atom.ExtFlags
-			}
+			in.addTerm(hash, doc.Counts[hash], atom.Bits, atom.Flags, atom.Group, atom.Role, atom.ExtFlags, atom.Sent, atom.Slot)
 		}
 	}
 	idx.finalizeMasses()
 	return idx
+}
+
+// indexDocInserter applies the single per-term insertion rule shared by the
+// in-memory BuildIndex path and the CSR snapshot rebuild path. Keeping the
+// postings/DF/flags/role bookkeeping here is what makes append-from-CSR
+// bit-identical instead of a second index implementation.
+type indexDocInserter struct {
+	idx         *Index
+	unit        int32
+	explicitPos bool
+	termCap     int
+}
+
+func (in *indexDocInserter) addTerm(hash uint64, occ int, bits uint16, flags uint8, group uint64, role TermRole, extFlags uint16, sent, slot uint16) {
+	idx := in.idx
+	unit := in.unit
+	if occ < 1 {
+		occ = 1
+	} else if occ > math.MaxInt32 {
+		occ = math.MaxInt32
+	}
+	idx.Postings[hash] = append(idx.Postings[hash], Posting{Unit: unit, Occ: int32(occ)})
+	idx.DF[hash]++
+	if !in.explicitPos && sent > 0 && slot > 0 {
+		if idx.UnitPositions[unit] == nil {
+			idx.UnitPositions[unit] = make(map[uint64][]TermPosition, in.termCap)
+		}
+		idx.UnitPositions[unit][hash] = []TermPosition{{Sentence: int(sent - 1), Slot: int(slot - 1)}}
+	}
+	if idx.UnitBits[unit] == nil {
+		idx.UnitBits[unit] = make(map[uint64]uint16, in.termCap)
+	}
+	if bits > 0 {
+		if bits > idx.TermBits[hash] {
+			idx.TermBits[hash] = bits
+		}
+		if bits > idx.UnitBits[unit][hash] {
+			idx.UnitBits[unit][hash] = bits
+		}
+	} else if _, exists := idx.UnitBits[unit][hash]; !exists {
+		idx.UnitBits[unit][hash] = 0
+	}
+	if idx.UnitFlags[unit] == nil {
+		idx.UnitFlags[unit] = make(map[uint64]uint8, in.termCap)
+	}
+	idx.UnitFlags[unit][hash] |= flags
+	if flags != 0 {
+		idx.TermFlags[hash] |= flags
+	}
+	if group != 0 {
+		if idx.UnitGroups[unit] == nil {
+			idx.UnitGroups[unit] = make(map[uint64]uint64, in.termCap)
+		}
+		idx.UnitGroups[unit][hash] = group
+	}
+	if re := PackTermRoleExt(role, extFlags); re != 0 {
+		if idx.UnitRoleExt[unit] == nil {
+			idx.UnitRoleExt[unit] = make(map[uint64]uint8, in.termCap)
+		}
+		idx.UnitRoleExt[unit][hash] = re
+	}
+	if extFlags&^0x07 != 0 {
+		if idx.UnitExtFlags[unit] == nil {
+			idx.UnitExtFlags[unit] = make(map[uint64]uint16, 4)
+		}
+		idx.UnitExtFlags[unit][hash] |= extFlags
+	}
+}
+
+// buildIndexWithDelta rebuilds the index from the live CSR snapshot plus the
+// delta docs, without materializing every old unit as a Doc (the ExportDocs
+// step). It returns nil when the engine has no cluster state to read, so the
+// caller can fall back to the ExportDocs path. Scores stay bit-identical
+// because both paths feed the same indexDocInserter rule and finalizeMasses.
+func (e *Engine) buildIndexWithDelta(delta []Doc) *Index {
+	if e == nil || e.Index == nil || e.Index.N == 0 {
+		return nil
+	}
+	st := e.ensureClusterState()
+	if st == nil || len(st.docRowPtr) != e.Index.N+1 {
+		return nil
+	}
+	latestDelta := make(map[string]Doc, len(delta))
+	for _, doc := range delta {
+		if doc.UnitID != "" {
+			latestDelta[doc.UnitID] = doc
+		}
+	}
+	idSet := make(map[string]struct{}, e.Index.N+len(latestDelta))
+	for _, id := range e.Index.UnitIDs {
+		if id != "" {
+			idSet[id] = struct{}{}
+		}
+	}
+	for id := range latestDelta {
+		idSet[id] = struct{}{}
+	}
+	ids := make([]string, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	old := e.Index
+	idx := &Index{
+		UnitIDs:       ids,
+		UnitOf:        make(map[string]int32, len(ids)),
+		DocMass:       make([]float64, len(ids)),
+		DocTerms:      make([][]uint64, len(ids)),
+		Mass:          make(map[uint64]float64),
+		DF:            make(map[uint64]int),
+		Postings:      make(map[uint64][]Posting),
+		N:             len(ids),
+		TermBits:      make(map[uint64]uint16),
+		TermFlags:     make(map[uint64]uint8),
+		UnitBits:      make([]map[uint64]uint16, len(ids)),
+		UnitFlags:     make([]map[uint64]uint8, len(ids)),
+		UnitRoleExt:   make([]map[uint64]uint8, len(ids)),
+		UnitExtFlags:  make([]map[uint64]uint16, len(ids)),
+		UnitGroups:    make([]map[uint64]uint64, len(ids)),
+		UnitMeta:      make([]DocMeta, len(ids)),
+		UnitPositions: make([]map[uint64][]TermPosition, len(ids)),
+	}
+	for unit, rawID := range ids {
+		id := rawID
+		if doc, ok := latestDelta[id]; ok {
+			idx.UnitOf[id] = int32(unit)
+			idx.UnitMeta[unit] = doc.Meta()
+			in := indexDocInserter{idx: idx, unit: int32(unit), termCap: len(doc.Terms)}
+			in.explicitPos = len(doc.Positions) > 0
+			if in.explicitPos {
+				posMap := make(map[uint64][]TermPosition, len(doc.Positions))
+				for h, pl := range doc.Positions {
+					if len(pl) > 0 {
+						cp := make([]TermPosition, len(pl))
+						copy(cp, pl)
+						posMap[h] = cp
+					} else if pl != nil {
+						posMap[h] = []TermPosition{}
+					}
+				}
+				idx.UnitPositions[unit] = posMap
+			}
+			for hash, atom := range doc.Terms {
+				in.addTerm(hash, doc.Counts[hash], atom.Bits, atom.Flags, atom.Group, atom.Role, atom.ExtFlags, atom.Sent, atom.Slot)
+			}
+			continue
+		}
+		oldU, ok := old.LookupUnit(id)
+		if !ok {
+			return nil
+		}
+		// Clone mmap-backed IDs before the caller may Close the old segment.
+		id = string([]byte(rawID))
+		idx.UnitIDs[unit] = id
+		idx.UnitOf[id] = int32(unit)
+		idx.UnitMeta[unit] = cloneSnapshotDocMeta(old.UnitMeta[oldU])
+		entries := st.docEntriesOf(oldU)
+		var posMap map[uint64][]TermPosition
+		for _, entry := range entries {
+			packed := st.entryPositionsOf(entry)
+			if len(packed) == 0 {
+				continue
+			}
+			if posMap == nil {
+				posMap = make(map[uint64][]TermPosition, len(entries))
+			}
+			pl := make([]TermPosition, len(packed))
+			for i, pp := range packed {
+				s, sl := int(pp>>16), int(pp&0xFFFF)
+				if st.widePos != nil {
+					if wp, okPos := st.widePos[entry.posOff+uint32(i)]; okPos {
+						s, sl = wp.Sentence, wp.Slot
+					}
+				}
+				pl[i] = TermPosition{Sentence: s, Slot: sl}
+			}
+			posMap[entry.id] = pl
+		}
+		if len(posMap) > 0 {
+			idx.UnitPositions[unit] = posMap
+		}
+		in := indexDocInserter{idx: idx, unit: int32(unit), termCap: len(entries)}
+		in.explicitPos = len(posMap) > 0
+		var hiExt map[uint64]uint16
+		if int(oldU) < len(old.UnitExtFlags) {
+			hiExt = old.UnitExtFlags[oldU]
+		}
+		for _, entry := range entries {
+			role, extFlags := UnpackTermRoleExt(entry.roleExt)
+			if hiExt != nil {
+				extFlags |= hiExt[entry.id]
+			}
+			in.addTerm(entry.id, int(entry.tf), entry.bits, entry.flags, entry.group, role, extFlags, 0, 0)
+		}
+	}
+	idx.finalizeMasses()
+	return idx
+}
+
+// cloneSnapshotDocMeta detaches a CSR/mmap-backed metadata record from the
+// mapped segment so the rebuilt index survives Close().
+func cloneSnapshotDocMeta(m DocMeta) DocMeta {
+	m.Layer = string([]byte(m.Layer))
+	if len(m.CitedIDs) == 0 {
+		m.CitedIDs = nil
+		return m
+	}
+	cited := make([]string, len(m.CitedIDs))
+	for i, id := range m.CitedIDs {
+		cited[i] = string([]byte(id))
+	}
+	m.CitedIDs = cited
+	return m
 }
 
 func (idx *Index) finalizeMasses() {

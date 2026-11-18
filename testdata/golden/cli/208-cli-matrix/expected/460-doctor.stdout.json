@@ -42,6 +42,9 @@
     }
   ],
   "config": {
+    "daemon": {
+      "memory_limit": "auto"
+    },
     "db": "<DB>",
     "egress": "loopback-only",
     "llm": {
