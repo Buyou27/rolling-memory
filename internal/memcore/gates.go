@@ -4,7 +4,6 @@
 package memcore
 
 import (
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,8 +16,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
-var apostropheReplacer = strings.NewReplacer("’", "'", "‘", "'", "`", "'")
-
 // CanonicalizeApostrophe normalizes curly apostrophes and backticks into ASCII single quote (delegates to internal/text).
 func CanonicalizeApostrophe(s string) string { return text.CanonicalizeApostrophe(s) }
 
@@ -29,22 +26,6 @@ func NormalizeGap(s string) string {
 
 // IsRolePlaceholder reports whether s is a generic dialog transcript role placeholder (delegates to internal/text).
 func IsRolePlaceholder(s string) bool { return text.IsRolePlaceholder(s) }
-
-// ResolveRoleSpeaker maps generic transcript role tokens ("user", "assistant") to registered
-// speaker identities when configured; returns raw unchanged otherwise.
-func ResolveRoleSpeaker(raw, userIdentity, assistantIdentity string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "user", "human":
-		if u := strings.TrimSpace(userIdentity); u != "" {
-			return u
-		}
-	case "assistant", "ai", "bot":
-		if a := strings.TrimSpace(assistantIdentity); a != "" {
-			return a
-		}
-	}
-	return raw
-}
 
 // ExtractPossessiveOwner extracts the leading named owner from a possessive noun phrase
 // ("Alice's dog" -> "Alice", "张三的豆豆" -> "张三"). Returns "" if not a qualified possessive,
@@ -91,30 +72,6 @@ func ExtractPossessiveOwner(label string) string {
 		}
 	}
 	return ""
-}
-
-// FormatOwnerQualifiedLabel formats an owner-qualified entity label ("<owner>的<label>" for CJK scripts,
-// "<owner>'s <label>" for alphabetic scripts) when disambiguating homonym entities owned by different subjects.
-func FormatOwnerQualifiedLabel(owner, label string) string {
-	owner = strings.TrimSpace(CanonicalizeApostrophe(owner))
-	label = strings.TrimSpace(CanonicalizeApostrophe(label))
-	if owner == "" || label == "" || strings.EqualFold(owner, label) {
-		return label
-	}
-	if existingOwner := ExtractPossessiveOwner(label); existingOwner != "" {
-		return label
-	}
-	loOwner := strings.ToLower(owner)
-	loLabel := strings.ToLower(label)
-	if strings.HasPrefix(loLabel, loOwner+"'s ") || strings.HasPrefix(loLabel, loOwner+"的") {
-		return label
-	}
-	for _, r := range owner + label {
-		if IsContinuousSyllabicOrIdeographic(r) {
-			return owner + "的" + label
-		}
-	}
-	return owner + "'s " + label
 }
 
 // IsReduplicatedCJK reports whether s is a pure-CJK reduplicated surface (AA, e.g. "妈妈", "豆豆").
@@ -262,48 +219,6 @@ func IsInvalidAliasSurface(of, alias string) (bool, string) {
 	return false, ""
 }
 
-// IsSubjectObjectCrossSlotAlias detects when an inline alias attached to a binary assertion (S —[R]→ O)
-// mistakenly binds a proper token from the opposite slot (e.g. S="Daisy", O="hexagonal white name tag reading BERNIE",
-// with alias {of:"Daisy", alias:"BERNIE"}) where the alias has zero character/prefix overlap with `of`
-// yet appears verbatim as a word inside the opposite slot.
-func IsSubjectObjectCrossSlotAlias(subject, object, of, alias string) bool {
-	s := strings.TrimSpace(subject)
-	o := strings.TrimSpace(object)
-	of = strings.TrimSpace(of)
-	alias = strings.TrimSpace(alias)
-	if s == "" || o == "" || of == "" || alias == "" || strings.EqualFold(s, o) || strings.EqualFold(of, alias) {
-		return false
-	}
-	if IsPlainShortening(of, alias) || IsPlainShortening(alias, of) {
-		return false
-	}
-	loOf := strings.ToLower(of)
-	loAl := strings.ToLower(alias)
-	if strings.Contains(loOf, loAl) || strings.Contains(loAl, loOf) {
-		return false
-	}
-	var opp string
-	if strings.EqualFold(of, s) {
-		opp = strings.ToLower(o)
-	} else if strings.EqualFold(of, o) {
-		opp = strings.ToLower(s)
-	} else {
-		return false
-	}
-	if opp == loAl {
-		return true
-	}
-	for _, w := range strings.FieldsFunc(opp, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}) {
-		// 逐字整词相等即跨槽同指（纯形式判据）；不再以香农阈值补一刀资格门。
-		if w == loAl {
-			return true
-		}
-	}
-	return false
-}
-
 // IsPlainShortening checks whether alias is a true character prefix or 2-char non-ASCII shortening of of.
 func IsPlainShortening(of, alias string) bool {
 	of, alias = strings.TrimSpace(of), strings.TrimSpace(alias)
@@ -416,27 +331,6 @@ func CorrectAliasTargetByPrefix(a AliasSpec, candidates ...string) AliasSpec {
 	return a
 }
 
-// IsHollowSocialEdge reports whether an assertion in batch encoding mode is a hollow interpersonal
-// greeting/question shell between batch speakers with zero factual payload.
-func IsHollowSocialEdge(subject, rel, object, objectLiteral string, subjectRef, objectRef uint64, timeExpr string, tValidFrom int64, participantCount int, batchSpeakers []string) bool {
-	if object == "" || objectLiteral != "" || objectRef > 0 || subjectRef > 0 ||
-		timeExpr != "" || tValidFrom > 0 || participantCount > 0 {
-		return false
-	}
-	if len(Tokenize(rel)) > 1 {
-		return false
-	}
-	speakers := make(map[string]bool, len(batchSpeakers))
-	for _, sp := range batchSpeakers {
-		if s := strings.ToLower(strings.TrimSpace(sp)); s != "" {
-			speakers[s] = true
-		}
-	}
-	sLow := strings.ToLower(strings.TrimSpace(subject))
-	oLow := strings.ToLower(strings.TrimSpace(object))
-	return speakers[sLow] && speakers[oLow]
-}
-
 // LongestVerbatimSubspan finds the highest-entropy maximal contiguous substring (>=8.0 Shannon bits)
 // of anchor that occurs verbatim in turnText using an O(N) two-pointer monotone sliding window.
 // Evaluating maximal common substrings prevents periodic floods ("ab ab ab ...") from being artificially
@@ -475,34 +369,6 @@ func LongestVerbatimSubspan(turnText, anchor string) string {
 		}
 	}
 	return best
-}
-
-// AssertionHash16 computes the 16-slot idempotent SHA-1 hash used by the PostgreSQL store.
-func AssertionHash16(scope string, subjectID, relID, objectID, holderID uint64, literal, warrant, turnHash string, bare bool, subjectGap, objectGap, holderGap string) string {
-	bareBit := "0"
-	if bare {
-		bareBit = "1"
-	}
-	parts := []string{
-		scope,
-		strconv.FormatUint(subjectID, 10),
-		"",
-		strconv.FormatUint(relID, 10),
-		strconv.FormatUint(objectID, 10),
-		strings.TrimSpace(literal),
-		bareBit,
-		"0",
-		"0",
-		strconv.FormatUint(holderID, 10),
-		warrant,
-		turnHash,
-		"0:0",
-		subjectGap,
-		objectGap,
-		holderGap,
-	}
-	sum := sha1.Sum([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(sum[:])
 }
 
 // AssertionDigestSHA256 computes a deterministic SHA-256 hex prefix over string-keyed slots.

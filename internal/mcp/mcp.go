@@ -812,21 +812,6 @@ func valueOr(values map[string]any, key string, fallback any) any {
 	return fallback
 }
 
-// optionalString maps one argument onto a *string slot. Non-string values are
-// rejected; standard would fail deeper with AttributeError/TypeError.
-func optionalString(value any) (*string, error) {
-	switch typed := value.(type) {
-	case nil:
-		return nil, nil
-	case string:
-		if typed == "" {
-			return nil, nil
-		}
-		return &typed, nil
-	}
-	return nil, fmt.Errorf("expected a string, got %s", pyTypeName(value))
-}
-
 // optionalText maps a slot standard stringifies at first use (anchor_text goes
 // through str(), scope/reader flow into text comparisons): falsy values fall
 // through to the caller's default, everything else becomes pyStr.

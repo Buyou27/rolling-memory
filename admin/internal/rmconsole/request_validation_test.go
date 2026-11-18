@@ -21,9 +21,10 @@ func TestValidateEvalRunRequestFailClosed(t *testing.T) {
 		wantErr bool
 	}{
 		{"default empty", evalRunRequest{}, false},
-		{"locomo default tier", evalRunRequest{Suite: "locomo", Tier: "100"}, false},
-		{"locomo tier 200", evalRunRequest{Suite: "locomo", Tier: "200"}, false},
+		{"retired locomo tier 100 rejected", evalRunRequest{Suite: "locomo", Tier: "100"}, true},
+		{"retired locomo tier 200 rejected", evalRunRequest{Suite: "locomo", Tier: "200"}, true},
 		{"locomo tier 1540", evalRunRequest{Suite: "locomo", Tier: "1540"}, false},
+		{"locomo adversarial tier", evalRunRequest{Suite: "locomo", Tier: "adversarial-446"}, false},
 		{"atm hard", evalRunRequest{Suite: "atm", Tier: "hard"}, false},
 		{"atm main alias", evalRunRequest{Suite: "atm", Tier: "main"}, false},
 		{"atm 1013", evalRunRequest{Suite: "atm", Tier: "1013"}, false},

@@ -33,11 +33,6 @@ var validLoopStates = map[string]bool{
 	LoopStateBroken:    true,
 }
 
-// IsValidLoopState reports whether s is a valid non-empty loop_state value.
-func IsValidLoopState(s string) bool {
-	return validLoopStates[strings.ToLower(strings.TrimSpace(s))]
-}
-
 // InitialLoopState determines the initial loop_state on assertion write:
 //   - If an explicit valid loopState is supplied, it is returned normalized;
 //   - Otherwise, if warrant == "performative", it defaults to "open";

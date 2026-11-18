@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
 )
@@ -283,23 +282,6 @@ func pyIntFromFloat(value float64) (int, error) {
 		return 0, fmt.Errorf("value out of range for a Go int")
 	}
 	return int(value), nil
-}
-
-// pyLen mirrors len() for the receipt collections the summary walks.
-func pyLen(value any) int {
-	switch typed := value.(type) {
-	case string:
-		return utf8.RuneCountInString(typed)
-	case []any:
-		return len(typed)
-	case []map[string]any:
-		return len(typed)
-	case []string:
-		return len(typed)
-	case map[string]any:
-		return len(typed)
-	}
-	return 0
 }
 
 // firstChars truncates text to at most limit Unicode code points (runes, not bytes).

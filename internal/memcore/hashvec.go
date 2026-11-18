@@ -15,6 +15,3 @@ func FeatureHashVec(s string, dim int) []float32 { return text.FeatureHashVec(s,
 
 // DotUnit returns the dot product of two unit vectors (delegates to internal/text).
 func DotUnit(a, b []float32) float64 { return text.DotUnit(a, b) }
-
-// Cosine returns the cosine similarity of two vectors (delegates to internal/text).
-func Cosine(a, b []float32) float64 { return text.Cosine(a, b) }

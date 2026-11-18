@@ -1223,15 +1223,17 @@ func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnes
 			}
 		}
 		rep.EpisodicIndexUnverified = len(unverified)
-		coverage, indexErr := tc.Vault.EpisodicIndexFaultDiagnostics()
-		if indexErr != nil {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index coverage unavailable: %v", indexErr))
-		} else {
-			rep.EpisodicIndexCompatible = coverage.Compatible
-			rep.EpisodicIndexIncompatible = coverage.Incompatible
-			rep.EpisodicIndexMissing = coverage.Missing
-			rep.EpisodicIndexCorrupt = coverage.Corrupt
-			rep.EpisodicIndexNeedsRebuild = coverage.NeedsRebuild
+		if !backgroundPass {
+			coverage, indexErr := tc.Vault.EpisodicIndexFaultDiagnostics()
+			if indexErr != nil {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index coverage unavailable: %v", indexErr))
+			} else {
+				rep.EpisodicIndexCompatible = coverage.Compatible
+				rep.EpisodicIndexIncompatible = coverage.Incompatible
+				rep.EpisodicIndexMissing = coverage.Missing
+				rep.EpisodicIndexCorrupt = coverage.Corrupt
+				rep.EpisodicIndexNeedsRebuild = coverage.NeedsRebuild
+			}
 		}
 	}
 

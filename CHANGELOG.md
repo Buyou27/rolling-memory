@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-18
+
+### Changed
+
+- **Engine-native incremental overlay**: the retrieval kernel now serves added, updated, and deleted memory units through a zero-copy on-disk baseline plus a small in-memory delta layer. Continuous ingestion no longer triggers full index rebuilds, so recall stays responsive and resident memory stays bounded as the vault grows.
+- **Leaner client surface**: remaining duplicated client/kernel paths were retired — incremental serving, per-unit term lookup, and snapshot verification are now delegated to the engine kernel, and redundant storage and graph-client adapters were removed with no change in memory quality.
+
+### Fixed
+
+- Automatic background sync no longer re-reads and re-verifies every stored episodic payload after a single new turn is saved; the diagnostic check reuses the zero-copy snapshot's verified unit set, removing multi-core CPU spikes during continuous ingestion.
+- L3 crystallized insights no longer receive a doubled citation boost when the same evidence is reachable through both the citation closure and a direct match.
+- Console maintenance and evaluation wording reads consistently in plain language.
+
 ## [0.0.3] - 2026-11-18
 
 ### Added

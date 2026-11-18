@@ -508,11 +508,6 @@ func validUTCDate(ys, ms, ds string) (time.Time, bool) {
 	}
 	return t, true
 }
-
-func validUTCDateTime(ys, ms, ds, hhs, mms, sss string) (time.Time, bool) {
-	return validUTCDateTimeTZ(ys, ms, ds, hhs, mms, sss, "", "")
-}
-
 func validUTCDateTimeTZ(ys, ms, ds, hhs, mms, sss, tzHs, tzMs string) (time.Time, bool) {
 	base, ok := validUTCDate(ys, ms, ds)
 	if !ok {

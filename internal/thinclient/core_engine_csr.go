@@ -595,6 +595,15 @@ func (v *Vault) buildCorpusSnapshotFromCSR(
 		if !okDelta {
 			return nil, false
 		}
+		validDelta := make(map[string]bool, len(deltaDocs))
+		for _, dd := range deltaDocs {
+			validDelta[dd.UnitID] = true
+		}
+		for _, id := range deltaUnits {
+			if !validDelta[id] {
+				delete(validEpisodicIDs, id)
+			}
+		}
 	}
 
 	snapEng := eng

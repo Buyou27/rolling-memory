@@ -366,15 +366,6 @@ func saveEvalTaskResult(rec EvalRunRecord, prov evalTaskProvenance, status, errM
 
 // ---------------- 全局入口（取宿主 admin 连接） ----------------
 
-// saveEvalTaskRecord 写入 / 覆盖一条测评任务行（completed | cancelled | failed 三态）。
-func saveEvalTaskRecord(rec EvalRunRecord, prov evalTaskProvenance, status, errMsg string) error {
-	db, err := evalLedger()
-	if err != nil {
-		return err
-	}
-	return writeEvalTaskRowOn(db, rec, prov, status, errMsg)
-}
-
 // loadEvalTaskHistory 读取全部任务状态（suite 为空 = 全部套件），最新在前。
 func loadEvalTaskHistory(suite string) ([]EvalRunRecord, error) {
 	db, err := evalLedger()
@@ -402,15 +393,6 @@ func readEvalTaskProvenanceOn(db *gorm.DB, runID string) (evalTaskProvenance, er
 		return evalTaskProvenance{}, errors.New("未找到指定的历史运行记录")
 	}
 	return evalTaskProvenance{Scope: row.Scope, Endpoint: row.Endpoint, CorpusSHA256: row.CorpusSHA256, PurgedUnits: row.PurgedUnits}, nil
-}
-
-// saveEvalTaskItems 覆盖式写入一场运行的逐题明细。
-func saveEvalTaskItems(runID string, items []EvalQuestionResultItem) error {
-	db, err := evalLedger()
-	if err != nil {
-		return err
-	}
-	return writeEvalTaskItemRowsOn(db, runID, items)
 }
 
 // loadEvalTaskItems 读取一场运行的逐题明细（查无返回空切片）。

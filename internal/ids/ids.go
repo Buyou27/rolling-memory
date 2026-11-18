@@ -102,12 +102,6 @@ const latinGlueMinBits = 6.0
 // carry compositional information. The unit is bits, not a script-specific count.
 const cjkGluePriorBits = 11.0
 
-// IsGlueToken reports whether tok carries only closed-class glue information under
-// the BPE merge-tree prior × Shannon self-information gain tier (zero word lists).
-func IsGlueToken(tok string) bool {
-	return isTokenFilteredByMemcore(tok)
-}
-
 // pySpaceChars is the character class behind standard str.isspace and re \s.
 const pySpaceChars = `\t\n\v\f\r\x{001C}-\x{001F} \x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
 
@@ -723,14 +717,6 @@ func FormatTimeUTC(epoch int64, empty string) string {
 	return time.Unix(epoch, 0).UTC().Format("2006-01-02")
 }
 
-// FormatTimeFull formats epoch as a local YYYY-MM-DD HH:MM timestamp.
-func FormatTimeFull(epoch int64, empty string) string {
-	if epoch == 0 {
-		return empty
-	}
-	return time.Unix(epoch, 0).In(time.Local).Format("2006-01-02 15:04")
-}
-
 // FormatTimeSeconds formats epoch as a local YYYY-MM-DD HH:MM:SS timestamp with
 // its numeric UTC offset. Recall delivery labels use this shape so a reader
 // never has to guess the zone behind a clock reading, and same-day moments stay
@@ -740,14 +726,6 @@ func FormatTimeSeconds(epoch int64, empty string) string {
 		return empty
 	}
 	return time.Unix(epoch, 0).In(time.Local).Format("2006-01-02 15:04:05 -07:00")
-}
-
-// ISOUTCTime formats epoch as a UTC ISO-8601 timestamp.
-func ISOUTCTime(epoch int64) string {
-	if epoch == 0 {
-		return ""
-	}
-	return time.Unix(epoch, 0).UTC().Format("2006-01-02T15:04:05Z")
 }
 
 // AudienceNarrower returns the narrower (lower-ranked) audience.

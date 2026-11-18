@@ -17,13 +17,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/memcore"
 )
 
-// NormalizeHierarchicalPath normalizes a slash-separated spatial locus path
-// (whether a code repository path like "rocareer/rolling-memory/internal/store"
-// or a geographic path like "中国/浙江/杭州/西湖") without any domain-specific heuristics.
-func NormalizeHierarchicalPath(raw string) string {
-	return memcore.NormalizeHierarchicalPath(raw)
-}
-
 // HierarchicalLCPScore computes the language-agnostic, domain-neutral Longest Common Prefix (LCP)
 // tree affinity score in [0, 1]:
 //
@@ -32,13 +25,6 @@ func NormalizeHierarchicalPath(raw string) string {
 // Disjoint or empty paths return 0.0 (zero penalty for far-field / global memories).
 func HierarchicalLCPScore(pathA, pathB string) float64 {
 	return memcore.HierarchicalLCPScore(pathA, pathB)
-}
-
-// IncarnationGenealogyScore computes the incarnation role hierarchy affinity score in [0, 1]:
-//
-//	K_inc(I_q, I_a) = LCP(seg(I_q), seg(I_a)) / max(|seg(I_q)|, |seg(I_a)|)
-func IncarnationGenealogyScore(incQuery, incAssertion string) float64 {
-	return memcore.IncarnationGenealogyScore(incQuery, incAssertion)
 }
 
 // EnsureDualTrackLocus materializes Track 2 of Dual-Track Spatial Encoding:

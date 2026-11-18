@@ -4,44 +4,12 @@
 package memcore
 
 import (
-	"context"
-
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 // PresenceCoordinates is a type alias to text.PresenceCoordinates to maintain
 // backward compatibility while we refactor core primitives to the new package.
 type PresenceCoordinates = text.PresenceCoordinates
-
-// IsEmpty reports whether all coordinates are unset.
-func IsEmpty(p PresenceCoordinates) bool {
-	return p.IsEmpty()
-}
-
-// Normalized returns a copy with normalized hierarchical paths and trimmed fields.
-func Normalized(p PresenceCoordinates) PresenceCoordinates {
-	return p.Normalized()
-}
-
-// WithPresenceCoordinates binds PresenceCoordinates onto ctx.
-func WithPresenceCoordinates(ctx context.Context, coords PresenceCoordinates) context.Context {
-	return text.WithPresenceCoordinates(ctx, coords)
-}
-
-// PresenceCoordinatesFromCtx extracts PresenceCoordinates bound on ctx.
-func PresenceCoordinatesFromCtx(ctx context.Context) (PresenceCoordinates, bool) {
-	return text.PresenceCoordinatesFromCtx(ctx)
-}
-
-// WithAudiencePeers binds the active audience peer subjects onto ctx.
-func WithAudiencePeers(ctx context.Context, peers ...string) context.Context {
-	return text.WithAudiencePeers(ctx, peers...)
-}
-
-// AudiencePeersFromCtx returns the active audience peer subjects bound on ctx.
-func AudiencePeersFromCtx(ctx context.Context) []string {
-	return text.AudiencePeersFromCtx(ctx)
-}
 
 // NormalizeHierarchicalPath normalizes a '/' or '\' separated hierarchical path,
 // stripping redundant separators, '.', and folding '..' parent segments without domain-specific word lists.
@@ -77,12 +45,6 @@ func SpacetimeResonanceMultiplier(query PresenceCoordinates, rowLocus, rowCarrie
 	return text.SpacetimeResonanceMultiplier(query, rowLocus, rowCarrier, rowIncarnation)
 }
 
-// CarrierMatches reports whether two carrier channels match (delegates to internal/text).
-func CarrierMatches(a, b string) bool { return text.CarrierMatches(a, b) }
-
-// CanonicalSchemaCarrier canonicalizes a schema carrier string (delegates to internal/text).
-func CanonicalSchemaCarrier(raw string) string { return text.CanonicalSchemaCarrier(raw) }
-
 // DualTrackLocusPrefixes returns dual-track locus prefixes (delegates to internal/text).
 func DualTrackLocusPrefixes(rawLocus string) (prefixes []string, leafShortAlias string) {
 	return text.DualTrackLocusPrefixes(rawLocus)
@@ -98,16 +60,8 @@ func ResolveEffectiveLocus(explicitEventLocus, presenceLocus string, maxRunes in
 	return text.ResolveEffectiveLocus(explicitEventLocus, presenceLocus, maxRunes)
 }
 
-// ParseGitRemoteSlug parses a git remote URL into a slug (delegates to internal/text).
-func ParseGitRemoteSlug(remoteURL string) string { return text.ParseGitRemoteSlug(remoteURL) }
-
 // DetectGitWorkspaceLocus detects the git workspace locus (delegates to internal/text).
 func DetectGitWorkspaceLocus(cwd string) string { return text.DetectGitWorkspaceLocus(cwd) }
-
-// DetectHarnessPresence detects harness presence coordinates (delegates to internal/text).
-func DetectHarnessPresence(cwd, harnessName, subrole string) PresenceCoordinates {
-	return text.DetectHarnessPresence(cwd, harnessName, subrole)
-}
 
 // DetectGitWorkspaceUser detects the git workspace user (delegates to internal/text).
 func DetectGitWorkspaceUser(cwd string) string { return text.DetectGitWorkspaceUser(cwd) }

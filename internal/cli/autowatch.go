@@ -81,14 +81,6 @@ func IsAutoSyncEnabled(cfgPath string) bool {
 	return true
 }
 
-// SyncModeString returns "auto" when automatic monitoring is enabled, or "manual" otherwise.
-func SyncModeString(cfgPath string) string {
-	if IsAutoSyncEnabled(cfgPath) {
-		return "auto"
-	}
-	return "manual"
-}
-
 const episodicSyncPausedMetaKey = "episodic_sync_paused"
 
 // IsEpisodicSyncPaused reports whether background episodic scanning/backfilling is paused

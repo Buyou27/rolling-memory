@@ -6,7 +6,6 @@ package memcore
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -149,48 +148,6 @@ func TestStmtCoversSnippetAndStripMultimodalParen(t *testing.T) {
 		t.Fatalf("StripMultimodalLongParen got %q", stripped)
 	}
 
-	if pass, incC, _ := MonotonicConvexBandPass(2, 10, 3, 2, 0, true, false, true, 5.0); !pass || !incC {
-		t.Fatal("expected connected micro band with connAccepted=2 and maxNS=5.0 to pass")
-	}
-	if pass, _, _ := MonotonicConvexBandPass(6, 12, 10, 5, 0, false, true, true, 12.0); pass {
-		t.Fatal("expected large trace-connected band at connAccepted=5 with maxNS=12.0 (< 31.0 floor) to be pruned")
-	}
-	if pass, incC, _ := MonotonicConvexBandPass(6, 12, 3, 5, 0, true, false, true, 12.0); !pass || !incC {
-		t.Fatal("expected 1-hop direct-connected micro band at connAccepted=5 with maxNS=12.0 (>= 11.5 floor) to pass")
-	}
-}
-
-func TestScoreAndAssembleBandsSelfCoverAndConvexBudget(t *testing.T) {
-	items := []ScoredAssertion{
-		{
-			Assertion:   Assertion{SubjectID: "n_caroline", ObjectID: "n_melanie", TEvent: 1683504000, AnchorTraceHash: "t1"},
-			SubjectName: "Caroline",
-			RelName:     "met",
-			ObjectName:  "Melanie",
-			Snippet:     "Caroline met Melanie at the coffee shop in Boston",
-		},
-		{
-			Assertion:   Assertion{SubjectID: "n_melanie", ObjectID: "n_sunrise", TEvent: 1683504000, AnchorTraceHash: "t1"},
-			SubjectName: "Melanie",
-			RelName:     "painted",
-			ObjectName:  "sunrise",
-			Snippet:     "Melanie painted a sunrise",
-		},
-	}
-	bands := ScoreAndAssembleBands("Where did Caroline meet Melanie and what did Melanie paint?", items, 8)
-	if len(bands) != 2 {
-		t.Fatalf("expected 2 connected bands, got %d", len(bands))
-	}
-	// Band 1 snippet has uncovered "coffee shop in Boston" -> snippet must be preserved.
-	if !strings.Contains(bands[0].Rendered, "Boston") && !strings.Contains(bands[1].Rendered, "Boston") {
-		t.Fatalf("expected uncovered locative 'Boston' to be preserved in rendered bands: %+v", bands)
-	}
-	// "Melanie painted a sunrise" is 100% covered by "Melanie —painted→ sunrise" -> redundant quote elided.
-	for _, b := range bands {
-		if b.SubjectName == "Melanie" && strings.Contains(b.Rendered, "「Melanie painted a sunrise」") {
-			t.Fatalf("expected fully covered snippet to be elided, got: %s", b.Rendered)
-		}
-	}
 }
 
 func TestSpacetimeIncarnationAddressingAndResonance(t *testing.T) {
@@ -329,26 +286,6 @@ func TestSliceRunesBoundedAndScoreAndAssembleBandsSlotMemo(t *testing.T) {
 	for _, tc := range cases {
 		if got := SliceRunesBounded(tc.value, tc.start, tc.end); got != tc.want {
 			t.Fatalf("%s: SliceRunesBounded(%q, %d, %d) = %q, want %q", tc.name, tc.value, tc.start, tc.end, got, tc.want)
-		}
-	}
-
-	items := make([]ScoredAssertion, 16)
-	for i := range items {
-		items[i] = ScoredAssertion{
-			Assertion:   Assertion{NodeID: "a_1", SubjectID: "s_1", RelID: "r_1", ObjectID: "o_1", Status: "active", TSource: 1700000000},
-			SubjectName: "UnifiedMemoryKernel",
-			RelName:     "optimizes",
-			ObjectName:  "CandidateLexicalScoring",
-			Snippet:     "UnifiedMemoryKernel optimizes CandidateLexicalScoring with slot memoization",
-		}
-	}
-	bands := ScoreAndAssembleBands("UnifiedMemoryKernel CandidateLexicalScoring", items, 12)
-	if len(bands) != 1 || len(bands[0].Rows) == 0 || bands[0].Rows[0].Score <= 0 {
-		t.Fatalf("expected ScoreAndAssembleBands to score shared-slot items > 0, got %+v", bands)
-	}
-	for i := 1; i < len(bands[0].Rows); i++ {
-		if bands[0].Rows[i].Score != bands[0].Rows[0].Score {
-			t.Fatalf("expected identical candidate items to receive identical score: %v vs %v", bands[0].Rows[i].Score, bands[0].Rows[0].Score)
 		}
 	}
 

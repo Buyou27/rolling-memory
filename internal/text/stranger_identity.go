@@ -5,7 +5,8 @@ package text
 
 import (
 	"strings"
-	"unicode"
+
+	"github.com/rocareer/rolling-memory/sdk/go/public/shaping"
 )
 
 // ExtractStrangerChannelSuffix extracts the distinct individual suffix from an unnamed
@@ -86,32 +87,7 @@ func IsAnonymousStrangerLabel(s string) bool {
 }
 
 func CanonicalizeApostrophe(s string) string {
-	needNorm := false
-	for i := 0; i < len(s); i++ {
-		if s[i] == '`' || s[i] >= 0x80 {
-			needNorm = true
-			break
-		}
-	}
-	if !needNorm {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r == '’' || r == '‘' || r == '`' || r == '＇':
-			b.WriteByte('\'')
-		case (r >= '０' && r <= '９') || (r >= 'Ａ' && r <= 'Ｚ') || (r >= 'ａ' && r <= 'ｚ') ||
-			r == '－' || r == '＿' || r == '＃':
-			b.WriteRune(r - 0xFEE0)
-		case r == '\u00ad' || unicode.Is(unicode.Cf, r):
-			continue
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return shaping.CanonicalizeApostrophe(s)
 }
 
 func IsRolePlaceholder(s string) bool {

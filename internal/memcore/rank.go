@@ -13,21 +13,6 @@ import (
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
-// PhraseBonus computes the sentence-level phrase match bonus (+10 per matched phrase of >= 16.0 Shannon bits,
-// unifying >=8-letter alphabetic phrases and >=2-character CJK phrases on the same entropy scale).
-func PhraseBonus(hay string, phrases []string) float64 {
-	if len(phrases) == 0 || hay == "" {
-		return 0
-	}
-	b := 0.0
-	for _, ph := range phrases {
-		if StringShannonBits(ph) >= 16.0 && strings.Contains(hay, ph) {
-			b += 10
-		}
-	}
-	return b
-}
-
 // IsShortOrDigitsToken reports whether s is an all-digit token or a non-ideographic short token (<=2 runes).
 func IsShortOrDigitsToken(s string) bool {
 	if s == "" {
@@ -706,25 +691,4 @@ func MatchTokenOrStemWithStem(hay, tok, st string, legacyStem bool) float64 {
 func MatchTokenOrStem(lowerText, tok string) float64 {
 	t := strings.ToLower(strings.TrimSpace(tok))
 	return MatchTokenOrStemWithStem(lowerText, t, StemToken(t), LegacyStemMode.Load())
-}
-
-// CleanWords extracts lowercased word tokens (SliceShannonBits >= 0.50*AtomicConceptEntropyBits) from text for lexical matching.
-func CleanWords(text string) []string {
-	var out []string
-	var cur []rune
-	flush := func() {
-		if SliceShannonBits(cur) >= 0.50*AtomicConceptEntropyBits {
-			out = append(out, strings.ToLower(string(cur)))
-		}
-		cur = cur[:0]
-	}
-	for _, r := range text {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) {
-			cur = append(cur, r)
-		} else {
-			flush()
-		}
-	}
-	flush()
-	return out
 }

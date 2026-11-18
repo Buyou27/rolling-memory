@@ -1230,15 +1230,6 @@ func locomoPublicRecallHandler(c *gin.Context) {
 	locomoSnapshotRecallWithCorpus(c, corpus)
 }
 
-func locomoSnapshotRecallHandler(c *gin.Context) {
-	corpus, err := loadLocomoCorpus()
-	if err != nil {
-		httpx.Fail(c, httpx.WithMessage(err.Error()))
-		return
-	}
-	locomoSnapshotRecallWithCorpus(c, corpus)
-}
-
 func locomoSnapshotRecallWithCorpus(c *gin.Context, corpus *locomoCachedCorpus) {
 	started := time.Now()
 	var req LocomoPublicRecallRequest

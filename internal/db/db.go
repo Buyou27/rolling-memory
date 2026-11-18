@@ -186,12 +186,6 @@ func LoadSchema() string {
 	return schemaSQL
 }
 
-// LoadThinSchema returns the embedded schema_thin.sql text applied to fresh
-// databases: the plaintext-vault product surface without the legacy graph.
-func LoadThinSchema() string {
-	return schemaThinSQL
-}
-
 // EnsureLegacyGraphSchema idempotently applies the canonical v1 schema and its
 // 1:1 extension tables. Fresh production databases no longer create the legacy
 // assertion graph; this entry point exists for historical-database maintenance
@@ -203,11 +197,6 @@ func EnsureLegacyGraphSchema(connection *sql.DB) error {
 		}
 	}
 	return EnsureMemcoreSchema(connection)
-}
-
-// LoadMemcoreSchema returns the embedded 1:1 isomorphic extension schema SQL.
-func LoadMemcoreSchema() string {
-	return schemaMemcoreSQL
 }
 
 // EnsureMemcoreSchema idempotently creates the 1:1 isomorphic extension tables

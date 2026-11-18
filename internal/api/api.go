@@ -1132,31 +1132,6 @@ func expandUser(path string) string {
 	}
 	return path
 }
-
-func collectionLength(value any) (int, bool) {
-	switch typed := value.(type) {
-	case []map[string]any:
-		return len(typed), true
-	case []any:
-		return len(typed), true
-	}
-	return 0, false
-}
-
-func asSlice(value any) []any {
-	switch typed := value.(type) {
-	case []any:
-		return typed
-	case []map[string]any:
-		result := make([]any, 0, len(typed))
-		for _, item := range typed {
-			result = append(result, item)
-		}
-		return result
-	}
-	return []any{}
-}
-
 func asInt(value any) int {
 	switch typed := value.(type) {
 	case int:
@@ -1211,23 +1186,4 @@ func truthy(value any) bool {
 		return typed != 0
 	}
 	return value != nil
-}
-
-func mergeMap(base, extra map[string]any) map[string]any {
-	result := map[string]any{}
-	for key, value := range base {
-		result[key] = value
-	}
-	for key, value := range extra {
-		result[key] = value
-	}
-	return result
-}
-
-func firstRunes(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }

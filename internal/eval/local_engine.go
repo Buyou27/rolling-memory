@@ -1691,6 +1691,15 @@ func (e *LocalEngine) recallLocalPlaintext(ctx context.Context, query string, to
 		if eng, az, zErr := e.ensureCoreRMEngine(); zErr == nil && eng != nil && az != nil {
 			e.coreQueryMu.Lock()
 			zHits := eng.Query(az, query, topK)
+			// 可选零交付臂：刚性空洞凭证 + 整查询实质词几乎全为零记载时物理 K=0。
+			if evalVoidFloorEnabled() && e.coreTermExtractor != nil && eng.Index != nil {
+				certs := e.coreTermExtractor.ArchiveVoidProbe(eng.Index, query)
+				report := e.coreTermExtractor.QueryCoverage(eng.Index, query, nil)
+				if blockingVoidCertificate(certs, report) {
+					zHits = nil
+					evalVoidFloorFired.Add(1)
+				}
+			}
 			e.coreQueryMu.Unlock()
 			out := make([]local.ResolvedHit, 0, len(zHits))
 			for _, zh := range zHits {
@@ -1700,10 +1709,11 @@ func (e *LocalEngine) recallLocalPlaintext(ctx context.Context, query string, to
 				}
 				out = append(out, local.ResolvedHit{
 					QueryHit: local.QueryHit{
-						UnitID:      zh.UnitID,
-						Layer:       local.LayerEpisodic,
-						WaveScore:   zh.Energy,
-						FinalWeight: zh.Energy,
+						UnitID:       zh.UnitID,
+						Layer:        local.LayerEpisodic,
+						WaveScore:    zh.Energy,
+						FinalWeight:  zh.Energy,
+						DirectWeight: zh.Direct,
 					},
 					RawPlaintext:       raw,
 					DistilledPlaintext: dist,

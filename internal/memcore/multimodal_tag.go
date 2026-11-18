@@ -185,29 +185,6 @@ func StripModalBracketSlotPrefix(slotLabel string) string {
 	return slotLabel
 }
 
-// LocateStructuralPartTagOffsets returns all line-bounded byte offsets of targetTag (e.g., "【图片】") in turnText.
-func LocateStructuralPartTagOffsets(turnText, targetTag string) []int {
-	if turnText == "" || targetTag == "" {
-		return nil
-	}
-	var offsets []int
-	if strings.HasPrefix(turnText, targetTag) {
-		offsets = append(offsets, 0)
-	}
-	needle := "\n" + targetTag
-	searchFrom := 0
-	for searchFrom < len(turnText) {
-		idx := strings.Index(turnText[searchFrom:], needle)
-		if idx < 0 {
-			break
-		}
-		pos := searchFrom + idx + 1
-		offsets = append(offsets, pos)
-		searchFrom = pos + len(targetTag)
-	}
-	return offsets
-}
-
 // ScriptBitMass measures the Shannon self-information bit mass across orthogonal Unicode script families,
 // replacing brittle byte-level `isASCII` checks so that typographic punctuation (“ ” ’ — …), mathematical/Greek
 // symbols (μ α β), and accented Latin letters (é ü ñ) never falsely disable script conservation gates.

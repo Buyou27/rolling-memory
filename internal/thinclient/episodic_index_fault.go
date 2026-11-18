@@ -4,6 +4,7 @@
 package thinclient
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -58,28 +59,8 @@ func (v *Vault) episodicIndexFaultDiagnostics(key []byte) (EpisodicIndexFaultRep
 		ready := v.snapRef.faultReady && v.snapRef.faultCodecKey == string(key)
 		hasLargeSnap := v.snapRef.snap != nil && len(v.snapRef.snap.docs) >= 2048
 		cached := v.snapRef.faultReport
-		lastFault := v.snapRef.lastFaultTime
-		alreadyRefreshing := v.snapRef.faultRefreshing
 		v.slotCacheMu.RUnlock()
 		if ready && hasLargeSnap {
-			if time.Since(lastFault) >= 5*time.Minute && !alreadyRefreshing {
-				v.slotCacheMu.Lock()
-				if !v.snapRef.faultRefreshing {
-					v.snapRef.faultRefreshing = true
-					v.snapRef.lastFaultTime = time.Now()
-					keyCopy := append([]byte(nil), key...)
-					go func() {
-						defer func() {
-							v.slotCacheMu.Lock()
-							v.snapRef.faultRefreshing = false
-							v.slotCacheMu.Unlock()
-						}()
-						time.Sleep(200 * time.Millisecond)
-						_, _ = v.computeEpisodicIndexFaultDiagnostics(keyCopy)
-					}()
-				}
-				v.slotCacheMu.Unlock()
-			}
 			return cached, nil
 		}
 	}
@@ -148,6 +129,15 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 						v.slotCacheMu.Unlock()
 						return pc.Report, nil
 					}
+				}
+				if s, sErr := v.loadCorpusSnapshot(context.Background()); sErr == nil && s != nil &&
+					s.docCnt == docCnt &&
+					s.docRowSum == docRowSum &&
+					s.maxRowID == docMaxRowID &&
+					s.docTextLen == docTextLen &&
+					s.episodicRevision == episodicRevision &&
+					s.episodicCodecKey == string(key) {
+					snapValidIDs = s.validEpisodicIDs
 				}
 			}
 		}

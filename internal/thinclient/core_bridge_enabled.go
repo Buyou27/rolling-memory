@@ -19,12 +19,6 @@ import (
 // (`sdk/go/pulse/plain`) is compiled into this binary.
 const CoreClusterEmbedded = true
 
-// NewCoreRuntimeEngine constructs an in-memory 4-step dual-cluster engine
-// from the embedded `sdk/go/pulse/plain` kernel.
-func NewCoreRuntimeEngine(docs []core.Doc) *core.Engine {
-	return core.NewEngine(core.BuildIndex(docs))
-}
-
 // withinNaturalEnergyEnvelope reports whether score stays within the natural 1/e
 // energy envelope of peak (score >= peak / e).
 func withinNaturalEnergyEnvelope(score, peak float64) bool {

@@ -275,11 +275,3 @@ func limitSlice[T any](values []T, limit int) []T {
 	}
 	return values
 }
-
-func firstRunes(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) > limit {
-		runes = runes[:limit]
-	}
-	return string(runes)
-}

@@ -3994,19 +3994,6 @@ func asInt(v any) int {
 	}
 }
 
-// SortHarnessesActiveFirst orders active/installed harnesses ahead of standby ones.
-func SortHarnessesActiveFirst(items []HarnessEfficacy) {
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].Sessions != items[j].Sessions {
-			return items[i].Sessions > items[j].Sessions
-		}
-		if items[i].Installed != items[j].Installed {
-			return items[i].Installed
-		}
-		return items[i].Detected && !items[j].Detected
-	})
-}
-
 // loadMemoryLandmarkCreatedAt extracts all structural code file paths stored in active
 // assertions in `scope` along with their earliest creation timestamp (`created_at`),
 // so `detectBootOrCarryoverHit` can verify whether a turn directly navigated to an

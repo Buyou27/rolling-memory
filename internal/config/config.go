@@ -264,15 +264,6 @@ func NormalizeDeliveryWindow(raw, fallback string) (string, int, bool) {
 	}
 }
 
-// DeliveryWindowCap returns the configured adaptive delivery window ceiling (16, 32, or 64; default 16).
-func (r RecallConfig) DeliveryWindowCap() int {
-	_, capN, ok := NormalizeDeliveryWindow(r.DeliveryWindow, "0-16")
-	if !ok || capN <= 0 {
-		return 16
-	}
-	return capN
-}
-
 // HooksConfig holds hook budgets.
 type HooksConfig struct {
 	BootContext bool

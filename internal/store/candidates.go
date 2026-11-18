@@ -2476,11 +2476,6 @@ func (s *Store) scopeSessionAuthors(scope string, rows []map[string]any) (map[st
 	}
 	return sessionAuthors, allAuthors
 }
-
-func sessionCoverageOrder(rows []map[string]any, weights []termWeight) []map[string]any {
-	return sessionCoverageOrderWithTime(rows, weights, 0, 0, 0, nil, nil)
-}
-
 func sessionCoverageOrderWithTime(rows []map[string]any, weights []termWeight, qStart, qEnd int64, qMonth int, scopeAuthors map[string]map[string]bool, allScopeAuthors map[string]bool) []map[string]any {
 	if len(rows) < 2 || len(weights) == 0 {
 		return rows

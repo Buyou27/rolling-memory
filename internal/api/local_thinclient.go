@@ -787,9 +787,10 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 	}
 	hits = evidenceHits
 
-	// L3 -> L1/L2 Citation Resonance Gain: when a past Noetic handle matches the current
-	// cue, boost its cited evidence units (and hydrate any cited unit missing from the
-	// initial topK) so proven evidence from past sessions bubbles to the top of delivery.
+	// L3 -> L1/L2 Citation Resonance Hydrate: SearchClientSDKDefault has already
+	// boosted any matched cited units inside the initial candidate pool; here we
+	// only hydrate cited units that were outside the initial topK so proven
+	// evidence from past sessions is never dropped.
 	if len(noeticHits) > 0 && tc.Vault != nil {
 		hitIdxByID := make(map[string]int, len(hits))
 		maxW := 1.0
@@ -804,15 +805,15 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 				break
 			}
 			vGain := nh.VerificationGain()
-			boostMult := (1.0 + 0.35*nh.MatchScore) * vGain
 			for _, cid := range nh.CitedUnitIDs {
 				cid = strings.TrimSpace(cid)
 				if cid == "" || strings.HasPrefix(cid, "nt_") || strings.HasPrefix(cid, "noetic_") {
 					continue
 				}
-				if idx, ok := hitIdxByID[cid]; ok {
-					hits[idx].FinalWeight *= boostMult
-				} else if len(hits) < topK*2 {
+				if _, ok := hitIdxByID[cid]; ok {
+					continue
+				}
+				if len(hits) < topK*2 {
 					rawTxt, distTxt, keptSents, lErr := tc.Vault.LoadLocalDocument(cid)
 					if lErr != nil {
 						hitIdxByID[cid] = len(hits)

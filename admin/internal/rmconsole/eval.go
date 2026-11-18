@@ -1668,14 +1668,6 @@ var (
 	evalPrepareLocks     = map[evalPrepareKey]*sync.Mutex{}
 )
 
-// evalPulseModeFromArm 归一化请求携带的评测臂 / 脉冲模式为现役唯一脉冲模式（local_plain）。
-// 历史脉冲臂取值保留可识别（供只读台账与明确拒收），但不改变归一化结果。
-func evalPulseModeFromArm(armMode, pulseMode string) string {
-	_ = armMode
-	_ = pulseMode
-	return EvalPulseModeLocalPlain
-}
-
 func evalScopeForSuite(suite string) string {
 	base := EvalScope
 	if normalizeSuite(suite) == SuiteATM {
@@ -1793,10 +1785,14 @@ func validateEvalRunRequest(req evalRunRequest) (string, error) {
 			return "", fmt.Errorf("未知 ATM 档位 %q：仅支持 hard 与 1013", req.Tier)
 		}
 	} else {
+		// LoCoMo 便捷档 100/200 已停用（题集以上游官方为准）：显式拒收，
+		// 与 internal/eval 的 CheckLoCoMoTier 同口径。
 		switch strings.ToLower(strings.TrimSpace(req.Tier)) {
-		case "", "100", "200", "1540":
+		case "", "1540", "adversarial-446":
+		case "100", "200":
+			return "", fmt.Errorf("LoCoMo 便捷档 %q 不再提供：题集以上游官方为准（cat1-4 全集），请使用 1540", req.Tier)
 		default:
-			return "", fmt.Errorf("未知 LoCoMo 档位 %q：仅支持 100 / 200 / 1540", req.Tier)
+			return "", fmt.Errorf("未知 LoCoMo 档位 %q：仅支持 1540 与 adversarial-446", req.Tier)
 		}
 	}
 	// 题集/档位契约校验优先；随后才是评测臂闸（现役只开放本地明文臂）。
@@ -1810,12 +1806,6 @@ func resolveEvalDBPathForSuite(home, suite string) string {
 		base = "eval-atm"
 	}
 	return filepath.Join(home, ".local", "state", "rolling-memory", "eval", base+"-local-plain.json")
-}
-
-// evalTransportForMode 返回评测传输标签：现役唯一通道 = 本地明文离线通道，
-// 故任何输入都返回本地标签（历史脉冲通道只作只读白名单，绝不产出）。
-func evalTransportForMode(_ string) string {
-	return evalLocalPlainTransport
 }
 
 // evalEndpointMatchesMode 判定评测端点是否为本地金库标识（现役唯一形态 local://...）。
@@ -3086,28 +3076,6 @@ func recordEvalIngestTelemetry(suite string, ms int64) {
 	if err == nil {
 		_ = os.WriteFile(evalIngestTelemetryPath(suite), payload, 0o644)
 	}
-}
-
-// lastEvalIngestMS 读取最近一次语料导入耗时（热缓存未命中回落磁盘，均无回 0）。
-func lastEvalIngestMS(suite string) int64 {
-	evalIngestTelemetryMu.Lock()
-	defer evalIngestTelemetryMu.Unlock()
-	if ms := evalIngestTelemetryMS[suite]; ms > 0 {
-		return ms
-	}
-	raw, err := os.ReadFile(evalIngestTelemetryPath(suite))
-	if err != nil {
-		return 0
-	}
-	var payload map[string]int64
-	if json.Unmarshal(raw, &payload) != nil {
-		return 0
-	}
-	if ms := payload["ingest_ms"]; ms > 0 {
-		evalIngestTelemetryMS[suite] = ms
-		return ms
-	}
-	return 0
 }
 
 // evaluateHead48EvidenceRecall 计算前 48 个唯一词元头尺下的最佳证据召回率（与 CLI internal/eval/scoring.go::TokenRecall
@@ -4714,27 +4682,6 @@ func evalRunHandler(c *gin.Context) {
 			return
 		}
 	}
-}
-
-func extractCategoryScores(summary map[string]any) (CategoryScores, CategoryScores) {
-	ev := CategoryScores{}
-	jdg := CategoryScores{}
-	byCat, ok := summary["by_category"].(map[string]any)
-	if !ok {
-		return ev, jdg
-	}
-	readCat := func(key string) (float64, float64) {
-		m, ok := byCat[key].(map[string]any)
-		if !ok {
-			return 0, 0
-		}
-		return asFloat(m["evidence_hit"]), asFloat(m["judge_correct"])
-	}
-	ev.Cat1, jdg.Cat1 = readCat("1")
-	ev.Cat2, jdg.Cat2 = readCat("2")
-	ev.Cat3, jdg.Cat3 = readCat("3")
-	ev.Cat4, jdg.Cat4 = readCat("4")
-	return ev, jdg
 }
 
 const (

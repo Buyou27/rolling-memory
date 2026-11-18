@@ -64,9 +64,6 @@ const (
 // TokenCounterFunc 词元计数函数签名（唯一正本 internal/text，本包仅转发）。
 type TokenCounterFunc = text.TokenCounterFunc
 
-// SetDefaultTokenCounter 注册全局默认 tokenz-r 词元计数器（转发 internal/text）。
-func SetDefaultTokenCounter(fn TokenCounterFunc) { text.SetDefaultTokenCounter(fn) }
-
 // CountTokens 使用 tokenz-r 词元计数器计算文本 Token 数（转发 internal/text）。
 func CountTokens(s string) int { return text.CountTokens(s) }
 
@@ -143,12 +140,6 @@ func SliceRunesBounded(value string, start, end int) string {
 	}
 	return value[byteStart:]
 }
-
-// EstimateTokensFallback 使用内嵌 tokenz-r 128k 词表直接计算 Token 数。
-func EstimateTokensFallback(text string) int {
-	return tokenzr.Count(text)
-}
-
 func countWith(fn TokenCounterFunc, text string) int {
 	if text == "" {
 		return 0
@@ -449,11 +440,6 @@ func splitHardRunesWithTarget(text string, targetTokens int, counter TokenCounte
 		out = append(out, text[sp.start:sp.end])
 	}
 	return out
-}
-
-// CompactContextTurnText 保障历史上下文单轮不超 1024 tokens（≤1024 原样返回完整原始原文；>1024 取最末切片）。
-func CompactContextTurnText(text string, counter TokenCounterFunc) string {
-	return CompactContextTurnTextWithCap(text, ContextSingleTurnTokens, counter)
 }
 
 // CompactContextTurnTextWithCap 保障历史上下文单轮不超 singleCap tokens（≤singleCap 原样返回完整原始原文；>singleCap 取最末切片）。

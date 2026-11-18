@@ -4,7 +4,6 @@
 package memcore
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -82,22 +81,6 @@ func FormatSpokenEventDateTag(lang string, srcTag, evTag string) string {
 	default:
 		return " ｜ spoken_on:" + srcTag + " → event_time:" + evTag
 	}
-}
-
-// FormatEvidenceLinesBandHeader formats the header of the [E#k] evidence lines band.
-func FormatEvidenceLinesBandHeader(lang string, count int) string {
-	if NormalizeDeliveryLang(lang) == DeliveryLangZH {
-		return fmt.Sprintf("【证据带·证据行】证据行 %d 条\n【证据行】", count)
-	}
-	return fmt.Sprintf("【Evidence Band · Lines】%d lines\n【Evidence Lines】", count)
-}
-
-// FormatEvidenceArtifactsBandHeader formats the header of the [A#m] evidence artifacts band.
-func FormatEvidenceArtifactsBandHeader(lang string, count int) string {
-	if NormalizeDeliveryLang(lang) == DeliveryLangZH {
-		return fmt.Sprintf("【证据带·证据件】证据件 %d 件\n【证据件】", count)
-	}
-	return fmt.Sprintf("【Evidence Band · Artifacts】%d artifacts\n【Evidence Artifacts】", count)
 }
 
 // MatchesLabelAnyLang reports whether s contains either the EN, ZH, or Bilingual variant of key.

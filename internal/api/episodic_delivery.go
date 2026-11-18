@@ -115,16 +115,6 @@ func turnWindowBudget(totalChars, turns int) int {
 	return totalChars / turns
 }
 
-// shortTurnRef renders a compact band title for a turn reference: the trailing
-// identifier (message id / turn index) is enough to tell turns apart.
-func shortTurnRef(ref string) string {
-	trimmed := strings.TrimSpace(ref)
-	if index := strings.LastIndex(trimmed, ":"); index > 0 && index+1 < len(trimmed) {
-		return trimmed[index+1:]
-	}
-	return trimmed
-}
-
 // bestTurnSegmentIndex selects the best focal segment inside `segments`:
 //   - If `rawPointer` carries an explicit `#<k>` segment suffix, `fallbackIdx` (`k`) is used directly;
 //   - If `rawPointer` is a legacy turn-level pointer without `#<k>` (where `splitTurnRefSegment`
@@ -173,58 +163,4 @@ func bestTurnSegmentIndex(rawPointer string, segments []string, query string, fa
 		}
 	}
 	return bestIdx
-}
-
-// distillTurnWindowWithRB uses the cloud engine's query-guided distilled sentences (`rbDistilled`,
-// reconstructed from `KeptSentenceIndices`) to filter out low-energy filler lines inside an oversized
-// turn window while preserving verbatim line formatting, punctuation, and speaker prefixes.
-func distillTurnWindowWithRB(windowText string, rbDistilled string, maxChars int) string {
-	if maxChars <= 0 || len(windowText) <= maxChars {
-		return windowText
-	}
-	rbTrim := strings.TrimSpace(rbDistilled)
-	if rbTrim == "" || strings.HasPrefix(rbTrim, "@ref:") {
-		return windowText
-	}
-	lines := strings.Split(windowText, "\n")
-	if len(lines) <= 3 {
-		return windowText
-	}
-	rbLower := strings.ToLower(rbTrim)
-	kept := make([]string, 0, len(lines))
-	used := 0
-	for idx, line := range lines {
-		trimLine := strings.TrimSpace(line)
-		if trimLine == "" {
-			continue
-		}
-		isSpeakerHead := idx == 0 || strings.HasPrefix(trimLine, "[user]") || strings.HasPrefix(trimLine, "[assistant]")
-		matchedRB := false
-		words := thinclient.SplitWords(strings.ToLower(trimLine))
-		hitWords := 0
-		minHits := 2
-		if len(words) <= 1 {
-			minHits = 1
-		}
-		for _, w := range words {
-			if w != "" && strings.Contains(rbLower, w) {
-				hitWords++
-				if hitWords >= minHits {
-					matchedRB = true
-					break
-				}
-			}
-		}
-		if isSpeakerHead || matchedRB {
-			if used+len(line)+1 > maxChars && len(kept) >= 2 {
-				break
-			}
-			kept = append(kept, line)
-			used += len(line) + 1
-		}
-	}
-	if len(kept) == 0 {
-		return windowText
-	}
-	return strings.Join(kept, "\n")
 }

@@ -5,7 +5,6 @@ package cli
 
 import (
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -184,47 +183,6 @@ func TestHarnessEnvDefinitionsExtendsOnFootprintOrActive(t *testing.T) {
 	defs = harnessEnvDefinitions(home, "doubao")
 	if !ids(defs)["doubao"] {
 		t.Fatalf("active extended harness absent from inventory: %+v", ids(defs))
-	}
-}
-
-// A global vault count cannot attribute newly imported turns to a harness.
-func TestHarnessCountCacheInvalidatesOnVaultCountChange(t *testing.T) {
-	home := t.TempDir()
-	zdbDir := filepath.Join(home, ".zcode", "cli", "db")
-	if err := os.MkdirAll(zdbDir, 0o755); err != nil {
-		t.Fatalf("mkdir zdb: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(zdbDir, "db.sqlite"), []byte("stub"), 0o600); err != nil {
-		t.Fatalf("write stub zdb: %v", err)
-	}
-	vdb, err := sql.Open("sqlite", filepath.Join(home, "vault.db"))
-	if err != nil {
-		t.Fatalf("open vault: %v", err)
-	}
-	defer vdb.Close()
-	if _, err := vdb.Exec(`CREATE TABLE thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
-		t.Fatalf("create meta: %v", err)
-	}
-
-	storeHarnessCountCache(vdb, "zcode", home, 100, 12, 80, 20, 100, 1700000000)
-
-	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); !ok || cached.Synced != 80 || cached.Unsynced != 20 {
-		t.Fatalf("unchanged vault cache = %+v, %v", cached, ok)
-	}
-	for _, vaultUnits := range []int{105, 130, 99} {
-		if cached, ok := loadHarnessCountCache(vdb, "zcode", home, vaultUnits); ok {
-			t.Fatalf("vault count %d must trigger a rescan, got %+v", vaultUnits, cached)
-		}
-	}
-	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); !ok || cached.Synced != 80 || cached.Unsynced != 20 {
-		t.Fatalf("other-harness growth must not mutate cached counts: %+v, %v", cached, ok)
-	}
-	legacy := `{"fp":1,"vault":100,"computed_at":` + fmt.Sprint(time.Now().Unix()) + `,"local_turns":100,"synced":85,"unsynced":15}`
-	if _, err := vdb.Exec(`UPDATE thin_vault_meta SET v = ? WHERE k = ?`, []byte(legacy), harnessCountCachePrefix+"zcode"); err != nil {
-		t.Fatal(err)
-	}
-	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); ok {
-		t.Fatalf("legacy row may contain guessed attribution: %+v", cached)
 	}
 }
 

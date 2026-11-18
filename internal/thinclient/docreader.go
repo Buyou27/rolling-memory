@@ -1122,45 +1122,18 @@ func readTextOrCodeChunks(absPath string, relPath string) ([]DocumentChunk, erro
 }
 
 func groupLinesIntoChunks(absPath string, relPath string, prefix string, lines []string) []DocumentChunk {
-	var blocks []rawChunkBlock
-	var curLines []string
-	curTokens := 0
-	startIdx := 1
-
-	for idx, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		tokens := measureLineTokens(trimmed)
-		isHeading := strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "## ") || strings.HasPrefix(trimmed, "### ")
-		if (curTokens+tokens > TargetChunkTokens || (isHeading && curTokens >= TargetChunkTokens/3)) && len(curLines) > 0 {
-			endIdx := idx
-			if endIdx < startIdx {
-				endIdx = startIdx
-			}
-			blocks = append(blocks, rawChunkBlock{
-				anchor:    fmt.Sprintf("%s%d-%d", prefix, startIdx, idx),
-				lines:     curLines,
-				lineStart: startIdx,
-				lineEnd:   endIdx,
-			})
-			curLines = nil
-			curTokens = 0
-			startIdx = idx + 1
-		}
-		// Blank lines carry zero tokens but stay in the block so the rendered chunk keeps the
-		// source's line numbering intact from `lineStart` to `lineEnd`.
-		curLines = append(curLines, trimmed)
-		curTokens += tokens
-	}
-	if len(curLines) > 0 {
-		endIdx := len(lines)
-		if endIdx < startIdx {
-			endIdx = startIdx
-		}
+	// The split itself lives in the shared SDK chunker (`tokenzr.ChunkLines`), so the
+	// canonical, mirror and client trees slice long files with one definition: the
+	// 1:1 line coordinates, the tokenz-r budget and the heading soft-break all come
+	// from there. This adapter only re-wraps the pieces for the document reader.
+	chunks := tokenzr.ChunkLines(lines, TargetChunkTokens, prefix)
+	blocks := make([]rawChunkBlock, 0, len(chunks))
+	for _, chunk := range chunks {
 		blocks = append(blocks, rawChunkBlock{
-			anchor:    fmt.Sprintf("%s%d-%d", prefix, startIdx, len(lines)),
-			lines:     curLines,
-			lineStart: startIdx,
-			lineEnd:   endIdx,
+			anchor:    chunk.Anchor,
+			lines:     chunk.Lines,
+			lineStart: chunk.LineStart,
+			lineEnd:   chunk.LineEnd,
 		})
 	}
 	return finalizeDocumentChunks(absPath, relPath, blocks)

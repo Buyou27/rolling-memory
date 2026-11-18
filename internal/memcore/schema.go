@@ -83,16 +83,6 @@ const (
 	BandIDSrc2              = BandIDPrefix + "src2"
 )
 
-// NormalizePrimaryBandCap clamps caller topK into the [1, MaxPrimaryBands] (1..96) primary-band budget.
-// Callers passing <=0 or >96 (e.g. gateway default 100 or total cap 99) receive 96 primary bands,
-// leaving +1 Misc band and +2 Evidence bands (lines + artifacts) for a total of 0–99 bands.
-func NormalizePrimaryBandCap(topK int) int {
-	if topK <= 0 || topK > MaxPrimaryBands {
-		return MaxPrimaryBands
-	}
-	return topK
-}
-
 // stripBandPrefix strips the canonical `mem:band:` prefix; ids outside the
 // canonical namespace are not recognized (legacy vendor prefixes are retired).
 func stripBandPrefix(bandID string) (string, bool) {
@@ -229,44 +219,6 @@ type EntityID struct {
 	Num uint64
 	Str string
 }
-
-// NewNumID constructs an EntityID from a numeric ID.
-func NewNumID(id uint64) EntityID {
-	if id == 0 {
-		return EntityID{}
-	}
-	return EntityID{Num: id, Str: strconv.FormatUint(id, 10)}
-}
-
-// NewStrID constructs an EntityID from a string ID (parsing numeric strings when applicable).
-func NewStrID(id string) EntityID {
-	s := strings.TrimSpace(id)
-	if s == "" {
-		return EntityID{}
-	}
-	if n, err := strconv.ParseUint(strings.TrimPrefix(s, "#"), 10, 64); err == nil && n > 0 {
-		return EntityID{Num: n, Str: s}
-	}
-	return EntityID{Str: s}
-}
-
-// IsZero reports whether the identifier is empty.
-func (id EntityID) IsZero() bool {
-	return id.Num == 0 && id.Str == ""
-}
-
-// Key returns the canonical string key for maps and hashing.
-func (id EntityID) Key() string {
-	if id.Str != "" {
-		return id.Str
-	}
-	if id.Num > 0 {
-		return strconv.FormatUint(id.Num, 10)
-	}
-	return ""
-}
-
-func (id EntityID) String() string { return id.Key() }
 
 // Trace is the 1:1 L0 verbatim evidence record.
 type Trace struct {
@@ -478,20 +430,6 @@ type RestateRow struct {
 	Kind            string `json:"kind"` // "mention" | "occurrence"
 	OccurredAt      int64  `json:"occurred_at"`
 	CreatedAt       int64  `json:"created_at"`
-}
-
-// SubjectForm classifies an assertion's structural form (ternary, binary_sx, binary_xo, unbound).
-func SubjectForm(subjectID, subjectLiteral, subjectGap string, subjectAbsent bool, objectID, objectLiteral, objectGap string) string {
-	if subjectGap != "" || objectGap != "" {
-		return "unbound"
-	}
-	if subjectAbsent {
-		return "binary_xo"
-	}
-	if objectID == "" && objectLiteral == "" {
-		return "binary_sx"
-	}
-	return "ternary"
 }
 
 // FormatAssertionLabel formats a deterministic human-readable label for an assertion node.

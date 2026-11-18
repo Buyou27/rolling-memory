@@ -106,13 +106,6 @@ func readLocomoSnapshot(path string) (*LocomoDataDump, error) {
 	return &dump, nil
 }
 
-// GenerateLocomoStaticSnapshot requires an explicit destination.
-//
-// Deprecated: use GenerateLocomoStaticSnapshotTo.
-func GenerateLocomoStaticSnapshot() error {
-	return errors.New("snapshot output path required; use GenerateLocomoStaticSnapshotTo")
-}
-
 // GenerateLocomoStaticSnapshotTo writes a snapshot to a new file.
 func GenerateLocomoStaticSnapshotTo(path string) error {
 	if strings.TrimSpace(path) == "" {

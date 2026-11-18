@@ -407,17 +407,13 @@
                                     <span class="rm-field-label">{{ isEn ? '3. Retrieval Arm' : '3. 检索臂 (Retrieval Arm)' }}</span>
                                     <el-radio-group v-model="evalConfig.arm_mode" :disabled="isJobRunning || ingesting !== ''">
                                         <el-radio-button value="sdk-local-plain">{{ isEn ? 'Local Plain (default)' : '本地明文 local_plain（默认）' }}</el-radio-button>
-                                        <el-radio-button v-if="!isLocalMode" value="sdk-pulse-cipher">{{ isEn ? 'Pulse Cipher' : '脉冲密文 pulse_cipher' }}</el-radio-button>
-                                        <el-radio-button v-if="!isLocalMode" value="sdk-pulse-plain">{{ isEn ? 'Pulse Plain' : '脉冲明文 pulse_plain' }}</el-radio-button>
                                         <el-radio-button value="oracle">{{ isEn ? 'Oracle ceiling' : 'Oracle 金标上限' }}</el-radio-button>
                                     </el-radio-group>
                                     <p class="rm-field-help">
                                         {{
                                             evalConfig.arm_mode === 'oracle'
                                                 ? (isEn ? 'Oracle injects gold evidence directly — an answerer ceiling, not an engine score.' : 'Oracle 直接注入金标证据——是答题上限参照，不是引擎成绩。')
-                                                : evalConfig.arm_mode === 'sdk-local-plain'
-                                                  ? (isEn ? 'Retrieval runs entirely on this machine (zero cloud requests).' : '检索 100% 在本机执行，零云端请求。')
-                                                  : (isEn ? 'Pulse arms call /open/memory/v1 even with Answer/Judge off.' : '脉冲臂即使关闭 Answer/Judge 仍会请求 /open/memory/v1。')
+                                                : (isEn ? 'Retrieval runs entirely on this machine (zero cloud requests).' : '检索 100% 在本机执行，零云端请求。')
                                         }}
                                     </p>
                                 </div>
@@ -1803,8 +1799,6 @@
                     <span class="rm-ql-lbl">{{ isEn ? 'Retrieval arm' : '检索臂' }}</span>
                     <el-radio-group v-model="evalConfig.arm_mode" :disabled="isJobRunning">
                         <el-radio-button value="sdk-local-plain">{{ isEn ? 'Local Plain' : '本地明文 local_plain' }}</el-radio-button>
-                        <el-radio-button v-if="!isLocalMode" value="sdk-pulse-cipher">{{ isEn ? 'Pulse Cipher' : '脉冲密文 pulse_cipher' }}</el-radio-button>
-                        <el-radio-button v-if="!isLocalMode" value="sdk-pulse-plain">{{ isEn ? 'Pulse Plain' : '脉冲明文 pulse_plain' }}</el-radio-button>
                         <el-radio-button value="oracle">{{ isEn ? 'Oracle ceiling' : 'Oracle 金标上限' }}</el-radio-button>
                     </el-radio-group>
                 </div>
@@ -2742,8 +2736,8 @@ watch(pluginChannels, (list) => {
 })
 
 const evalConfig = reactive({
-    arm_mode: 'sdk-local-plain' as 'sdk-pulse-cipher' | 'sdk-pulse-plain' | 'sdk-local-plain' | 'oracle',
-    pulse_mode: 'local_plain' as 'pulse_cipher' | 'pulse_plain' | 'local_plain',
+    arm_mode: 'sdk-local-plain' as 'sdk-local-plain' | 'oracle',
+    pulse_mode: 'local_plain' as 'local_plain',
     top_k: 50,
     workers: 2,
     category: '',
@@ -2754,22 +2748,14 @@ const evalConfig = reactive({
 const evalArmLabel = computed(() => {
     switch (evalConfig.arm_mode) {
         case 'sdk-local-plain': return isEn.value ? 'Local Plain (local_plain)' : '本地明文 (local_plain)'
-        case 'sdk-pulse-plain': return isEn.value ? 'Pulse Plain (pulse_plain)' : '脉冲明文 (pulse_plain)'
-        case 'sdk-pulse-cipher': return isEn.value ? 'Pulse Cipher (pulse_cipher)' : '脉冲密文 (pulse_cipher)'
         case 'oracle': return isEn.value ? 'Oracle gold ceiling' : 'Oracle 金标上限'
     }
     return '—'
 })
 
-watch(() => evalConfig.arm_mode, (val) => {
+watch(() => evalConfig.arm_mode, () => {
     overview.value = { ...overview.value, manifest: null, readiness: undefined, store_path: '' }
-    if (val === 'sdk-pulse-plain') {
-        evalConfig.pulse_mode = 'pulse_plain'
-    } else if (val === 'sdk-pulse-cipher') {
-        evalConfig.pulse_mode = 'pulse_cipher'
-    } else {
-        evalConfig.pulse_mode = 'local_plain'
-    }
+    evalConfig.pulse_mode = 'local_plain'
     void loadOverview()
 }, { flush: 'sync' })
 

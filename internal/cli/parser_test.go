@@ -195,7 +195,7 @@ func TestHelpMatchesArgparse(t *testing.T) {
 	// The one-line help= only belongs to the parent's command list.
 	for _, row := range []struct{ name, text string }{
 		{"import", "import a transcript (JSONL or text)"},
-		{"sync", "optional cloud sync (cloud mode only)"},
+		{"sync", "local alignment status and reconcile (zero network egress)"},
 	} {
 		want := "\n" + fmt.Sprintf("    %-18s %s", row.name, row.text) + "\n"
 		if !strings.Contains(root.stdout, want) {

@@ -5,9 +5,7 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,54 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/rocareer/rolling-memory/internal/ids"
 )
-
-// decodeJSONValue parses one --*-json argument. Integral json.Number values
-// are normalized to int64 so ids.ParseTime and the assertion payloads see an
-// int/float split rather than float64-only numbers.
-func decodeJSONValue(text string) (any, error) {
-	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, errors.New(ids.PyJSONDecodeMessage(text, err))
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return nil, errors.New("Extra data")
-		}
-		return nil, errors.New(ids.PyJSONDecodeMessage(text, err))
-	}
-	return normalizeJSONNumbers(value), nil
-}
-
-func normalizeJSONNumbers(value any) any {
-	switch typed := value.(type) {
-	case json.Number:
-		if integer, err := strconv.ParseInt(typed.String(), 10, 64); err == nil {
-			return integer
-		}
-		if number, err := typed.Float64(); err == nil {
-			return number
-		}
-		return typed.String()
-	case map[string]any:
-		for key, item := range typed {
-			typed[key] = normalizeJSONNumbers(item)
-		}
-		return typed
-	case []any:
-		for index, item := range typed {
-			typed[index] = normalizeJSONNumbers(item)
-		}
-		return typed
-	default:
-		return value
-	}
-}
 
 // expandUser mirrors pathlib.Path.expanduser for the CLI's config argument.
 func expandUser(path string) string {
@@ -179,32 +130,6 @@ func pyFloatText(value float64) string {
 	return text
 }
 
-// pyFloat mirrors float(value or 0) for the human renderers.
-func pyFloat(value any) float64 {
-	switch typed := value.(type) {
-	case nil:
-		return 0
-	case float64:
-		return typed
-	case float32:
-		return float64(typed)
-	case int:
-		return float64(typed)
-	case int64:
-		return float64(typed)
-	case bool:
-		if typed {
-			return 1
-		}
-		return 0
-	case json.Number:
-		number, _ := typed.Float64()
-		return number
-	default:
-		return 0
-	}
-}
-
 // pyInt mirrors int(value or 0) for the human renderers.
 func pyInt(value any) int {
 	switch typed := value.(type) {
@@ -265,14 +190,6 @@ func isContainer(value any) bool {
 	}
 	kind := reflect.ValueOf(value).Kind()
 	return kind == reflect.Map || kind == reflect.Slice || kind == reflect.Array
-}
-
-// valueOr returns value when truthy, otherwise fallback.
-func valueOr(value, fallback any) any {
-	if truthy(value) {
-		return value
-	}
-	return fallback
 }
 
 // getOr mirrors dict.get(key, fallback): only a missing key falls back, so
@@ -347,9 +264,4 @@ func childList(value any, key string) []map[string]any {
 		}
 	}
 	return result
-}
-
-// percent1 formats a ratio as a one-decimal percentage (e.g. "42.0%").
-func percent1(value any) string {
-	return fmt.Sprintf("%.1f%%", pyFloat(value)*100)
 }

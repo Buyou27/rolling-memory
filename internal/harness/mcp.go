@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -115,11 +114,6 @@ func isOurBinary(value string, options InstallOptions) bool {
 	resolved := options.ResolvedBinary()
 	return value == resolved || value == "rolling-memory" || value == "rmem" || value == DefaultShimPath(options.Home)
 }
-
-func hasShimSuffix(value string) bool {
-	return hasShimSuffixFor(value, runtime.GOOS)
-}
-
 func hasShimSuffixFor(value, goos string) bool {
 	name := shimNameFor(goos)
 	return strings.HasSuffix(value, "/"+name) || strings.HasSuffix(value, "\\"+name)
@@ -1299,9 +1293,4 @@ func parseTOML(raw string) (map[string]any, error) {
 		return nil, err
 	}
 	return data, nil
-}
-
-func validateTOML(raw string) error {
-	var data map[string]any
-	return toml.Unmarshal([]byte(raw), &data)
 }

@@ -4,7 +4,6 @@
 package text
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,9 +11,6 @@ import (
 	"strings"
 	"time"
 )
-
-type ctxPresenceCoordsKey struct{}
-type ctxAudiencePeersKey struct{}
 
 // PresenceCoordinates holds the 4D presence probe coordinates (World x Carrier x Locus x Incarnation)
 // plus optional SelfLabel (the Assistant's first-class ego identity, origin="self") and PeerLabel
@@ -43,49 +39,6 @@ func (p PresenceCoordinates) Normalized() PresenceCoordinates {
 		SelfLabel:   strings.TrimSpace(p.SelfLabel),
 		PeerLabel:   strings.TrimSpace(p.PeerLabel),
 	}
-}
-
-// WithPresenceCoordinates binds PresenceCoordinates onto ctx.
-func WithPresenceCoordinates(ctx context.Context, coords PresenceCoordinates) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, ctxPresenceCoordsKey{}, coords.Normalized())
-}
-
-// PresenceCoordinatesFromCtx extracts PresenceCoordinates bound on ctx.
-func PresenceCoordinatesFromCtx(ctx context.Context) (PresenceCoordinates, bool) {
-	if ctx == nil {
-		return PresenceCoordinates{}, false
-	}
-	v, ok := ctx.Value(ctxPresenceCoordsKey{}).(PresenceCoordinates)
-	if !ok || v.IsEmpty() {
-		return PresenceCoordinates{}, false
-	}
-	return v, true
-}
-
-// WithAudiencePeers binds the active audience peer subjects onto ctx.
-func WithAudiencePeers(ctx context.Context, peers ...string) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	cleaned := make([]string, 0, len(peers))
-	for _, p := range peers {
-		if s := strings.ToLower(strings.TrimSpace(p)); s != "" {
-			cleaned = append(cleaned, s)
-		}
-	}
-	return context.WithValue(ctx, ctxAudiencePeersKey{}, cleaned)
-}
-
-// AudiencePeersFromCtx returns the active audience peer subjects bound on ctx.
-func AudiencePeersFromCtx(ctx context.Context) []string {
-	if ctx == nil {
-		return nil
-	}
-	v, _ := ctx.Value(ctxAudiencePeersKey{}).([]string)
-	return v
 }
 
 // NormalizeHierarchicalPath normalizes a '/' or '\' separated hierarchical path,

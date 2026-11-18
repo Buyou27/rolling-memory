@@ -533,63 +533,6 @@ atmLeaderboard:
     judgeCorrect: '{correct}/{scored} correct'
     copyBtn: 'Copy CLI'
     protoDetailTitle: 'Built-in atmbench-official-v1 Protocol Stack & Official Evaluator Checklist'
-cloudAccount:
-    title: Rolling Memory Cloud Account & API Key Center (Application Preview)
-    serverLabel: 'Cloud Server:'
-    connected: Connected
-    applyIntro: 'Cloud mode is application-based and opens progressively. Online registration is closed; please contact us via the application email.'
-    applyNote: 'Tell us your use case and expected scale; once approved we will issue a trial account, then sign in here to bind it.'
-    applyBtn: Send Application Email
-    applyContact: 'Application email:'
-    supportContact: 'Support email:'
-    tabLogin: Sign In
-    tabApply: Apply for Trial
-    username: Username
-    password: Password
-    rotateOnLogin: Rotate and fetch a fresh plaintext Memory API Key upon sign-in
-    signInBtn: Sign In & Bind Cloud Memory
-    keyMask: 'Key Mask:'
-    colKeyMask: Key Mask
-    signedKeyMask: 'Data-Plane Signed Key:'
-    signedKeyExpires: 'Expires:'
-    signedKeyErrorTitle: Signed-key exchange failed (the only memory-plane credential)
-    keyFile: 'Saved:'
-    rotateDefaultKey: Rotate Default Key
-    signOut: Sign Out
-    freshKeyTitle: 'New API Key Issued (auto-saved to local cloud.key):'
-    copy: Copy
-    tabMemory: Cloud Memory Management
-    statActiveUnits: Active Memory Units
-    statNodes: Graph Nodes
-    statTraces: Raw Traces
-    statConflicts: Open Conflicts
-    refresh: Refresh
-    recallPlaceholder: Enter cue to recall from the local memory service...
-    recallBtn: Recall
-    subjectS: Subject (S)
-    predicateX: Predicate (X)
-    objectO: Object (O)
-    addToCloud: + Add to Cloud
-    actions: Actions
-    forgetConfirm: Retract/delete this memory in Cloud?
-    delete: Delete
-    tabDevices: API Keys & Devices
-    deviceNamePlaceholder: New device / client name
-    createKey: Create Key
-    device: Device
-    kind: Kind
-    status: Status
-    statusActive: Active
-    statusRevoked: Revoked
-    rotate: Rotate
-    revoke: Revoke
-    msgSignedIn: Signed in to Cloud Memory!
-    msgSignedOut: Signed out
-    msgKeyRotated: API Key rotated and saved!
-    msgFillAll: Please fill in Subject (S), Predicate (X), and Object (O)
-    msgSaved: Saved to Cloud Memory!
-    msgRetracted: Memory retracted in Cloud
-    msgCopied: Copied!
 
 recall:
     readerOwner: owner (audience restrictions may not cover all sources)

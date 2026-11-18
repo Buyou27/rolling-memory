@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rocareer/rolling-memory/sdk/go/local"
 )
 
 const (
@@ -22,51 +24,15 @@ const (
 	// EngineNameZH is the canonical Chinese engine name.
 	EngineNameZH = "洛灵自知记忆引擎"
 
-	// EvalScopeMarker 与评测命名空间正本 internal/evalns.Marker 同源；套件取线名。
-	EvalScopeMarker      = "-mem-eval-"
-	evalScopeSuiteLoCoMo = "locomo"
-	evalScopeSuiteATM    = "atmbench"
-
-	// Canary* constants pin the built-in codec self-test vector shared across all SDKs.
-	CanarySecret    = "rame-codec-canary-key-v1"
-	CanaryDocID     = "CANARY_V1"
-	CanaryText      = "RollingMemory v1.0.1 WaveEngine_256 洛灵记忆. Zero plaintext!"
-	CanaryTS        = int64(1700000000)
-	CanarySlotCount = 21
-	CanarySentCount = 2
-	CanaryAtomsB64  = "Uk1CUAEAPA0AFAAAABUAAhQhUFBjZHiLAYwBtAHIAYQCtQJAEATBATAPB0jHISlR96QHZAI40Tt3T0fPAxxcTN+orGsN87QYgKG+M3wAaBUxyxkJx8f8zRbMt024NoH4VZEtimANzWUASZ6GWiX3Z7rb64Eq7inVwwMYS98I2I7VbHWwUFW4WszbtBQnTCgoPkEZy9pjGebXDmmqB9vwbo0DeZvaEa9TH6Ti6fHUlg3MbBKkCYTXBbqHJcBSS+ORCU+K9G0qrLWQNLboQC4oYxzk6gIUARCElBIB"
+	// Canary* constants delegate to the canonical SDK self-test vector.
+	CanarySecret    = local.CanarySecret
+	CanaryDocID     = local.CanaryDocID
+	CanaryText      = local.CanaryText
+	CanaryTS        = local.CanaryTS
+	CanarySlotCount = local.CanarySlotCount
+	CanarySentCount = local.CanarySentCount
+	CanaryAtomsB64  = local.CanaryAtomsB64
 )
-
-// VerifyCodecLocal executes an in-process round-trip self-test of the thinclient encoder and
-// RMBP wire codec against the pinned canary vector without network I/O.
-func VerifyCodecLocal() error {
-	enc := NewBlindEncoder([]byte(CanarySecret))
-	pkt, sents := enc.PackBlindPacket(CanaryDocID, CanaryText, CanaryTS)
-	if len(sents) != CanarySentCount || len(pkt.Slots) != CanarySlotCount {
-		return fmt.Errorf("thinclient: local codec canary count mismatch (got slots=%d sents=%d, want slots=%d sents=%d)",
-			len(pkt.Slots), len(sents), CanarySlotCount, CanarySentCount)
-	}
-	b64, err := EncodePulsePayload(pkt)
-	if err != nil {
-		return fmt.Errorf("thinclient: local codec canary encode failed: %w", err)
-	}
-	if b64 != CanaryAtomsB64 {
-		return fmt.Errorf("thinclient: local codec canary atoms_b64 drift (got %q, want %q)", b64, CanaryAtomsB64)
-	}
-	decAtoms, decOffsets, err := DecodePulsePayloadB64(b64)
-	if err != nil {
-		return fmt.Errorf("thinclient: local codec canary decode failed: %w", err)
-	}
-	if len(decAtoms) != len(pkt.Slots) || len(decOffsets) != len(pkt.SentenceFrames) {
-		return fmt.Errorf("thinclient: local codec canary round-trip size mismatch")
-	}
-	for i := range pkt.Slots {
-		if decAtoms[i] != pkt.Slots[i] {
-			return fmt.Errorf("thinclient: local codec canary atom[%d] mismatch", i)
-		}
-	}
-	return nil
-}
 
 // BrainTransport abstracts the retrieval channel of the Ultra-Thin Client: the
 // in-process `LocalVaultTransport` over the local SQLite plaintext vault is the
@@ -74,15 +40,6 @@ func VerifyCodecLocal() error {
 type BrainTransport interface {
 	IngestBlindPulse(ctx context.Context, pkt BlindPulsePacket) (IngestResponse, error)
 	QueryBlindManifold(ctx context.Context, queryPkt BlindPulsePacket, topK int) ([]QueryHit, error)
-}
-
-// DefaultSiblingExcludeScopeTokens returns the default sibling-resonance exclude list:
-// 「标记 + 合法套件名」双令牌，与评测命名空间正本 internal/evalns（Marker + SuiteLoCoMo /
-// SuiteATMWire）逐字对齐 —— 覆盖全部现行评测 scope 形态（`<user>-mem-eval-<suite>[-模式][-世代]`，
-// 引擎落库后为 `ast:default:inc:...`），同时不误伤含 "eval" 字样的用户空间
-// （`u10-mem-eval-team`）。早期裸前缀形态（`mem-eval-<x>`）不在子串令牌语义内。
-func DefaultSiblingExcludeScopeTokens() []string {
-	return []string{EvalScopeMarker + evalScopeSuiteLoCoMo, EvalScopeMarker + evalScopeSuiteATM}
 }
 
 // Client is the top-level Ultra-Thin Client coordinating any user-chosen PlaintextStore
@@ -295,11 +252,6 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 		return IngestResponse{}, err
 	}
 	return resp, nil
-}
-
-// RememberBackground explicitly stores a knowledge-base / codebase / document substrate item in `LayerBackground` ("background").
-func (c *Client) RememberBackground(ctx context.Context, docID string, plaintext string, occurredAt int64) (IngestResponse, error) {
-	return c.RememberWithLayer(ctx, docID, plaintext, occurredAt, LayerBackground, nil)
 }
 
 // RememberWithLayer stores the plaintext in the user's chosen PlaintextStore and packs the blind `{h, b, f}`
@@ -1052,363 +1004,17 @@ func (l *LocalVaultTransport) QueryBlindManifold(ctx context.Context, queryPkt B
 				WaveformBar:    d.waveBar,
 				WaveScore:      zh.Energy,
 				FinalWeight:    zh.Energy,
+				DirectWeight:   zh.Direct,
 			})
 		} else {
 			out = append(out, QueryHit{
-				UnitID:      zh.UnitID,
-				Layer:       LayerEpisodic,
-				WaveScore:   zh.Energy,
-				FinalWeight: zh.Energy,
+				UnitID:       zh.UnitID,
+				Layer:        LayerEpisodic,
+				WaveScore:    zh.Energy,
+				FinalWeight:  zh.Energy,
+				DirectWeight: zh.Direct,
 			})
 		}
 	}
 	return out, nil
-}
-
-// ResolveGraph builds the source-agnostic topology from the local Vault (or any transport that
-// exposes BuildBlindGraph) and resolves plaintext summaries for every unit and Noetic node on the client.
-func (c *Client) ResolveGraph(ctx context.Context, req BlindGraphRequest) (LocalResolvedGraph, error) {
-	var graphResp GraphResponse
-	if gt, ok := c.Transport.(interface {
-		BuildBlindGraph(context.Context, BlindGraphRequest) (GraphResponse, error)
-	}); ok {
-		var err error
-		graphResp, err = gt.BuildBlindGraph(ctx, req)
-		if err != nil {
-			return LocalResolvedGraph{}, err
-		}
-	} else if c.Vault != nil {
-		localTr := NewLocalVaultTransport(c.Vault)
-		graphResp, _ = localTr.BuildBlindGraph(ctx, req)
-	}
-
-	layerFilter := make(map[string]bool, len(req.Layers))
-	for _, l := range req.Layers {
-		trimmed := strings.ToLower(strings.TrimSpace(l))
-		if trimmed != "" {
-			layerFilter[trimmed] = true
-		}
-	}
-	allowNoetic := len(layerFilter) == 0 || layerFilter["noetic"]
-	weights := map[string]float64{"background": 1.0, "episodic": 1.0, "noetic": 1.0}
-	for k, v := range graphResp.LayerWeights {
-		weights[k] = v
-	}
-	for k, v := range req.LayerWeights {
-		weights[strings.ToLower(strings.TrimSpace(k))] = v
-	}
-
-	st := c.activeStore()
-	noeticByID := make(map[string]LocalNoeticRecord)
-	if c.Vault != nil && c.Vault.db != nil {
-		rows, err := c.Vault.db.Query(`
-				SELECT noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json,
-				       COALESCE(address_uri, ''), COALESCE(coord64, 0), COALESCE(waveform_bar, '')
-				FROM thin_vault_noetic WHERE status = 'active' ORDER BY occurred_at DESC
-			`)
-		if err == nil {
-			for rows.Next() {
-				var r LocalNoeticRecord
-				var uidsJSON string
-				if err := rows.Scan(&r.NoeticID, &r.OccurredAt, &r.Status, &r.QueryText, &r.AnswerText, &uidsJSON,
-					&r.AddressURI, &r.Coord64, &r.WaveformBar); err == nil {
-					_ = json.Unmarshal([]byte(uidsJSON), &r.CitedUnitIDs)
-					noeticByID[r.NoeticID] = r
-				}
-			}
-			rows.Close()
-		}
-	}
-
-	resolvedNodes := make([]LocalResolvedGraphNode, 0, len(graphResp.Nodes)+len(noeticByID))
-	seenUnitRaw := make(map[string]bool, len(graphResp.Nodes))
-	cellIdxByNodeID := make(map[string]int, len(graphResp.Nodes))
-	unitCellByRawID := make(map[string]string, len(graphResp.Nodes))
-	edges := append([]GraphEdge(nil), graphResp.Edges...)
-	counts := map[string]int{"background": 0, "episodic": 0, "noetic": 0}
-	cellCnt, unitCnt := 0, 0
-
-	for _, cn := range graphResp.Nodes {
-		rn := LocalResolvedGraphNode{
-			GraphNode: cn,
-			Summary:   cn.RawID,
-		}
-		if cn.NodeType == "cell" || cn.NodeType == "super_cell" {
-			cellCnt++
-			cellIdxByNodeID[cn.ID] = len(resolvedNodes)
-			rn.Summary = cn.RawID + " (" + cn.Layer + ")"
-		} else {
-			unitCnt++
-			seenUnitRaw[cn.RawID] = true
-			if cn.ParentID != "" {
-				unitCellByRawID[cn.RawID] = cn.ParentID
-			}
-			if nr, isNoetic := noeticByID[cn.RawID]; isNoetic {
-				rn.Layer = "noetic"
-				rn.RawPlaintext = "Q: " + nr.QueryText + "\nA: " + nr.AnswerText
-				rn.DistilledPlaintext = nr.AnswerText
-				rn.Summary = nr.QueryText
-				if len(rn.CitedUnitIDs) == 0 {
-					rn.CitedUnitIDs = nr.CitedUnitIDs
-				}
-				if rn.AddressURI == "" && nr.AddressURI != "" {
-					rn.AddressURI = nr.AddressURI
-				}
-				if rn.WaveformBar == "" && nr.WaveformBar != "" {
-					rn.WaveformBar = nr.WaveformBar
-				}
-			} else if st != nil {
-				if rawTxt, distTxt, _, err := st.LoadLocalDocument(cn.RawID); err == nil {
-					rn.RawPlaintext = rawTxt
-					rn.DistilledPlaintext = distTxt
-					if strings.TrimSpace(distTxt) != "" {
-						rn.Summary = distTxt
-					} else if strings.TrimSpace(rawTxt) != "" {
-						rn.Summary = rawTxt
-					}
-				}
-				if c.Vault != nil && (rn.Layer == "" || rn.Layer == "episodic") {
-					if vLayer := c.Vault.LoadLocalDocumentLayer(cn.RawID); vLayer != "" {
-						rn.Layer = vLayer
-					}
-				}
-			}
-		}
-		if rn.Layer == "" {
-			rn.Layer = "episodic"
-		}
-		counts[rn.Layer]++
-		resolvedNodes = append(resolvedNodes, rn)
-	}
-
-	// Merge any local Noetic records not yet present in graph nodes when Noetic layer is enabled
-	if allowNoetic && weights["noetic"] > 0 {
-		for nid, nr := range noeticByID {
-			if seenUnitRaw[nid] {
-				continue
-			}
-			nodeID := "unit:" + nid
-			w := weights["noetic"]
-			addrURI := strings.TrimSpace(nr.AddressURI)
-			parentCellNodeID := ""
-			if addrURI != "" {
-				ck := extractLocalCellKey(addrURI)
-				if ck != "" {
-					parentCellNodeID = "cell:" + ck
-					if cIdx, ok := cellIdxByNodeID[parentCellNodeID]; ok {
-						resolvedNodes[cIdx].MemberCount++
-					} else {
-						cellIdxByNodeID[parentCellNodeID] = len(resolvedNodes)
-						resolvedNodes = append(resolvedNodes, LocalResolvedGraphNode{
-							GraphNode: GraphNode{
-								ID:          parentCellNodeID,
-								RawID:       ck,
-								NodeType:    "cell",
-								Layer:       "noetic",
-								LayerWeight: w,
-								AddressURI:  ck,
-								Weight:      w,
-								MemberCount: 1,
-							},
-							Summary: ck + " (noetic)",
-						})
-						cellCnt++
-						counts["noetic"]++
-					}
-				}
-			} else {
-				for _, cited := range nr.CitedUnitIDs {
-					if pc := unitCellByRawID[strings.TrimSpace(cited)]; pc != "" {
-						parentCellNodeID = pc
-						if cIdx, ok := cellIdxByNodeID[parentCellNodeID]; ok {
-							resolvedNodes[cIdx].MemberCount++
-						}
-						break
-					}
-				}
-			}
-			deg := len(nr.CitedUnitIDs)
-			if parentCellNodeID != "" {
-				deg++
-			}
-			resolvedNodes = append(resolvedNodes, LocalResolvedGraphNode{
-				GraphNode: GraphNode{
-					ID:           nodeID,
-					RawID:        nid,
-					NodeType:     "unit",
-					Layer:        "noetic",
-					LayerWeight:  w,
-					ParentID:     parentCellNodeID,
-					AddressURI:   addrURI,
-					WaveformBar:  nr.WaveformBar,
-					Weight:       w,
-					OccurredAt:   nr.OccurredAt,
-					CitedUnitIDs: nr.CitedUnitIDs,
-					Degree:       deg,
-				},
-				Summary:            nr.QueryText,
-				RawPlaintext:       "Q: " + nr.QueryText + "\nA: " + nr.AnswerText,
-				DistilledPlaintext: nr.AnswerText,
-			})
-			unitCnt++
-			counts["noetic"]++
-			if parentCellNodeID != "" {
-				edges = append(edges, GraphEdge{
-					Source: nodeID,
-					Target: parentCellNodeID,
-					Kind:   "member_of",
-					Layer:  "noetic",
-					Weight: w,
-				})
-			}
-			for _, cited := range nr.CitedUnitIDs {
-				edges = append(edges, GraphEdge{
-					Source: nodeID,
-					Target: "unit:" + cited,
-					Kind:   "cites",
-					Layer:  "noetic",
-					Weight: w,
-				})
-			}
-		}
-	}
-
-	return LocalResolvedGraph{
-		Layers:       graphResp.Layers,
-		LayerWeights: weights,
-		Nodes:        resolvedNodes,
-		Edges:        edges,
-		Stats: GraphStats{
-			TotalNodes:      len(resolvedNodes),
-			TotalEdges:      len(edges),
-			CellCount:       cellCnt,
-			UnitCount:       unitCnt,
-			LayerNodeCounts: counts,
-		},
-	}, nil
-}
-
-func extractLocalCellKey(addrURI string) string {
-	trimmed := strings.TrimSpace(addrURI)
-	if trimmed == "" {
-		return ""
-	}
-	if parts := strings.Split(trimmed, "/"); len(parts) >= 3 {
-		if idx := strings.IndexByte(parts[2], '#'); idx > 0 {
-			return parts[2][:idx]
-		}
-		return parts[2]
-	} else if idx := strings.IndexByte(trimmed, '#'); idx > 0 {
-		return trimmed[:idx]
-	}
-	return trimmed
-}
-
-// BuildBlindGraph synthesizes a local fallback GraphResponse from `thin_vault_docs` and `thin_vault_noetic`.
-func (l *LocalVaultTransport) BuildBlindGraph(_ context.Context, req BlindGraphRequest) (GraphResponse, error) {
-	if l.Vault == nil || l.Vault.db == nil {
-		return GraphResponse{Success: true, Version: "v1"}, nil
-	}
-	if err := l.Vault.verifyTransportScope(req.Scope); err != nil {
-		return GraphResponse{}, err
-	}
-	layerFilter := make(map[string]bool, len(req.Layers))
-	for _, ly := range req.Layers {
-		t := strings.ToLower(strings.TrimSpace(ly))
-		if t != "" {
-			layerFilter[t] = true
-		}
-	}
-	weights := map[string]float64{"background": 1.0, "episodic": 1.0, "noetic": 1.0}
-	for k, v := range req.LayerWeights {
-		weights[strings.ToLower(strings.TrimSpace(k))] = v
-	}
-
-	rows, err := l.Vault.db.Query(`SELECT doc_id, layer, occurred_at, address_uri, waveform_bar FROM thin_vault_docs ORDER BY occurred_at DESC`)
-	if err != nil {
-		return GraphResponse{}, err
-	}
-	defer rows.Close()
-
-	var nodes []GraphNode
-	var edges []GraphEdge
-	counts := map[string]int{"background": 0, "episodic": 0, "noetic": 0}
-	cellSet := make(map[string]int)
-
-	for rows.Next() {
-		var docID, layer, addrURI, waveBar string
-		var occ int64
-		if err := rows.Scan(&docID, &layer, &occ, &addrURI, &waveBar); err != nil {
-			continue
-		}
-		if layer == "" {
-			layer = "episodic"
-		}
-		if len(layerFilter) > 0 && !layerFilter[layer] {
-			continue
-		}
-		w := weights[layer]
-		if w <= 0 {
-			continue
-		}
-		cellKey := extractLocalCellKey(addrURI)
-		if cellKey == "" {
-			cellKey = "C6:L1:LOCAL"
-		}
-		cellNodeID := "cell:" + cellKey
-		if _, exists := cellSet[cellNodeID]; !exists {
-			cellSet[cellNodeID] = len(nodes)
-			nodes = append(nodes, GraphNode{
-				ID:          cellNodeID,
-				RawID:       cellKey,
-				NodeType:    "cell",
-				Layer:       layer,
-				LayerWeight: w,
-				AddressURI:  cellKey,
-				Weight:      w,
-				MemberCount: 1,
-			})
-			counts[layer]++
-		} else {
-			nodes[cellSet[cellNodeID]].MemberCount++
-		}
-
-		unitNodeID := "unit:" + docID
-		nodes = append(nodes, GraphNode{
-			ID:          unitNodeID,
-			RawID:       docID,
-			NodeType:    "unit",
-			Layer:       layer,
-			LayerWeight: w,
-			ParentID:    cellNodeID,
-			AddressURI:  addrURI,
-			WaveformBar: waveBar,
-			Weight:      w,
-			OccurredAt:  occ,
-		})
-		counts[layer]++
-		edges = append(edges, GraphEdge{
-			Source: unitNodeID,
-			Target: cellNodeID,
-			Kind:   "member_of",
-			Layer:  layer,
-			Weight: w,
-		})
-	}
-
-	return GraphResponse{
-		Success:      true,
-		Version:      "v1",
-		Layers:       req.Layers,
-		LayerWeights: weights,
-		Nodes:        nodes,
-		Edges:        edges,
-		Stats: GraphStats{
-			TotalNodes:      len(nodes),
-			TotalEdges:      len(edges),
-			CellCount:       len(cellSet),
-			UnitCount:       len(nodes) - len(cellSet),
-			LayerNodeCounts: counts,
-		},
-	}, nil
 }

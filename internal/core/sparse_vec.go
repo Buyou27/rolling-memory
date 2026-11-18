@@ -883,20 +883,23 @@ func (e *Engine) UnitEnergyVector(unitID string) (UnitEnergyProfile, bool) {
 	return e.unitEnergyVectorByIndex(u), true
 }
 
+// UnitGroupVector 返回单元 unitID 的词族级动态能量稀疏向量（组内幂等 max 包络，Nats），
+// 不做句内 dyad 展开：与 UnitEnergyVector().GroupVector 逐位一致，供批量定权路径避免 O(L^2) 短语展开。
+func (e *Engine) UnitGroupVector(unitID string) (SparseVector, bool) {
+	if e == nil || e.Index == nil || e.Index.N == 0 || unitID == "" {
+		return SparseVector{}, false
+	}
+	u, ok := e.Index.LookupUnit(unitID)
+	if !ok {
+		return SparseVector{}, false
+	}
+	return e.unitGroupVector(u), true
+}
+
 func (e *Engine) unitEnergyVectorByIndex(u int32) UnitEnergyProfile {
 	idx := e.Index
 	st := e.ensureClusterState()
-	sc := e.ensureQueryScratch(idx.N, st.clusterN)
-	highDFThresh := idx.HighDFThreshold()
-	prof := st.buildUnitGroupProfileWithPos(idx, sc, u, highDFThresh, false)
-	groupVec := prof.toSparseVector()
-	for i := range groupVec.Entries {
-		g := groupVec.Entries[i].ID
-		groupVec.Entries[i].DF = idx.TermDF(g)
-		if m, okM := idx.TermMass(g); okM && m > 0 {
-			groupVec.Entries[i].SelfInfoNats = m
-		}
-	}
+	groupVec := e.unitGroupVector(u)
 
 	entries := st.docEntriesOf(u)
 	var dyads []rmDyad
@@ -905,6 +908,7 @@ func (e *Engine) unitEnergyVectorByIndex(u int32) UnitEnergyProfile {
 	} else {
 		dyads, _ = st.extractDocDyadsInto(entries, nil, nil)
 	}
+	highDFThresh := idx.HighDFThreshold()
 	var phraseEntries []SparseEntry
 	for _, pair := range dyads {
 		posts := st.phrasePostings(pair)
@@ -950,6 +954,26 @@ func (e *Engine) unitEnergyVectorByIndex(u int32) UnitEnergyProfile {
 		GroupVector:  groupVec,
 		PhraseVector: BuildSparseVector(phraseEntries),
 	}
+}
+
+// unitGroupVector 实时计算单元 u 的词族级动态能量稀疏向量（组内幂等 max 包络，Nats）。
+// 只遍历该单元自身的词项条目，不做句内 dyad 展开；批量调用方（如认知图谱逐单元定权）
+// 用它可以避免 O(L^2) 短语展开，同时保持与 UnitEnergyVector 的 GroupVector 逐位一致。
+func (e *Engine) unitGroupVector(u int32) SparseVector {
+	idx := e.Index
+	st := e.ensureClusterState()
+	sc := e.ensureQueryScratch(idx.N, st.clusterN)
+	highDFThresh := idx.HighDFThreshold()
+	prof := st.buildUnitGroupProfileWithPos(idx, sc, u, highDFThresh, false)
+	v := prof.toSparseVector()
+	for i := range v.Entries {
+		g := v.Entries[i].ID
+		v.Entries[i].DF = idx.TermDF(g)
+		if m, okM := idx.TermMass(g); okM && m > 0 {
+			v.Entries[i].SelfInfoNats = m
+		}
+	}
+	return v
 }
 
 // ClusterEnergyProfile 表达单个「认知簇（EntityCluster 或 SpacetimeCluster）」的动态能量稀疏向量画像：
@@ -1099,17 +1123,23 @@ func (e *Engine) EntityClusterEnergyVector(groups []uint64) (ClusterEnergyProfil
 
 func (e *Engine) clusterEnergyFromUnits(units []int32, epID int32) ClusterEnergyProfile {
 	idx := e.Index
-	st := e.ensureClusterState()
-	sc := e.ensureQueryScratch(idx.N, st.clusterN)
-	highDFThresh := idx.HighDFThreshold()
-
 	unitIDs := make([]string, len(units))
-	var envVec, meetVec SparseVector
-	var linearSum float64
+	vecs := make([]SparseVector, len(units))
 	for i, u := range units {
 		unitIDs[i] = idx.UnitIDs[u]
-		up := st.buildUnitGroupProfileWithPos(idx, sc, u, highDFThresh, false)
-		uv := up.toSparseVector()
+		vecs[i] = e.unitGroupVector(u)
+	}
+	return ClusterEnergyProfileFromVectors(units, unitIDs, vecs, epID)
+}
+
+// ClusterEnergyProfileFromVectors 由已计算好的成员词族动态能量稀疏向量合成簇画像：
+// 跨成员上确界包络 ∨、交集下确界 ∧、成员能量算术和（仅作冗余度分母）与同源回声冗余率。
+// 供批量调用方复用逐单元向量，避免为同一成员重复构建 profile。
+func ClusterEnergyProfileFromVectors(units []int32, unitIDs []string, vecs []SparseVector, epID int32) ClusterEnergyProfile {
+	var envVec, meetVec SparseVector
+	var linearSum float64
+	for i := range vecs {
+		uv := vecs[i]
 		linearSum += uv.TotalMassNats
 		if i == 0 {
 			envVec = uv
@@ -1119,22 +1149,22 @@ func (e *Engine) clusterEnergyFromUnits(units []int32, epID int32) ClusterEnergy
 			meetVec = IntersectionMeet(meetVec, uv)
 		}
 	}
-	for i := range envVec.Entries {
-		g := envVec.Entries[i].ID
-		envVec.Entries[i].DF = idx.TermDF(g)
-		if m, okM := idx.TermMass(g); okM && m > 0 {
-			envVec.Entries[i].SelfInfoNats = m
-		}
-	}
 	var echoRed float64
 	if linearSum > envVec.TotalMassNats && linearSum > 0 {
 		echoRed = math.Max(0, math.Min(1.0, 1.0-envVec.TotalMassNats/linearSum))
+	}
+	memberCount := len(units)
+	if memberCount == 0 {
+		memberCount = len(vecs)
+	}
+	if unitIDs == nil {
+		unitIDs = make([]string, memberCount)
 	}
 	return ClusterEnergyProfile{
 		EpisodeID:           epID,
 		MemberUnits:         units,
 		MemberUnitIDs:       unitIDs,
-		ClusterDF:           len(units),
+		ClusterDF:           memberCount,
 		LinearSumMassNats:   linearSum,
 		EchoRedundancyRatio: echoRed,
 		EnvelopeVector:      envVec,

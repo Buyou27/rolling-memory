@@ -98,32 +98,3 @@ func DotUnit(a, b []float32) float64 {
 	}
 	return sum
 }
-
-// Cosine computes the cosine similarity between two float32 vectors in [-1, 1].
-func Cosine(a, b []float32) float64 {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	if n == 0 {
-		return 0
-	}
-	var dot, na, nb float64
-	for i := 0; i < n; i++ {
-		va, vb := float64(a[i]), float64(b[i])
-		dot += va * vb
-		na += va * va
-		nb += vb * vb
-	}
-	if na <= 1e-24 || nb <= 1e-24 {
-		return 0
-	}
-	c := dot / math.Sqrt(na*nb)
-	if c > 1.0 {
-		return 1.0
-	}
-	if c < -1.0 {
-		return -1.0
-	}
-	return c
-}

@@ -68,10 +68,3 @@ func CountTokens(text string) int {
 	}
 	return tokenzr.Count(text)
 }
-
-// SetDefaultTokenCounter 注册全局默认 tokenz-r 词元计数器（宿主在 init 中注入真实 bpe/tokenz-r 实现；传 nil 无操作）。
-func SetDefaultTokenCounter(fn TokenCounterFunc) {
-	if fn != nil {
-		defaultTokenCounter.Store(fn)
-	}
-}

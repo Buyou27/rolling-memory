@@ -189,108 +189,33 @@ type IngestResponse struct {
 
 // QueryHit is a single ranked document ID and weight breakdown.
 type QueryHit struct {
-	UnitID              string   `json:"id"`
-	Layer               string   `json:"layer,omitempty"`
-	CitedUnitIDs        []string `json:"cited_unit_ids,omitempty"`
-	OccurredAt          int64    `json:"occurred_at,omitempty"`
-	NarratedAt          int64    `json:"narrated_at,omitempty"`
-	IngestedAt          int64    `json:"ingested_at,omitempty"`
-	AuthorHash          uint64   `json:"author_h,omitempty"`
-	DocHash             uint64   `json:"doc_h,omitempty"`
-	BlockHash           uint64   `json:"block_h,omitempty"`
-	LineStart           int      `json:"line_start,omitempty"`
-	LineEnd             int      `json:"line_end,omitempty"`
-	LayerWeight         float64  `json:"layer_weight,omitempty"`
-	AddressURI          string   `json:"address_uri"`
-	AddressCoord64      uint64   `json:"address_coord64"`
-	WaveformBar         string   `json:"waveform_bar"`
-	WaveScore           float64  `json:"wave_score"`
-	CellWormhole        float64  `json:"cell_wormhole"`
-	ManifoldGain        float64  `json:"manifold_gain"`
-	FinalWeight         float64  `json:"final_weight"`
-	PlasticityGate      float64  `json:"plasticity_gate,omitempty"`
-	KeptSentenceIndices []int    `json:"kept_sentence_indices,omitempty"`
-	CompressionRatio    float64  `json:"compression_ratio,omitempty"`
-}
-
-// BlindGraphRequest describes the source-agnostic unified graph topology request.
-type BlindGraphRequest struct {
-	TenantID     string             `json:"tenant_id,omitempty"`
-	Scope        string             `json:"scope,omitempty"`
-	UserID       string             `json:"user_id,omitempty"`
-	Layers       []string           `json:"layers,omitempty"`         // ["background", "episodic", "noetic"]
-	LayerWeights map[string]float64 `json:"layer_weights,omitempty"`  // {"background": 1.0, "episodic": 1.0, "noetic": 1.2}
-	CenterUnitID string             `json:"center_unit_id,omitempty"` // Optional focal unit/cell ID
-	IncludeCells *bool              `json:"include_cells,omitempty"`
-	IncludeUnits *bool              `json:"include_units,omitempty"`
-	MaxNodes     int                `json:"max_nodes,omitempty"`
-	MaxEdges     int                `json:"max_edges,omitempty"`
-}
-
-// GraphNode is a single topology node of the resolved graph.
-type GraphNode struct {
-	ID           string   `json:"id"`
-	RawID        string   `json:"raw_id"`
-	NodeType     string   `json:"node_type"` // "super_cell" | "cell" | "unit"
-	Layer        string   `json:"layer"`     // "background" | "episodic" | "noetic"
-	LayerWeight  float64  `json:"layer_weight,omitempty"`
-	ParentID     string   `json:"parent_id,omitempty"`
-	AddressURI   string   `json:"address_uri,omitempty"`
-	WaveformBar  string   `json:"waveform_bar,omitempty"`
-	Weight       float64  `json:"weight"`
-	MemberCount  int      `json:"member_count,omitempty"`
-	OccurredAt   int64    `json:"occurred_at,omitempty"`
-	CitedUnitIDs []string `json:"cited_unit_ids,omitempty"`
-	Degree       int      `json:"degree"`
-}
-
-// GraphEdge is a directed topology edge of the resolved graph.
-type GraphEdge struct {
-	Source string  `json:"source"`
-	Target string  `json:"target"`
-	Kind   string  `json:"kind"` // "hierarchy" | "member_of" | "weak_edge" | "cooccur_bridge" | "cites"
-	Layer  string  `json:"layer,omitempty"`
-	Weight float64 `json:"weight"`
-}
-
-// GraphStats holds node and edge distribution statistics across the three layers.
-type GraphStats struct {
-	TotalNodes      int            `json:"total_nodes"`
-	TotalEdges      int            `json:"total_edges"`
-	CellCount       int            `json:"cell_count"`
-	UnitCount       int            `json:"unit_count"`
-	LayerNodeCounts map[string]int `json:"layer_node_counts"`
-}
-
-// GraphResponse is the topology envelope.
-type GraphResponse struct {
-	Success      bool               `json:"success"`
-	Version      string             `json:"version"`
-	TenantID     string             `json:"tenant_id,omitempty"`
-	Scope        string             `json:"scope,omitempty"`
-	UserID       string             `json:"user_id,omitempty"`
-	Layers       []string           `json:"layers"`
-	LayerWeights map[string]float64 `json:"layer_weights"`
-	Nodes        []GraphNode        `json:"nodes"`
-	Edges        []GraphEdge        `json:"edges"`
-	Stats        GraphStats         `json:"stats"`
-}
-
-// LocalResolvedGraphNode pairs a GraphNode with locally resolved plaintext from the client's SQLite Vault.
-type LocalResolvedGraphNode struct {
-	GraphNode
-	Summary            string `json:"summary"`
-	RawPlaintext       string `json:"raw_plaintext,omitempty"`
-	DistilledPlaintext string `json:"distilled_plaintext,omitempty"`
-}
-
-// LocalResolvedGraph holds the complete client-resolved three-layer cognitive graph.
-type LocalResolvedGraph struct {
-	Layers       []string                 `json:"layers"`
-	LayerWeights map[string]float64       `json:"layer_weights"`
-	Nodes        []LocalResolvedGraphNode `json:"nodes"`
-	Edges        []GraphEdge              `json:"edges"`
-	Stats        GraphStats               `json:"stats"`
+	UnitID         string   `json:"id"`
+	Layer          string   `json:"layer,omitempty"`
+	CitedUnitIDs   []string `json:"cited_unit_ids,omitempty"`
+	OccurredAt     int64    `json:"occurred_at,omitempty"`
+	NarratedAt     int64    `json:"narrated_at,omitempty"`
+	IngestedAt     int64    `json:"ingested_at,omitempty"`
+	AuthorHash     uint64   `json:"author_h,omitempty"`
+	DocHash        uint64   `json:"doc_h,omitempty"`
+	BlockHash      uint64   `json:"block_h,omitempty"`
+	LineStart      int      `json:"line_start,omitempty"`
+	LineEnd        int      `json:"line_end,omitempty"`
+	LayerWeight    float64  `json:"layer_weight,omitempty"`
+	AddressURI     string   `json:"address_uri"`
+	AddressCoord64 uint64   `json:"address_coord64"`
+	WaveformBar    string   `json:"waveform_bar"`
+	WaveScore      float64  `json:"wave_score"`
+	CellWormhole   float64  `json:"cell_wormhole"`
+	ManifoldGain   float64  `json:"manifold_gain"`
+	FinalWeight    float64  `json:"final_weight"`
+	// DirectWeight is the candidate's own query-collision evidence (Nats), carried
+	// from the kernel hit: delivery stopping uses it as the reference scale so the
+	// Hop1/Hop2 energy borrowed from same-cluster neighbors cannot raise the
+	// natural decay envelope against an isolated-date complementary record.
+	DirectWeight        float64 `json:"direct_weight,omitempty"`
+	PlasticityGate      float64 `json:"plasticity_gate,omitempty"`
+	KeptSentenceIndices []int   `json:"kept_sentence_indices,omitempty"`
+	CompressionRatio    float64 `json:"compression_ratio,omitempty"`
 }
 
 // LocalNoeticRecord represents a downstream-maintained L3 Noetic memory record (Query + Retrieved Sentences + Answer)
@@ -2262,7 +2187,6 @@ func (v *Vault) WarmupCorpusSnapshot(ctx context.Context) error {
 		_ = snap.ensureSnapshotCoreEngine(v)
 	}
 	noetics, _ := v.loadActiveNoeticRecords()
-	_, _ = v.EpisodicIndexFaultDiagnostics()
 	if zdb, err := openZCodeReadOnly(); err == nil && zdb != nil {
 		var one int
 		_ = zdb.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master LIMIT 1`).Scan(&one)
@@ -2342,44 +2266,14 @@ func (v *Vault) loadCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, e
 		v.slotCacheMu.RLock()
 		cached := v.snapRef.snap
 		lastTime := v.snapRef.lastSnapTime
-		alreadyRefreshing := v.snapRef.refreshing
 		genVerified := v.snapRef.snapVerifiedGen == v.snapRef.snapWriteGen
 		v.slotCacheMu.RUnlock()
-		if cached != nil && genVerified && len(cached.docs) >= 2048 && cached.episodicCodecKey == string(episodicCodecKey) {
-			if (lastTime.IsZero() || time.Since(lastTime) >= 5*time.Minute) && !alreadyRefreshing {
-				v.slotCacheMu.Lock()
-				if !v.snapRef.refreshing {
-					v.snapRef.refreshing = true
-					v.snapRef.lastSnapTime = time.Now()
-					go func() {
-						defer func() {
-							v.slotCacheMu.Lock()
-							v.snapRef.refreshing = false
-							v.slotCacheMu.Unlock()
-						}()
-						if !lastTime.IsZero() {
-							time.Sleep(200 * time.Millisecond)
-						}
-						_, _ = v.buildCorpusSnapshot(context.Background())
-						_, _ = v.computeEpisodicIndexFaultDiagnostics(episodicCodecKey)
-					}()
-				}
-				v.slotCacheMu.Unlock()
-			}
+		if cached != nil && genVerified && len(cached.docs) >= 2048 && !lastTime.IsZero() && cached.episodicCodecKey == string(episodicCodecKey) {
 			return cached, nil
 		}
 	}
 	return v.buildCorpusSnapshot(context.WithoutCancel(ctx))
 }
-
-// packDocCacheEntry packs one document into its cached canonical core.Doc slot
-// form. It must stay semantically identical to the full-rescan packing in
-// buildCorpusSnapshot so incrementally appended entries are indistinguishable
-// from cold-built ones.
-func (v *Vault) packDocCacheEntry(docID, rawText string, occ int64) vaultCachedDocSlots {
-	return v.packDocCacheEntryWithExtractor(nil, docID, rawText, occ)
-}
-
 func (v *Vault) packDocCacheEntryWithExtractor(te *plain.TermExtractor, docID, rawText string, occ int64) vaultCachedDocSlots {
 	cDoc := v.extractVaultCoreDoc(te, docID, occ, rawText)
 	allHashes := make([]uint64, 0, len(cDoc.Terms))
@@ -3068,13 +2962,15 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 					WaveformBar:    d.waveBar,
 					WaveScore:      zh.Energy,
 					FinalWeight:    zh.Energy,
+					DirectWeight:   zh.Direct,
 				})
 			} else {
 				hits = append(hits, QueryHit{
-					UnitID:      zh.UnitID,
-					Layer:       LayerEpisodic,
-					WaveScore:   zh.Energy,
-					FinalWeight: zh.Energy,
+					UnitID:       zh.UnitID,
+					Layer:        LayerEpisodic,
+					WaveScore:    zh.Energy,
+					FinalWeight:  zh.Energy,
+					DirectWeight: zh.Direct,
 				})
 			}
 		}

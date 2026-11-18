@@ -5,7 +5,6 @@ package memcore
 
 import (
 	"sync/atomic"
-	"time"
 )
 
 // clockNow is the single, overridable wall-clock source for read-side time-dependent operators
@@ -22,14 +21,6 @@ func InjectedNowUnix() (int64, bool) {
 		return (*fn)(), true
 	}
 	return 0, false
-}
-
-// NowUnix returns the kernel's current reference timestamp (seconds since epoch).
-func NowUnix() int64 {
-	if fn := clockNow.Load(); fn != nil {
-		return (*fn)()
-	}
-	return time.Now().Unix()
 }
 
 // SetNowUnixForTest replaces the kernel wall clock with fn and returns a restore function.

@@ -291,41 +291,6 @@ func (c CandidateRow) Map() map[string]any {
 	return result
 }
 
-// Map renders the row with the raw schema keys and nulls preserved.
-func (m MetaEdge) Map() map[string]any {
-	return map[string]any{
-		"id": m.ID, "scope": m.Scope, "meta_kind": m.MetaKind,
-		"lhs_id": m.LHSID, "rhs_id": m.RHSID, "status": m.Status,
-		"evidence_anchor": m.EvidenceAnchor, "created_at": m.CreatedAt,
-		"created_by": m.CreatedBy, "revert_of": m.RevertOf,
-	}
-}
-
-// Map renders the row with the raw schema keys and nulls preserved.
-func (e Event) Map() map[string]any {
-	return map[string]any{
-		"id": e.ID, "scope": e.Scope, "op": e.Op, "refs_json": e.RefsJSON,
-		"note": e.Note, "created_at": e.CreatedAt, "created_by": e.CreatedBy,
-	}
-}
-
-// Map renders the row with the raw schema keys and nulls preserved.
-func (m Mention) Map() map[string]any {
-	return map[string]any{
-		"id": m.ID, "scope": m.Scope, "trace_hash": m.TraceHash,
-		"span_start": m.SpanStart, "span_end": m.SpanEnd, "surface": m.Surface,
-		"node_id": m.NodeID, "created_at": m.CreatedAt,
-	}
-}
-
-// Map renders the row with the raw schema keys and nulls preserved.
-func (a Alias) Map() map[string]any {
-	return map[string]any{
-		"node_id": a.NodeID, "alias": a.Alias, "norm_alias": a.NormAlias,
-		"source": a.Source, "created_at": a.CreatedAt,
-	}
-}
-
 // TraceOptions carries add_trace keyword arguments.
 type TraceOptions struct {
 	Session    string
@@ -813,10 +778,6 @@ func pyRound(value float64, digits int) float64 {
 // pyStrip mirrors str.strip() for the whitespace set used by ids.
 func pyStrip(value string) string {
 	return speech.TrimSpace(value)
-}
-
-func isPySpace(char rune) bool {
-	return speech.IsPySpace(char)
 }
 
 // pyRepr mirrors a simple repr() for error messages.

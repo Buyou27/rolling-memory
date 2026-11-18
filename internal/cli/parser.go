@@ -320,9 +320,6 @@ func (a *Args) FlagPtr(name string) *bool {
 	return &value
 }
 
-// Raw returns the stored value, preserving --turn's str-or-int type.
-func (a *Args) Raw(name string) any { return a.values[name] }
-
 // List returns a variadic positional slice.
 func (a *Args) List(name string) []string {
 	value, _ := a.values[name].([]string)
@@ -652,7 +649,7 @@ func commonOptions() []*Option {
 		stringOption([]string{"--db"}, "db", nil, "database path"),
 		stringOption([]string{"--scope"}, "scope", nil, "memory scope"),
 		choiceOption([]string{"--mode"}, "mode", []string{"local", "cloud"}, nil,
-			"override mode for this command"),
+			"override mode for this command (only local is accepted)"),
 		flagOption([]string{"--json"}, "json", false, ""),
 	}
 }
@@ -807,16 +804,16 @@ func BuildParser() *Parser {
 		intOption([]string{"--timeout"}, "timeout", 0, "per-call timeout seconds"),
 		intOption([]string{"--max-tokens"}, "max_tokens", 0, "per-call max tokens"),
 		intOption([]string{"--context-chars"}, "context_chars", 0, "context character cap"),
-		intOption([]string{"--top-k", "--raw-limit"}, "raw_limit", 0, "remote engine hit cap"),
+		intOption([]string{"--top-k", "--raw-limit"}, "raw_limit", 0, "engine hit cap"),
 		intOption([]string{"--corpus-limit"}, "corpus_limit", 0, "ingest only N corpus rows (smoke)"),
 		intOption([]string{"--progress-every"}, "progress_every", 20, "progress line interval"),
-		flagOption([]string{"--rebuild"}, "rebuild", false, "reset the isolated cloud scope (purge every remembered unit), then re-ingest the corpus"),
-		flagOption([]string{"--reuse-prepare"}, "reuse_prepare", false, "reuse an identical isolated corpus only after exact remote-set verification"),
+		flagOption([]string{"--rebuild"}, "rebuild", false, "reset the isolated evaluation scope (purge every remembered unit), then re-ingest the corpus"),
+		flagOption([]string{"--reuse-prepare"}, "reuse_prepare", false, "reuse an identical isolated corpus only after exact manifest-set verification"),
 		flagOption([]string{"--verify-prepare"}, "verify_prepare", false, "verify exact manifest/corpus/remote-unit equality without ingesting or scoring"),
 		choiceOption([]string{"--pulse-tokenizer"}, "pulse_tokenizer", []string{"product", "standard", "trigram"}, "product",
 			"blind pulse tokenizer: product = default max-capability product tokenizer (128k BPE substring pieces + companion-word expansion + unit/date beacons; default) | standard = SDK native surface+subword | trigram = trigram-window segmenter"),
-		choiceOption([]string{"--pulse-mode"}, "pulse_mode", []string{"local_plain", "pulse_cipher", "pulse_plain"}, "local_plain",
-			"evaluation arm (each registered in its own isolated scope & store): local_plain (本地明文, default; the only arm available in local mode) | pulse_cipher (脉冲密文, requires cloud mode) | pulse_plain (脉冲明文, requires cloud mode)"),
+		choiceOption([]string{"--pulse-mode"}, "pulse_mode", []string{"local_plain"}, "local_plain",
+			"evaluation arm: local_plain (本地明文, default and the only supported arm)"),
 		flagOption([]string{"--no-verify"}, "no_verify", false,
 			"skip the sha256 check of the bundled data files"),
 		floatOption([]string{"--denoise-ratio"}, "denoise_ratio", 0.0,
@@ -827,7 +824,7 @@ func BuildParser() *Parser {
 	}
 	evalCmd := &command{
 		Name: "eval", Path: []string{"eval"},
-		Help:    "isolated cloud-SDK evaluation (jobs: import → ingest → run → grade)",
+		Help:    "isolated local evaluation (jobs: import → ingest → run → grade)",
 		Options: evalOptions, SubDest: "eval_command", DefaultSub: "all",
 		Subcommands: []*command{
 			evalStage("all", "full pipeline: import → ingest → run → grade (same as a bare `rmem eval`)"),
@@ -857,7 +854,7 @@ func BuildParser() *Parser {
 	}
 
 	syncCmd := &command{
-		Name: "sync", Path: []string{"sync"}, Help: "optional cloud sync (cloud mode only)",
+		Name: "sync", Path: []string{"sync"}, Help: "local alignment status and reconcile (zero network egress)",
 		SubDest: "sync_command",
 	}
 	syncStatusCmd := &command{

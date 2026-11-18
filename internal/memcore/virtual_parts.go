@@ -29,30 +29,6 @@ func IsThinkingScratchpadTurn(content string) bool {
 	return strings.HasPrefix(strings.TrimSpace(content), "[thinking]")
 }
 
-// ExtractToolUseTargetFilePath extracts the target file path from a structured [tool_use <Name>] {...} message,
-// even when the message itself is a short Read/Edit command under minVirtualPartTokens.
-func ExtractToolUseTargetFilePath(content string) string {
-	trimmed := strings.TrimSpace(content)
-	if !strings.HasPrefix(trimmed, "[tool_use") {
-		return ""
-	}
-	closeBr := strings.IndexByte(trimmed, ']')
-	if closeBr <= 0 || closeBr+1 >= len(trimmed) {
-		return ""
-	}
-	jsonBody := strings.TrimSpace(trimmed[closeBr+1:])
-	var m map[string]any
-	if err := json.Unmarshal([]byte(jsonBody), &m); err == nil && m != nil {
-		if fp := firstMapString(m, "file_path", "path", "target_file", "filename"); fp != "" {
-			return fp
-		}
-	}
-	if fp := extractJSONStringFieldRaw(jsonBody, "file_path"); fp != "" {
-		return fp
-	}
-	return extractJSONStringFieldRaw(jsonBody, "path")
-}
-
 // ExtractVirtualCodeAndToolParts extracts structured code files, patches, and tool outputs from a message body
 // without mutating the original message text. An optional prevToolFilePath supplies the target file path
 // from an immediately preceding [tool_use Read/Edit] turn when the current [tool_result] turn omits the path.

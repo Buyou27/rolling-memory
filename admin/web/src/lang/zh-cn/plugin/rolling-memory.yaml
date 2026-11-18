@@ -533,63 +533,6 @@ atmLeaderboard:
     judgeCorrect: '判对 {correct}/{scored}'
     copyBtn: 复制命令
     protoDetailTitle: 内置 atmbench-official-v1 协议栈与官方评判组件核对清单
-cloudAccount:
-    title: 云端会员中心 · API Key 与云端记忆管理（申请制预览）
-    serverLabel: '云端服务地址：'
-    connected: 已连接
-    applyIntro: '云端模式采用申请制，当前逐步开放试用；在线注册已关闭，请通过申请邮箱联系开通。'
-    applyNote: '请在邮件中说明使用场景与预计规模；开通后我们会发放试用账号，再回到此处登录绑定。'
-    applyBtn: 发送申请邮件
-    applyContact: '申请邮箱：'
-    supportContact: '支持邮箱：'
-    tabLogin: 会员登录
-    tabApply: 申请试用
-    username: 用户名
-    password: 密码
-    rotateOnLogin: 登录时顺带轮换并获取最新明文 API Key（自动写入本机 cloud.key）
-    signInBtn: 立即登录并绑定云端记忆
-    keyMask: '密钥掩码：'
-    colKeyMask: 密钥掩码
-    signedKeyMask: '数据面签名钥：'
-    signedKeyExpires: '到期：'
-    signedKeyErrorTitle: 签名钥换取失败（端侧唯一记忆凭据）
-    keyFile: '已保存至：'
-    rotateDefaultKey: 轮换默认 API Key
-    signOut: 退出登录
-    freshKeyTitle: '已签发最新明文 API Key（已自动写入本机 cloud.key）：'
-    copy: 复制
-    tabMemory: 云端记忆管理
-    statActiveUnits: 活跃记忆单元
-    statNodes: 图谱节点数
-    statTraces: 原文轮次
-    statConflicts: 待决冲突
-    refresh: 刷新
-    recallPlaceholder: 输入线索从洛灵自知记忆引擎检索召回...
-    recallBtn: 检索召回
-    subjectS: 主体 (S)
-    predicateX: 关系 (X)
-    objectO: 客体 (O)
-    addToCloud: + 写入云端
-    actions: 操作
-    forgetConfirm: 确定在云端撤销/删除该条记忆？
-    delete: 删除
-    tabDevices: API Key 与多设备管理
-    deviceNamePlaceholder: 新客户端/设备名称（如 MacBook-ZCode）
-    createKey: 新增独立 API Key
-    device: 设备名称
-    kind: 类型
-    status: 状态
-    statusActive: 生效中
-    statusRevoked: 已停用
-    rotate: 轮换
-    revoke: 停用
-    msgSignedIn: 登录成功，已绑定云端记忆账户！
-    msgSignedOut: 已退出云端账户
-    msgKeyRotated: 默认 API Key 已轮换并更新至本机！
-    msgFillAll: 请填写完整的主体 (S)、关系 (X) 与客体 (O)
-    msgSaved: 已成功写入云端记忆！
-    msgRetracted: 云端记忆已撤销/删除
-    msgCopied: 已复制到剪贴板
 
 recall:
     readerOwner: owner（受众限制可能无法覆盖所有来源）

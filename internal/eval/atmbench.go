@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	local "github.com/rocareer/rolling-memory/sdk/go/local"
 )
@@ -510,26 +510,6 @@ func NormalizeATMQType(rawQType, answer string) string {
 	}
 	return "open_end"
 }
-
-// atmSessionID derives the `session_id` an SGM item is written under.
-//
-// The remote gateway takes a trace's session from its locator prefix
-// (`ExtractSessionKeyFromLocator`) and builds episode
-// containers per session, so this value *is* the episode boundary of the memory
-// structure. Writing one session per item yields one episode per item.
-//
-// The corpus is therefore sessionised on its own structured fields, following the
-// AML shape where one session carries a series of related turns:
-//   - media: one calendar day at one place (city, falling back to the first
-//     location component) — a day out, a conference day, a venue visit;
-//   - mail: one calendar day — a day's correspondence.
-//
-// The key is content-derived (not sequence-derived), so re-ingesting the same
-// corpus targets the same sessions and the same locators.
-// ATMSessionID 暴露 ATM 语料的会话分桶口径（同日邮件 / 同日同城的媒体），
-// 供外部记忆系统对照评测复用同一会话边界；与内部 atmSessionID 同源。
-func ATMSessionID(it *ATMSGMItem) string { return atmSessionID(it) }
-
 func atmSessionID(it *ATMSGMItem) string {
 	if it == nil {
 		return "ev:undated:noloc"
@@ -802,46 +782,38 @@ func ComputeATMOfficialCompositeBps(main1013R10, hard31R10 float64) float64 {
 	return PyRound(10000.0*(0.70*main1013R10+0.30*hard31R10), 2)
 }
 
-// SelectATMAdaptiveDelivery selects the 0-64 smart adaptive delivery prefix from ranked hits
-// using the parameter-free natural energy decay envelope E(u_k) >= E(u_1)/e within maxChars.
-// When hits carry no energy gradient (e.g. unweighted test stubs), it falls back to min(10, len(retIDs)).
-func SelectATMAdaptiveDelivery(hits []local.ResolvedHit, retIDs []string, byID map[string]*ATMSGMItem, maxItems, maxChars int) int {
-	if len(retIDs) == 0 {
+// SelectATMAdaptiveDelivery selects the smart adaptive delivery prefix from ranked
+// hits with the kernel's zero-floor natural decay envelope (`core.NaturalDecayPrefixCount`):
+// the window is the longest prefix whose total collision energy stays at or above
+// e^-1 of the peak candidate's own (direct) collision energy, capped at maxItems.
+//
+// Two properties follow from the kernel definition and replace the previous local
+// rule: (1) the reference scale is the peak's direct evidence, so cluster
+// corroboration the peak borrowed from same-day neighbors cannot raise the envelope
+// against an isolated-date record carrying complementary evidence; (2) the window is
+// bounded by the item cap alone — no byte or character budget truncates it, because a
+// single long record is already bounded at ingestion by the shared tokenz-r chunker.
+// Zero collision yields an empty window and an all-equal plateau expands to the cap,
+// so no branch carries a fixed item count.
+func SelectATMAdaptiveDelivery(hits []local.ResolvedHit, retIDs []string, maxItems int) int {
+	if len(retIDs) == 0 || len(hits) == 0 {
 		return 0
 	}
 	if maxItems <= 0 {
 		maxItems = 64
 	}
-	if maxChars <= 0 {
-		maxChars = 64000
-	}
-	hasGradient := len(hits) == len(retIDs) && len(hits) > 1 && hits[0].FinalWeight > 0 && hits[len(hits)-1].FinalWeight < hits[0].FinalWeight
-	if !hasGradient {
-		if len(retIDs) < 10 {
-			return len(retIDs)
-		}
-		return 10
-	}
-	e1 := hits[0].FinalWeight
-	k := 0
-	chars := 0
-	lim := len(retIDs)
-	if lim > maxItems {
-		lim = maxItems
-	}
-	for idx := 0; idx < lim; idx++ {
-		cLen := 0
-		if it := byID[retIDs[idx]]; it != nil {
-			cLen = len(it.FullText)
-		}
-		if hits[idx].FinalWeight >= e1/math.E && chars+cLen <= maxChars {
-			k = idx + 1
-			chars += cLen
-		} else {
+	ranked := make([]core.Hit, 0, len(hits))
+	for i := range hits {
+		if i >= len(retIDs) {
 			break
 		}
+		ranked = append(ranked, core.Hit{
+			UnitID: retIDs[i],
+			Energy: hits[i].FinalWeight,
+			Direct: hits[i].DirectWeight,
+		})
 	}
-	return k
+	return core.NaturalDecayPrefixCount(ranked, maxItems)
 }
 
 // FormatATMEvidencePayload 按 ATM-Bench 官方 MMRag 规范将 Top-K 证据格式化为答题输入。
@@ -1167,7 +1139,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 				evHit := len(q.EvidenceIDs) > 0 && r10 > 0
 				allHit10 := len(q.EvidenceIDs) > 0 && r10 >= 1.0-1e-9
 
-				qRetrieveK := SelectATMAdaptiveDelivery(rawHits, retIDs, byID, retrieveK, 64000)
+				qRetrieveK := SelectATMAdaptiveDelivery(rawHits, retIDs, retrieveK)
 				if opts.Oracle {
 					qRetrieveK = len(retIDs)
 				}
@@ -1585,13 +1557,4 @@ func sha256FileHex(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -302,33 +301,6 @@ func loadRecallLedgerStat(home, dbPath, scope string, sinceUnix int64) *recallLe
 	recallLedgerStatCache[cacheKey] = recallLedgerCacheEntry{sig: sig, at: time.Now(), stat: stat}
 	recallLedgerStatMu.Unlock()
 	return stat
-}
-
-// mergeRecentHookEvents 按时间戳降序归并钩子日志与事实账本的最近事件，去重同秒同类型事件并截断至 12 条。
-func mergeRecentHookEvents(a, b []HookEventItem) []HookEventItem {
-	if len(b) == 0 {
-		return append([]HookEventItem{}, a...)
-	}
-	if len(a) == 0 {
-		return append([]HookEventItem{}, b...)
-	}
-	combined := make([]HookEventItem, 0, len(a)+len(b))
-	seen := map[string]bool{}
-	for _, item := range append(append([]HookEventItem{}, a...), b...) {
-		key := fmt.Sprintf("%d:%s", item.Timestamp, item.Event)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		combined = append(combined, item)
-	}
-	sort.SliceStable(combined, func(i, j int) bool {
-		return combined[i].Timestamp > combined[j].Timestamp
-	})
-	if len(combined) > 12 {
-		combined = combined[:12]
-	}
-	return combined
 }
 
 // mergeRecallSource 把一次聚合行并入来源计数。

@@ -150,14 +150,6 @@ func executablePath() string {
 	}
 	return executable
 }
-
-func chmodShim(path string) error {
-	if err := os.Chmod(path, 0o755); err != nil && runtime.GOOS != "windows" {
-		return err
-	}
-	return nil
-}
-
 func ensureBinary(options InstallOptions, report *Report) {
 	if options.Binary != "" {
 		report.Add("*", "binary", options.Binary, StatusSkipped, "custom --binary given; no shim written")

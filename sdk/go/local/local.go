@@ -116,25 +116,31 @@ type SegmenterPackOptions struct {
 }
 
 type QueryHit struct {
-	UnitID              string   `json:"id"`
-	Layer               string   `json:"layer,omitempty"`
-	CitedUnitIDs        []string `json:"cited_unit_ids,omitempty"`
-	OccurredAt          int64    `json:"occurred_at,omitempty"`
-	NarratedAt          int64    `json:"narrated_at,omitempty"`
-	IngestedAt          int64    `json:"ingested_at,omitempty"`
-	AuthorHash          uint64   `json:"author_h,omitempty"`
-	DocHash             uint64   `json:"doc_h,omitempty"`
-	BlockHash           uint64   `json:"block_h,omitempty"`
-	LineStart           int      `json:"line_start,omitempty"`
-	LineEnd             int      `json:"line_end,omitempty"`
-	AddressURI          string   `json:"address_uri"`
-	AddressCoord64      uint64   `json:"address_coord64"`
-	WaveScore           float64  `json:"wave_score"`
-	ManifoldGain        float64  `json:"manifold_gain"`
-	FinalWeight         float64  `json:"final_weight"`
-	KeptSentenceIndices []int    `json:"kept_sentence_indices,omitempty"`
-	RawText             string   `json:"raw_text,omitempty"`
-	DistilledText       string   `json:"distilled_text,omitempty"`
+	UnitID         string   `json:"id"`
+	Layer          string   `json:"layer,omitempty"`
+	CitedUnitIDs   []string `json:"cited_unit_ids,omitempty"`
+	OccurredAt     int64    `json:"occurred_at,omitempty"`
+	NarratedAt     int64    `json:"narrated_at,omitempty"`
+	IngestedAt     int64    `json:"ingested_at,omitempty"`
+	AuthorHash     uint64   `json:"author_h,omitempty"`
+	DocHash        uint64   `json:"doc_h,omitempty"`
+	BlockHash      uint64   `json:"block_h,omitempty"`
+	LineStart      int      `json:"line_start,omitempty"`
+	LineEnd        int      `json:"line_end,omitempty"`
+	AddressURI     string   `json:"address_uri"`
+	AddressCoord64 uint64   `json:"address_coord64"`
+	WaveScore      float64  `json:"wave_score"`
+	ManifoldGain   float64  `json:"manifold_gain"`
+	FinalWeight    float64  `json:"final_weight"`
+	// DirectWeight is the candidate's own query-collision evidence (Nats): direct
+	// term collisions plus within-record structural/proximity terms, excluding the
+	// Hop1/Hop2 energy borrowed from same-cluster neighbors. Delivery stopping uses
+	// it as the reference scale so borrowed cluster mass cannot raise the envelope
+	// against an isolated-date record that carries complementary evidence.
+	DirectWeight        float64 `json:"direct_weight,omitempty"`
+	KeptSentenceIndices []int   `json:"kept_sentence_indices,omitempty"`
+	RawText             string  `json:"raw_text,omitempty"`
+	DistilledText       string  `json:"distilled_text,omitempty"`
 }
 
 type LocalNoeticRecord struct {
