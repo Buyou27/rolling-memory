@@ -528,7 +528,18 @@ func TestEpisodicSourceScanWriteAcrossScales(t *testing.T) {
 			}
 			defer memory.Close()
 			started := time.Now()
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			// The deadline is only a hang guard for a functional assertion, so it
+			// scales with the fixture size instead of pinning every scale to one
+			// wall-clock constant: shared CI runners pace pages far slower than a
+			// workstation (10k units is ~400 pages at the default page size).
+			budget := 120 * time.Second
+			if scaled := time.Duration(count) * 75 * time.Millisecond; scaled > budget {
+				budget = scaled
+			}
+			if raceDetectorEnabled && count >= 10000 {
+				t.Skip("10k scale case exceeds the race-detector hang-guard budget")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			defer cancel()
 			pages := 0
 			for {

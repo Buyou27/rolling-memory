@@ -4,12 +4,15 @@
 package api_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -71,5 +74,81 @@ func TestLocalRecallEpisodicTurnKeepsUserPromptOutsideHitWindow(t *testing.T) {
 	}
 	if rendered := result.Render(6000); !strings.Contains(rendered, "[user]") {
 		t.Fatalf("rendered recall must show the user line: %s", rendered)
+	}
+}
+
+// TestLocalRecallLongTurnFollowerChunkKeepsSpeakerAttribution pins the attribution
+// rule for messages longer than one chunk: only the opening chunk of a segment
+// carries the inline role tag, so a hit that lands on a later chunk must inherit
+// the speaker named by the turn's first segment (read from verified source text,
+// never inferred from content).
+func TestLocalRecallLongTurnFollowerChunkKeepsSpeakerAttribution(t *testing.T) {
+	memory := newMemory(t)
+	client, err := memory.ThinClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	filler := strings.Repeat("alpha 缓存断言复跑全部包，确认没有回归之后再汇报结论。", 800)
+	speech := filler + "zebra quokka evidence 只出现在后片。"
+	prompt, err := json.Marshal(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": "请记录这次长回复的结论"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := json.Marshal(map[string]any{
+		"type":    "assistant",
+		"message": map[string]any{"role": "assistant", "content": speech},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "long-turn.jsonl")
+	if err := os.WriteFile(path, append(append(prompt, '\n'), append(answer, '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turnRef := "@ref:jsonl:" + path + ":0"
+	chunks := episodicunit.Chunk(episodicunit.Text("assistant", speech), episodicunit.TokenBudget)
+	if len(chunks) < 2 {
+		t.Fatalf("fixture did not split into chunks: %d", len(chunks))
+	}
+	for index, chunk := range chunks {
+		id := fmt.Sprintf("ep_long_chunk_%d", index)
+		pointer := fmt.Sprintf("%s#1.%d", turnRef, index)
+		packet, _ := client.Vault.PackBlindPacket(id, chunk, testNow+int64(index))
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow+int64(index), pointer, turnRef, chunk, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+			t.Fatalf("save chunk %d: %v", index, err)
+		}
+	}
+	thinclient.PurgeLegacyTables(memory.Store.DB())
+
+	result, err := memory.Recall(api.RecallRequest{Cue: "zebra quokka evidence", NoCrystallize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Bands) == 0 {
+		t.Fatalf("expected a delivered band, got none (raw=%d)", len(result.RawHits))
+	}
+	var authors []string
+	for _, band := range result.Bands {
+		nodes, _ := band["nodes"].([]map[string]any)
+		for _, node := range nodes {
+			if list, ok := node["authors"].([]string); ok {
+				authors = append(authors, list...)
+			}
+		}
+	}
+	if len(authors) == 0 {
+		t.Fatalf("follower-chunk hit delivered without speaker attribution: %+v", result.Bands)
+	}
+	found := false
+	for _, author := range authors {
+		if author == "assistant" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("speaker attribution = %v, want assistant from the turn's first segment", authors)
 	}
 }

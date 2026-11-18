@@ -394,6 +394,14 @@ func (in *indexDocInserter) addTerm(hash uint64, occ int, bits uint16, flags uin
 // caller can fall back to the ExportDocs path. Scores stay bit-identical
 // because both paths feed the same indexDocInserter rule and finalizeMasses.
 func (e *Engine) buildIndexWithDelta(delta []Doc) *Index {
+	return e.buildIndexWithDeltaDrop(delta, nil)
+}
+
+// buildIndexWithDeltaDrop is the single CSR rebuild entry for appends and
+// deletions: delta docs override same-ID old units, drop IDs are excluded from
+// both sides. The rebuilt index is exactly what BuildIndex would produce over
+// the surviving document set (same inserter and finalizeMasses).
+func (e *Engine) buildIndexWithDeltaDrop(delta []Doc, drop map[string]struct{}) *Index {
 	if e == nil || e.Index == nil || e.Index.N == 0 {
 		return nil
 	}
@@ -403,15 +411,27 @@ func (e *Engine) buildIndexWithDelta(delta []Doc) *Index {
 	}
 	latestDelta := make(map[string]Doc, len(delta))
 	for _, doc := range delta {
-		if doc.UnitID != "" {
-			latestDelta[doc.UnitID] = doc
+		if doc.UnitID == "" {
+			continue
 		}
+		if drop != nil {
+			if _, gone := drop[doc.UnitID]; gone {
+				continue
+			}
+		}
+		latestDelta[doc.UnitID] = doc
 	}
 	idSet := make(map[string]struct{}, e.Index.N+len(latestDelta))
 	for _, id := range e.Index.UnitIDs {
-		if id != "" {
-			idSet[id] = struct{}{}
+		if id == "" {
+			continue
 		}
+		if drop != nil {
+			if _, gone := drop[id]; gone {
+				continue
+			}
+		}
+		idSet[id] = struct{}{}
 	}
 	for id := range latestDelta {
 		idSet[id] = struct{}{}

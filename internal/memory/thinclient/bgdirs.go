@@ -103,12 +103,19 @@ type BackgroundSyncReport struct {
 // successful sync converges them and the extension costs bandwidth on the failure path only.
 const backgroundSyncWorkers = 4
 
-// backgroundChunkerGeneration names the chunking rule that produced a stored inventory. Chunk
-// boundaries follow the sizing rule, not the file alone, so the identity of that rule is stored
-// per file and compared on the stat fast path: rows written by an older rule are re-chunked
-// instead of trusted. Change this string in the same commit as any chunking rule change (budget
-// unit, budget value, packing rule) so existing inventories converge on the next sync.
-const backgroundChunkerGeneration = "tokenz-r/1024/rmbp-v1"
+// backgroundChunkerStampVersion is the chunking-rule version recorded in
+// thin_vault_bg_files.chunker_generation. Chunk boundaries follow the sizing rule,
+// not the file alone, so the identity of that rule is stored per file and compared
+// on the stat fast path: rows written by an older rule are re-chunked instead of
+// trusted. Bump this in the same commit as any chunking rule change (budget unit,
+// budget value, packing rule); the sync test asserts it against the canonical
+// tokenzr.ChunkerVersion so a rule bump cannot pass silently.
+const backgroundChunkerStampVersion = 1
+
+// backgroundChunkerGeneration names the chunking rule that produced a stored
+// inventory. The rung is derived from TargetChunkTokens and the version from
+// backgroundChunkerStampVersion, so the stamp cannot drift from the rule it names.
+var backgroundChunkerGeneration = fmt.Sprintf("tokenz-r/%d/rmbp-v%d", TargetChunkTokens, backgroundChunkerStampVersion)
 
 // backgroundTrackedFile is one `thin_vault_bg_files` row loaded as the previous sync's baseline for
 // the stat fast path, the content-SHA comparison and per-chunk delta detection.

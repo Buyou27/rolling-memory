@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 	"modernc.org/sqlite"
 )
 
@@ -1116,8 +1117,12 @@ func TestBackgroundSyncRechunksWhenChunkerGenerationChanges(t *testing.T) {
 	if err := db.QueryRow(`SELECT chunker_generation FROM thin_vault_bg_files WHERE abs_path = ?`, path).Scan(&stamped); err != nil {
 		t.Fatalf("read chunker generation: %v", err)
 	}
-	if stamped != "" && stamped == "carrier/16000" {
-		t.Fatalf("stored chunker generation was not refreshed: %q", stamped)
+	// The stored stamp is the migration gate: it must name the canonical chunk
+	// contract (background rung + tokenzr.ChunkerVersion). Pinning it here makes a
+	// chunker rule bump fail loud instead of silently keeping old boundaries.
+	wantGeneration := fmt.Sprintf("tokenz-r/%d/rmbp-v%d", thinclient.TargetChunkTokens, tokenzr.ChunkerVersion)
+	if stamped != wantGeneration {
+		t.Fatalf("stored chunker generation = %q, want %q: a chunker rule bump must change the background stamp and plan the re-chunk", stamped, wantGeneration)
 	}
 	fourth, err := client.SyncBackgroundDirs(ctx)
 	if err != nil {

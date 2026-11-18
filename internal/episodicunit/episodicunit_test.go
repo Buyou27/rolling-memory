@@ -66,7 +66,7 @@ func TestChunkSplitsOnlyAtSentenceBoundaries(t *testing.T) {
 		}
 	}
 	joined := strings.Join(chunks, "")
-	if strings.ReplaceAll(joined, " ", "") != strings.ReplaceAll(text, " ", "") {
+	if joined != text {
 		t.Fatalf("chunking must not drop or rewrite speech")
 	}
 }
@@ -131,5 +131,28 @@ func TestSegmentUnitsPointsEveryChunkOfALongSegment(t *testing.T) {
 		if unit.RefPointer != "" {
 			t.Fatalf("unaddressable segment must not carry a pointer, got %q", unit.RefPointer)
 		}
+	}
+}
+
+// TestSegmentUnitsPreservesLongSpeechExactly pins the no-loss contract at the
+// adapter boundary: the unit texts concatenate back to the rendered segment byte
+// for byte (the role tag opens the first chunk), and no multi-sentence unit
+// exceeds the token rung.
+func TestSegmentUnitsPreservesLongSpeechExactly(t *testing.T) {
+	sentence := "先确认缓存失效断言并复跑全部包，确认没有回归之后再汇报结论。"
+	segment := episodic.Segment{Role: "assistant", Text: strings.Repeat(sentence, 500), Index: 2}
+	units := SegmentUnits("mem:test", "@ref:zcode:s1:m1", segment, 1793102400, true)
+	if len(units) < 2 {
+		t.Fatalf("expected a long segment to split, got %d unit(s)", len(units))
+	}
+	var joined strings.Builder
+	for _, unit := range units {
+		joined.WriteString(unit.Text)
+		if n := tokenzr.Count(unit.Text); n > TokenBudget && strings.Count(unit.Text, "。") > 1 {
+			t.Fatalf("unit %d carries %d tokens over the rung with multiple sentences", unit.ChunkIndex, n)
+		}
+	}
+	if got, want := joined.String(), Text(segment.Role, segment.Text); got != want {
+		t.Fatalf("unit texts do not concatenate to the rendered segment (len got=%d want=%d)", len(got), len(want))
 	}
 }

@@ -902,6 +902,10 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 	bands := make([]map[string]any, 0, topK)
 	rawHits := make([]map[string]any, 0, len(hits))
 	sourceUnavailable := make(map[string]bool)
+	// turnAuthors caches the speaker tags named by a turn's opening segment, so a
+	// long message whose later chunks carry no inline role tag still attributes
+	// every hit of that message to its speaker without re-reading the source.
+	turnAuthors := make(map[string][]string, len(hits))
 
 	// Group hits by turn, but deliver only units independently verified against
 	// their indexed source identity; neighboring content has no implicit authority.
@@ -937,6 +941,18 @@ func (m *Memory) thinClientRecall(req RecallRequest) (*recall.Result, error) {
 		h.RawPlaintext = resolved
 		h.DistilledPlaintext = resolved
 		h.Authors = thinclient.RoleTaggedAuthors(resolved)
+		if len(h.Authors) == 0 {
+			// A message longer than one chunk carries its role tag only in the
+			// opening chunk; the segment's own source text names the speaker, and
+			// that tag is read from verified source, never inferred from content.
+			key := fmt.Sprintf("%s#%d", ref, segmentIndex)
+			if cached, ok := turnAuthors[key]; ok {
+				h.Authors = cached
+			} else if tags := tc.Vault.SegmentSpeakerTags(ref, segmentIndex); len(tags) > 0 {
+				h.Authors = tags
+				turnAuthors[key] = tags
+			}
+		}
 		group := groups[ref]
 		if group == nil {
 			group = &episodicTurnGroup{ref: ref, rawPointer: actualRef, hitIndex: segmentIndex, score: h.FinalWeight, unitID: h.UnitID, authors: h.Authors}

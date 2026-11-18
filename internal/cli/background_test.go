@@ -83,20 +83,6 @@ func (s *backgroundCloudStub) requests() ([]backgroundCloudRequest, []background
 	return append([]backgroundCloudRequest(nil), s.ingests...), append([]backgroundCloudRequest(nil), s.purges...)
 }
 
-func (s *backgroundCloudStub) setFailures(ingest, purge bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ingestFails = ingest
-	s.purgeFails = purge
-}
-
-func configureBackgroundCloud(t *testing.T, stub *backgroundCloudStub) {
-	t.Helper()
-	t.Setenv("ROLLING_MEMORY_BRAIN_URL", stub.server.URL)
-	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "test-memory-key")
-	t.Setenv("ROLLING_MEMORY_OPEN_MEMORY_USER", "10")
-}
-
 func TestBackgroundCLILocalModeNeverContactsBrain(t *testing.T) {
 	env := newEnv(t)
 	stub := newBackgroundCloudStub(t)

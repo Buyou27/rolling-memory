@@ -238,24 +238,6 @@ func IncarnationHierarchyPrefixes(rawIncarnation string) []string {
 	return out
 }
 
-// ResolveEffectiveLocus implements the priority rule (Event Locus > Presence Locus):
-// an explicit event locus on the assertion takes precedence; when absent, it inherits the presence locus.
-func ResolveEffectiveLocus(explicitEventLocus, presenceLocus string, maxRunes int) string {
-	locus := NormalizeHierarchicalPath(explicitEventLocus)
-	if locus == "" {
-		locus = strings.TrimSpace(explicitEventLocus)
-	}
-	if locus == "" {
-		locus = NormalizeHierarchicalPath(presenceLocus)
-	}
-	if maxRunes > 0 {
-		if runes := []rune(locus); len(runes) > maxRunes {
-			locus = string(runes[:maxRunes])
-		}
-	}
-	return locus
-}
-
 // ParseGitRemoteSlug extracts "<org>/<repo>" from standard SSH or HTTPS git remote URLs.
 func ParseGitRemoteSlug(remoteURL string) string {
 	u := strings.TrimSpace(remoteURL)

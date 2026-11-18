@@ -2257,19 +2257,15 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 		lastUnit      int32
 		unitCount     int
 		multiDocCount int
-		clusters      map[int32]struct{}
-		partners      map[uint64]float64
+		clusters      []int32
+		partners      []uint64
 		weight        float64
 	}
 	families := make(map[uint64]*famInfo, len(idx.DF))
 	get := func(id uint64) *famInfo {
 		f := families[id]
 		if f == nil {
-			f = &famInfo{
-				lastUnit: -1,
-				clusters: make(map[int32]struct{}),
-				partners: make(map[uint64]float64),
-			}
+			f = &famInfo{lastUnit: -1}
 			families[id] = f
 		}
 		return f
@@ -2290,7 +2286,7 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 			if f.lastUnit != u32 {
 				f.lastUnit = u32
 				f.unitCount++
-				f.clusters[cl] = struct{}{}
+				f.clusters = append(f.clusters, cl)
 				docFams = append(docFams, f)
 			}
 		}
@@ -2318,30 +2314,31 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 			if i > 0 && pair == rootPairs[i-1] {
 				continue
 			}
-			get(pair.a).partners[pair.b]++
-			get(pair.b).partners[pair.a]++
+			get(pair.a).partners = append(get(pair.a).partners, pair.b)
+			get(pair.b).partners = append(get(pair.b).partners, pair.a)
 		}
 	}
-	var keys []uint64
 	for _, f := range families {
-		keys = keys[:0]
-		var total float64
-		for k, c := range f.partners {
-			keys = append(keys, k)
-			total += c
-		}
-		if len(keys) > 1 {
-			sortUint64Asc(keys)
-		}
-		var entropy float64
-		if total > 0 {
-			for _, k := range keys {
-				p := f.partners[k] / total
-				entropy -= p * math.Log(p)
+		sortInt32Asc(f.clusters)
+		clusters := 0
+		for i, c := range f.clusters {
+			if i == 0 || c != f.clusters[i-1] {
+				clusters++
 			}
 		}
+		sortUint64Asc(f.partners)
+		total := float64(len(f.partners))
+		var entropy float64
+		for i := 0; i < len(f.partners); {
+			j := i + 1
+			for j < len(f.partners) && f.partners[j] == f.partners[i] {
+				j++
+			}
+			p := float64(j-i) / total
+			entropy -= p * math.Log(p)
+			i = j
+		}
 		df := f.unitCount
-		clusters := len(f.clusters)
 		effDF := 1.0
 		if df > 1 {
 			if clusters < 1 {

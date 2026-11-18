@@ -61,20 +61,6 @@ func isValidStrangerSuffix(s string) bool {
 	return len(s) == 1 && s[0] >= 'a' && s[0] <= 'z'
 }
 
-// FormatAnonymousStrangerLabel formats a deterministic base-category + ordinal label for an unnamed
-// person individual ("人1", "人2" for CJK scripts; "Person 1", "Person 2" otherwise — following the
-// universal ontology that any unnamed entity falls back to its base category noun + ordinal ID).
-func FormatAnonymousStrangerLabel(suffix string, preferCJK bool) string {
-	suf := strings.TrimSpace(suffix)
-	if suf == "" {
-		suf = "1"
-	}
-	if preferCJK {
-		return "人" + suf
-	}
-	return "Person " + suf
-}
-
 // IsAnonymousStrangerLabel reports whether s is a materialized anonymous stranger individual entity label
 // (e.g., "人1", "人2", "Person 1", "Person 2", "陌生人1", "Stranger 1"), distinct from raw unresolved role placeholders.
 func IsAnonymousStrangerLabel(s string) bool {

@@ -3,10 +3,6 @@
 
 package memcore
 
-import (
-	"strings"
-)
-
 // DeliveryLang specifies the target language for presentation-layer meta-labels
 // in memory delivery and LLM context scaffolding.
 //
@@ -35,21 +31,6 @@ const (
 	// DefaultDeliveryLang is the system-wide default label language ("en").
 	DefaultDeliveryLang = DeliveryLangEN
 )
-
-// NormalizeDeliveryLang canonicalizes a raw language code into a supported DeliveryLang,
-// defaulting to DeliveryLangEN ("en") when empty or unrecognized.
-func NormalizeDeliveryLang(lang string) DeliveryLang {
-	switch strings.ToLower(strings.TrimSpace(lang)) {
-	case "", "en", "eng", "english", "default":
-		return DeliveryLangEN
-	case "zh", "cn", "zh-cn", "zh-tw", "zh_cn", "zh_tw", "chinese", "han":
-		return DeliveryLangZH
-	case "bi", "bilingual", "dual", "en+zh", "zh+en":
-		return DeliveryLangBilingual
-	default:
-		return DefaultDeliveryLang
-	}
-}
 
 // LabelKey identifies a canonical presentation-layer meta-label in the translation table.
 type LabelKey uint8
@@ -753,40 +734,4 @@ var deliveryLabelTable = [labelKeyCount]LabelEntry{
 		ZH:        "何物",
 		Bilingual: "object/何物",
 	},
-}
-
-// Label returns the default English (DeliveryLangEN) string for key.
-func Label(key LabelKey) string {
-	return TranslateLabel(DefaultDeliveryLang, key)
-}
-
-// LabelFor returns the localized label for raw lang ("en" default, "zh", or "bilingual").
-func LabelFor(lang string, key LabelKey) string {
-	return TranslateLabel(NormalizeDeliveryLang(lang), key)
-}
-
-// TranslateLabel looks up key in O(1) for the normalized DeliveryLang.
-func TranslateLabel(lang DeliveryLang, key LabelKey) string {
-	if key >= labelKeyCount {
-		return ""
-	}
-	entry := deliveryLabelTable[key]
-	switch lang {
-	case DeliveryLangZH:
-		return entry.ZH
-	case DeliveryLangBilingual:
-		if entry.Bilingual != "" {
-			return entry.Bilingual
-		}
-		return entry.EN
-	default:
-		return entry.EN
-	}
-}
-
-// AllLabelEntries returns a copy of the complete translation catalog.
-func AllLabelEntries() []LabelEntry {
-	out := make([]LabelEntry, labelKeyCount)
-	copy(out, deliveryLabelTable[:])
-	return out
 }

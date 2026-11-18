@@ -785,37 +785,3 @@ func Tokenize(q string) []string {
 	compacted = append(compacted, SelectTopInformationTokens(out[:headN], actualHeadN)...)
 	return compacted
 }
-
-// OnlineDFConjugateBits computes the lightweight Bayesian cold-to-warm conjugate self-information (in bits)
-// driven solely by online document frequency (df, totalDocs) and literal Shannon capacity bChar.
-func OnlineDFConjugateBits(bChar, coldBits float64, df, totalDocs int) float64 {
-	if coldBits <= 0 {
-		coldBits = bChar
-	}
-	if totalDocs <= 0 || df <= 0 {
-		return coldBits
-	}
-	nFloat := float64(totalDocs)
-	dFloat := float64(df)
-	if dFloat > nFloat {
-		dFloat = nFloat
-	}
-	eSq := math.E * math.E
-	invE := 1.0 / math.E
-	alphaN := nFloat / (nFloat + eSq)
-
-	empBits := math.Log2((nFloat + 1.0) / (dFloat + 0.5))
-	if empBits < 0 {
-		empBits = 0
-	}
-	baseCarrier := math.Pow(math.Max(1.0, bChar), invE) * math.E
-	warmBits := baseCarrier + 0.5*math.E*empBits
-
-	priorWeight := 1.0 - alphaN
-	if dFloat >= 2.0 && coldBits > warmBits {
-		diff := coldBits - warmBits
-		conflictZ2 := (dFloat - 1.0) * diff * diff
-		priorWeight = priorWeight / (1.0 + conflictZ2)
-	}
-	return priorWeight*coldBits + (1.0-priorWeight)*warmBits
-}

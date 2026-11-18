@@ -843,13 +843,48 @@ func (v *Vault) EpisodicTurnDocuments(turnRef string) (map[string]string, error)
 // passes content verification. Recall delivery prepends it so the reader always sees what
 // the user asked, even when retrieval matched only later assistant segments.
 func (v *Vault) VerifiedTurnFirstSegment(turnRef string) (string, bool) {
+	bestID, bestPointer, ok := v.openingSegmentUnit(turnRef, 0)
+	if !ok {
+		return "", false
+	}
+	text, _, err := v.loadVerifiedEpisodicPointer(bestID, bestPointer, false)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// SegmentSpeakerTags returns the role tags the source segment carries, read from its
+// opening chunk (the only chunk of a long segment that holds the inline tag). The tag
+// is source text, never inferred from content; a segment without role tags reports
+// none. Callers attribute later chunks of the same message with it, because splitting
+// a long message must not lose who said it.
+func (v *Vault) SegmentSpeakerTags(turnRef string, segmentIndex int) []string {
+	if segmentIndex < 0 {
+		return nil
+	}
+	bestID, bestPointer, ok := v.openingSegmentUnit(turnRef, segmentIndex)
+	if !ok {
+		return nil
+	}
+	text, _, err := v.loadVerifiedEpisodicPointer(bestID, bestPointer, false)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return RoleTaggedAuthors(text)
+}
+
+// openingSegmentUnit locates the unit that holds a segment's opening chunk: a
+// whole-segment unit outranks any chunked variant, otherwise the smallest chunk index
+// wins. docIDs are sorted so map iteration cannot reorder the choice.
+func (v *Vault) openingSegmentUnit(turnRef string, segmentIndex int) (string, string, bool) {
 	turnRef = strings.TrimSpace(turnRef)
 	if v == nil || v.db == nil || turnRef == "" {
-		return "", false
+		return "", "", false
 	}
 	docs, err := v.EpisodicTurnDocuments(turnRef)
 	if err != nil || len(docs) == 0 {
-		return "", false
+		return "", "", false
 	}
 	ids := make([]string, 0, len(docs))
 	for id := range docs {
@@ -863,27 +898,22 @@ func (v *Vault) VerifiedTurnFirstSegment(turnRef string) (string, bool) {
 		if colon <= 0 || colon == len(pointer)-1 {
 			continue
 		}
-		_, segmentIndex, chunkIndex, hasSegment, hasChunk := splitPointerSegment(pointer[colon+1:])
-		if !hasSegment || segmentIndex != 0 {
+		_, index, chunkIndex, hasSegment, hasChunk := splitPointerSegment(pointer[colon+1:])
+		if !hasSegment || index != segmentIndex {
 			continue
 		}
 		if !hasChunk {
-			// A whole-segment `#0` unit outranks any chunked variant.
-			bestID, bestPointer, bestChunk = id, pointer, -1
-			break
+			// A whole-segment unit outranks any chunked variant.
+			return id, pointer, true
 		}
 		if bestChunk < 0 || chunkIndex < bestChunk {
 			bestID, bestPointer, bestChunk = id, pointer, chunkIndex
 		}
 	}
 	if bestID == "" {
-		return "", false
+		return "", "", false
 	}
-	text, _, err := v.loadVerifiedEpisodicPointer(bestID, bestPointer, false)
-	if err != nil || strings.TrimSpace(text) == "" {
-		return "", false
-	}
-	return text, true
+	return bestID, bestPointer, true
 }
 
 // SaveLocalEpisodicPointerIndexed stores a pointer and its canonical, plaintext-free

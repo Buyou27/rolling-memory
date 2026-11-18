@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Long-text units and text/code background files now keep the source text verbatim, including indentation and the whitespace at a cut point, and each one's token bound is checked against the exact text it stores rather than per-sentence estimates. A unit can no longer quietly exceed the 8,192-token rung through cross-boundary re-tokenisation; a single sentence that alone exceeds it is still kept whole instead of being cut.
 - Spreadsheet background files use the same exact-fit budget rule when a sheet is split into row blocks, and a row that alone exceeds the budget is kept whole instead of being cut.
+- A message long enough to be stored as several memory units now attributes every delivered part to the speaker named by the message's opening line, instead of leaving the parts after the first without a speaker. The attribution is read from the stored source, never guessed from the content.
 
 ## [0.0.4] - 2026-11-18
 

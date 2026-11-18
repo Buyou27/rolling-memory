@@ -68,3 +68,24 @@ func BenchmarkAppendCostProbe(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkDeleteCostProbe measures one resident deletion on a warm engine; the
+// setup (fresh build + cluster state) is excluded so the reading isolates the
+// delete path itself (CSR rebuild vs ExportDocs + BuildIndex).
+func BenchmarkDeleteCostProbe(b *testing.B) {
+	for _, n := range []int{1000, 3000} {
+		docs := appendProbeDocs(n)
+		key := fmt.Sprintf("%d", n)
+		b.Run("DeleteOne/"+key, func(b *testing.B) {
+			victim := fmt.Sprintf("probe-%05d", n/2)
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				eng := NewEngine(BuildIndex(docs))
+				eng.ensureClusterState()
+				b.StartTimer()
+				eng.DeleteDocs(victim)
+			}
+		})
+	}
+}

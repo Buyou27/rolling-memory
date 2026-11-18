@@ -576,20 +576,40 @@ func (e *Engine) DeleteDocs(unitIDs ...string) int {
 	if !present {
 		return 0
 	}
-	existing := e.ExportDocs()
-	kept := make([]Doc, 0, len(existing))
 	removed := 0
-	for _, d := range existing {
-		if _, drop := delSet[d.UnitID]; drop {
-			removed++
-			continue
+	var rebuilt *Index
+	if !e.HasDelta() {
+		// CSR snapshot rebuild: exclude the dropped IDs from the live snapshot
+		// instead of exporting every surviving document as a Doc. Delta overlay
+		// engines keep the ExportDocs path so masked/overlay semantics stay
+		// exactly as before.
+		for id := range delSet {
+			if e.Index != nil {
+				if _, ok := e.Index.LookupUnit(id); ok {
+					removed++
+				}
+			}
 		}
-		kept = append(kept, d)
+		if removed == 0 {
+			return 0
+		}
+		rebuilt = e.buildIndexWithDeltaDrop(nil, delSet)
 	}
-	if removed == 0 {
-		return 0
+	if rebuilt == nil {
+		existing := e.ExportDocs()
+		kept := make([]Doc, 0, len(existing))
+		for _, d := range existing {
+			if _, drop := delSet[d.UnitID]; drop {
+				removed++
+				continue
+			}
+			kept = append(kept, d)
+		}
+		if removed == 0 {
+			return 0
+		}
+		rebuilt = BuildIndex(kept)
 	}
-	rebuilt := BuildIndex(kept)
 	if e.mmapUnmap != nil {
 		_ = e.Close()
 	}

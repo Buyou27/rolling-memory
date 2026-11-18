@@ -12,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
-	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
 // SubjectCandidate represents an active subject band in the graph with pre-tokenized
@@ -650,30 +649,6 @@ func globalCorpusDFValue(feature string) int {
 	globalCorpusDFMu.RLock()
 	defer globalCorpusDFMu.RUnlock()
 	return globalCorpusTokenDF[feature]
-}
-
-// globalCorpusDFSnapshot returns the published table, its total document count,
-// and whether an online table is installed at all.
-func globalCorpusDFSnapshot() (table map[string]int, totalDocs int, installed bool) {
-	globalCorpusDFMu.RLock()
-	defer globalCorpusDFMu.RUnlock()
-	return globalCorpusTokenDF, globalCorpusTotalDocs, globalCorpusTokenDF != nil
-}
-
-// globalCorpusDFProbe returns one feature's frequency plus the totals; installed
-// reports whether an online table exists, and totalDocs falls back to the table
-// size when the stored count is non-positive.
-func globalCorpusDFProbe(feature string) (df int, totalDocs int, installed bool) {
-	globalCorpusDFMu.RLock()
-	defer globalCorpusDFMu.RUnlock()
-	if globalCorpusTokenDF == nil {
-		return 0, globalCorpusTotalDocs, false
-	}
-	totalDocs = globalCorpusTotalDocs
-	if totalDocs <= 0 {
-		totalDocs = len(globalCorpusTokenDF)
-	}
-	return globalCorpusTokenDF[feature], totalDocs, true
 }
 
 // publishGlobalCorpusDF installs a freshly built online DF table.
@@ -1563,31 +1538,4 @@ func DetectTopGateFilteredBand(rawPrompt, workspace string, bands []map[string]a
 		}
 	}
 	return bestTitle
-}
-
-// SetCorpusTokenDFForRecall 注入当前分区/金库的在线文档频次表 (df) 与总文档数 (totalDocs)，
-// 供 EndogenousDFConjugateBits 与 BPEShannonCompressionPurity 执行零高级算子的在线 DF 贝叶斯共轭洗脱。
-func SetCorpusTokenDFForRecall(df map[string]int, totalDocs int) {
-	publishGlobalCorpusDF(df, totalDocs)
-}
-
-// IsExtendedInflectedVerbRoot reports whether word is an open-class root in the 128k BPE merge tree
-// using pure BPE subword valence and Shannon stem neighborhoods (zero language-specific suffix strings).
-func IsExtendedInflectedVerbRoot(word string) bool {
-	w := strings.ToLower(strings.TrimSpace(word))
-	if tokenzr.BPEInflectionValence(w) >= 2 {
-		return true
-	}
-	if memcore.StringShannonBits(w) < memcore.AtomicConceptEntropyBits {
-		return false
-	}
-	_, _, cnt4k := tokenzr.BPEPrefixStats(w)
-	return tokenzr.BPEInflectionValence(w) >= 1 && cnt4k == 0 && tokenzr.EffectiveLexicalBits(w) >= 11.2
-}
-
-// IsExtendedInflectedVerbToken determines whether word is an already-inflected finite verb form
-// ("moved", "lives", "studies", "watches", "rusted") using pure BPE merge-tree terminal state
-// (tokenzr.IsAlreadyInflectedVerbToken) and Shannon Bit-Field morphological root alignment (zero suffix strings).
-func IsExtendedInflectedVerbToken(word string) bool {
-	return tokenzr.IsAlreadyInflectedVerbToken(word)
 }
