@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/rocareer/rolling-memory/internal/ids"
 )
 
 // Check inspects registrations and, when live, probes the selected launcher on
@@ -138,15 +140,32 @@ func validateMCPRegistration(harness Harness, options InstallOptions, path strin
 		return fmt.Errorf("server entry is not an object")
 	}
 	commandValue, _ := objectGet(object, "command")
-	command, ok := commandValue.(string)
-	if !ok || strings.TrimSpace(command) == "" {
+	command, commandOK := commandValue.(string)
+	argsValue, argsFound := objectGet(object, "args")
+	args, argsOK := asArray(argsValue)
+	if commandList, listOK := asArray(commandValue); listOK {
+		if harness.ID != "opencode" || len(commandList) != 2 || commandList[1] != "mcp" || argsFound {
+			return fmt.Errorf("command must be [executable, mcp]")
+		}
+		command = pyString(commandList[0])
+		commandOK = true
+		args = []any{"mcp"}
+		argsOK = true
+	}
+	if !commandOK || strings.TrimSpace(command) == "" {
 		return fmt.Errorf("command is missing")
 	}
 	if value, found := objectGet(object, "type"); found {
 		text, ok := value.(string)
-		if !ok || text != "stdio" {
-			return fmt.Errorf("transport type is not stdio")
+		want := "stdio"
+		if harness.ID == "opencode" {
+			want = "local"
 		}
+		if !ok || text != want {
+			return fmt.Errorf("transport type is not %s", want)
+		}
+	} else if harness.ID == "opencode" {
+		return fmt.Errorf("transport type is missing")
 	}
 	if value, found := objectGet(object, "transport"); found {
 		text, ok := value.(string)
@@ -162,16 +181,21 @@ func validateMCPRegistration(harness Harness, options InstallOptions, path strin
 			}
 		}
 	}
-	argsValue, found := objectGet(object, "args")
-	args, ok := asArray(argsValue)
-	if !found || !ok || len(args) != 1 {
+	if !argsFound && harness.ID != "opencode" || !argsOK || len(args) != 1 {
+		if harness.ID == "opencode" {
+			return fmt.Errorf("expected command [executable, mcp]")
+		}
 		return fmt.Errorf("expected args [mcp]")
 	}
 	arg, ok := args[0].(string)
 	if !ok || arg != "mcp" {
 		return fmt.Errorf("expected args [mcp]")
 	}
-	if value, found := objectGet(object, "env"); found {
+	envKey := "env"
+	if harness.ID == "opencode" {
+		envKey = "environment"
+	}
+	if value, found := objectGet(object, envKey); found {
 		env, ok := asObject(value)
 		if !ok {
 			return fmt.Errorf("env is not an object")
@@ -243,7 +267,7 @@ func SelectHarnesses(registry []Harness, names []string, detectedOnly bool) ([]H
 			for _, harness := range registry {
 				known = append(known, harness.ID)
 			}
-			return nil, fmt.Errorf("unknown harness %s; known: %s", pyRepr(name), strings.Join(known, ", "))
+			return nil, fmt.Errorf("unknown harness %s; known: %s", ids.QuotePyString(name), strings.Join(known, ", "))
 		}
 		selected := make([]Harness, 0, len(names))
 		for _, name := range names {

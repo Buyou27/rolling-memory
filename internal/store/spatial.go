@@ -4,6 +4,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -176,8 +177,8 @@ func (s *Store) ObserveSpatialEpisode(scope, assertionNodeID, world, carrier, lo
 		return
 	}
 	_ = db.EnsureMemcoreSchema(s.conn)
-	w := defaultIfEmpty(strings.TrimSpace(world), "actual")
-	c := defaultIfEmpty(strings.TrimSpace(carrier), "virtual")
+	w := cmp.Or(strings.TrimSpace(world), "actual")
+	c := cmp.Or(strings.TrimSpace(carrier), "virtual")
 	loc := memcore.NormalizeHierarchicalPath(locus)
 	if loc == "" {
 		loc = strings.TrimSpace(locus)
@@ -200,7 +201,7 @@ func (s *Store) ObserveSpatialEpisode(scope, assertionNodeID, world, carrier, lo
 		World:       w,
 		Carrier:     c,
 		Locus:       loc,
-		SessionKey:  defaultIfEmpty(session, "default"),
+		SessionKey:  cmp.Or(session, "default"),
 		TStart:      ts,
 		TEnd:        ts,
 		TSourceMin:  tSource,
@@ -419,7 +420,7 @@ func (s *Store) EnsureExplicitMetaEdge(scope, rawKind, lhsID, rhsID, evidence st
 		return err
 	}
 	hyphenKind := strings.ReplaceAll(canon, "_", "-")
-	return s.ensureActiveMetaEdge(scope, hyphenKind, lhsID, rhsID, defaultIfEmpty(evidence, "llm-closed-set"), clock.Unix())
+	return s.ensureActiveMetaEdge(scope, hyphenKind, lhsID, rhsID, cmp.Or(evidence, "llm-closed-set"), clock.Unix())
 }
 
 func (s *Store) ensureActiveMetaEdge(scope, metaKind, lhsID, rhsID, evidence string, now int64) error {

@@ -9,8 +9,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -70,7 +70,7 @@ func zcodePointerSession(pointer string) string {
 // 按游标取一页指针行，逐行分类；封条内容漂移到其他坐标的行重指并重封（含跨轮次重锚）。
 // 确证不存在的行不在此处回收——回收永远留在 `sync prune --apply --yes`；
 // 源不可读的行原样保留。返回 (扫描的指针行数, 实际修复的行数)。
-func healDriftedEpisodicPointers(ctx context.Context, memory *api.Memory, limit int) (int, int, error) {
+func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, limit int) (int, int, error) {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return 0, 0, errors.New("episodic heal requires an open local store")
 	}
@@ -146,7 +146,7 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *api.Memory, limit 
 			// 内联单元没有坐标可漂移，常规巡检不为其付分类成本。
 			continue
 		}
-		if api.ShouldYieldToForegroundRecall() {
+		if facade.ShouldYieldToForegroundRecall() {
 			break
 		}
 		scanned++

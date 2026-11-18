@@ -56,6 +56,15 @@
                 <el-button size="small" plain data-testid="btn-system-update" @click="showSystemUpdateDialog = true">
                     {{ t('plugin.rolling-memory.systemUpdate.openBtn') }}
                 </el-button>
+                <el-button
+                    size="small"
+                    plain
+                    data-testid="btn-open-system-service"
+                    @click="router.push('/admin/plugin/rolling-memory/system')"
+                >
+                    <Icon name="lucide-server-cog" :size="14" style="margin-right: 4px" />
+                    {{ t('plugin.rolling-memory.overview.systemServiceBtn') }}
+                </el-button>
                 <el-button type="primary" size="small" :loading="syncing" data-testid="btn-bg-sync" @click="handleSync">
                     {{ t('plugin.rolling-memory.overview.syncBtn') }}
                     <template v-if="syncing"> ({{ bgSyncPct }}%)</template>

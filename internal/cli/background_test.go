@@ -125,7 +125,7 @@ func TestBackgroundCLIReadsBlindlySyncsAndPurges(t *testing.T) {
 	}
 	defer db.Close()
 	var addressedChunks int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE address_uri != '' AND waveform_bar != '' AND slots_json != '[]'`).Scan(&addressedChunks); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE address_uri != '' AND waveform_bar != ''`).Scan(&addressedChunks); err != nil {
 		t.Fatalf("count addressed chunks: %v", err)
 	}
 	if addressedChunks != 1 {

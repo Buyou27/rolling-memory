@@ -24,6 +24,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
 	"github.com/rocareer/rolling-memory/internal/store"
+	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 var gapLabels = map[string]string{
@@ -915,7 +916,7 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 		"deterministic":    true,
 		"deep":             deepMeta,
 		"date_window":      window,
-		"session":          ptrStringValue(opts.Session),
+		"session":          ids.OptionalString(opts.Session),
 		"canonical_merges": canonicalMerges,
 		"vector": map[string]any{
 			"provider": "hash", "warning": opts.VectorWarning,
@@ -1603,18 +1604,18 @@ func nodeView(entry *bandCandidate, now *int64) map[string]any {
 		"kind":         "memory_unit",
 		"label":        subject,
 		"content":      rendered,
-		"anchor":       fmt.Sprintf("trace:%s#%d-%d", shortHash(data.AnchorTraceHash), data.AnchorStart, data.AnchorEnd),
-		"confidence":   pyRound(data.Confidence, 3),
+		"anchor":       fmt.Sprintf("trace:%s#%d-%d", ids.ShortHash(data.AnchorTraceHash), data.AnchorStart, data.AnchorEnd),
+		"confidence":   ids.PyRound(data.Confidence, 3),
 		"status":       displayStatus,
 		"t_valid_from": data.TValidFrom,
 		"t_valid_to":   data.TValidTo,
 		"t_source":     data.TSource,
 		"time":         timeStr,
-		"world":        ptrStringValue(data.World),
-		"carrier":      ptrStringValue(data.Carrier),
-		"locus":        ptrStringValue(data.Locus),
+		"world":        ids.OptionalString(data.World),
+		"carrier":      ids.OptionalString(data.Carrier),
+		"locus":        ids.OptionalString(data.Locus),
 		"warrant":      data.Warrant,
-		"score":        pyRound(entry.candidate.Score, 4),
+		"score":        ids.PyRound(entry.candidate.Score, 4),
 		"_object_id":   walkObject,
 	}
 	if !anchorSpanOK(data) {
@@ -2154,7 +2155,7 @@ func renderRecall(result *Result, maxChars int) string {
 		if cut < 0 {
 			cut = 0
 		}
-		trimmed := prefixRunes(body, cut)
+		trimmed := text.FirstRunes(body, cut)
 		// Cut on a line boundary so the block never ends inside a speaker line.
 		if boundary := strings.LastIndex(trimmed, "\n"); boundary > 0 {
 			trimmed = trimmed[:boundary]
@@ -2574,37 +2575,6 @@ func capSlice[T any](values []T, limit int) []T {
 		return values[:limit]
 	}
 	return values
-}
-
-func ptrStringValue(value *string) any {
-	if value == nil {
-		return nil
-	}
-	return *value
-}
-
-func shortHash(value string) string {
-	if len(value) <= 8 {
-		return value
-	}
-	return value[:8]
-}
-
-func pyRound(value float64, digits int) float64 {
-	text := strconv.FormatFloat(value, 'f', digits, 64)
-	parsed, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return value
-	}
-	return parsed
-}
-
-func prefixRunes(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }
 
 func sliceRunes(value string, start, end int) string {

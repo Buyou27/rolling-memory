@@ -66,11 +66,11 @@
                         <button
                             type="button"
                             class="fs-layer-chip is-cell"
-                            :class="{ 'is-active': roleFilter === 'cell' }"
+                            :class="{ 'is-active': roleFilter === 'cluster' }"
                             :disabled="inDrill"
-                            @click="roleFilter = roleFilter === 'cell' ? 'all' : 'cell'"
+                            @click="roleFilter = roleFilter === 'cluster' ? 'all' : 'cluster'"
                         >
-                            {{ isEn ? 'Addr' : '地址' }} {{ roleCounts.cell }}
+                            {{ isEn ? 'Cluster' : '簇' }} {{ roleCounts.cluster }}
                         </button>
                         <button
                             type="button"
@@ -102,30 +102,40 @@
                         <button
                             type="button"
                             class="fs-layer-chip is-atom"
-                            :class="{ 'is-active': roleFilter === 'atom' }"
+                            :class="{ 'is-active': roleFilter === 'word' }"
                             :disabled="inDrill"
-                            @click="roleFilter = roleFilter === 'atom' ? 'all' : 'atom'"
+                            @click="roleFilter = roleFilter === 'word' ? 'all' : 'word'"
                         >
-                            {{ isEn ? 'Atom' : '原子' }} {{ graph?.stats?.atom_total || roleCounts.atom }}
+                            {{ isEn ? 'Word' : '词' }} {{ graph?.stats?.word_total || roleCounts.word }}
                         </button>
                         <button
                             type="button"
                             class="fs-layer-chip is-mol"
-                            :class="{ 'is-active': roleFilter === 'molecule' }"
+                            :class="{ 'is-active': roleFilter === 'phrase' }"
                             :disabled="inDrill"
-                            @click="roleFilter = roleFilter === 'molecule' ? 'all' : 'molecule'"
+                            @click="roleFilter = roleFilter === 'phrase' ? 'all' : 'phrase'"
                         >
-                            {{ isEn ? 'Mol' : '分子' }} {{ graph?.stats?.molecule_total || roleCounts.molecule }}
+                            {{ isEn ? 'Phrase' : '短语' }} {{ graph?.stats?.phrase_total || roleCounts.phrase }}
+                        </button>
+                        <button
+                            type="button"
+                            class="fs-layer-chip is-free"
+                            :class="{ 'is-active': roleFilter === 'free' }"
+                            :disabled="inDrill"
+                            @click="roleFilter = roleFilter === 'free' ? 'all' : 'free'"
+                        >
+                            {{ isEn ? 'Free' : '游离' }} {{ graph?.stats?.free_unit_total || roleCounts.free }}
                         </button>
                     </div>
 
                     <span class="fs-divider" />
 
-                    <!-- 全局粒子拓扑统计（原子/分子/突触） -->
+                    <!-- 全局结构统计（词 / 短语 / 簇 / 游离） -->
                     <div class="fs-stat-text" style="display:flex; gap:12px; font-size: 10px;">
-                        <span title="Active Atomic Particles">A: <b>{{ graph?.stats?.atom_total || roleCounts.atom }}</b></span>
-                        <span title="Active Molecular Fragments">M: <b>{{ graph?.stats?.molecule_total || roleCounts.molecule }}</b></span>
-                        <span title="Active Dimer Synapses">S: <b>{{ graph?.stats?.dimer_synapse_total || activeEdges.length }}</b></span>
+                        <span title="Word nodes">词: <b>{{ graph?.stats?.word_total || roleCounts.word }}</b></span>
+                        <span title="Phrase nodes">短语: <b>{{ graph?.stats?.phrase_total || roleCounts.phrase }}</b></span>
+                        <span title="Cluster nodes">簇: <b>{{ graph?.stats?.cluster_total || roleCounts.cluster }}</b></span>
+                        <span title="Free units">游离: <b>{{ graph?.stats?.free_unit_total || roleCounts.free }}</b></span>
                     </div>
 
                     <span class="fs-divider" />
@@ -217,10 +227,10 @@
                     <div class="nt-title">{{ hover3DNode.summary }}</div>
                     <div class="nt-meta" :style="{ color: nodeDotColor(hover3DNode) }">
                         {{
-                            hover3DNode.kind === 'cell'
+                            isContainerKind(hover3DNode.kind)
                                 ? isEn
-                                    ? 'Memory Address Container'
-                                    : '记忆地址容器'
+                                    ? 'Cluster Container'
+                                    : '簇容器'
                                 : hover3DNode.layer === 'noetic'
                                   ? isEn
                                       ? 'L3 Noetic Ganglion (Q&A)'
@@ -268,10 +278,10 @@
                                 {{ isEn ? 'Nodes' : '节点' }} ({{ activeNodes.length }})
                             </button>
                             <button type="button" class="hud-mode-tab" :class="{ 'is-on': hudTab === 'atoms' }" @click="hudTab = 'atoms'">
-                                {{ isEn ? 'Atoms' : '原子荷' }} ({{ graph?.stats?.atom_total ?? 0 }})
+                                {{ isEn ? 'Words' : '词族' }} ({{ graph?.stats?.word_total ?? graph?.stats?.atom_total ?? 0 }})
                             </button>
                             <button type="button" class="hud-mode-tab" :class="{ 'is-on': hudTab === 'molecules' }" @click="hudTab = 'molecules'">
-                                {{ isEn ? 'Molecules' : '分子包' }} ({{ graph?.stats?.molecule_total ?? 0 }})
+                                {{ isEn ? 'Phrases' : '短语' }} ({{ graph?.stats?.phrase_total ?? graph?.stats?.molecule_total ?? 0 }})
                             </button>
                         </div>
                         <el-input v-model="hubFilter" size="small" clearable class="hud-filter">
@@ -279,7 +289,7 @@
                                 <Icon name="el-search" :size="12" />
                             </template>
                             <template #placeholder>
-                                <span class="hud-filter-ph">{{ isEn ? 'Filter nodes / atoms / molecules…' : '过滤节点 / 原子 / 分子…' }}</span>
+                                <span class="hud-filter-ph">{{ isEn ? 'Filter nodes / words / phrases…' : '过滤节点 / 词 / 短语…' }}</span>
                             </template>
                         </el-input>
                         <div v-if="hudTab === 'nodes'" class="hud-hub-list">
@@ -324,7 +334,7 @@
                                     {{ a.cell_span }}A·{{ a.df }}U
                                 </span>
                             </div>
-                            <div v-if="!topAtomList.length" class="hud-hub-empty">{{ isEn ? 'No matching atom' : '无匹配原子' }}</div>
+                            <div v-if="!topAtomList.length" class="hud-hub-empty">{{ isEn ? 'No matching word' : '无匹配词族' }}</div>
                         </div>
                         <div v-else class="hud-hub-list">
                             <div
@@ -342,7 +352,7 @@
                                     γ{{ m.gamma.toFixed(2) }}
                                 </span>
                             </div>
-                            <div v-if="!topMoleculeList.length" class="hud-hub-empty">{{ isEn ? 'No matching molecule' : '无匹配分子波包' }}</div>
+                            <div v-if="!topMoleculeList.length" class="hud-hub-empty">{{ isEn ? 'No matching phrase' : '无匹配短语' }}</div>
                         </div>
                     </template>
                 </div>
@@ -470,7 +480,7 @@
                 <el-empty
                     v-if="!activeNodes.length && !loading"
                     class="graph-empty"
-                    :description="isEn ? 'No matching nodes in current filter' : '当前筛选条件下暂无图谱节点'"
+                    :description="graphError || (isEn ? 'No matching nodes in current filter' : '当前筛选条件下暂无图谱节点')"
                 />
 
                 <div v-if="activeNodes.length && !zenMode" class="graph-legend">
@@ -513,11 +523,11 @@
                     <template v-else>
                         <span
                             class="graph-legend-item graph-legend-clickable"
-                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'cell' }"
-                            @click="roleFilter = roleFilter === 'cell' ? 'all' : 'cell'"
+                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'cluster' }"
+                            @click="roleFilter = roleFilter === 'cluster' ? 'all' : 'cluster'"
                         >
                             <i class="geo-glyph geo-glyph--cell" />
-                            {{ isEn ? `Addresses (${roleCounts.cell})` : `记忆地址 (${roleCounts.cell})` }}
+                            {{ isEn ? `Clusters (${roleCounts.cluster})` : `簇容器 (${roleCounts.cluster})` }}
                         </span>
                         <span
                             class="graph-legend-item graph-legend-clickable"
@@ -545,19 +555,27 @@
                         </span>
                         <span
                             class="graph-legend-item graph-legend-clickable"
-                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'atom' }"
-                            @click="roleFilter = roleFilter === 'atom' ? 'all' : 'atom'"
+                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'word' }"
+                            @click="roleFilter = roleFilter === 'word' ? 'all' : 'word'"
                         >
                             <i class="geo-glyph geo-glyph--focus" />
-                            {{ isEn ? `Atom (${roleCounts.atom})` : `原子荷 (${roleCounts.atom})` }}
+                            {{ isEn ? `Words (${roleCounts.word})` : `词 (${roleCounts.word})` }}
                         </span>
                         <span
                             class="graph-legend-item graph-legend-clickable"
-                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'molecule' }"
-                            @click="roleFilter = roleFilter === 'molecule' ? 'all' : 'molecule'"
+                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'phrase' }"
+                            @click="roleFilter = roleFilter === 'phrase' ? 'all' : 'phrase'"
                         >
                             <i class="geo-glyph" style="background: #a855f7" />
-                            {{ isEn ? `Molecule (${roleCounts.molecule})` : `分子包 (${roleCounts.molecule})` }}
+                            {{ isEn ? `Phrases (${roleCounts.phrase})` : `短语 (${roleCounts.phrase})` }}
+                        </span>
+                        <span
+                            class="graph-legend-item graph-legend-clickable"
+                            :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'free' }"
+                            @click="roleFilter = roleFilter === 'free' ? 'all' : 'free'"
+                        >
+                            <i class="geo-glyph" style="background: #94a3b8" />
+                            {{ isEn ? `Free units (${roleCounts.free})` : `游离单元 (${roleCounts.free})` }}
                         </span>
                     </template>
                     <span class="graph-legend-group" style="margin-left: 6px">{{ isEn ? 'Synapses:' : '突触边：' }}</span>
@@ -579,17 +597,29 @@
         <el-drawer
             v-model="detailVisible"
             :title="
-                currentNode?.kind === 'cell'
+                isContainerKind(currentNode?.kind)
                     ? isEn
-                        ? 'Memory Address Container Details'
-                        : '记忆地址容器详情'
-                    : currentNode?.layer === 'noetic'
+                        ? 'Cluster Container Details'
+                        : '簇容器详情'
+                    : currentNode?.kind === 'word' || currentNode?.kind === 'atom'
                       ? isEn
-                          ? 'L3 Noetic Insight Engram (Q & A)'
-                          : 'L3 知性问答印迹详情 (Q & A)'
-                      : isEn
-                        ? 'Memory Unit Provenance'
-                        : '记忆单元明文详情'
+                          ? 'Word Family Details'
+                          : '词族详情'
+                      : currentNode?.kind === 'phrase' || currentNode?.kind === 'molecule'
+                        ? isEn
+                            ? 'Phrase Details'
+                            : '短语详情'
+                        : currentNode?.kind === 'free_unit'
+                          ? isEn
+                              ? 'Free Unit Details'
+                              : '游离单元详情'
+                          : currentNode?.layer === 'noetic'
+                            ? isEn
+                                ? 'L3 Noetic Insight Engram (Q & A)'
+                                : 'L3 知性问答印迹详情 (Q & A)'
+                            : isEn
+                              ? 'Memory Unit Provenance'
+                              : '记忆单元明文详情'
             "
             size="560px"
             :append-to-body="false"
@@ -617,15 +647,25 @@
                         <template #label>
                             <span>{{ isEn ? 'Unit Type' : '单位角色' }}</span>
                         </template>
-                        <el-tag size="small" :type="currentNode.kind === 'cell' ? 'primary' : 'success'" effect="plain">
+                        <el-tag size="small" :type="isContainerKind(currentNode.kind) ? 'primary' : 'success'" effect="plain">
                             {{
-                                currentNode.kind === 'cell'
-                                    ? isEn
-                                        ? 'Memory Address Container'
-                                        : '记忆地址容器'
-                                    : isEn
-                                      ? 'Memory Unit'
-                                      : '记忆单元 (Unit)'
+                                isContainerKind(currentNode.kind)
+                                    ? `${isEn ? 'Cluster' : '簇容器'}${currentNode.cluster_type ? ` · ${clusterTypeLabel(currentNode.cluster_type, isEn)}` : ''}`
+                                    : currentNode.kind === 'word' || currentNode.kind === 'atom'
+                                      ? isEn
+                                          ? 'Word'
+                                          : '词族'
+                                      : currentNode.kind === 'phrase' || currentNode.kind === 'molecule'
+                                        ? isEn
+                                            ? 'Phrase'
+                                            : '短语'
+                                        : currentNode.kind === 'free_unit'
+                                          ? isEn
+                                              ? 'Free Unit'
+                                              : '游离单元'
+                                          : isEn
+                                            ? 'Memory Unit'
+                                            : '记忆单元 (Unit)'
                             }}
                         </el-tag>
                     </el-descriptions-item>
@@ -677,11 +717,11 @@
                 </template>
 
                 <!-- 专属视图 B：记忆地址容器（展示地址说明与可点击成员卡片列表） -->
-                <template v-else-if="currentNode.kind === 'cell'">
+                <template v-else-if="isContainerKind(currentNode.kind)">
                     <div class="graph-sub-title">{{ isEn ? 'Memory Address Cluster Summary' : '记忆地址聚合主题' }}</div>
                     <div class="graph-node-summary">{{ currentNode.summary }}</div>
                     <div class="graph-sub-title">
-                        {{ isEn ? 'Stored Memory Units Under This Address (click to open)' : '该记忆地址下收纳的记忆单元（点击直接打开详情）' }}
+                        {{ isEn ? 'Member Units In This Cluster (click to open)' : '该簇下收纳的记忆单元（点击直接打开详情）' }}
                     </div>
                     <div class="cell-member-list">
                         <div
@@ -699,7 +739,7 @@
                             </span>
                         </div>
                         <div v-if="!cellMemberNodes.length" class="graph-muted">
-                            {{ isEn ? 'No member units under this address' : '该记忆地址下暂无成员记忆单元' }}
+                            {{ isEn ? 'No member units in this cluster' : '该簇下暂无成员记忆单元' }}
                         </div>
                     </div>
                 </template>
@@ -708,6 +748,51 @@
                 <template v-else>
                     <div class="graph-sub-title">{{ isEn ? 'Vault Plaintext Content' : '本地明文金库还原内容' }}</div>
                     <div class="graph-node-span">「{{ (currentNode.span || '').trim() || currentNode.summary }}」</div>
+                </template>
+
+                <!-- 引擎投影：簇容器属性 / 词族 / 二元短语 -->
+                <template v-if="isContainerKind(currentNode.kind)">
+                    <div class="graph-sub-title">{{ isEn ? 'Cluster Container' : '簇容器属性' }}</div>
+                    <div class="graph-node-span">
+                        {{ clusterTypeLabel(currentNode.cluster_type, isEn) }}
+                        · {{ isEn ? 'members' : '成员' }} {{ currentNode.member_count ?? cellMemberNodes.length }}
+                        <span v-if="currentNode.energy_nats"> · E={{ currentNode.energy_nats.toFixed(2) }} nats</span>
+                        <span v-if="currentNode.layer_mix">
+                            · L1 {{ currentNode.layer_mix.background ?? 0 }} / L2 {{ currentNode.layer_mix.episodic ?? 0 }} / L3 {{ currentNode.layer_mix.noetic ?? 0 }}
+                        </span>
+                    </div>
+                </template>
+                <template v-if="currentNode.words?.length || currentNode.phrases?.length">
+                    <div class="graph-sub-title">
+                        {{ isEn ? 'Words & Phrases (engine projection)' : '词族与短语（引擎投影）' }}
+                    </div>
+                    <div v-if="currentNode.words?.length" class="particle-atom-grid">
+                        <div
+                            v-for="w in currentNode.words"
+                            :key="w.group_hex || w.token"
+                            class="particle-atom-card"
+                            :class="{ 'is-active': keyword === w.token }"
+                            @click="filterByParticle(w.token)"
+                        >
+                            <div class="pa-head">
+                                <span class="pa-token">{{ w.token }}</span>
+                                <span class="pa-hash">#{{ (w.group_hex || '').slice(0, 8) }}</span>
+                            </div>
+                            <div class="pa-metrics">
+                                <span>m={{ w.mass_nats.toFixed(2) }}</span>
+                                <span>w={{ w.weight.toFixed(2) }}</span>
+                                <span>DF={{ w.df }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="currentNode.phrases?.length" class="particle-mol-list">
+                        <div v-for="p in currentNode.phrases" :key="`${p.left}|${p.right}`" class="particle-mol-card">
+                            <div class="pm-top">
+                                <span class="pm-key">{{ p.left }} · {{ p.right }}</span>
+                                <span class="pm-stat">B={{ p.binding_energy_nats.toFixed(2) }} nats · DF={{ p.df }}</span>
+                            </div>
+                        </div>
+                    </div>
                 </template>
 
                 <!-- 五级粒子微观能谱（一级守恒原子荷 AtomView × 二级共价分子波包 MoleculeView & 二聚体突触 DimerSynapses） -->
@@ -775,7 +860,7 @@
 
                 <div class="graph-sub-title">
                     {{
-                        currentNode.kind === 'cell'
+                        isContainerKind(currentNode.kind)
                             ? isEn
                                 ? 'Member Units & Cross-Address Links'
                                 : '记忆地址收纳成员与跨地址共振边'
@@ -839,8 +924,8 @@
             <div class="gpv-body">
                 {{
                     isEn
-                        ? 'In local mode, this page displays the built-in LoCoMo 3D memory graph sample (5,882 memories · 42 memory addresses) as a preview of 3D memory nebula exploration; full real-time memory graph generation will be provided in the next release.'
-                        : '当前本地模式下，本页展示内置预置的 LoCoMo 3D 记忆星云示例数据（5,882 条记忆 · 42 个记忆地址），供你提前体验三维记忆图谱的探索、下钻与激活扩散；真实记忆图谱将在下一版本正式提供。'
+                        ? 'This view is showing the built-in LoCoMo 3D sample (5,882 memories) for layout preview. The real vault graph is generated by the local engine and appears when the memory service is running.'
+                        : '当前展示的是内置 LoCoMo 3D 示例数据（5,882 条记忆），用于预览三维布局与交互；真实金库图谱由本地引擎生成，记忆服务运行时即会显示。'
                 }}
             </div>
             <template #footer>
@@ -864,6 +949,7 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMoun
 import { useRouter, useRoute } from 'vue-router'
 import { computeEgoLayout, computeLayout, type LayoutEdge, type LayoutNode, type LayoutResult } from '@/components/graph/layout'
 import { Hypergraph3DEngine, type Graph3DNode, type Graph3DSpaceMode } from '@/components/graph/engine'
+import { CLUSTER_TYPE_META, KIND_META, clusterTypeLabel, isContainerKind, isPhraseKind, isWordKind, kindLabel, nodeAccentColor } from '@/components/graph/kinds'
 import GraphDrillOverlay from '@/components/graph/GraphDrillOverlay.vue'
 import LayoutWorker from '@/components/graph/layout.worker?worker'
 
@@ -896,12 +982,37 @@ interface GraphMoleculeFragment {
     unit_span?: number
 }
 
+interface GraphWordParticle {
+    token: string
+    group_hex?: string
+    df: number
+    mass_nats: number
+    weight: number
+    unit_span?: number
+}
+
+interface GraphPhraseFragment {
+    left: string
+    right: string
+    df: number
+    joint_surprisal_nats: number
+    binding_energy_nats: number
+    unit_span?: number
+}
+
 interface GraphNode {
     id: number
     node_key: string
     summary: string
+    label?: string
     kind: string
     layer?: string
+    cluster_type?: string
+    member_count?: number
+    free?: boolean
+    primary_cluster_key?: string
+    energy_nats?: number
+    layer_mix?: Record<string, number>
     weight?: number
     certainty: string
     intention: string
@@ -916,6 +1027,8 @@ interface GraphNode {
     degree: number
     atoms?: GraphAtomParticle[]
     molecules?: GraphMoleculeFragment[]
+    words?: GraphWordParticle[]
+    phrases?: GraphPhraseFragment[]
 }
 
 interface GraphEdge {
@@ -955,6 +1068,7 @@ interface GraphRelationOption {
 }
 
 interface GraphPayload {
+    graph_schema_version?: number
     source: string
     scope_key: string
     scopes: GraphScope[]
@@ -975,6 +1089,14 @@ interface GraphPayload {
         atom_total?: number
         molecule_total?: number
         dimer_synapse_total?: number
+        word_total?: number
+        phrase_total?: number
+        cluster_total?: number
+        free_unit_total?: number
+        kind_counts?: { units?: number; words?: number; phrases?: number; clusters?: number; free_units?: number }
+        cluster_type_counts?: { episode?: number; entity?: number; document?: number }
+        build_ms?: number
+        label_coverage_pct?: number
         top_atoms?: GraphAtomParticle[]
         top_molecules?: GraphMoleculeFragment[]
     }
@@ -1021,7 +1143,7 @@ const updatedText = ref('')
 const scopes = ref<GraphScope[]>([])
 const scopeKey = ref('mem:self')
 const keyword = ref('')
-const roleFilter = ref<'all' | 'cell' | 'background' | 'episodic' | 'noetic' | 'atom' | 'molecule'>('all')
+const roleFilter = ref<'all' | 'cluster' | 'unit' | 'background' | 'episodic' | 'noetic' | 'word' | 'phrase' | 'free' | 'cell' | 'atom' | 'molecule'>('all')
 const keepOneHopContext = ref(true)
 const activeRelations = ref<string[]>([])
 const showEdgeLabels = ref(false)
@@ -1033,25 +1155,37 @@ const layerWeights = ref<{ background: number; episodic: number; noetic: number 
     noetic: 1.2,
 })
 const graph = ref<GraphPayload | null>(null)
+const graphError = ref('')
 
 const totalNodeCount = computed(() => graph.value?.stats?.event_total || graph.value?.nodes?.length || 0)
 
 const roleCounts = computed(() => {
-    const out = { cell: 0, background: 0, episodic: 0, noetic: 0, atom: 0, molecule: 0 }
+    const out = { cluster: 0, cell: 0, unit: 0, free: 0, background: 0, episodic: 0, noetic: 0, word: 0, atom: 0, phrase: 0, molecule: 0 }
     for (const n of graph.value?.nodes ?? []) {
+        if (isContainerKind(n.kind)) out.cluster++
         if (n.kind === 'cell') out.cell++
-        else if (n.kind === 'atom') out.atom++
-        else if (n.kind === 'molecule') out.molecule++
-        else if (n.layer === 'noetic') out.noetic++
-        else if (n.layer === 'background') out.background++
-        else out.episodic++
+        if (isWordKind(n.kind)) out.word++
+        if (n.kind === 'atom') out.atom++
+        if (isPhraseKind(n.kind)) out.phrase++
+        if (n.kind === 'molecule') out.molecule++
+        if (n.kind === 'free_unit' || n.free) out.free++
+        if (n.kind === 'unit' || n.kind === 'free_unit') {
+            out.unit++
+            if (n.layer === 'noetic') out.noetic++
+            else if (n.layer === 'background') out.background++
+            else out.episodic++
+        }
     }
     return out
 })
 
 function edgeRelationLabel(rel: string): string {
-    if (rel === 'member_of') return isEn.value ? 'member_of (Address)' : 'member_of (归属地址)'
-    if (rel === 'cites') return isEn.value ? 'cites (Wormhole)' : 'cites (引证虫洞)'
+    if (rel === 'member_of') return isEn.value ? 'member_of (Container)' : 'member_of (归属簇容器)'
+    if (rel === 'cites') return isEn.value ? 'cites (Evidence)' : 'cites (引证证据)'
+    if (rel === 'co_cites') return isEn.value ? 'co_cites (Resonance)' : 'co_cites (跨簇共振)'
+    if (rel === 'word_of') return isEn.value ? 'word_of (Word)' : 'word_of (词族)'
+    if (rel === 'phrase_of') return isEn.value ? 'phrase_of (Phrase)' : 'phrase_of (短语)'
+    if (rel === 'phrase_has_word') return isEn.value ? 'phrase_has_word' : 'phrase_has_word (短语组成)'
     if (rel === 'weak_edge') return isEn.value ? 'weak_edge (Resonance)' : 'weak_edge (跨地址共振)'
     if (rel === 'atom_of') return isEn.value ? 'atom_of (Atom Charge)' : 'atom_of (原子荷投影)'
     if (rel === 'molecule_of') return isEn.value ? 'molecule_of (Molecule)' : 'molecule_of (分子波包)'
@@ -1069,10 +1203,11 @@ function parseNoeticQA(node: GraphNode): { q: string; a: string } {
     return { q: node.summary.trim(), a: raw || '-' }
 }
 
-function nodeGlyphClass(n: { kind: string; layer?: string }): string {
-    if (n.kind === 'cell') return 'geo-glyph--cell'
-    if (n.kind === 'atom') return 'geo-glyph--focus'
-    if (n.kind === 'molecule') return 'geo-glyph--noetic'
+function nodeGlyphClass(n: { kind: string; layer?: string; cluster_type?: string }): string {
+    if (isContainerKind(n.kind)) return 'geo-glyph--cell'
+    if (isWordKind(n.kind)) return 'geo-glyph--focus'
+    if (isPhraseKind(n.kind)) return 'geo-glyph--noetic'
+    if (n.kind === 'free_unit' || (n as { free?: boolean }).free) return 'geo-glyph--free'
     if (n.layer === 'noetic') return 'geo-glyph--noetic'
     if (n.layer === 'background') return 'geo-glyph--bg'
     return 'geo-glyph--ep'
@@ -1102,13 +1237,52 @@ let selectTimer: ReturnType<typeof setTimeout> | null = null
 const topAtomList = computed<GraphAtomParticle[]>(() => {
     const raw = graph.value?.stats?.top_atoms ?? []
     const q = hubFilter.value.trim().toLowerCase()
-    return q ? raw.filter((a) => a.token.toLowerCase().includes(q)) : raw
+    if (raw.length) {
+        return q ? raw.filter((a) => a.token.toLowerCase().includes(q)) : raw
+    }
+    const words = (graph.value?.nodes ?? [])
+        .filter((n) => n.kind === 'word' || n.kind === 'atom')
+        .sort((a, b) => (b.weight ?? b.energy_nats ?? 0) - (a.weight ?? a.energy_nats ?? 0))
+        .slice(0, 16)
+    const mapped = words.map((n) => {
+        const w = n.words?.[0]
+        return {
+            token: n.label || n.summary,
+            hash_hex: (n.anchor || '').replace('word://', '').slice(0, 8),
+            df: w?.df ?? 0,
+            mass_nats: w?.mass_nats ?? n.energy_nats ?? 0,
+            potential: n.energy_nats ?? n.weight ?? 0,
+            weight: n.weight ?? 0,
+            cell_span: n.member_count ?? 0,
+            unit_span: n.degree,
+        }
+    })
+    return q ? mapped.filter((a) => a.token.toLowerCase().includes(q)) : mapped
 })
 
 const topMoleculeList = computed<GraphMoleculeFragment[]>(() => {
     const raw = graph.value?.stats?.top_molecules ?? []
     const q = hubFilter.value.trim().toLowerCase()
-    return q ? raw.filter((m) => m.text.toLowerCase().includes(q) || m.mol_key.toLowerCase().includes(q)) : raw
+    if (raw.length) {
+        return q ? raw.filter((m) => m.text.toLowerCase().includes(q) || m.mol_key.toLowerCase().includes(q)) : raw
+    }
+    const phrases = (graph.value?.nodes ?? [])
+        .filter((n) => n.kind === 'phrase' || n.kind === 'molecule')
+        .sort((a, b) => (b.energy_nats ?? b.weight ?? 0) - (a.energy_nats ?? a.weight ?? 0))
+        .slice(0, 12)
+    const mapped = phrases.map((n) => {
+        const p = n.phrases?.[0]
+        return {
+            mol_key: n.anchor || n.node_key,
+            text: n.label || n.summary,
+            df: p?.df ?? 0,
+            mass_nats: p?.binding_energy_nats ?? n.energy_nats ?? 0,
+            gamma: 0,
+            core_atoms: p ? [p.left, p.right] : [],
+            unit_span: n.degree,
+        }
+    })
+    return q ? mapped.filter((m) => m.text.toLowerCase().includes(q) || m.mol_key.toLowerCase().includes(q)) : mapped
 })
 
 function filterByParticle(term: string): void {
@@ -1125,6 +1299,10 @@ const relationColorMap = computed(() => {
     const map: Record<string, string> = {
         member_of: '#06b6d4',
         cites: '#ec4899',
+        co_cites: '#f59e0b',
+        word_of: '#fbbf24',
+        phrase_of: '#a855f7',
+        phrase_has_word: '#c084fc',
         weak_edge: '#f59e0b',
         atom_of: '#fbbf24',
         molecule_of: '#a855f7',
@@ -1147,13 +1325,8 @@ function relationColor(relation: string): string {
     return ECHARTS_PALETTE[h % ECHARTS_PALETTE.length]!
 }
 
-function nodeDotColor(n: { kind: string; layer?: string; intention?: string }): string {
-    if (n.kind === 'cell') return '#0891b2'
-    if (n.kind === 'atom') return '#f59e0b'
-    if (n.kind === 'molecule') return '#a855f7'
-    if (n.layer === 'noetic') return '#ec4899'
-    if (n.layer === 'background') return '#3b82f6'
-    return '#10b981'
+function nodeDotColor(n: { kind: string; layer?: string; cluster_type?: string; intention?: string }): string {
+    return nodeAccentColor(n)
 }
 
 function toggleRelationChip(rel: string) {
@@ -1193,16 +1366,19 @@ function applyFilters(
     const seedMatched = new Set<number>()
     for (const n of rawNodes) {
         if (rf !== 'all') {
-            if (rf === 'cell' && n.kind !== 'cell') continue
-            if (rf === 'atom' && n.kind !== 'atom') continue
-            if (rf === 'molecule' && n.kind !== 'molecule') continue
-            if (
-                rf !== 'cell' &&
-                rf !== 'atom' &&
-                rf !== 'molecule' &&
-                (n.kind !== 'unit' || (n.layer || 'episodic') !== rf)
-            )
-                continue
+            if (rf === 'cluster' || rf === 'cell') {
+                if (!isContainerKind(n.kind)) continue
+            } else if (rf === 'word' || rf === 'atom') {
+                if (!isWordKind(n.kind)) continue
+            } else if (rf === 'phrase' || rf === 'molecule') {
+                if (!isPhraseKind(n.kind)) continue
+            } else if (rf === 'free') {
+                if (!(n.kind === 'free_unit' || n.free)) continue
+            } else if (rf === 'unit') {
+                if (!(n.kind === 'unit' || n.kind === 'free_unit')) continue
+            } else {
+                if (!(n.kind === 'unit' || n.kind === 'free_unit') || (n.layer || 'episodic') !== rf) continue
+            }
         }
         if (kw !== '') {
             const hay = `${n.node_key} ${n.summary} ${n.span} ${n.anchor}`.toLowerCase()
@@ -1684,6 +1860,7 @@ async function load(opts: { silent?: boolean } = {}): Promise<void> {
         )
         const data = res.data?.data
         if (data) {
+            graphError.value = ''
             graph.value = data
             nodeByKey.clear()
             for (const n of data.nodes ?? []) {
@@ -1713,8 +1890,15 @@ async function load(opts: { silent?: boolean } = {}): Promise<void> {
                 router.replace({ query: cleanQuery })
             }
         }
-    } catch {
-        if (!silent) ElMessage.error(isEn.value ? 'Failed to load memory graph' : '加载记忆图谱失败')
+    } catch (error) {
+        const message =
+            (error as { data?: { message?: string } })?.data?.message ||
+            (error as { message?: string })?.message ||
+            (isEn.value ? 'Failed to load memory graph' : '加载记忆图谱失败')
+        graphError.value = message
+        graph.value = null
+        nodeByKey.clear()
+        if (!silent) ElMessage.error(message)
     } finally {
         graphFetching = false
         loading.value = false
@@ -1748,7 +1932,10 @@ function liveDigestOf(status: Record<string, any>): string {
     return [art.thin_vault_docs ?? 0, art.thin_vault_cells ?? 0, art.thin_vault_noetic ?? 0, status?.total_nodes ?? 0].join('|')
 }
 
-const isLocomoPreview = computed(() => (graph.value as Record<string, any> | null)?.corpus?.suite === 'locomo')
+const isLocomoPreview = computed(() => {
+    const payload = graph.value as Record<string, any> | null
+    return payload?.corpus?.suite === 'locomo' || payload?.source === 'open-memory-v1'
+})
 
 /** 防抖软刷新：突发写入合并为一次静默重载；下钻 / 暂停 / 预置演示图谱期间不自动重刷。 */
 function scheduleAutoReload(): void {
@@ -2186,9 +2373,11 @@ onMounted(() => {
         viewSize.value = { w: el.clientWidth, h: el.clientHeight }
         watchViewport(el)
     }
-    load()
+    void load().then(() => {
+        // 预览说明只属于 LoCoMo 示例；真实金库图谱不再弹假预览。
+        previewVisible.value = isLocomoPreview.value
+    })
     startStatusStream()
-    previewVisible.value = true
 })
 
 let wasDeactivated = false
@@ -2450,6 +2639,14 @@ onBeforeUnmount(() => {
             height: 11px;
             background: #f59e0b;
             box-shadow: 0 0 0 2.5px rgba(245, 158, 11, 0.38);
+        }
+
+        &--free {
+            width: 10px;
+            height: 10px;
+            background: transparent;
+            border: 1.5px dashed #94a3b8;
+            box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.18);
         }
     }
 
@@ -2835,6 +3032,21 @@ onBeforeUnmount(() => {
             &.is-noetic.is-active {
                 background: rgba(236, 72, 153, 0.28);
                 border-color: #ec4899;
+            }
+
+            &.is-atom.is-active {
+                background: rgba(245, 158, 11, 0.26);
+                border-color: #f59e0b;
+            }
+
+            &.is-mol.is-active {
+                background: rgba(168, 85, 247, 0.26);
+                border-color: #a855f7;
+            }
+
+            &.is-free.is-active {
+                background: rgba(148, 163, 184, 0.22);
+                border-color: #94a3b8;
             }
         }
 

@@ -405,6 +405,11 @@ func (e *Engine) buildIndexWithDeltaDrop(delta []Doc, drop map[string]struct{}) 
 	if e == nil || e.Index == nil || e.Index.N == 0 {
 		return nil
 	}
+	// The CSR snapshot covers the base index only; an overlay carries documents
+	// that are not part of it, so those mutations keep the ExportDocs path.
+	if e.HasDelta() {
+		return nil
+	}
 	st := e.ensureClusterState()
 	if st == nil || len(st.docRowPtr) != e.Index.N+1 {
 		return nil
@@ -676,7 +681,9 @@ func (idx *Index) finalizeMasses() {
 	if len(keys) > 0 {
 		idx.MeanBits = bitSum / float64(len(keys))
 	}
-	idx.PostingDigest = idx.computePostingDigestFromMap()
+	// 簇状态新鲜度由「索引指针 + 世代号」精确判定（见 ensureClusterState）；
+	// PostingDigest 改为按需计算（.zcsr 落盘与 ComputeCorpusDigest 需要时现算），
+	// 不再每次重建都对全量倒排再哈希一遍。
 	if idx.stateGen == 0 {
 		idx.stateGen = 1
 	}

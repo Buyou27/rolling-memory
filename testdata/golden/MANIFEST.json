@@ -85,9 +85,9 @@
     "cli/208-cli-matrix/expected/560-mcp-eof.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "cli/208-cli-matrix/expected/560-mcp-eof.stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "cli/208-cli-matrix/input/transcript.jsonl": "f9ca13a22d7796b2f562a183160a9406c877183cbce5d77203f665a64a1c86c9",
-    "db/030-date-window.db": "3069de867b1eed4ca8a8df351b801391a0daddea5a39d8de8ce7fd82efef28ac",
-    "db/250-config-egress.db": "6bf992af5a03eb8f7c49941aef5bf20172916c313dc9a4bc235e09532ed2dfeb",
-    "db/270-transcript-cursor.db": "d7670a34754bf95bf96a7c4dd6b54233fae9a0083da4c2d8c1a82ad2f6d32342",
+    "db/030-date-window.db": "3d66f37b054e8da1fd87b94ba2f4d1dbb5680ce6a79a9d2ec83888ef11e31979",
+    "db/250-config-egress.db": "f1d9e1a6c9ba2bb5c6100703d4c6fe21941d73bc8ba468d76b7e1b3b7d10ddbe",
+    "db/270-transcript-cursor.db": "bc1d858021ddfb1b6d49715470826b77022de06911e3277eb17945a7eb88d107",
     "fixtures/030-date-window/expected/recall-month-only.json": "cc0a95cd4326e50f983c973f480241a7320b26607c3b05b6c49f0bde1fe1eb77",
     "fixtures/030-date-window/expected/recall-month-only.txt": "5a7cf5a07ddca03768f77a854700556f4b8f98293b315401621f37efe097f77c",
     "fixtures/030-date-window/expected/recall-month-year.json": "ae05ac82b01742b81fdc8ba5c9e4e78c7e8409b076c3ff709ccf3e0517210194",
@@ -227,7 +227,7 @@
     "vectors/time.json": "ad9afaba9f3d8fcbd3b28c968f4be3ac1978e2beb0678f1a43c8ed1979e571e7",
     "vectors/tokenize.json": "b0279bcf10b5f3e8d6f5f2dd94f9bba9f03df77f686279802df16de5f80a10e5"
   },
-  "seal_sha256": "13f703cb9c92fd7734a2d4a9df1ec4a2add64a272188112877595c1b53c11a3e",
+  "seal_sha256": "ba55b1544c4b27898001bb572a4f78880e5e780284cd18ae6791253e7a4a2bd4",
   "frozen_at": 1793102400,
   "frozen_at_iso": "2026-10-27T12:00:00Z",
   "generator": {

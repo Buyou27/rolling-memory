@@ -4,8 +4,10 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/clock"
@@ -19,18 +21,18 @@ import (
 // reported (optionally with a single-direction time backfill), and conflicting
 // objects become proposed meta edges instead of being resolved.
 func (s *Store) AppendAssertion(req AppendAssertionRequest) (map[string]any, error) {
-	req.Warrant = defaultIfEmpty(req.Warrant, "referential")
-	req.Status = defaultIfEmpty(req.Status, "active")
-	req.Audience = defaultIfEmpty(req.Audience, "shared")
-	req.CreatedBy = defaultIfEmpty(req.CreatedBy, "system")
-	if !containsValue(ids.Warrants, req.Warrant) {
-		return nil, fmt.Errorf("invalid warrant %s", pyRepr(req.Warrant))
+	req.Warrant = cmp.Or(req.Warrant, "referential")
+	req.Status = cmp.Or(req.Status, "active")
+	req.Audience = cmp.Or(req.Audience, "shared")
+	req.CreatedBy = cmp.Or(req.CreatedBy, "system")
+	if !slices.Contains(ids.Warrants, req.Warrant) {
+		return nil, fmt.Errorf("invalid warrant %s", ids.QuotePyString(req.Warrant))
 	}
-	if !containsValue(ids.AssertionStatuses, req.Status) {
-		return nil, fmt.Errorf("invalid assertion status %s", pyRepr(req.Status))
+	if !slices.Contains(ids.AssertionStatuses, req.Status) {
+		return nil, fmt.Errorf("invalid assertion status %s", ids.QuotePyString(req.Status))
 	}
 	if _, ok := ids.AudienceRank[req.Audience]; !ok {
-		return nil, fmt.Errorf("invalid audience %s", pyRepr(req.Audience))
+		return nil, fmt.Errorf("invalid audience %s", ids.QuotePyString(req.Audience))
 	}
 	hasSubject := presentID(req.SubjectID) || req.SubjectLiteral != nil
 	hasObject := presentID(req.ObjectID) || req.ObjectLiteral != nil
@@ -116,7 +118,7 @@ func (s *Store) AppendAssertion(req AppendAssertionRequest) (map[string]any, err
 	if fromTime != 0 {
 		temporal = ids.TemporalClass(fromTime, &now)
 	}
-	if !containsValue(ids.TemporalClasses, temporal) {
+	if !slices.Contains(ids.TemporalClasses, temporal) {
 		temporal = "unknown"
 	}
 
@@ -175,21 +177,21 @@ func (s *Store) AppendAssertion(req AppendAssertionRequest) (map[string]any, err
 		}
 	}
 
-	subjectKey := ids.KeyForNodeOrLiteral(derefString(req.SubjectID), derefString(subjectLiteralValue))
-	objectKey := ids.KeyForNodeOrLiteral(derefString(req.ObjectID), derefString(objectLiteralValue))
+	subjectKey := ids.KeyForNodeOrLiteral(ids.DerefString(req.SubjectID), ids.DerefString(subjectLiteralValue))
+	objectKey := ids.KeyForNodeOrLiteral(ids.DerefString(req.ObjectID), ids.DerefString(objectLiteralValue))
 	identity := ids.AssertionHash(ids.AssertionHashParts{
 		Scope:           req.Scope,
 		SubjectKey:      subjectKey,
 		RelID:           req.RelID,
 		ObjectKey:       objectKey,
 		Bare:            req.Bare,
-		HolderID:        derefString(req.HolderID),
+		HolderID:        ids.DerefString(req.HolderID),
 		Warrant:         req.Warrant,
 		AnchorTraceHash: req.AnchorTraceHash,
 		Audience:        effectiveAudience,
-		World:           derefString(req.World),
-		Carrier:         derefString(req.Carrier),
-		Locus:           derefString(req.Locus),
+		World:           ids.DerefString(req.World),
+		Carrier:         ids.DerefString(req.Carrier),
+		Locus:           ids.DerefString(req.Locus),
 	})
 
 	existing, err := queryOneMap(s.conn, "SELECT * FROM assertion WHERE hash = ?", identity)
@@ -247,11 +249,11 @@ func (s *Store) AppendAssertion(req AppendAssertionRequest) (map[string]any, err
 	}
 
 	nodeKey := ids.AssertionNodeID(identity)
-	subjectLabel := derefString(subjectLiteralValue)
+	subjectLabel := ids.DerefString(subjectLiteralValue)
 	if presentID(req.SubjectID) {
 		subjectLabel = subjectNode.Label
 	}
-	objectLabel := derefString(objectLiteralValue)
+	objectLabel := ids.DerefString(objectLiteralValue)
 	if presentID(req.ObjectID) {
 		objectLabel = objectNode.Label
 	}
@@ -276,10 +278,10 @@ func (s *Store) AppendAssertion(req AppendAssertionRequest) (map[string]any, err
 			   temporal_class, holder_id, warrant, anchor_trace_hash, anchor_start, anchor_end,
 			   source_trace_hash, audience, confidence, status, loop_state, falsifier, hash, created_at
 			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			nodeKey, req.Scope, nullableID(req.SubjectID), subjectLiteralValue, req.RelID,
-			nullableID(req.ObjectID), objectLiteralValue, boolInt(req.Bare),
+			nodeKey, req.Scope, ids.OptionalNonEmptyString(req.SubjectID), subjectLiteralValue, req.RelID,
+			ids.OptionalNonEmptyString(req.ObjectID), objectLiteralValue, boolInt(req.Bare),
 			req.World, req.Carrier, req.Locus, fromTime, toTime, recordTime, sourceTime,
-			temporal, nullableID(req.HolderID), req.Warrant, req.AnchorTraceHash,
+			temporal, ids.OptionalNonEmptyString(req.HolderID), req.Warrant, req.AnchorTraceHash,
 			req.AnchorStart, req.AnchorEnd, sourceHashOr(req.SourceTraceHash, req.AnchorTraceHash),
 			effectiveAudience, confidence, req.Status, req.LoopState, req.Falsifier,
 			identity, now,
@@ -355,9 +357,9 @@ func (s *Store) findCovered(
 		   AND ((object_id = ?) OR (object_id IS NULL AND lower(object_literal) = lower(?)))
 		 ORDER BY created_at LIMIT 1`,
 		scope, relID, boolInt(bare), warrant, audience,
-		nullableID(holderID),
-		nullableID(subjectID), nullableString(subjectLiteral),
-		nullableID(objectID), nullableString(objectLiteral),
+		ids.OptionalNonEmptyString(holderID),
+		ids.OptionalNonEmptyString(subjectID), ids.OptionalString(subjectLiteral),
+		ids.OptionalNonEmptyString(objectID), ids.OptionalString(objectLiteral),
 	)
 	if err != nil {
 		return nil, err
@@ -397,8 +399,8 @@ func (s *Store) recordConflicts(
 		   AND holder_id IS ? AND warrant = ? AND audience = ?
 		   AND ((subject_id = ?) OR (subject_id IS NULL AND lower(subject_literal) = lower(?)))
 		 LIMIT 32`,
-		scope, relID, nullableID(holderID), warrant, audience,
-		nullableID(subjectID), nullableString(subjectLiteral),
+		scope, relID, ids.OptionalNonEmptyString(holderID), warrant, audience,
+		ids.OptionalNonEmptyString(subjectID), ids.OptionalString(subjectLiteral),
 	)
 	if err != nil {
 		return 0, nil, err
@@ -411,7 +413,7 @@ func (s *Store) recordConflicts(
 			continue
 		}
 		existingKey := ids.KeyForNodeOrLiteral(
-			derefString(mapPtrString(row, "object_id")),
+			ids.DerefString(mapPtrString(row, "object_id")),
 			mapString(row, "object_literal"),
 		)
 		if existingKey == objectKey {
@@ -484,27 +486,6 @@ func presentID(value *string) bool {
 
 func reqScopeOr(scope string) string {
 	return scope
-}
-
-func derefString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-func nullableID(value *string) any {
-	if value == nil || *value == "" {
-		return nil
-	}
-	return *value
-}
-
-func nullableString(value *string) any {
-	if value == nil {
-		return nil
-	}
-	return *value
 }
 
 func boolInt(value bool) int {

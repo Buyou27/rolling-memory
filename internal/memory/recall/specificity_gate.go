@@ -331,7 +331,7 @@ func IsStructuralFilePath(token string) bool {
 }
 
 // ExpandScriptSubtokens extracts script-transition subtokens and CJK 3/4-gram windows
-// so FTS seed lookup can bridge unsegmented CJK runs.
+// so cue expansion can bridge unsegmented CJK runs.
 func ExpandScriptSubtokens(prompt string) []string {
 	var out []string
 	seen := map[string]bool{}

@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
@@ -1126,7 +1126,7 @@ type unixDaemonMemoryKey struct{}
 // It hosts both `/v1/recall` (for CLI and Admin Console) and `/mcp` (for stdio MCP proxies),
 // warms the in-memory corpus snapshot in the background on startup, and runs `onStart`
 // (such as the single-instance auto-watcher) until shutdown.
-func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context)) error {
+func ServeUnix(sockPath string, memory *facade.Memory, onStart func(context.Context)) error {
 	if sockPath == "" {
 		sockPath = DefaultUnixSocketPath()
 	} else {
@@ -1145,7 +1145,7 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 	}
 	// Apply the configured soft memory limit before the engine snapshot warms
 	// up so the collector target covers the whole daemon lifetime.
-	ApplyMemoryLimit(daemonCfg)
+	memoryState := ApplyMemoryLimit(daemonCfg)
 	health, err := unixDaemonHealth(daemonCfg, myMTime)
 	if err != nil {
 		return err
@@ -1227,6 +1227,7 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 		_ = lazy.Close()
 		return errors.New("daemon configuration changed during startup")
 	}
+	active.SetColdBuildMemoryLimit(coldBuildMemoryLimit(memoryState))
 	go func() { _ = active.Warmup(ctx) }()
 	if onStart != nil {
 		go onStart(ctx)
@@ -1236,6 +1237,7 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 	mcpHandler := httpSrv.Handler()
 
 	var srv *http.Server
+	var graphStore graphBuilderStore
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		current, getErr := lazy.Get()
@@ -1311,6 +1313,12 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 		defer inFlight.Add(-1)
 		handleUnixDocuments(w, r, memory, lazy)
 	})
+	mux.HandleFunc("/v1/graph", func(w http.ResponseWriter, r *http.Request) {
+		activity.Store(time.Now().UnixNano())
+		inFlight.Add(1)
+		defer inFlight.Add(-1)
+		handleUnixGraph(w, r, lazy, &graphStore, health)
+	})
 	mux.HandleFunc("/v1/invalidate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1324,6 +1332,7 @@ func ServeUnix(sockPath string, memory *api.Memory, onStart func(context.Context
 		if active != nil {
 			if tc, err := active.ThinClient(); err == nil && tc != nil && tc.Vault != nil {
 				tc.Vault.InvalidateRuntimeCaches()
+				graphStore.invalidate(tc.Vault)
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -1420,7 +1429,7 @@ func closeUnixDaemon(srv *http.Server) {
 	_ = srv.Close()
 }
 
-func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *api.Memory, lazy *LazyMemory) {
+func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *facade.Memory, lazy *LazyMemory) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHTTPBody))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, UnixRecallResponse{OK: false, Error: err.Error()})
@@ -1454,7 +1463,7 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *api.Memory
 			presence = &norm
 		}
 	}
-	req := api.RecallRequest{
+	req := facade.RecallRequest{
 		Cue:             payload.Cue,
 		Scope:           payload.Scope,
 		Reader:          payload.Reader,
@@ -1489,7 +1498,7 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *api.Memory
 		writeJSON(w, http.StatusOK, UnixRecallResponse{OK: false, EngineError: true, Error: err.Error()})
 		return
 	}
-	api.WaitForPendingNoeticPulses(api.NoeticPulseBudget)
+	facade.WaitForPendingNoeticPulses(facade.NoeticPulseBudget)
 	out := UnixRecallResponse{OK: true}
 	if strings.EqualFold(strings.TrimSpace(payload.Mode), "probe") {
 		out.Probe = result.ToProbe()
@@ -1522,7 +1531,7 @@ func episodicHydrateTurn(ref string) string {
 
 // handleUnixHydrate resolves display pointers only after the sealed episodic index
 // verifies the document, pointer, and source content.
-func handleUnixHydrate(w http.ResponseWriter, r *http.Request, memory *api.Memory, lazy *LazyMemory) {
+func handleUnixHydrate(w http.ResponseWriter, r *http.Request, memory *facade.Memory, lazy *LazyMemory) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHTTPBody))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, UnixHydrateResponse{OK: false, Error: err.Error()})
@@ -1592,7 +1601,7 @@ func handleUnixHydrate(w http.ResponseWriter, r *http.Request, memory *api.Memor
 // indices, so a display layer never re-implements file chunking and can never drift from
 // ingest. Display layers (Admin Console lists and detail dialogs) call this instead of
 // ever showing path coordinates as if they were the chunk text.
-func handleUnixDocuments(w http.ResponseWriter, r *http.Request, memory *api.Memory, lazy *LazyMemory) {
+func handleUnixDocuments(w http.ResponseWriter, r *http.Request, memory *facade.Memory, lazy *LazyMemory) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHTTPBody))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, UnixDocumentResponse{OK: false, Error: err.Error()})

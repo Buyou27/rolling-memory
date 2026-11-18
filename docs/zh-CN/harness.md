@@ -31,7 +31,7 @@ rolling-memory install       ← 宿主适配层：注册表 + 保守写手（JS
         │  写入启动器与注册项
 MCP stdio · CLI · Hooks      ← 机械记忆核：零宿主耦合，标准进程通信契约
         │
-SQLite 明文金库 (WAL + FTS5)  ← 本地存储层：本地明文金库
+SQLite 明文金库 (WAL)         ← 本地存储层：本地明文金库
 ```
 
 - **机械核（`api` / `mcp` / `cli` / `hooks`）零宿主耦合**：不依赖任何特定宿主 SDK，仅通过标准进程协议通信（MCP 为逐行 JSON-RPC 2.0，CLI 为 argv/stdin，Hooks 为 JSON stdin → JSON stdout）。
@@ -50,6 +50,7 @@ SQLite 明文金库 (WAL + FTS5)  ← 本地存储层：本地明文金库
 | **ZCode** | `~/.zcode/skills/` | `~/.zcode/cli/config.json` → `mcp.servers` | ✅ `hooks.events`（需 `hooks.enabled=true`） | `~/.zcode/AGENTS.md` / `AGENTS.md` |
 | **Claude Code** | `~/.claude/skills/` | `~/.claude.json` → `mcpServers`（项目级 `.mcp.json`） | ✅ `~/.claude/settings.json` → `hooks` | `~/.claude/CLAUDE.md` / `CLAUDE.md` |
 | **Codex** | `~/.codex/skills/` | `~/.codex/config.toml` → `[mcp_servers.<name>]` | ✅ `~/.codex/hooks.json`（可选，`--with-hooks`；首次需在 Codex 内评审信任） | `~/.codex/AGENTS.md` / `AGENTS.md` |
+| **OpenCode** | `~/.config/opencode/skills/` | `~/.config/opencode/opencode.json(c)` → `mcp.servers`（项目级 `.opencode/opencode.json`） | —（由 Skill 驱动） | — / `AGENTS.md` |
 | **DeepSeek Harness (`dsh`)** | `~/.dsh/skills/`（`$DSH_HOME`） | `~/.dsh/profiles/<profile>/cordis.patch.yml` → `dsh-mcp-client` | —（由 Skill 驱动） | `~/.dsh/AGENTS.md` / `AGENTS.md` |
 | **CodeBuddy** | `~/.codebuddy/skills/` | `~/.codebuddy/mcp.json` → `mcpServers` | —（由 Skill 驱动） | — / `CODEBUDDY.md` |
 
@@ -104,7 +105,7 @@ rolling-memory mcp --http --addr 127.0.0.1:9000 --path /mcp  # 需要换端口 /
 
 ### 4.5 对话采集范围与手工导入
 
-安装 MCP 服务或技能与采集对话历史是两件事。后台扫描器读取 ZCode 的本地会话数据库，以及 ZCode、Claude Code、Codex、DSH、CodeBuddy 和 WorkBuddy 的部分转录文件位置。它支持 Codex 的 `.jsonl.zst` 归档，以及已观察到的 v4 格式 DSH 压缩 `.jsonl.zstd` 会话：用户消息须具有 `source.kind: user`，只有匹配的 `turn/start` 与 `turn/end` 事件确认成功完成（`reason.kind: completed`）的轮次才会导入。未知格式和无法确认成功完成的轮次不导入；不保证覆盖子代理对话。CodeBuddy 和 WorkBuddy 的预设 JSONL 位置可能与宿主实际存储不一致。Cursor、Windsurf、Cline 和豆包没有自动对话扫描器。已安装且受宿主支持的钩子也不能保证这些来源完整。
+安装 MCP 服务或技能与采集对话历史是两件事。后台扫描器读取 ZCode 的本地会话数据库，以及 ZCode、Claude Code、Codex、DSH、CodeBuddy 和 WorkBuddy 的部分转录文件位置。它支持 Codex 的 `.jsonl.zst` 归档，以及已观察到的 v4 格式 DSH 压缩 `.jsonl.zstd` 会话：用户消息须具有 `source.kind: user`，只有匹配的 `turn/start` 与 `turn/end` 事件确认成功完成（`reason.kind: completed`）的轮次才会导入。未知格式和无法确认成功完成的轮次不导入；不保证覆盖子代理对话。CodeBuddy 和 WorkBuddy 的预设 JSONL 位置可能与宿主实际存储不一致。OpenCode、Cursor、Windsurf、Cline 和豆包没有自动对话扫描器。已安装且受宿主支持的钩子也不能保证这些来源完整。
 
 其他来源可导出或准备受支持的 JSONL 或文本对话文件，用 `rolling-memory import /path/to/transcript` 手工导入并检查结果。文件导入仅接受 `shared` 或 `public` 受众；由于后台扫描无法执行文件级访问控制，受限或未知受众会被拒绝。请勿将敏感文件放入扫描目录；已有副本不会自动删除。手工导入和后台扫描均不保证完整或无损采集。工具契约见 [mcp.md](mcp.md)。检索与存储使用本地明文 `local_plain`；安装或更新软件是单独的操作，可能需要联网。
 
@@ -130,6 +131,10 @@ rolling-memory install --name rmem --skill-name rmem
 
 # 6. 指定特定宿主或 dsh 配置文件
 rolling-memory install zcode dsh --profile web
+
+# OpenCode：在用户配置中安装 Skill 和本地 MCP 服务
+rolling-memory install opencode
+rolling-memory install opencode --check
 
 # 7. 静态配置核验 + 实时拉起 MCP 进程验证 initialize / tools/list 握手
 rolling-memory install --check

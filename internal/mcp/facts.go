@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
@@ -26,7 +26,7 @@ var (
 // the tool returned and how large the delivery was, never what the agent later
 // did with it. The ledger is evidence, not a verdict, and it stores only a
 // content hash plus a byte count — the delivered text itself is never written.
-func recordRecallFact(memory *api.Memory, presence *text.PresenceCoordinates, mode, outcome, delivered string) {
+func recordRecallFact(memory *facade.Memory, presence *text.PresenceCoordinates, mode, outcome, delivered string) {
 	if memory == nil || memory.Config == nil {
 		return
 	}

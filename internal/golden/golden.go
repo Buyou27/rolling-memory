@@ -22,11 +22,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 	"github.com/rocareer/rolling-memory/internal/version"
@@ -34,6 +34,36 @@ import (
 
 // FixedNow is the frozen wall clock used by the standard oracle.
 const FixedNow = int64(1793102400)
+
+// ResealHint points a failing expectation comparison at the one-command
+// maintenance path instead of leaving the reader to reconstruct the ritual.
+const ResealHint = "golden expectations record user-visible surfaces; if this change is intentional run the repository golden reseal workflow and review its diff, otherwise revert the surface change"
+
+// deterministicFixtureSecretKeyHex pins the scenario database's HMAC root
+// (thin_vault_meta.user_secret_key) before the facade opens it. Freshly
+// replayed fixture databases then stay byte-reproducible across reseals instead
+// of carrying a per-run random key that turns every seal into a manual
+// dump-diff decision.
+const deterministicFixtureSecretKeyHex = "5d4be152dd073e2919df275566a8366c9b5c9e2b8eb1c229dd1e88245110fb25"
+
+// seedFixtureSecretKey creates the fixture database with its secret key already
+// pinned, so the facade's key bootstrap observes an existing 32-byte value.
+func seedFixtureSecretKey(path string) error {
+	key, err := hex.DecodeString(deterministicFixtureSecretKeyHex)
+	if err != nil {
+		return err
+	}
+	connection, err := sql.Open("sqlite", path)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	if _, err := connection.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+		return err
+	}
+	_, err = connection.Exec(`INSERT OR IGNORE INTO thin_vault_meta(k, v) VALUES ('user_secret_key', ?)`, key)
+	return err
+}
 
 // DumpTables is the table list used for rows.json and table digests.
 var DumpTables = []string{
@@ -364,7 +394,7 @@ type Runner struct {
 	ScenarioRoot string
 	Normalizer   *Normalizer
 	Config       *config.Config
-	Memory       *api.Memory
+	Memory       *facade.Memory
 	Saved        map[string]any
 	Produced     map[string]any
 	ProducedText map[string]string
@@ -409,8 +439,16 @@ func NewRunner(fixture *Fixture, workRoot, repoRoot string) (*Runner, error) {
 
 // OpenFresh creates the scenario database from scratch.
 func (r *Runner) OpenFresh() error {
-	_ = os.Remove(r.Config.DB)
-	database, err := api.New(r.Config)
+	if err := os.Remove(r.Config.DB); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(r.Config.DB), 0o755); err != nil {
+		return err
+	}
+	if err := seedFixtureSecretKey(r.Config.DB); err != nil {
+		return err
+	}
+	database, err := facade.New(r.Config)
 	if err != nil {
 		return err
 	}
@@ -438,7 +476,7 @@ func (r *Runner) OpenCopy(source string) error {
 	if err := os.WriteFile(r.Config.DB, raw, 0o600); err != nil {
 		return err
 	}
-	database, err := api.New(r.Config)
+	database, err := facade.New(r.Config)
 	if err != nil {
 		return err
 	}
@@ -563,7 +601,7 @@ func (r *Runner) opRemember(args map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	request := api.RememberRequest{
+	request := facade.RememberRequest{
 		Content:    argStringPtr(args, "content"),
 		SourceText: argStringPtr(args, "source_text"),
 		AnchorText: argStringPtr(args, "anchor_text"),
@@ -659,7 +697,7 @@ func (r *Runner) opAddMention(args map[string]any) (any, error) {
 }
 
 func (r *Runner) opRecall(args map[string]any) (any, error) {
-	request := api.RecallRequest{
+	request := facade.RecallRequest{
 		Cue:             argString(args, "cue"),
 		Scope:           argStringPtr(args, "scope"),
 		Reader:          argStringPtr(args, "reader"),
@@ -730,7 +768,7 @@ func (r *Runner) opImport(args map[string]any) (any, error) {
 		}
 		cfg.Log = filepath.Join(freshRoot, "state", "rolling-memory.log")
 		cfg.Recall.BudgetMS = 60000
-		fresh, err := api.New(cfg)
+		fresh, err := facade.New(cfg)
 		if err != nil {
 			return nil, err
 		}

@@ -542,7 +542,7 @@ func (v *Vault) healEpisodicPointerUnit(docID string, occurredAt int64, oldRaw, 
 }
 
 // DeleteLocalEpisodicUnit removes one pointer-indexed episodic unit (document row,
-// index row via the delete trigger, lineage references and the FTS mirror) when its
+// index row via the delete trigger, and lineage references) when its
 // stored pointer still matches expectPointer: a concurrent re-point (the scan
 // healing a drifted row) keeps the row instead of deleting verified speech.
 func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, error) {
@@ -579,6 +579,12 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	if err := v.deleteCanonicalUnits(docID); err != nil {
+		return false, err
+	}
+	if err := v.deleteCanonicalEpisodicIndex(docID); err != nil {
 		return false, err
 	}
 	v.InvalidateRuntimeCaches()
@@ -1096,6 +1102,22 @@ func (v *Vault) saveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	if err := v.ingestCanonicalText(docID, occurredAt, livePlaintext, canonicalUnitMeta{
+		Layer:           "episodic",
+		RefPointer:      refPointer,
+		KeptIndicesJSON: string(keptJSON),
+		AddressURI:      resp.AddressURI,
+		Coord64:         int64(resp.AddressCoord64),
+		WaveformBar:     resp.WaveformBar,
+		DocMacroWave:    resp.DocMacroWaveform,
+		AssistantID:     v.identity.AssistantID,
+		IncarnationID:   v.identity.IncarnationID,
+		Locus:           v.identity.Locus,
+		InsertedAt:      time.Now().Unix(),
+		StoreRawText:    false,
+	}); err != nil {
+		return err
+	}
 	v.InvalidateRuntimeCaches()
 	return nil
 }
@@ -1199,7 +1221,8 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 		return false, err
 	}
 	var raw string
-	if err := tx.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&raw); err != nil {
+	var occurredAt int64
+	if err := tx.QueryRow(`SELECT raw_text, occurred_at FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&raw, &occurredAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, fmt.Errorf("%w: document unavailable: %w", ErrEpisodicIndexItem, err)
 		}
@@ -1231,6 +1254,14 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	if err := v.ingestCanonicalText(docID, occurredAt, text, canonicalUnitMeta{
+		Layer:        "episodic",
+		RefPointer:   refPointer,
+		InsertedAt:   time.Now().Unix(),
+		StoreRawText: false,
+	}); err != nil {
 		return false, err
 	}
 	v.InvalidateRuntimeCaches()
@@ -1342,15 +1373,6 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 		if len(r.storedKey) == 0 || !v.validEpisodicPayloadMAC(r.docID, r.refPointer, r.storedKey, r.payload, r.digest, r.mac) {
 			return
 		}
-		pkt, err := v.decodeEpisodicIndex(r.docID, r.storedKey, r.payload, r.storedKey)
-		if err != nil {
-			return
-		}
-		tMeta, tCounts, tPos := coreTermsFromPacket(pkt.Slots, pkt.SentenceFrames)
-		docLen := len(pkt.Slots)
-		if docLen < 1 {
-			docLen = 1
-		}
 		doc := vaultDocEntry{
 			docID:         r.docID,
 			layer:         r.layer,
@@ -1361,10 +1383,7 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 			locus:         strings.TrimSpace(r.locus),
 			refPointer:    r.refPointer,
 			contentDigest: r.digest,
-			termMeta:      tMeta,
-			termCounts:    tCounts,
-			termPositions: tPos,
-			docLen:        docLen,
+			docLen:        1,
 		}
 		r.payload = nil
 		r.entry = doc

@@ -10,14 +10,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 // The page size reuses the reconciliation budget. It bounds each tick, not the
 // history covered: completed cycles restart and retry unavailable references.
-func runEpisodicIndexBackfillTick(ctx context.Context, memory *api.Memory) (thinclient.EpisodicIndexBackfillReport, error) {
+func runEpisodicIndexBackfillTick(ctx context.Context, memory *facade.Memory) (thinclient.EpisodicIndexBackfillReport, error) {
 	var report thinclient.EpisodicIndexBackfillReport
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return report, errors.New("episodic backfill requires an open local store")

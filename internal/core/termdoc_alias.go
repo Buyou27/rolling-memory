@@ -10,8 +10,6 @@ import "github.com/rocareer/rolling-memory/sdk/go/public/termdoc"
 // math/sort 白名单零外部 import，同时 core 对外 API 与全部调用点不变。
 type (
 	TermRole = termdoc.TermRole
-	// AtomRole 是 TermRole 的向后兼容类型别名（标准术语统一为 TermRole）。
-	AtomRole = TermRole
 	Term     = termdoc.Term
 	// Atom 是 Term 的向后兼容类型别名（去伪物理化标准术语统一为 Term）。
 	Atom           = Term

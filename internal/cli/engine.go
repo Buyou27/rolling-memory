@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/graphmodel"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
 )
@@ -35,6 +36,8 @@ func (a *application) runEngine() int {
 		return a.runEngineHydrate()
 	case "documents":
 		return a.runEngineDocuments()
+	case "graph":
+		return a.runEngineGraph()
 	case "invalidate":
 		return a.runEngineInvalidate()
 	}
@@ -185,6 +188,37 @@ func (a *application) runEngineDocuments() int {
 		payload.DB = cfg.DB
 	}
 	resp, err := mcp.CallUnixDaemonDocuments(context.Background(), "", cfg, payload)
+	if err != nil {
+		return a.fail(err)
+	}
+	envelope, err := engineRelayValue(resp)
+	if err != nil {
+		return a.fail(err)
+	}
+	if err := a.printJSON(envelope); err != nil {
+		return a.fail(err)
+	}
+	return 0
+}
+
+// runEngineGraph relays one read-only memory-graph view (same shape as the
+// daemon's `POST /v1/graph` payload) over the verified connection. The graph is
+// built from the local vault and the immutable core snapshot; no cloud endpoint
+// is consulted.
+func (a *application) runEngineGraph() int {
+	request, err := a.readEngineRequest()
+	if err != nil {
+		return a.fail(err)
+	}
+	var payload graphmodel.ViewRequest
+	if err := json.Unmarshal(request, &payload); err != nil {
+		return a.fail(fmt.Errorf("decode engine request: %w", err))
+	}
+	cfg, err := a.loadEngineConfig()
+	if err != nil {
+		return a.fail(err)
+	}
+	resp, err := mcp.CallUnixDaemonGraph(context.Background(), "", cfg, payload)
 	if err != nil {
 		return a.fail(err)
 	}

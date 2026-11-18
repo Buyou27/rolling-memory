@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -84,20 +85,29 @@ func systemDaemonHandler(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
-	raw, err := systemCLIRunner(ctx, bin, []string{"daemon", action, "--db", resolveMemoryDBPath(home), "--json"})
+	report, err := daemonReport(ctx, bin, resolveMemoryDBPath(home), action)
 	if err != nil {
 		httpx.Fail(c, httpx.WithMessage("守护命令执行失败: "+err.Error()))
-		return
-	}
-	var report map[string]any
-	if err := json.Unmarshal(raw, &report); err != nil {
-		httpx.Fail(c, httpx.WithMessage("解析守护报告失败: "+err.Error()))
 		return
 	}
 	if action != "status" {
 		invalidateEnvHealthCache(home)
 	}
 	httpx.Success(c, httpx.WithData(gin.H{"action": action, "report": report}))
+}
+
+// daemonReport 运行一次 `daemon <action> --json` 子进程并解析 report。
+// HTTP 控制端与实时帧生产者共用同一份参数拼装与解析，避免两处契约漂移。
+func daemonReport(ctx context.Context, bin, dbPath, action string) (map[string]any, error) {
+	raw, err := systemCLIRunner(ctx, bin, []string{"daemon", action, "--db", dbPath, "--json"})
+	if err != nil {
+		return nil, err
+	}
+	var report map[string]any
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, fmt.Errorf("解析守护报告失败: %w", err)
+	}
+	return report, nil
 }
 
 type systemMemoryLimitRequest struct {

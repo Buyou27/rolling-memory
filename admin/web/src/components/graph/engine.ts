@@ -18,13 +18,21 @@
 
 import * as THREE from 'three'
 import { OrbitControls } from 'three-stdlib'
+import { isContainerKind, isWordKind, isPhraseKind, nodeAccentColor } from './kinds'
 
 export interface Graph3DNode {
     id: number
     node_key: string
     summary: string
+    label?: string
     kind: string
     layer?: string
+    cluster_type?: string
+    member_count?: number
+    free?: boolean
+    primary_cluster_key?: string
+    energy_nats?: number
+    layer_mix?: Record<string, number>
     weight?: number
     status: string
     confidence: number
@@ -35,6 +43,8 @@ export interface Graph3DNode {
     viewDegree: number
     atoms?: { token: string; potential: number; weight: number }[]
     molecules?: { text: string; mass_nats: number; gamma: number }[]
+    words?: { token: string; group_hex?: string; df: number; mass_nats: number; weight: number; unit_span?: number }[]
+    phrases?: { left: string; right: string; df: number; binding_energy_nats: number; joint_surprisal_nats: number; unit_span?: number }[]
 }
 
 export interface Graph3DEdge {
@@ -893,8 +903,11 @@ export class Hypergraph3DEngine {
             if (e.relation === 'member_of') {
                 if (!cellMembersMap.has(e.to)) cellMembersMap.set(e.to, [])
                 cellMembersMap.get(e.to)!.push(e.from)
-                unitParentCell.set(e.from, e.to)
-            } else if ((e.relation === 'atom_of' || e.relation === 'molecule_of') && !particleHostNode.has(e.from)) {
+                const fromNode = this.nodeById.get(e.from)
+                if (!unitParentCell.has(e.from) || fromNode?.primary_cluster_key === e.to_key) {
+                    unitParentCell.set(e.from, e.to)
+                }
+            } else if ((e.relation === 'atom_of' || e.relation === 'molecule_of' || e.relation === 'word_of' || e.relation === 'phrase_of') && !particleHostNode.has(e.from)) {
                 particleHostNode.set(e.from, e.to)
             }
         }
@@ -927,13 +940,13 @@ export class Hypergraph3DEngine {
                 for (const n of nodes) {
                     if (n.id === focusId) {
                         this.pos3DById.set(n.id, new THREE.Vector3(0, 0, 0))
-                        if (n.kind === 'cell') this.cellRadiusById.set(n.id, 24)
+                        if (isContainerKind(n.kind)) this.cellRadiusById.set(n.id, 24)
                         continue
                     }
                     const h = hopMap[n.id] ?? 3
                     if (!hopBuckets.has(h)) hopBuckets.set(h, [])
                     hopBuckets.get(h)!.push(n)
-                    if (n.kind === 'cell') this.cellRadiusById.set(n.id, 20)
+                    if (isContainerKind(n.kind)) this.cellRadiusById.set(n.id, 20)
                 }
                 for (const [hop, list] of hopBuckets.entries()) {
                     const shellR = hop === 1 ? 145 : hop === 2 ? 265 : 375
@@ -947,8 +960,8 @@ export class Hypergraph3DEngine {
                 // • 中层情景球壳（R ∈ [195, 295]）：L2 Episodic 情景 Cell 星云团分布在三维中层球面上；
                 // • 外层背景球壳（R ∈ [315, 415]）：L1 Background 背景 Cell 星云团分布在三维外层球面上。
                 const noeticList = nodes.filter((n) => n.kind !== 'cell' && n.layer === 'noetic')
-                const epCells = nodes.filter((n) => n.kind === 'cell' && n.layer !== 'background')
-                const bgCells = nodes.filter((n) => n.kind === 'cell' && n.layer === 'background')
+                const epCells = nodes.filter((n) => isContainerKind(n.kind) && n.layer !== 'background')
+                const bgCells = nodes.filter((n) => isContainerKind(n.kind) && n.layer === 'background')
 
                 noeticList.forEach((n, i) => {
                     const r = 62 + (i % 4) * 22
@@ -1144,13 +1157,13 @@ export class Hypergraph3DEngine {
                     const hop = hopMap[n.id] ?? 3
                     const zWave = n.id === focusId ? 0 : ((n.id % 11) - 5) * (hop === 1 ? 8 : 14)
                     this.pos3DById.set(n.id, new THREE.Vector3(p2[0], p2[1], zWave))
-                    if (n.kind === 'cell') {
+                    if (isContainerKind(n.kind)) {
                         this.cellRadiusById.set(n.id, 22)
                     }
                     continue
                 }
 
-                if (n.kind === 'cell') {
+                if (isContainerKind(n.kind)) {
                     const memberIds = cellMembersMap.get(n.id) ?? []
                     const somaRad = Math.min(64, 22 + Math.sqrt(memberIds.length) * 9.5)
                     this.cellRadiusById.set(n.id, somaRad)
@@ -1167,7 +1180,7 @@ export class Hypergraph3DEngine {
             // 星盘防重叠弹性松弛（Disc Collision Relaxation）：
             // 对主星盘层的所有 Cell 容器做 8 轮轻量级排斥松弛，确保相邻半透明光晕球壳（somaRad）舒展不重叠
             if (!inDrill) {
-                const discCells = nodes.filter((n) => n.kind === 'cell' && this.pos3DById.has(n.id))
+                const discCells = nodes.filter((n) => isContainerKind(n.kind) && this.pos3DById.has(n.id))
                 for (let pass = 0; pass < 8; pass++) {
                     for (let i = 0; i < discCells.length; i++) {
                         const ci = discCells[i]!
@@ -1202,12 +1215,12 @@ export class Hypergraph3DEngine {
         let particleIdx = 0
         for (const n of nodes) {
             if (this.pos3DById.has(n.id)) continue
-            if (n.kind === 'atom' || n.kind === 'molecule') {
+            if (isWordKind(n.kind) || isPhraseKind(n.kind)) {
                 particleIdx++
                 const hostId = particleHostNode.get(n.id)
                 const hostPos = hostId !== undefined ? this.pos3DById.get(hostId) : undefined
                 if (!inDrill && hostPos) {
-                    const isAtom = n.kind === 'atom'
+                    const isAtom = isWordKind(n.kind)
                     const orbitR = isAtom ? 32 + (particleIdx % 4) * 9 : 46 + (particleIdx % 3) * 11
                     const th = particleIdx * goldenAngle * 1.7
                     const zOff = (isAtom ? 26 : -28) + ((particleIdx % 5) - 2) * 7
@@ -1216,11 +1229,11 @@ export class Hypergraph3DEngine {
                         new THREE.Vector3(hostPos.x + Math.cos(th) * orbitR, hostPos.y + Math.sin(th) * orbitR, hostPos.z + zOff)
                     )
                 } else if (isSphere) {
-                    const shellR = n.kind === 'atom' ? 165 : 285
+                    const shellR = isWordKind(n.kind) ? 165 : 285
                     this.pos3DById.set(n.id, fibonacciSpherePoint(particleIdx, 40, shellR, 2.1))
                 } else {
                     const p2 = coords2D[n.id] ?? [0, 0]
-                    const zParticle = n.kind === 'atom' ? 48 : -44
+                    const zParticle = isWordKind(n.kind) ? 48 : -44
                     this.pos3DById.set(n.id, new THREE.Vector3(p2[0], p2[1], zParticle))
                 }
                 continue
@@ -1309,7 +1322,7 @@ export class Hypergraph3DEngine {
         // 统计需要常显胶囊标签的 Top-14 核心 Cell 与 Top-12 L3 Noetic 神经节（避免 100+ 标签糊满全屏）
         const topCellIds = new Set(
             nodes
-                .filter((x) => x.kind === 'cell' && (cellMembersMap.get(x.id)?.length ?? 0) >= 2)
+                .filter((x) => isContainerKind(x.kind) && (cellMembersMap.get(x.id)?.length ?? 0) >= 2)
                 .sort((a, b) => (cellMembersMap.get(b.id)?.length ?? 0) - (cellMembersMap.get(a.id)?.length ?? 0) || b.viewDegree - a.viewDegree)
                 .slice(0, 14)
                 .map((x) => x.id)
@@ -1331,7 +1344,7 @@ export class Hypergraph3DEngine {
             const initSpawnScale = isNew ? 0.001 : 1.0
             this.pos3DById.set(n.id, startPos.clone())
 
-            const isCell = n.kind === 'cell'
+            const isCell = isContainerKind(n.kind)
             const isNoetic = !isCell && n.layer === 'noetic'
             const isFocus = inDrill && focusId === n.id
             const somaRad = this.cellRadiusById.get(n.id) ?? 22
@@ -1428,36 +1441,41 @@ export class Hypergraph3DEngine {
                 this.haloBaseScale.set(n.id, haloScale)
             } else {
                 // Unit 记忆囊泡 / L3 Noetic 神经节 / Atom 原子荷 / Molecule 分子波包
-                const isAtom = n.kind === 'atom'
-                const isMolecule = n.kind === 'molecule'
+                const isAtom = isWordKind(n.kind)
+                const isMolecule = isPhraseKind(n.kind)
+                const isFree = n.kind === 'free_unit'
                 const baseCol = isFocus
                     ? '#f59e0b'
-                    : isAtom
-                      ? '#f59e0b'
-                      : isMolecule
-                        ? '#a855f7'
-                        : isNoetic
-                          ? '#ec4899'
-                          : n.layer === 'background'
-                            ? '#3b82f6'
-                            : '#10b981'
+                    : isFree
+                      ? '#94a3b8'
+                      : isAtom
+                        ? '#f59e0b'
+                        : isMolecule
+                          ? '#a855f7'
+                          : isNoetic
+                            ? '#ec4899'
+                            : n.layer === 'background'
+                              ? '#3b82f6'
+                              : '#10b981'
                 const emissiveCol = isFocus
                     ? '#d97706'
-                    : isAtom
-                      ? '#d97706'
-                      : isMolecule
-                        ? '#7e22ce'
-                        : isNoetic
-                          ? '#db2777'
-                          : n.layer === 'background'
-                            ? '#2563eb'
-                            : '#059669'
+                    : isFree
+                      ? '#475569'
+                      : isAtom
+                        ? '#d97706'
+                        : isMolecule
+                          ? '#7e22ce'
+                          : isNoetic
+                            ? '#db2777'
+                            : n.layer === 'background'
+                              ? '#2563eb'
+                              : '#059669'
 
-                const coreRadius = isFocus ? 7.5 : isAtom ? 4.4 : isMolecule ? 4.9 : isNoetic ? 5.8 : 5.2
+                const coreRadius = isFocus ? 7.5 : isFree ? 4.6 : isAtom ? 4.4 : isMolecule ? 4.9 : isNoetic ? 5.8 : 5.2
                 const unitMat = new THREE.MeshStandardMaterial({
                     color: baseCol,
                     emissive: emissiveCol,
-                    emissiveIntensity: isAtom || isMolecule ? 0.78 : isNoetic ? 0.65 : 0.62,
+                    emissiveIntensity: isAtom || isMolecule ? 0.78 : isFree ? 0.42 : isNoetic ? 0.65 : 0.62,
                     roughness: 0.18,
                     metalness: 0.08,
                 })
@@ -1490,12 +1508,15 @@ export class Hypergraph3DEngine {
             }
 
             // 3.8 为焦点、选中或高能核心节点构建「量子原子轨道微粒（Atomic Quantum Satellites）」与「分子共价轨道环（Molecular Orbital Ring）」
+            const orbitalParticles =
+                Array.isArray(n.atoms) && n.atoms.length > 0
+                    ? n.atoms
+                    : (n.words ?? []).map((w) => ({ token: w.token, potential: w.mass_nats, weight: w.weight }))
             const showAtomicOrbitals =
                 (isFocus || n.id === this.selectedNodeId || topCellIds.has(n.id) || topNoeticIds.has(n.id)) &&
-                Array.isArray(n.atoms) &&
-                n.atoms.length > 0
+                orbitalParticles.length > 0
             if (showAtomicOrbitals) {
-                const topA = (n.atoms ?? []).slice(0, isCell ? 5 : 4)
+                const topA = orbitalParticles.slice(0, isCell ? 5 : 4)
                 const baseOrbitR = isCell ? somaRad * 1.12 : isFocus ? 14.5 : 10.5
                 topA.forEach((atom, aIdx) => {
                     const satMat = new THREE.SpriteMaterial({
@@ -1524,23 +1545,13 @@ export class Hypergraph3DEngine {
             }
 
             // 4. 为核心 Hub Cell、L3 Noetic 神经节、Atom/Molecule 粒子、下钻焦点或选中节点生成科幻切角全息投影铭牌
-            const isParticle = n.kind === 'atom' || n.kind === 'molecule'
+            const isParticle = isWordKind(n.kind) || isPhraseKind(n.kind)
             const showLabel =
-                isFocus || n.id === this.selectedNodeId || isParticle || nodes.length <= 48 || topCellIds.has(n.id) || topNoeticIds.has(n.id)
+                isFocus || n.id === this.selectedNodeId || isParticle || n.kind === 'free_unit' || nodes.length <= 48 || topCellIds.has(n.id) || topNoeticIds.has(n.id)
             if (showLabel) {
                 const rawLabel = (n.summary || `#${n.id}`).replace(/\s+/g, ' ').trim()
                 const shortText = rawLabel.length > 22 ? `${rawLabel.slice(0, 22)}…` : rawLabel
-                const accent = isCell
-                    ? '#06b6d4'
-                    : n.kind === 'atom'
-                      ? '#f59e0b'
-                      : n.kind === 'molecule'
-                        ? '#a855f7'
-                        : isNoetic
-                          ? '#ec4899'
-                          : n.layer === 'background'
-                            ? '#3b82f6'
-                            : '#10b981'
+                const accent = nodeAccentColor(n)
                 const labelSprite = createTextLabelSprite(shortText, accent, isCell, isDark)
                 const zLift = isCell ? somaRad + 7 : isNoetic ? 12 : 8
                 labelSprite.position.set(startPos.x, startPos.y, startPos.z + zLift)
@@ -1760,7 +1771,7 @@ export class Hypergraph3DEngine {
             if (!pB) continue
             this.createLightningBolt(targetId, nb.peerId, seedPos, pB, now, 0, 1.45, 1, nb.relation)
             this.nodeSurgeUntil.set(nb.peerId, { peak: 1.38, until: now + 1.75 })
-            const isCell = this.nodeById.get(nb.peerId)?.kind === 'cell'
+            const isCell = isContainerKind(this.nodeById.get(nb.peerId)?.kind)
             const rad = this.cellRadiusById.get(nb.peerId) ?? 18
             this.spawnShockwaveRing(pB, now, 0.14, 1.25, isCell ? rad * 0.55 : 5, isCell ? rad * 1.65 : 32)
         }
@@ -1780,7 +1791,7 @@ export class Hypergraph3DEngine {
                 hop2Count++
                 this.createLightningBolt(h1Id, nb2.peerId, p1, p2, now, 0.28, 1.4, 2, nb2.relation)
                 this.nodeSurgeUntil.set(nb2.peerId, { peak: 1.25, until: now + 1.95 })
-                const isCell2 = this.nodeById.get(nb2.peerId)?.kind === 'cell'
+                const isCell2 = isContainerKind(this.nodeById.get(nb2.peerId)?.kind)
                 if (isCell2) {
                     const rad2 = this.cellRadiusById.get(nb2.peerId) ?? 24
                     this.spawnShockwaveRing(p2, now, 0.34, 1.35, rad2 * 0.6, rad2 * 1.75)

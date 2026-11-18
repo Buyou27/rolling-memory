@@ -151,6 +151,7 @@ overview:
     reconcileAllBtn: 一键三层对齐同步
     reconcileLayerBtn: 对齐同步本层
     checkHealthBtn: 重新检测
+    systemServiceBtn: 记忆服务
     harnessesTitle: 宿主运行环境检测与历史会话扫描（Claude Code / ZCode / Codex 等）
     healthChecksTitle: 五维记忆健康诊断与本地 ⇄ 远端三层对齐
     healthChecksTitleLocal: 五维记忆健康诊断与本地三层金库
@@ -630,3 +631,70 @@ system:
     cleanConfirm: 将删除过期备份与可再生成缓存（不影响记忆原文）。继续？
     compactConfirm: 金库瘦身会停止守护进程、重建数据库文件并复位，期间检索不可用。继续？
     doneToast: 维护完成
+    # —— 驾驶舱（实时帧 / KPI / 详情） ——
+    modePill: 本地明文 local_plain
+    liveConnected: 实时
+    liveConnecting: 连接中
+    liveReconnecting: 重连中
+    liveDisabled: 实时不可用
+    refreshFailedToast: 刷新失败，已保留上次读数
+    statusError: 异常
+    detailsTitle: 运行详情
+    startedAtLbl: 启动时间
+    socketLbl: Socket
+    dbPathLbl: 数据库
+    configPathLbl: 配置文件
+    configMatchLbl: 配置指纹
+    configMatchOk: 一致
+    configMatchMismatch: 不一致
+    healthErrorTitle: 守护进程异常
+    retryBtn: 重试
+    offlineEmptyTitle: 守护进程未运行
+    offlineEmptyDesc: 下一次检索或后台同步会自动拉起，也可以手动启动
+    kpiHeapOfLimit: 占上限
+    kpiSysMemLbl: 进程内存
+    kpiSysOfRam: 占物理内存
+    kpiNotRunning: 未运行
+    presetLbl: 上限预设
+    presetCustom: 自定义
+    customPlaceholder: 如 768MiB
+    restartBanner: 上限已保存，重启守护进程后生效
+    restartNowBtn: 立即重启
+    memoryDirtyHint: 修改尚未保存
+    keepLbl: 备份保留份数
+    keepDefault: 引擎默认
+    keepOption: '{n} 份'
+    scanFirstHint: 尚未扫描：点击「扫描空间」读取可回收空间与明细
+    logsLbl: 日志
+    vaultSizeLbl: 金库体积
+    vaultDetailTitle: 金库明细
+    backupsItemsLbl: 旧版本备份
+    cachesItemsLbl: 可再生成缓存
+    logsItemsLbl: 日志文件
+    itemsCount: '{n} 项'
+    keepPolicyLbl: 保留策略
+    receiptLbl: 回执
+    copyBtn: 复制
+    copiedToast: 已复制到剪贴板
+    detailTitle: 空间明细
+    lastClearedLbl: 上次清理
+    neverCleared: 尚未清理
+    infoTitle: 系统信息
+    modeLbl: 运行模式
+    modeValue: 本地明文 local_plain
+    cliTitle: CLI 等价命令
+    cliSub: 可在终端直接执行
+    cliStatusLbl: 查看守护状态
+    cliLimitLbl: 修改内存上限
+    cliMaintainLbl: 空间体检
+    confirmOk: 执行
+    confirmCancel: 取消
+    staleBadge: 读数已过期
+    lastUpdatedLbl: 最后更新
+    envOverrideTitle: 环境变量正在覆盖本页设置
+    envOverrideDesc: 守护进程检测到 GOMEMLIMIT={value}，当前以环境变量为准；清除该环境变量并重启守护进程后，本页配置才会生效。
+    openOverviewBtn: 回收与自愈在「记忆总览」维护卡中执行 →
+    linksTitle: 相关入口
+    linksSub: 记忆控制台负责运行开关与数据资产；本页负责进程、资源与维护
+    openConsoleBtn: 记忆控制台（运行开关 · 数据资产）→
+    openOverviewIndexBtn: 记忆总览（浏览 · 维护 · 回收）→

@@ -6,7 +6,7 @@
 //
 // The package owns argv parsing, exit codes (0 success, 1 processed
 // application error, 2 usage error) and output formatting. Business decisions
-// stay in internal/api and the surface packages wired in here (mcp, hooks,
+// stay in internal/memory/facade and the surface packages wired in here (mcp, hooks,
 // harness); the CLI adds no policy of its own.
 package cli
 
@@ -948,7 +948,7 @@ func BuildParser() *Parser {
 		Options: commonOptions(),
 	}
 	reindexCmd := &command{
-		Name: "reindex", Path: []string{"reindex"}, Help: "rebuild the lexical index and the local compatibility index（本地兼容索引，不参与引擎检索）",
+		Name: "reindex", Path: []string{"reindex"}, Help: "rebuild the legacy assertion-graph index and the local compatibility index（本地明文金库检索无需重建）",
 		Options: commonOptions(),
 	}
 
@@ -963,6 +963,7 @@ func BuildParser() *Parser {
 			Name: "clean", Path: []string{"maintain", "clean"}, Options: append(commonOptions(),
 				intOption([]string{"--keep"}, "keep", maintainDefaultBackupKeep, "keep the newest N backups per (dir, family)"),
 				flagOption([]string{"--caches"}, "caches", false, "also clear regenerable state caches (daemon memory snapshots are dropped first)"),
+				flagOption([]string{"--purge-engine-cache"}, "purge_engine_cache", false, "also delete the engine disk-cluster cache (.zcsr); the next recall rebuilds it (minutes, multi-GB peak)"),
 				flagOption([]string{"--apply"}, "apply", false, "execute the cleanup (dry-run without it)"),
 				flagOption([]string{"--yes"}, "yes", false, "confirm the cleanup (required with --apply)")),
 		},
@@ -1121,7 +1122,7 @@ func BuildParser() *Parser {
 		Help:    "internal verified local-daemon channel for the web console and automation (request JSON on stdin, response JSON on stdout)",
 		Options: commonOptions(),
 		Positionals: []*positional{{
-			Name: "op", Choices: []string{"recall", "hydrate", "documents", "invalidate"}, Required: true,
+			Name: "op", Choices: []string{"recall", "hydrate", "documents", "graph", "invalidate"}, Required: true,
 		}},
 	}
 

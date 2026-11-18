@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
@@ -28,12 +28,12 @@ type recallBatchRequest struct {
 // runRecallStdinBatch 在同一个已打开的 Memory 上按 stdin JSONL 循环服务 recall：
 // 每行一个请求、每行一个 JSON 响应（成功 = result.ToDict() + req_id 回显；失败 =
 // {"req_id","error"}），行级错误不终止进程，stdin EOF 正常退出。
-func (a *application) runRecallStdinBatch(memory *api.Memory) (int, error) {
+func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 	reader := bufio.NewReaderSize(a.stdin, 1<<20)
 	writer := bufio.NewWriter(a.stdout)
 	defer writer.Flush()
 	// 常驻进程退出前有界等待在途 L3 结晶脉冲，与单发路径同约（评测隔离 scope 本身禁结晶）。
-	defer api.WaitForPendingNoeticPulses(api.NoeticPulseBudget)
+	defer facade.WaitForPendingNoeticPulses(facade.NoeticPulseBudget)
 
 	// 进程级一次性参数：与单发 runRecall 同源取值，整批所有行共享。
 	if bands := a.args.IntPtr("bands"); bands != nil && (*bands < 0 || *bands > 64) {
@@ -124,7 +124,7 @@ func (a *application) runRecallStdinBatch(memory *api.Memory) (int, error) {
 			case strings.TrimSpace(req.Q) == "" && mode != "recent":
 				payload["error"] = "recall requires q"
 			default:
-				result, recallErr := memory.Recall(api.RecallRequest{
+				result, recallErr := memory.Recall(facade.RecallRequest{
 					Cue:             req.Q,
 					Scope:           scopeOpt,
 					Reader:          readerOpt,

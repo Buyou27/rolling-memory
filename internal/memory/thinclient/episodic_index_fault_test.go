@@ -47,6 +47,11 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id = 'bad'`); err != nil {
 		t.Fatal(err)
 	}
+	// Retrieval now comes from the canonical store; an unusable source is removed
+	// from it instead of being filtered at snapshot time.
+	if err := v.deleteCanonicalUnits("bad"); err != nil {
+		t.Fatal(err)
+	}
 	report, err := v.EpisodicIndexFaultDiagnostics()
 	if err != nil || report.Compatible != 1 || report.Corrupt != 1 || report.Incompatible != 0 || report.Missing != 0 {
 		t.Fatalf("diagnostics: %+v %v", report, err)
@@ -208,6 +213,9 @@ func TestEpisodicIndexSwappedRows(t *testing.T) {
 	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = CASE doc_id WHEN 'one' THEN ? ELSE ? END WHERE doc_id IN ('one', 'two')`, mac2, mac1); err != nil {
 		t.Fatal(err)
 	}
+	if err := v.deleteCanonicalUnits("one", "two"); err != nil {
+		t.Fatal(err)
+	}
 	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.Corrupt != 2 || report.Compatible != 1 {
 		t.Fatalf("swapped rows: %+v %v", report, err)
 	}
@@ -251,7 +259,7 @@ func TestEpisodicIndexSourceDeleteCascade(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest) SELECT doc_id, ref_pointer, x'01', payload, content_digest FROM thin_vault_episodic_index WHERE doc_id = 'delete'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = 'delete'`); err != nil {
+	if _, err := v.DeleteLocalEpisodicUnit("delete", ref); err != nil {
 		t.Fatal(err)
 	}
 	var count int

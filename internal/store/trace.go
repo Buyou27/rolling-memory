@@ -4,6 +4,7 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -19,11 +20,11 @@ func (s *Store) AddTrace(scope, text string, o TraceOptions) (string, bool, erro
 	if clean == "" {
 		return "", false, fmt.Errorf("empty trace text")
 	}
-	session := defaultIfEmpty(o.Session, "default")
-	kind := defaultIfEmpty(o.Kind, "message")
-	audience := defaultIfEmpty(o.Audience, "shared")
+	session := cmp.Or(o.Session, "default")
+	kind := cmp.Or(o.Kind, "message")
+	audience := cmp.Or(o.Audience, "shared")
 	if _, ok := ids.AudienceRank[audience]; !ok {
-		return "", false, fmt.Errorf("invalid audience %s", pyRepr(audience))
+		return "", false, fmt.Errorf("invalid audience %s", ids.QuotePyString(audience))
 	}
 	turn := ids.NormalizeTurn(o.Turn)
 	now := clock.Unix()
@@ -223,7 +224,7 @@ func (s *Store) UpdateSessionCursor(scope, session string, turnDone int64) error
 // RewindSession is the governed replay rewind: reset the session cursor and
 // make its processed traces pending again, keeping the graph untouched.
 func (s *Store) RewindSession(scope, session, reason, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	if session == "" {
 		return nil, fmt.Errorf("rewind requires a session")
 	}

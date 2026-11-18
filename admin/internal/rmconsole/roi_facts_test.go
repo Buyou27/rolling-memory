@@ -656,7 +656,10 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Anchor fixtures at local noon so the "today" bucket assertions stay valid
+	// even when the suite runs just after midnight (now-120s would cross days).
 	now := time.Now()
+	now = time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
 	nowUnix := now.Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);

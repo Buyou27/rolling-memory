@@ -18,10 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
+	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -176,7 +177,7 @@ func TestMain(m *testing.M) {
 // rawLine is written to the server verbatim (malformed input coverage).
 type rawLine string
 
-func newMemory(t *testing.T) *api.Memory {
+func newMemory(t *testing.T) *facade.Memory {
 	t.Helper()
 	restore := clock.SetForTest(time.Unix(testNow, 0), 1_000_000_000)
 	t.Cleanup(restore)
@@ -194,7 +195,7 @@ func newMemory(t *testing.T) *api.Memory {
 		t.Fatalf("config: %v", err)
 	}
 	cfg.Log = filepath.Join(directory, "state", "rolling-memory.log")
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
 	}
@@ -208,7 +209,7 @@ func newMemory(t *testing.T) *api.Memory {
 	return memory
 }
 
-func runSession(t *testing.T, memory *api.Memory, messages ...any) []any {
+func runSession(t *testing.T, memory *facade.Memory, messages ...any) []any {
 	t.Helper()
 	var input strings.Builder
 	for _, message := range messages {
@@ -606,7 +607,7 @@ func TestRecallCapsQuirk(t *testing.T) {
 }
 
 // TestRecallDeliverySwitchArgs 锁定交付开关的入口接线：result_unit / rank /
-// caps.chains / caps.rows 必须逐值映射到 api.RecallRequest，且 rank 保持三态
+// caps.chains / caps.rows 必须逐值映射到 facade.RecallRequest，且 rank 保持三态
 // （缺省 nil 让引擎沿用分组缺省，显式 false 必须存活），否则入口与内核能力脱节。
 func TestRecallDeliverySwitchArgs(t *testing.T) {
 	request, err := recallRequest(map[string]any{
@@ -899,8 +900,8 @@ func TestPythonValueSemantics(t *testing.T) {
 	if pyTypeName(json.Number("5")) != "int" || pyTypeName(json.Number("5.0")) != "float" || pyTypeName(nil) != "NoneType" {
 		t.Fatalf("pyTypeName: %q %q %q", pyTypeName(json.Number("5")), pyTypeName(json.Number("5.0")), pyTypeName(nil))
 	}
-	if firstChars("老张abc", 2) != "老张" || firstChars("ab", 8) != "ab" {
-		t.Fatalf("firstChars: %q %q", firstChars("老张abc", 2), firstChars("ab", 8))
+	if text.FirstRunes("老张abc", 2) != "老张" || text.FirstRunes("ab", 8) != "ab" {
+		t.Fatalf("firstChars: %q %q", text.FirstRunes("老张abc", 2), text.FirstRunes("ab", 8))
 	}
 }
 
@@ -1177,7 +1178,7 @@ func TestLazyMemoryReopensWhenDBInodeReplaced(t *testing.T) {
 		t.Fatalf("second Get after inode swap: %v", err)
 	}
 	if m1 == m2 {
-		t.Fatalf("expected LazyMemory to reopen a fresh *api.Memory when DB inode changed")
+		t.Fatalf("expected LazyMemory to reopen a fresh *facade.Memory when DB inode changed")
 	}
 }
 
@@ -1203,7 +1204,7 @@ func TestLiveDaemonRecallFullOmitsDuplicateStructuredContent(t *testing.T) {
 	}
 	content := "老张养了一只猫。"
 	anchor := "老张养了一只猫"
-	if _, err := memory.Remember(api.RememberRequest{
+	if _, err := memory.Remember(facade.RememberRequest{
 		Content:    &content,
 		AnchorText: &anchor,
 		Assertion: map[string]any{

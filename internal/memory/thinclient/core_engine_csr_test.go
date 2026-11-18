@@ -146,8 +146,8 @@ func TestCorpusSnapshotCSRDeltaLayerAndUpdateFallback(t *testing.T) {
 	}
 	_, genPath := vaultCSRPaths(dbPath)
 	raw, err := os.ReadFile(genPath)
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(raw)), "v4|") {
-		t.Fatalf("cold build must persist a v4 freshness sidecar: %q err=%v", strings.TrimSpace(string(raw)), err)
+	if err != nil || signatureCodecKey(strings.TrimSpace(string(raw))) == "" {
+		t.Fatalf("cold build must persist a canonical v5 freshness sidecar: %q err=%v", strings.TrimSpace(string(raw)), err)
 	}
 
 	// Pure append: the next load must reuse the baseline and layer a small delta.

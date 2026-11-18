@@ -96,6 +96,8 @@ func appEvidence(id string) (bundles, launchers []string) {
 		return nil, []string{"claude"}
 	case "codex":
 		return nil, []string{"codex"}
+	case "opencode":
+		return nil, []string{"opencode"}
 	case "dsh":
 		return nil, []string{"dsh"}
 	case "codebuddy":

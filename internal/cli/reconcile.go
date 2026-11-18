@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -171,7 +171,7 @@ type candidateEpisodicTurn struct {
 	Completed bool
 }
 
-func (a *application) runSyncCommand(memory *api.Memory) (int, error) {
+func (a *application) runSyncCommand(memory *facade.Memory) (int, error) {
 	sub := a.args.Subcommand()
 	switch sub {
 	case "status":
@@ -406,12 +406,12 @@ func (a *application) runSyncCommand(memory *api.Memory) (int, error) {
 	}
 }
 
-func inspectEnvHealthAndSync(ctx context.Context, memory *api.Memory, harnessFilter string) (EnvHealthAndSyncStatus, error) {
+func inspectEnvHealthAndSync(ctx context.Context, memory *facade.Memory, harnessFilter string) (EnvHealthAndSyncStatus, error) {
 	return inspectEnvHealth(ctx, memory, harnessFilter, true)
 }
 
 // resolveSyncTransport 初始化并返回薄客户端及本地金库传输面（纯本地模式零外呼，cloudFace 恒为 false）。
-func resolveSyncTransport(memory *api.Memory) (*thinclient.Client, bool, error) {
+func resolveSyncTransport(memory *facade.Memory) (*thinclient.Client, bool, error) {
 	tc, err := memory.ThinClient()
 	if err != nil {
 		return nil, false, fmt.Errorf("init thinclient failed: %w", err)
@@ -423,7 +423,7 @@ func resolveSyncTransport(memory *api.Memory) (*thinclient.Client, bool, error) 
 }
 
 // cloudFaceWarning 报告「配置声明云端但实际仅有本地面」的降级事实（本地对齐照常执行）。
-func cloudFaceWarning(memory *api.Memory) string {
+func cloudFaceWarning(memory *facade.Memory) string {
 	if memory == nil || memory.Config == nil {
 		return ""
 	}
@@ -437,7 +437,7 @@ func cloudFaceWarning(memory *api.Memory) string {
 // harness transcripts are scanned for turn counts: `sync status` needs them, while a
 // background reconcile pass only needs wiring and per-layer sets and must not pay a
 // full five-harness transcript scan on every tick.
-func inspectEnvHealth(ctx context.Context, memory *api.Memory, harnessFilter string, withTurnCounts bool) (EnvHealthAndSyncStatus, error) {
+func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter string, withTurnCounts bool) (EnvHealthAndSyncStatus, error) {
 	home, _ := os.UserHomeDir()
 	scope := config.DefaultScope
 	if memory != nil && memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
@@ -1012,7 +1012,7 @@ func episodicTurnSourcePath(refPointer string) string {
 	return ""
 }
 
-func executeReconcileSync(ctx context.Context, memory *api.Memory, layer, harnessFilter string, limit int) (ReconcileReport, error) {
+func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, harnessFilter string, limit int) (ReconcileReport, error) {
 	t0 := time.Now()
 	if limit <= 0 {
 		limit = reconcileDefaultLimit

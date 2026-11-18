@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
 // seedMonitorTurn writes one user prompt + assistant reply pair at a controlled recorded_at.
-func seedMonitorTurn(t *testing.T, mem *api.Memory, session string, recordedAt int64, prompt, reply string) {
+func seedMonitorTurn(t *testing.T, mem *facade.Memory, session string, recordedAt int64, prompt, reply string) {
 	t.Helper()
 	at := recordedAt
 	if _, _, err := mem.Store.AddTrace("mem:self", prompt, store.TraceOptions{
@@ -48,7 +48,7 @@ func seedMonitorTurn(t *testing.T, mem *api.Memory, session string, recordedAt i
 	}
 }
 
-func monitorTestMemory(t *testing.T) (*api.Memory, *config.Config, string) {
+func monitorTestMemory(t *testing.T) (*facade.Memory, *config.Config, string) {
 	t.Helper()
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "memory.db")
@@ -63,7 +63,7 @@ func monitorTestMemory(t *testing.T) (*api.Memory, *config.Config, string) {
 		t.Fatalf("load config: %v", err)
 	}
 	cfg.Log = logPath
-	mem, err := api.New(cfg)
+	mem, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
 	}
@@ -74,7 +74,7 @@ func monitorTestMemory(t *testing.T) (*api.Memory, *config.Config, string) {
 		t.Fatalf("legacy graph schema: %v", err)
 	}
 	seedAt := time.Now().Unix() - 3600
-	if _, err := mem.Remember(api.RememberRequest{
+	if _, err := mem.Remember(facade.RememberRequest{
 		Content: strPtr("监控窗聚合落位于 internal/efficacy/efficacy.go 的 window buckets。"),
 		Assertion: map[string]any{
 			"s":          map[string]any{"label": "监控窗聚合"},

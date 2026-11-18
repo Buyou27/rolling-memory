@@ -32,8 +32,7 @@ const (
 	LocalPlainTransport = "ramesdk.local_plain.offline-v1"
 
 	// 现役唯一评测脉冲模式 = 本地明文（local_plain）：本地 SQLite 明文金库 +
-	// 离线双簇检索，零云端请求。脉冲云端臂（pulse_plain / pulse_cipher）的端点、
-	// 凭据、健康检查与 SDK 客户端已随「评测层去云端」一并移除。
+	// 离线双簇检索，零云端请求。本项目不存在任何云端脉冲模式。
 	PulseModeLocalPlain = local.ModeLocalPlain
 
 	// defaultEvalUserID 是未配置用户命名空间时的默认租户（scope 前缀派生为 u10，
@@ -41,15 +40,8 @@ const (
 	defaultEvalUserID = "10"
 )
 
-// 历史（已停用）评测传输通道取值：只用于读取旧版 manifest 的 transport 字段
-// （只读兼容白名单），新产物一律写 LocalPlainTransport。
-const (
-	legacyCipherTransport = "ramesdk.pulse_cipher.open-memory-v1"
-	legacyPlainTransport  = "ramesdk.pulse_plain.open-memory-v1"
-)
-
-// NormalizePulseMode 归一化评测脉冲模式：现役唯一合法值 = local_plain（空值默认 local_plain）；
-// 其它值原样返回，由上层 fail-closed 拒绝（历史脉冲模式名不再兼容为可运行值）。
+// NormalizePulseMode 归一化评测脉冲模式：唯一合法值 = local_plain（空值默认 local_plain）；
+// 其它值原样返回，由上层 fail-closed 拒绝。
 func NormalizePulseMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", PulseModeLocalPlain:
@@ -71,15 +63,9 @@ func IsValidPulseMode(raw string) bool {
 }
 
 // IsValidEvalTransport 判定 manifest / summary 的 transport 是否属于合法的评测传输通道。
-// 现役合法通道只有本地明文；两个历史脉冲臂取值保留为只读白名单（仅用于读取历史 manifest），
-// 本项目新产物绝不再写出它们。
+// 唯一合法通道 = 本地明文。
 func IsValidEvalTransport(tr string) bool {
-	switch strings.TrimSpace(tr) {
-	case LocalPlainTransport, legacyCipherTransport, legacyPlainTransport:
-		return true
-	default:
-		return false
-	}
+	return strings.TrimSpace(tr) == LocalPlainTransport
 }
 
 // TransportForPulseMode returns the provenance transport label for an evaluation
@@ -364,7 +350,7 @@ type CloudManifest struct {
 
 // LocalEngine is the benchmark-only strict local data plane. The JSON vault stores
 // plaintext locally; ranking and memory computation are performed by the local
-// engine (SQLite FTS5/BM25 + core collision kernel), zero network egress.
+// engine (deterministic cluster collision kernel over the vault), zero network egress.
 type LocalEngine struct {
 	Store     *local.JSONFileStore
 	Endpoint  string
@@ -416,8 +402,8 @@ func ScopeForSuite(suite, userID string) string {
 //
 //	<user>-mem-eval-<locomo|atmbench>-local-plain
 //
-// 历史脉冲云端命名空间（pulse_cipher 裸形态 / -pulse-plain 后缀）已随「评测层去云端」移除；
-// pulseMode 参数仅为旧调用签名保留，任何取值都生成 local_plain 独立 scope（绝不产出脉冲 scope）。
+// 历史脉冲云端命名空间已随「评测层去云端」移除；pulseMode 参数仅为旧调用签名保留，
+// 任何取值都生成 local_plain 独立 scope。
 func ScopeForSuiteAndMode(suite, userID, pulseMode string) string {
 	_ = pulseMode
 	part := strings.Map(func(r rune) rune {
@@ -472,13 +458,12 @@ func ScopeForModeGeneration(suite, userID, pulseMode, generation string) string 
 }
 
 // SplitEvalScopeWithMode 解析评测 scope：返回 (suite, pulseMode, generation, ok)。
-// 解析正本在 `internal/evalns`：产品侧（`internal/api`）用同一份判定把自动 L3 Noetic
+// 解析正本在 `internal/evalns`：产品侧（`internal/memory/facade`）用同一份判定把自动 L3 Noetic
 // 结晶挡在评测空间之外，两边共用一份 grammar 才不会随代际漂移。
-// 形态闭集（历史形态一并解析，仅供读取旧制品；本项目只生产 local_plain）：
-//   - <prefix>-mem-eval-<locomo|atmbench>[-<世代号>]              => pulseMode = "pulse_cipher"（历史值）
-//   - <prefix>-mem-eval-<locomo|atmbench>-pulse-plain[-<世代号>]  => pulseMode = "pulse_plain"（历史值）
-//   - <prefix>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]  => pulseMode = "local_plain"
+// 形态闭集（唯一合法）：
+//   - <prefix>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]
 //
+// 历史形态在 evalns 中一律 fail-closed。
 // 本函数只把线名 `atmbench` 映射回内部套件名 `atm`，其余语义一律委托。
 func SplitEvalScopeWithMode(scope string) (string, string, string, bool) {
 	suite, pulseMode, generation, ok := evalns.Split(scope)
@@ -632,8 +617,7 @@ func (e *LocalEngine) BindScope(scope string) error {
 	if e.Suite != "" && suite != e.Suite {
 		return fmt.Errorf("evaluation scope %q does not belong to suite %q", scope, e.Suite)
 	}
-	// 本地模式只认 local_plain：scope 里的历史脉冲模式名（pulse_plain / pulse_cipher）
-	// 不匹配引擎模式，在此 fail-closed 拒绝。
+	// 本地模式只认 local_plain：任何非本地模式在此 fail-closed 拒绝。
 	if pulseMode != NormalizePulseMode(e.PulseMode) {
 		return fmt.Errorf("evaluation scope %q pulse mode %s does not match engine mode %s", scope, pulseMode, e.PulseMode)
 	}

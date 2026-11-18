@@ -688,8 +688,13 @@ type rmClusterState struct {
 	meanLineSpan       float64
 	widePos            map[uint32]TermPosition
 
+	// 新鲜度指纹：索引对象身份（重建会换指针）+ 世代号（原位变更会自增）。
+	// 二者组合精确判定缓存是否仍对应当前索引，无需对全量倒排重算内容哈希。
+	builtIndex    *Index
 	builtIndexGen uint64
-	builtDigest   uint64
+
+	// 词族增量充分统计量（仅内存态；.zcsr 水合状态为 nil ⇒ append 回退全量重建）。
+	agg *clusterAggregates
 }
 
 func (st *rmClusterState) buildProvenanceCSR(idx *Index) {
@@ -1158,7 +1163,7 @@ func (e *Engine) canUseClusterPipeline() bool {
 func (e *Engine) ensureClusterState() *rmClusterState {
 	idx := e.Index
 	if e.clusterState != nil {
-		if idx == nil || (e.clusterState.builtIndexGen == idx.stateGen && e.clusterState.builtDigest == idx.PostingDigest) {
+		if idx == nil || (e.clusterState.builtIndex == idx && e.clusterState.builtIndexGen == idx.stateGen) {
 			return e.clusterState
 		}
 		e.clusterState = nil
@@ -1167,6 +1172,7 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	if idx == nil {
 		return nil
 	}
+	inc := e.takeIncrementalDelta(idx)
 	var totalDocEntries int
 	var totalPositions int
 	for u := 0; u < idx.N; u++ {
@@ -1181,8 +1187,8 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 		}
 	}
 	st := &rmClusterState{
+		builtIndex:     idx,
 		builtIndexGen:  idx.stateGen,
-		builtDigest:    idx.PostingDigest,
 		docRowPtr:      make([]uint32, idx.N+1),
 		docEntriesFlat: make([]rmDocEntry, totalDocEntries),
 		posPool:        make([]uint32, 0, totalPositions),
@@ -1376,6 +1382,10 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 			entries[i].roleExt = re
 		}
 		docDyadRowPtr[u] = uint32(len(docDyadsFlat))
+		if inc != nil && !inc.delta[u] {
+			// 增量扩展：旧单元的短语倒排由旧状态复用，只有追加单元需要现场抽取。
+			continue
+		}
 		if st.hasWidePos() {
 			dyadScratch = st.extractDocDyadsExactInto(entries, dyadScratch[:0])
 		} else {
@@ -1397,8 +1407,12 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 
 	// Build flat CSR for intra-sentence PhraseDyad postings: in-place 1024-bucket
 	// MSB radix partition on pair.a >> 54 followed by a per-bucket sort (see
-	// radixSortDyadPostings).
-	if len(allDyadPostings) > 0 {
+	// radixSortDyadPostings). In the append-only fast path only delta postings
+	// exist here and the old CSR is reused through a two-way merge.
+	if inc != nil {
+		sort.Sort(dyadPostingSort(allDyadPostings))
+		st.phraseKeys, st.phraseRowPtr, st.phraseUnits = mergePhraseCSR(inc.prev, inc.remap, allDyadPostings)
+	} else if len(allDyadPostings) > 0 {
 		radixSortDyadPostings(allDyadPostings)
 		uniqueKeys := 1
 		for i := 1; i < len(allDyadPostings); i++ {
@@ -1507,8 +1521,16 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	}
 	st.neighborRowPtr[idx.N] = uint32(len(st.neighborPool))
 
-	// Build effective family weights reusing pre-extracted docDyadsFlat.
-	st.buildEffectiveWeightsFromDyads(idx, docDyadRowPtr, docDyadsFlat)
+	// Build effective family weights: the append-only fast path extends the
+	// previous compressed statistics with delta contributions, the full path
+	// rebuilds them from the pre-extracted docDyadsFlat.
+	if inc != nil {
+		inc.prev.agg.extendForDelta(st, idx, inc, docDyadRowPtr, docDyadsFlat)
+		st.agg = inc.prev.agg
+		st.fillEffWeightFromAggregates(idx, st.agg)
+	} else {
+		st.buildEffectiveWeightsFromDyads(idx, docDyadRowPtr, docDyadsFlat)
+	}
 	docDyadsFlat = nil
 	docDyadRowPtr = nil
 
@@ -1857,11 +1879,12 @@ func (st *rmClusterState) buildEnvelopeDF(idx *Index) {
 }
 
 // envelopeKeyGain is the normalized collision surprisal of one shared
-// envelope key: -ln(df/N) / ln(N) in [0, 1]. A key carried by every unit
-// (df == N) is a certain collision under the null hypothesis and earns zero
-// floor; a key carried by a single pair approaches full gain. Both df and N
-// are online sufficient statistics, so the gain self-calibrates as the
-// corpus grows and stays scale-invariant across N.
+// envelope key, -ln(df/N) / ln(N). Since 1 <= df <= N, the value lies in
+// [0, 1] by construction: a key carried by every unit (df == N) earns zero,
+// and a key carried by a single unit earns the full ln(N). The normalizer is
+// the largest attainable surprisal, not a scale-free quantity: at a fixed
+// share df/N the gain falls as N grows (0.5 at N=100 and 0.25 at N=10^4 for a
+// 10% share), while at fixed df it rises toward 1.
 func (st *rmClusterState) envelopeKeyGain(key uint64, n int) float64 {
 	if key == 0 || n <= 1 || st.authorDF == nil {
 		return 0
@@ -1934,6 +1957,20 @@ type rmPackedOccurrence struct {
 	pos uint32
 	id  uint64
 }
+
+// rmPackedOccurrenceSort orders packed (sentence<<16|slot, term hash) rows
+// ascending with direct dispatch; the packed key preserves (sentence, slot)
+// lexicographic order because slot occupies the low 16 bits.
+type rmPackedOccurrenceSort []rmPackedOccurrence
+
+func (s rmPackedOccurrenceSort) Len() int { return len(s) }
+func (s rmPackedOccurrenceSort) Less(i, j int) bool {
+	if s[i].pos != s[j].pos {
+		return s[i].pos < s[j].pos
+	}
+	return s[i].id < s[j].id
+}
+func (s rmPackedOccurrenceSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 // maxPhraseSlotSpan 定义同句二元短语（dyad）索引的最大词槽跨度：
 // 相邻词槽距离为 1，中间最多允许隔 3 个修饰/功能词槽（总跨度 4），控制短语倒排体积 O(L*W)。
@@ -2016,13 +2053,7 @@ func (st *rmClusterState) extractDocDyadsInto(entries []rmDocEntry, occs []rmPac
 	if len(occs) < 2 {
 		return out[:0], occs
 	}
-	sort.Slice(occs, func(i, j int) bool {
-		a, b := occs[i], occs[j]
-		if a.pos != b.pos {
-			return a.pos < b.pos
-		}
-		return a.id < b.id
-	})
+	sort.Sort(rmPackedOccurrenceSort(occs))
 	out = out[:0]
 	const maxSpan = uint32(maxPhraseSlotSpan)
 	for i, a := range occs {
@@ -2045,20 +2076,7 @@ func (st *rmClusterState) extractDocDyadsInto(entries []rmDocEntry, occs []rmPac
 	if len(out) <= 1 {
 		return out, occs
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].a != out[j].a {
-			return out[i].a < out[j].a
-		}
-		return out[i].b < out[j].b
-	})
-	w := 1
-	for r := 1; r < len(out); r++ {
-		if out[r] != out[w-1] {
-			out[w] = out[r]
-			w++
-		}
-	}
-	return out[:w], occs
+	return sortAndDedupRmDyads(out), occs
 }
 
 // rmExactOccurrence 是宽坐标语料上一次 (句, 槽, 词项) 出现的精确坐标记录。
@@ -2186,10 +2204,6 @@ func sortAndDedupRmDyads(pairs []rmDyad) []rmDyad {
 	return pairs[:w]
 }
 
-func rmQueryDyadsWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) []rmDyad {
-	return rmQueryDyadsWithPositionsInto(nil, qTerms, qPositions)
-}
-
 func rmQueryDyadsWithPositionsInto(sc *rmQueryScratch, qTerms map[uint64]Term, qPositions map[uint64][]TermPosition) []rmDyad {
 	var occs []rmOccurrence
 	if sc != nil {
@@ -2253,25 +2267,17 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 		}
 		return id
 	}
-	type famInfo struct {
-		lastUnit      int32
-		unitCount     int
-		multiDocCount int
-		clusters      []int32
-		partners      []uint64
-		weight        float64
-	}
-	families := make(map[uint64]*famInfo, len(idx.DF))
-	get := func(id uint64) *famInfo {
+	families := make(map[uint64]*clusterFamilyInfo, len(idx.DF))
+	get := func(id uint64) *clusterFamilyInfo {
 		f := families[id]
 		if f == nil {
-			f = &famInfo{lastUnit: -1}
+			f = &clusterFamilyInfo{lastUnit: -1}
 			families[id] = f
 		}
 		return f
 	}
 	var rootPairs []rmDyad
-	var docFams []*famInfo
+	var docFams []*clusterFamilyInfo
 	for u := 0; u < idx.N; u++ {
 		u32 := int32(u)
 		cl := st.clusters[u]
@@ -2320,56 +2326,11 @@ func (st *rmClusterState) buildEffectiveWeightsFromDyads(idx *Index, docDyadRowP
 	}
 	for _, f := range families {
 		sortInt32Asc(f.clusters)
-		clusters := 0
-		for i, c := range f.clusters {
-			if i == 0 || c != f.clusters[i-1] {
-				clusters++
-			}
-		}
 		sortUint64Asc(f.partners)
-		total := float64(len(f.partners))
-		var entropy float64
-		for i := 0; i < len(f.partners); {
-			j := i + 1
-			for j < len(f.partners) && f.partners[j] == f.partners[i] {
-				j++
-			}
-			p := float64(j-i) / total
-			entropy -= p * math.Log(p)
-			i = j
-		}
-		df := f.unitCount
-		effDF := 1.0
-		if df > 1 {
-			if clusters < 1 {
-				clusters = 1
-			}
-			if clusters > df {
-				clusters = df
-			}
-			d := float64(df - 1)
-			indep := math.Pow(float64(clusters-1)/d, 1/math.E)
-			disp := 1.0
-			if total > 0 || f.multiDocCount > 0 {
-				disp = math.Min(1, math.Max(0, entropy/math.Log(float64(df)+math.E)))
-			}
-			effDF = 1 + d*indep*disp
-		}
-		f.weight = math.Log1p((float64(st.clusterN) + 1) / (effDF + 1))
 	}
-	for h := range idx.DF {
-		st.effWeight[h] = get(root(h)).weight
-	}
-	for u := 0; u < idx.N; u++ {
-		for _, entry := range st.docEntriesOf(int32(u)) {
-			if entry.group == 0 {
-				continue
-			}
-			if f := families[entry.group]; f != nil && f.weight < st.effWeight[entry.id] {
-				st.effWeight[entry.id] = f.weight
-			}
-		}
-	}
+	agg := buildClusterAggregates(idx, families, st)
+	st.agg = agg
+	st.fillEffWeightFromAggregates(idx, agg)
 }
 
 // buildEpisodeComponents partitions the sorted bucket timeline into episodic

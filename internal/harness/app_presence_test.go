@@ -61,4 +61,11 @@ func TestAppPresentPOSIXLauncherPath(t *testing.T) {
 	if !AppPresent("claude-code", home) {
 		t.Fatalf("launcher under ~/.local/bin must count as present")
 	}
+	opencode := filepath.Join(home, ".local", "bin", "opencode")
+	if err := os.WriteFile(opencode, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write OpenCode launcher fixture: %v", err)
+	}
+	if !AppPresent("opencode", home) {
+		t.Fatalf("OpenCode launcher under ~/.local/bin must count as present")
+	}
 }

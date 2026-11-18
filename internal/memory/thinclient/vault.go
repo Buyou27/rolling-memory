@@ -19,11 +19,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
+	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/text"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
 
@@ -93,6 +96,11 @@ type BlindPulsePacket struct {
 	// payload format, so no negotiation field exists; the server expands it back into
 	// Slots/SentenceFrames before handing the pulse to the engine.
 	AtomsB64 string `json:"atoms_b64,omitempty"`
+	// RawText / PulseMode mirror the canonical sdk/go/local packet fields. Plain
+	// mode keeps the text on the client so query extraction uses the same
+	// TermExtractor as ingestion instead of reconstructing terms from atoms.
+	RawText   string `json:"raw_text,omitempty"`
+	PulseMode string `json:"pulse_mode,omitempty"`
 }
 
 // BlindQueryOptions defines the explicit control parameters for the local plaintext query.
@@ -325,21 +333,24 @@ type vaultCorpusSnapshot struct {
 	docTextLen       int64
 	episodicRevision int64
 	episodicCodecKey string
-	docsRev          int64
-	bgRev            int64
-	epiCnt           int64
-	bgCnt            int64
-	bgMaxRowID       int64
-	bgOccSum         int64
-	bgSlotsLen       int64
-	inlineCount      int
-	docs             []vaultDocEntry
-	episodicDocs     []vaultDocEntry
-	validEpisodicIDs map[string]struct{}
-	docIdxByID       map[string]int
-	coreOnce         sync.Once
-	coreMu           sync.Mutex
-	coreEngine       *core.Engine
+	// freshnessSignature is the canonical-store identity (v5 line) for snapshots
+	// built from rm_*; empty for legacy thin-table snapshots.
+	freshnessSignature string
+	docsRev            int64
+	bgRev              int64
+	epiCnt             int64
+	bgCnt              int64
+	bgMaxRowID         int64
+	bgOccSum           int64
+	bgSlotsLen         int64
+	inlineCount        int
+	docs               []vaultDocEntry
+	episodicDocs       []vaultDocEntry
+	validEpisodicIDs   map[string]struct{}
+	docIdxByID         map[string]int
+	coreOnce           sync.Once
+	coreMu             sync.Mutex
+	coreEngine         *core.Engine
 }
 
 // CorpusSize returns the number of documents in the current cached corpus snapshot (0 if unloaded).
@@ -379,6 +390,10 @@ type Vault struct {
 	// 定位；内存库或查询失败时为空串（此时不做磁盘簇缓存，行为与历史一致）。
 	dbPath     string
 	dbPathOnce sync.Once
+	// coldBuildMemoryLimit 由克隆共享：冷启动全量构建期间临时生效的软内存上限（0 表示
+	// 不改动运行时上限）。构建的活集可数倍于守护进程的稳态上限，在上限内构建会退化为
+	// GC 空转而非完成，故由调用方按可用物理内存给出构建窗口。
+	coldBuildMemoryLimit *int64
 }
 
 // vaultSnapshotRef holds the corpus snapshot behind a pointer shared across clones.
@@ -437,6 +452,11 @@ type vaultSnapshotRef struct {
 	activeNoetics    []LocalNoeticRecord
 	lastDataVersion  int64
 	lastDataVerCheck time.Time
+	// canonicalStore handle wrapping the shared connection pool; the core schema
+	// is applied once per vault family.
+	canonicalOnce  sync.Once
+	canonicalStore *core.Store
+	canonicalErr   error
 }
 
 func (v *Vault) clearSlotCache() {
@@ -671,7 +691,31 @@ func (v *Vault) CloneWithSharedSlotCache() *Vault {
 		db: v.db, secretKey: v.secretKey,
 		segOpts: v.segOpts, harmOpts: v.harmOpts, harmOptsExplicit: v.harmOptsExplicit,
 		slotCacheMu: v.slotCacheMu, slotCache: v.slotCache, snapRef: v.snapRef,
+		coldBuildMemoryLimit: v.coldBuildMemoryLimit,
 	}
+}
+
+// SetColdBuildMemoryLimit configures the soft memory limit applied while a cold
+// full-corpus engine build runs. Such a build materialises the whole corpus
+// index before the .zcsr disk cluster exists, so its live set can exceed the
+// daemon's steady-state cap several times over and GC inside that cap never
+// finishes. Zero leaves the runtime limit untouched.
+func (v *Vault) SetColdBuildMemoryLimit(bytes int64) {
+	if v == nil || v.coldBuildMemoryLimit == nil {
+		return
+	}
+	if bytes < 0 {
+		bytes = 0
+	}
+	atomic.StoreInt64(v.coldBuildMemoryLimit, bytes)
+}
+
+// coldBuildLimit reads the configured cold-build window (0 = disabled).
+func (v *Vault) coldBuildLimit() int64 {
+	if v == nil || v.coldBuildMemoryLimit == nil {
+		return 0
+	}
+	return atomic.LoadInt64(v.coldBuildMemoryLimit)
 }
 
 // VaultIdentity is the local persona coordinate persisted alongside each plaintext row.
@@ -843,15 +887,18 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 					return nil, err
 				}
 				ensureInsertedAtColumns(db)
-				_ = migrateBackgroundSlotBlobs(db)
 				_ = EnsureCoreSQLiteSchema(db)
+				if err := ensureCanonicalBusinessSchema(db); err != nil {
+					return nil, err
+				}
 				CoreSchemaContracts()
 				bgRevReliable := ensureCorpusRevisionSchema(db)
 				v := &Vault{
-					db:          db,
-					slotCacheMu: &sync.RWMutex{},
-					slotCache:   make(map[string]vaultCachedDocSlots, 256),
-					snapRef:     &vaultSnapshotRef{bgRevReliable: bgRevReliable},
+					db:                   db,
+					slotCacheMu:          &sync.RWMutex{},
+					slotCache:            make(map[string]vaultCachedDocSlots, 256),
+					snapRef:              &vaultSnapshotRef{bgRevReliable: bgRevReliable},
+					coldBuildMemoryLimit: new(int64),
 				}
 				copy(v.secretKey[:], stored)
 				return v, nil
@@ -907,6 +954,9 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 	if err := EnsureCoreSQLiteSchema(db); err != nil {
 		return nil, err
 	}
+	if err := ensureCanonicalBusinessSchema(db); err != nil {
+		return nil, err
+	}
 	CoreSchemaContracts()
 	_, _ = db.Exec(`ALTER TABLE thin_vault_docs ADD COLUMN layer TEXT NOT NULL DEFAULT 'episodic'`)
 	for _, stmt := range []string{
@@ -922,16 +972,15 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		_, _ = db.Exec(stmt)
 	}
 	ensureInsertedAtColumns(db)
-	// Legacy JSON slot rows are rewritten into the packed form once (idempotent).
-	_ = migrateBackgroundSlotBlobs(db)
 	bgRevReliable := ensureCorpusRevisionSchema(db)
 	reclaimDeadVaultIndexes(db)
 
 	v := &Vault{
-		db:          db,
-		slotCacheMu: &sync.RWMutex{},
-		slotCache:   make(map[string]vaultCachedDocSlots, 256),
-		snapRef:     &vaultSnapshotRef{bgRevReliable: bgRevReliable},
+		db:                   db,
+		slotCacheMu:          &sync.RWMutex{},
+		slotCache:            make(map[string]vaultCachedDocSlots, 256),
+		snapRef:              &vaultSnapshotRef{bgRevReliable: bgRevReliable},
+		coldBuildMemoryLimit: new(int64),
 	}
 	if len(explicitSecret) > 0 {
 		h := sha256.Sum256(explicitSecret)
@@ -1128,6 +1177,9 @@ func (v *Vault) packBlindPacketWithKey(key [32]byte, docID, text string, occurre
 			OccurredAt:     rmPkt.OccurredAt,
 			Slots:          rmPkt.Slots,
 			SentenceFrames: rmPkt.SentenceFrames,
+			AtomsB64:       rmPkt.AtomsB64,
+			RawText:        text,
+			PulseMode:      "local_plain",
 		}, sents
 	}
 	sdkPkt, sents := enc.PackBlindPacket(docID, text, occurredAt)
@@ -1136,6 +1188,9 @@ func (v *Vault) packBlindPacketWithKey(key [32]byte, docID, text string, occurre
 		OccurredAt:     sdkPkt.OccurredAt,
 		Slots:          sdkPkt.Slots,
 		SentenceFrames: sdkPkt.SentenceFrames,
+		AtomsB64:       sdkPkt.AtomsB64,
+		RawText:        text,
+		PulseMode:      "local_plain",
 	}, sents
 }
 
@@ -1163,6 +1218,7 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 			return err
 		}
 	}
+	insertedAt := time.Now().Unix()
 	_, err = tx.Exec(`
 			INSERT INTO thin_vault_docs(
 				doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json,
@@ -1182,7 +1238,7 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 				assistant_id = excluded.assistant_id,
 				incarnation_id = excluded.incarnation_id,
 				locus = excluded.locus`,
-		docID, layer, occurredAt, time.Now().Unix(), rawText, string(sentsJSON),
+		docID, layer, occurredAt, insertedAt, rawText, string(sentsJSON),
 		resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON),
 		v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus,
 	)
@@ -1190,6 +1246,22 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if err := v.ingestCanonicalText(docID, occurredAt, rawText, canonicalUnitMeta{
+		Layer:           layer,
+		SentencesJSON:   string(sentsJSON),
+		KeptIndicesJSON: string(keptJSON),
+		AddressURI:      resp.AddressURI,
+		Coord64:         int64(resp.AddressCoord64),
+		WaveformBar:     resp.WaveformBar,
+		DocMacroWave:    resp.DocMacroWaveform,
+		AssistantID:     v.identity.AssistantID,
+		IncarnationID:   v.identity.IncarnationID,
+		Locus:           v.identity.Locus,
+		InsertedAt:      insertedAt,
+		StoreRawText:    true,
+	}); err != nil {
 		return err
 	}
 	if v.slotCacheMu != nil {
@@ -2045,7 +2117,7 @@ func (v *Vault) SaveLocalNoetic(rec LocalNoeticRecord) error {
 					incarnation_id = excluded.incarnation_id`,
 		rec.NoeticID, rec.OccurredAt, insertAt, status, rec.QueryText, rec.AnswerText, string(unitIDsJSON), string(sentsJSON),
 		rec.AddressURI, rec.Coord64, rec.WaveformBar,
-		firstNonEmpty(rec.AssistantID, v.identity.AssistantID), firstNonEmpty(rec.IncarnationID, v.identity.IncarnationID),
+		text.FirstTrimmedNonEmpty(rec.AssistantID, v.identity.AssistantID), text.FirstTrimmedNonEmpty(rec.IncarnationID, v.identity.IncarnationID),
 	)
 	if err == nil && v.slotCacheMu != nil && v.snapRef != nil {
 		v.slotCacheMu.Lock()
@@ -2069,16 +2141,6 @@ func (v *Vault) UpdateLocalNoeticManifold(noeticID, addressURI string, coord64 i
 		v.slotCacheMu.Unlock()
 	}
 	return err
-}
-
-// firstNonEmpty returns the first trimmed non-empty value, else "".
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 type localNoeticExecutor interface {
@@ -2318,6 +2380,20 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 			v.slotCacheMu.RUnlock()
 		}
 	}
+	// Canonical snapshot path: the canonical store is the retrieval truth, so the
+	// mmap baseline and its bounded delta are resolved before any thin-table scan.
+	if canonicalSnap, ok := v.buildCanonicalSnapshotFromCSR(ctx); ok && canonicalSnap != nil {
+		if v.slotCacheMu != nil && v.snapRef != nil {
+			v.slotCacheMu.Lock()
+			v.snapRef.snap = canonicalSnap
+			v.snapRef.lastSnapTime = time.Now()
+			if v.snapRef.snapVerifiedGen < genAtStart {
+				v.snapRef.snapVerifiedGen = genAtStart
+			}
+			v.slotCacheMu.Unlock()
+		}
+		return canonicalSnap, nil
+	}
 	// O(1) revision gate, read before any aggregate so a write racing this build
 	// can only make the stored revisions conservatively stale (next build re-checks).
 	var docsRev, bgRev int64
@@ -2414,33 +2490,6 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	}
 
 	useCache := v.slotCacheMu != nil
-
-	// Cold-start CSR fast path: when an on-disk .zcsr matches the exact table
-	// fingerprint (or differs by at most maxCSRDeltaDocs new/deleted units), open
-	// the zero-copy mmap engine and load only lightweight row headers without
-	// decoding hundreds of megabytes of wire/slot blobs into Go maps.
-	if csrSnap, ok := v.buildCorpusSnapshotFromCSR(
-		ctx,
-		docCnt, docRowSum, docMaxRowID, docTextLen, docsRev, bgRev, episodicRevision,
-		episodicCodecKey,
-		bgCnt, bgMaxRowID, bgOccSum, bgSlotsLen,
-		revGateOK,
-	); ok && csrSnap != nil {
-		if useCache && v.snapRef != nil {
-			v.slotCacheMu.Lock()
-			v.snapRef.snap = csrSnap
-			v.snapRef.lastSnapTime = time.Now()
-			if revGateOK {
-				v.snapRef.lastDocsRev = docsRev
-				v.snapRef.lastBgRev = bgRev
-			}
-			if v.snapRef.snapVerifiedGen < genAtStart {
-				v.snapRef.snapVerifiedGen = genAtStart
-			}
-			v.slotCacheMu.Unlock()
-		}
-		return csrSnap, nil
-	}
 
 	var inlineDocs []vaultDocEntry
 	{
@@ -2561,18 +2610,15 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 		for idx := range rawRows {
 			r := &rawRows[idx]
 			inlineDocs = append(inlineDocs, vaultDocEntry{
-				docID:         r.docID,
-				layer:         r.layer,
-				occ:           r.occ,
-				addrURI:       r.addrURI,
-				coord64:       r.coord64,
-				waveBar:       r.waveBar,
-				locus:         r.locus,
-				termMeta:      r.entry.termMeta,
-				termCounts:    r.entry.termCounts,
-				termPositions: r.entry.termPositions,
-				allHashes:     r.entry.allHashes,
-				docLen:        r.entry.docLen,
+				docID:     r.docID,
+				layer:     r.layer,
+				occ:       r.occ,
+				addrURI:   r.addrURI,
+				coord64:   r.coord64,
+				waveBar:   r.waveBar,
+				locus:     r.locus,
+				allHashes: r.entry.allHashes,
+				docLen:    1,
 			})
 		}
 	}
@@ -2581,26 +2627,25 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 
 	var bgDocs []vaultDocEntry
 	{
-		bgRows, bgErr := v.db.QueryContext(ctx, `SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, COALESCE(rel_path, ''), COALESCE(abs_path, ''), COALESCE(anchor, ''), slots_json FROM thin_vault_bg_chunks`)
+		bgRows, bgErr := v.db.QueryContext(ctx, `SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, COALESCE(rel_path, ''), COALESCE(abs_path, ''), COALESCE(anchor, '') FROM thin_vault_bg_chunks`)
 		if bgErr == nil {
 			type rawBgRow struct {
-				unitID   string
-				occ      int64
-				addrURI  string
-				coord64  uint64
-				waveBar  string
-				relPath  string
-				absPath  string
-				anchor   string
-				slotsRaw []byte
-				ok       bool
-				entry    vaultDocEntry
+				unitID  string
+				occ     int64
+				addrURI string
+				coord64 uint64
+				waveBar string
+				relPath string
+				absPath string
+				anchor  string
+				ok      bool
+				entry   vaultDocEntry
 			}
 			var rawBg []rawBgRow
 			for bgRows.Next() {
 				var r rawBgRow
 				var coord64 int64
-				if err := bgRows.Scan(&r.unitID, &r.occ, &r.addrURI, &coord64, &r.waveBar, &r.relPath, &r.absPath, &r.anchor, &r.slotsRaw); err != nil {
+				if err := bgRows.Scan(&r.unitID, &r.occ, &r.addrURI, &coord64, &r.waveBar, &r.relPath, &r.absPath, &r.anchor); err != nil {
 					continue
 				}
 				r.coord64 = uint64(coord64)
@@ -2609,10 +2654,6 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 			bgRows.Close()
 
 			decodeBgOne := func(r *rawBgRow) {
-				tMeta, tCounts, tPos, dLen, ok := decodeAtomSlotCoreTerms(r.slotsRaw)
-				if !ok {
-					return
-				}
 				fileKey := strings.TrimSpace(r.relPath)
 				if fileKey == "" {
 					fileKey = strings.TrimSpace(r.absPath)
@@ -2628,22 +2669,18 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 				}
 				lStart, lEnd := parseBackgroundAnchorLines(r.anchor)
 				r.entry = vaultDocEntry{
-					docID:         r.unitID,
-					layer:         LayerBackground,
-					occ:           r.occ,
-					addrURI:       r.addrURI,
-					coord64:       r.coord64,
-					waveBar:       r.waveBar,
-					docHash:       docH,
-					blockHash:     blockH,
-					lineStart:     lStart,
-					lineEnd:       lEnd,
-					termMeta:      tMeta,
-					termCounts:    tCounts,
-					termPositions: tPos,
-					docLen:        dLen,
+					docID:     r.unitID,
+					layer:     LayerBackground,
+					occ:       r.occ,
+					addrURI:   r.addrURI,
+					coord64:   r.coord64,
+					waveBar:   r.waveBar,
+					docHash:   docH,
+					blockHash: blockH,
+					lineStart: lStart,
+					lineEnd:   lEnd,
+					docLen:    1,
 				}
-				r.slotsRaw = nil
 				r.ok = true
 			}
 
@@ -3036,23 +3073,6 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 	return hits, nil
 }
 
-// windowsURIPath reports the file: URI path form of a Windows drive or UNC
-// path, rewriting the separators to forward slashes; other paths return
-// ok=false unchanged. An unanchored `C:\...` renders as file://C:%5C..., the
-// drive letter becomes the URI authority, and the driver rejects the DSN with
-// "invalid uri authority".
-func windowsURIPath(path string) (string, bool) {
-	if len(path) >= 2 && path[1] == ':' {
-		if c := path[0]; 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' {
-			return "/" + strings.ReplaceAll(path, `\`, "/"), true
-		}
-	}
-	if strings.HasPrefix(path, `\\`) {
-		return strings.ReplaceAll(path, `\`, "/"), true
-	}
-	return "", false
-}
-
 // zcodeReadHandle caches one read-only handle on the ZCode session store.
 // Resolving a zero-copy pointer used to open (and close) a SQLite connection per
 // call: a multi-hundred-unit reconcile pass paid a schema read and a WAL index load
@@ -3077,7 +3097,7 @@ func zcodeReadHandle(path string) (*sql.DB, error) {
 	}
 	// Encode URI metacharacters and Windows drive paths before opening SQLite.
 	dsnPath := "file:" + path
-	if uriPath, ok := windowsURIPath(path); ok {
+	if uriPath, ok := ids.WindowsURIPath(path); ok {
 		dsnPath = (&url.URL{Scheme: "file", Path: uriPath}).String()
 	} else if strings.ContainsAny(path, "?#") {
 		dsnPath = (&url.URL{Scheme: "file", Path: path}).String()

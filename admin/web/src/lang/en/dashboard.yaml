@@ -19,7 +19,7 @@ dbSize: DB Size
 conflicts: Stale Noetic
 modeLabel: Mode
 localPlain: Local Plain (local_plain)
-localPlainTip: Local Plaintext Vault (local_plain) — 100% on-device SQLite FTS5 + BM25 + Shannon continuous gain, zero cloud requests.
+localPlainTip: Local Plaintext Vault (local_plain) — 100% on-device SQLite with deterministic cluster-kernel retrieval and Shannon continuous gain, zero cloud requests.
 pulsePreviewTip: Cloud memory service preview — ciphertext-only, stronger operators, application-based.
 previewDetails: Preview & apply
 

@@ -94,7 +94,7 @@ func promoteBandsByLocusAnchor(result *Result, cue string) {
 }
 
 // LocusAnchor 提取 cue 首部的工作区锚（`[<workspace>]`，未写锚返回空串）。导出给薄客户端
-// 交付管线（internal/api thinClientRecall）共用同一提取口径，两种管线的锚语义只有一个正本。
+// 交付管线（internal/memory/facade thinClientRecall）共用同一提取口径，两种管线的锚语义只有一个正本。
 func LocusAnchor(cue string) string { return locusAnchor(cue) }
 
 // StripLocusAnchor 剥离 cue 首部的工作区锚（`[<workspace>]`），使检索内核仅对纯正文线索求值；

@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -63,7 +63,7 @@ func engineSeedZCodeTurnFixture(t *testing.T, home string) {
 
 // engineStartVerifiedDaemon 启动进程内共享守护进程（同一进程：同 UID、同 PID），
 // 播种一个已密封的 @ref: 指针与一份内联文档，并把 socket 路径写进环境变量。
-func engineStartVerifiedDaemon(t *testing.T) *api.Memory {
+func engineStartVerifiedDaemon(t *testing.T) *facade.Memory {
 	t.Helper()
 	sockDir, err := os.MkdirTemp("/tmp", "rm-engine-")
 	if err != nil {
@@ -83,7 +83,7 @@ func engineStartVerifiedDaemon(t *testing.T) *api.Memory {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +218,41 @@ func TestEngineRecallRelaysEngineLevelFailure(t *testing.T) {
 	response := jsonObject(t, strings.TrimSpace(result.stdout))
 	if response["ok"] != false || response["engine_error"] != true || asStringValue(response["error"]) == "" {
 		t.Fatalf("engine-level failure envelope = %s", result.stdout)
+	}
+}
+
+func TestEngineGraphRelaysEngineProjection(t *testing.T) {
+	newEnv(t)
+	engineStartVerifiedDaemon(t)
+
+	result := runInput(t, `{"op":"view","limit":32}`, "engine", "graph", "--json")
+	if result.code != 0 {
+		t.Fatalf("engine graph failed: %+v", result)
+	}
+	response := jsonObject(t, strings.TrimSpace(result.stdout))
+	if response["source"] != "local-vault" || response["graph_schema_version"] != float64(2) {
+		t.Fatalf("engine graph envelope = %s", result.stdout)
+	}
+	nodes, _ := response["nodes"].([]any)
+	if len(nodes) == 0 {
+		t.Fatalf("engine graph returned no nodes: %s", result.stdout)
+	}
+	var sawCluster, sawWord bool
+	for _, raw := range nodes {
+		node, _ := raw.(map[string]any)
+		switch node["kind"] {
+		case "cluster":
+			if asStringValue(node["cluster_type"]) != "" && node["member_count"] != nil {
+				sawCluster = true
+			}
+		case "word":
+			if asStringValue(node["label"]) != "" {
+				sawWord = true
+			}
+		}
+	}
+	if !sawCluster || !sawWord {
+		t.Fatalf("engine graph lost word/cluster fields: cluster=%v word=%v payload=%s", sawCluster, sawWord, result.stdout)
 	}
 }
 

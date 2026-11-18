@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/text"
 	local "github.com/rocareer/rolling-memory/sdk/go/local"
 )
 
@@ -275,9 +276,9 @@ func recordGenerationCorpus(scope, storePath string, manifest CloudManifest) {
 		gen.StartedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 	gen.Generation = EvalScopeGeneration(scope)
-	gen.UserID = firstNonEmptyText(gen.UserID, manifest.UserID)
-	gen.Endpoint = firstNonEmptyText(gen.Endpoint, manifest.Endpoint)
-	gen.StorePath = firstNonEmptyText(gen.StorePath, storePath)
+	gen.UserID = text.FirstTrimmedNonEmpty(gen.UserID, manifest.UserID)
+	gen.Endpoint = text.FirstTrimmedNonEmpty(gen.Endpoint, manifest.Endpoint)
+	gen.StorePath = text.FirstTrimmedNonEmpty(gen.StorePath, storePath)
 	gen.CorpusSHA256 = manifest.CorpusSHA256
 	gen.Documents = manifest.Documents
 	if gen.Role == "" {
@@ -285,15 +286,6 @@ func recordGenerationCorpus(scope, storePath string, manifest CloudManifest) {
 	}
 	gen.HeartbeatAt = time.Now().UTC().Format(time.RFC3339)
 	_ = SaveEvalGeneration(gen)
-}
-
-func firstNonEmptyText(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 // touchEvalGeneration 续期心跳；role 为空时保留既有角色（读者不得把写手降级成读者）。
@@ -467,7 +459,7 @@ func (e *LocalEngine) CloseGeneration(ctx context.Context, logf func(string, ...
 }
 
 // adoptStoredGeneration 采纳本 store 上既有 manifest 的世代：manifest 是「这个 store 当前是谁」
-// 的唯一真源；仅当套件与脉冲模式（local_plain / pulse_plain / pulse_cipher）均一致时才采纳。
+// 的唯一真源；仅当套件与模式（local_plain）一致时才采纳。
 func (e *LocalEngine) adoptStoredGeneration() (EvalGeneration, bool) {
 	manifest, err := ReadCloudManifest(e.StorePath)
 	if err != nil || manifest.Suite != e.Suite || e.validateManifestPulseMode(manifest) != nil {
@@ -542,8 +534,7 @@ func (e *LocalEngine) ReconcileRetiredGenerations(ctx context.Context, logf func
 		if e.Suite != "" && gen.Suite != "" && gen.Suite != e.Suite {
 			continue
 		}
-		// 模式隔离：现役唯一模式 = 本地明文（local_plain）；历史脉冲代（pulse_plain / pulse_cipher）
-		// 的世代租约不属于本模式，严禁本地评测去回收它们。
+		// 模式隔离：唯一模式 = 本地明文（local_plain）；非本地模式世代一律不回收。
 		if EvalScopePulseMode(gen.Scope) != activeMode {
 			continue
 		}

@@ -1404,8 +1404,8 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 	}
 
 	st := &rmClusterState{
+		builtIndex:         idx,
 		builtIndexGen:      idx.stateGen,
-		builtDigest:        idx.PostingDigest,
 		docRowPtr:          docRowPtr,
 		docEntriesFlat:     docEntriesFlat,
 		posPool:            posPool,

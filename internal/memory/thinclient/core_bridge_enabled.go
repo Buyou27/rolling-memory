@@ -6,6 +6,7 @@ package thinclient
 import (
 	"math"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -98,118 +99,35 @@ func (v *Vault) newVaultTermExtractor() *plain.TermExtractor {
 // extractVaultCoreDoc converts a plaintext document into a canonical core.Doc
 // using the Vault's TermExtractor (or custom Segmenter when explicitly configured).
 func (v *Vault) extractVaultCoreDoc(te *plain.TermExtractor, docID string, occ int64, rawText string) core.Doc {
-	if v != nil && v.segOpts.Segmenter != nil {
-		pkt, _ := v.PackBlindPacket(docID, rawText, occ)
-		terms, counts, positions := coreTermsFromPacket(pkt.Slots, pkt.SentenceFrames)
-		return core.Doc{
-			UnitID:     docID,
-			OccurredAt: occ,
-			Terms:      terms,
-			Counts:     counts,
-			Positions:  positions,
-		}
-	}
 	if te == nil {
 		te = v.newVaultTermExtractor()
 	}
 	return te.ExtractDoc(docID, occ, rawText)
 }
 
-// coreTermsFromPacket reconstructs canonical core.Term, counts, and (Sentence, Slot)
-// positions from a pre-packed BlindPulsePacket (used by L2 zero-copy episodic
-// index rows and L1 pre-packed background chunk blobs).
-func coreTermsFromPacket(slots []BlindTokenAtom, frames [][]BlindTokenAtom) (map[uint64]core.Term, map[uint64]int, map[uint64][]core.TermPosition) {
-	if len(frames) == 0 && len(slots) > 0 {
-		frames = [][]BlindTokenAtom{slots}
+// coreTermsFromPacket remains only for the legacy thin-table codec that the
+// canonical store replaced; it returns no terms and is never on a live path.
+func coreTermsFromPacket(_ []BlindTokenAtom, _ [][]BlindTokenAtom) (map[uint64]core.Term, map[uint64]int, map[uint64][]core.TermPosition) {
+	return map[uint64]core.Term{}, map[uint64]int{}, map[uint64][]core.TermPosition{}
+}
+
+// applyColdBuildWindow raises the runtime soft memory limit to the given build
+// window and returns the function that restores the previous limit (and returns
+// cached pages). A zero window, or one no larger than the current limit, leaves
+// the runtime untouched and returns nil.
+func applyColdBuildWindow(limit int64) func() {
+	if limit <= 0 {
+		return nil
 	}
-	hint := len(slots)/2 + 4
-	if hint < 8 {
-		hint = 8
+	previous := debug.SetMemoryLimit(-1)
+	if previous >= limit {
+		return nil
 	}
-	atoms := make(map[uint64]core.Term, hint)
-	counts := make(map[uint64]int, hint)
-	positions := make(map[uint64][]core.TermPosition, hint)
-	var docSlot int
-	for sentenceAt, frame := range frames {
-		var currentGroup uint64
-		var currentHostBits uint16
-		var pos core.TermPosition
-		for _, raw := range frame {
-			if raw.H == 0 {
-				continue
-			}
-			isPrimary := raw.ClassFlags&plain.FlagIsHarmonicCompanion == 0
-			if !isPrimary && raw.Role == 0 && (raw.RawBitsX10&1) == 1 &&
-				(raw.ClassFlags&FlagHasConn) != 0 && (raw.ClassFlags&FlagHasDigit) == 0 &&
-				currentHostBits >= raw.RawBitsX10 && (currentHostBits-raw.RawBitsX10 == 1 || currentHostBits-raw.RawBitsX10 == 3) {
-				isPrimary = false
-			}
-			grp := currentGroup
-			slotRole := raw.Role
-			if isPrimary {
-				slotRole = core.RolePrimary
-				currentHostBits = raw.RawBitsX10
-				docSlot++
-				currentGroup = raw.H
-				grp = currentGroup
-				pos = core.TermPosition{Sentence: sentenceAt, Slot: docSlot}
-			} else if slotRole == 0 {
-				if raw.RawBitsX10 == plain.ISODateCarrierBitsX10 && (raw.ClassFlags&FlagHasConn) != 0 {
-					slotRole = core.RoleClosedBeacon
-				} else if int(currentHostBits) >= int(raw.RawBitsX10)+3 {
-					slotRole = core.RoleSubwordPiece
-				} else {
-					slotRole = core.RoleMorphStem
-				}
-			}
-			if grp == 0 {
-				grp = raw.H
-			}
-			var extBit uint16
-			switch {
-			case isPrimary:
-				extBit = core.ExtFlagSeenPrimary
-			case slotRole == core.RoleSubwordPiece:
-				extBit = core.ExtFlagSeenSubword
-			default:
-				extBit = core.ExtFlagSeenMorphOrClos
-			}
-			atom, seen := atoms[raw.H]
-			if !seen {
-				atom = core.Term{
-					Hash:     raw.H,
-					Role:     slotRole,
-					ExtFlags: extBit,
-					Group:    grp,
-					Sent:     plain.ClampPosU16(sentenceAt + 1),
-					Slot:     plain.ClampPosU16(pos.Slot),
-				}
-			} else {
-				atom.ExtFlags |= extBit
-				if isPrimary {
-					atom.Group = raw.H
-					atom.Role = core.RolePrimary
-				} else if atom.Role != core.RolePrimary && slotRole < atom.Role {
-					atom.Role = slotRole
-				}
-			}
-			bits := raw.RawBitsX10
-			if bits == 0 {
-				bits = 32
-			}
-			if bits > atom.Bits {
-				atom.Bits = bits
-			}
-			atom.Flags |= raw.ClassFlags
-			atoms[raw.H] = atom
-			prev := positions[raw.H]
-			if len(prev) == 0 || prev[len(prev)-1] != pos {
-				positions[raw.H] = append(prev, pos)
-				counts[raw.H]++
-			}
-		}
+	debug.SetMemoryLimit(limit)
+	return func() {
+		debug.SetMemoryLimit(previous)
+		debug.FreeOSMemory()
 	}
-	return atoms, counts, positions
 }
 
 // ensureSnapshotCoreEngine lazily builds (and caches on the immutable snapshot)
@@ -228,40 +146,35 @@ func (s *vaultCorpusSnapshot) ensureSnapshotCoreEngine(v *Vault) *core.Engine {
 	}
 	s.coreOnce.Do(func() {
 		signature := s.freshnessLine()
+		if v != nil {
+			if canonical := v.canonicalSignature(); canonical != "" {
+				signature = canonical
+			}
+		}
 		if eng, ok := openSnapshotCoreEngineFromCSR(dbPath, signature); ok {
 			s.coreEngine = eng
-			if len(s.docs) >= 2048 {
-				s.releaseTransientDocTermMaps(v)
-			}
 			return
 		}
-		rmDocs := make([]core.Doc, len(s.docs))
-		for i := range s.docs {
-			d := &s.docs[i]
-			occ := d.occ
-			if d.layer == LayerBackground {
-				// L1 background chunks are static document slices rather than temporal
-				// dialogue events; their file mtime must not enter SpacetimeCluster
-				// exact-timestamp buckets (where git checkouts or multi-chunk files
-				// collapse thousands of chunks onto one timestamp and trigger O(B^2)
-				// neighbor edges). Same-document slices couple via DocHash + LineStart..LineEnd.
-				occ = 0
-			}
-			rmDocs[i] = core.Doc{
-				UnitID:     d.docID,
-				OccurredAt: occ,
-				Layer:      d.layer,
-				DocHash:    d.docHash,
-				BlockHash:  d.blockHash,
-				LineStart:  d.lineStart,
-				LineEnd:    d.lineEnd,
-				Terms:      d.termMeta,
-				Counts:     d.termCounts,
-				Positions:  d.termPositions,
-			}
+		// 冷启动全量构建的活集与语料规模同阶，可数倍于守护进程的稳态软上限；在上限内构建
+		// 会退化为 GC 空转而无法完成。此处按调用方给的构建窗口临时抬高上限，构建与落盘
+		// 结束后恢复稳态上限并归还页缓存。
+		if restore := applyColdBuildWindow(v.coldBuildLimit()); restore != nil {
+			defer restore()
 		}
-		eng := core.NewEngine(core.BuildIndex(rmDocs))
-		rmDocs = nil
+		if v == nil {
+			return
+		}
+		// 全量构建直接以规范存储为源：Store.LoadIndex 在单事务快照内重建倒排，
+		// 词项只来自 rm_terms，不再从打包原子重建或推断角色。
+		store, err := v.canonicalStore()
+		if err != nil {
+			return
+		}
+		idx, err := store.LoadIndex()
+		if err != nil || idx == nil || idx.N == 0 {
+			return
+		}
+		eng := core.NewEngine(idx)
 		eng.MaterializeClusterState()
 		// 构建后按核心侧生产配方落盘并 mmap 挂载磁盘簇、释放堆过渡 Map：
 		// 常驻内存从「堆索引 + 簇状态」降到「mmap 页缓存 + 极小堆壳」，
@@ -269,7 +182,8 @@ func (s *vaultCorpusSnapshot) ensureSnapshotCoreEngine(v *Vault) *core.Engine {
 		// 直接零拷贝复用。落盘或挂载失败时保留纯堆形态，行为与历史一致。
 		if csrPath, ok := persistSnapshotCoreCSR(dbPath, signature, eng, v, []byte(s.episodicCodecKey)); ok {
 			_ = core.AttachDiskClusterCSR(csrPath, eng, true)
-			if v != nil && v.slotCacheMu != nil && v.snapRef != nil {
+			_ = v.persistCanonicalUnitRevisions(dbPath)
+			if v.slotCacheMu != nil && v.snapRef != nil {
 				if st, sErr := os.Stat(csrPath); sErr == nil && st.Size() > 0 {
 					v.slotCacheMu.Lock()
 					v.snapRef.csrEngine = eng
@@ -278,9 +192,6 @@ func (s *vaultCorpusSnapshot) ensureSnapshotCoreEngine(v *Vault) *core.Engine {
 					v.slotCacheMu.Unlock()
 				}
 			}
-		}
-		if len(s.docs) >= 2048 {
-			s.releaseTransientDocTermMaps(v)
 		}
 		s.coreEngine = eng
 	})
@@ -328,20 +239,11 @@ func (s *vaultCorpusSnapshot) releaseTransientDocTermMaps(v *Vault) {
 // caller invokes LocalVaultTransport.QueryBlindManifold with a pre-packed
 // BlindPulsePacket instead of raw query text.
 func (v *Vault) extractQueryFromBlindPacket(idx *core.Index, pkt BlindPulsePacket) (map[uint64]core.Term, map[uint64][]core.TermPosition) {
-	qTerms, _, qPos := coreTermsFromPacket(pkt.Slots, pkt.SentenceFrames)
-	if len(qTerms) == 0 || idx == nil || idx.N == 0 {
-		return qTerms, qPos
+	text := strings.TrimSpace(pkt.RawText)
+	if text == "" {
+		return nil, nil
 	}
-	// Apply the same clock-header de-rigidification on packet-only queries.
-	if clockExcl := localQueryClockHeaderExclusiveHashes(pkt); len(clockExcl) > 0 {
-		for h := range clockExcl {
-			if tm, ok := qTerms[h]; ok {
-				tm.Bits = 18
-				tm.Flags &^= FlagHasDigit | FlagHasUpper | FlagHasCamel
-				qTerms[h] = tm
-			}
-		}
-	}
+	qTerms, _, qPos := v.newVaultTermExtractor().ExtractQueryWithPositions(idx, text)
 	return qTerms, qPos
 }
 

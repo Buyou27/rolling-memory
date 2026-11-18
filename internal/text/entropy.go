@@ -165,8 +165,8 @@ func SliceShannonBits(rs []rune) float64 {
 // tandem-repeat collapse on compact single-token strings, and cross-space periodic flood collapse on
 // long space-delimited repetition floods.
 //
-// 双副本契约：FTS 边界变体额外忽略 FTS 边界标记 '^'/'$'
-// （本版各计 1.0 bit）；其余行为必须逐值全等，由 TestShannonPrimitivesDualCopyParity 守卫。
+// ASCII punctuation (including '^' and '$') contributes 1.0 bit each: this function is the
+// generic string-entropy primitive and keeps no special case for retired retrieval channels.
 func StringShannonBits(s string) float64 {
 	var bits float64
 	hasAlnum := false

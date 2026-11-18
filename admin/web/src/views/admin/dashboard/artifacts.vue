@@ -37,6 +37,14 @@
                 <el-button size="small" plain data-testid="btn-artifacts-system-update" @click="showSystemUpdateDialog = true">
                     {{ isEn ? 'Version & Update' : '版本与在线更新' }}
                 </el-button>
+                <el-button
+                    size="small"
+                    plain
+                    data-testid="btn-artifacts-system-service"
+                    @click="router.push('/admin/plugin/rolling-memory/system')"
+                >
+                    {{ isEn ? 'System Service' : '系统管理' }}
+                </el-button>
                 <el-button size="small" plain @click="router.push('/admin/dashboard')">
                     {{ isEn ? 'Live Console' : '实时控制台' }}
                 </el-button>
@@ -61,7 +69,7 @@
                 <div class="pipe-eyebrow">{{ isEn ? '① LOCAL PLAINTEXT VAULT' : '① 本地 SQLite 明文金库' }}</div>
                 <div class="pipe-main">
                     <strong>{{
-                        isEn ? 'SQLite Plaintext Vault (FTS5 + BM25 + Shannon Gain)' : '本地 SQLite 明文金库 (FTS5 + BM25 + 香农自信息连续增益)'
+                        isEn ? 'SQLite Plaintext Vault (Shannon Gain · Cluster Kernel)' : '本地 SQLite 明文金库（香农自信息增益 · 簇检索内核）'
                     }}</strong>
                     <span class="pipe-main-right">
                         <el-tag size="small" type="success" effect="plain">local_plain · 0 Egress</el-tag>
@@ -75,7 +83,7 @@
             <div class="pipe-stage is-enhanced">
                 <div class="pipe-eyebrow">
                     {{
-                        isEn ? '② LOCAL RECALL (SQLite FTS5 · local_plain)' : '② 本地检索（SQLite 明文金库 · local_plain）'
+                        isEn ? '② LOCAL RECALL (Local Vault · local_plain)' : '② 本地检索（SQLite 明文金库 · local_plain）'
                     }}
                 </div>
                 <div class="pipe-main">
@@ -301,7 +309,7 @@
                         </div>
                         <div class="stat-big">
                             {{ isEn ? 'Local' : '本地' }}
-                            <small>SQLite FTS5 + BM25 (local_plain)</small>
+                            <small>{{ isEn ? 'Cluster Kernel (local_plain)' : '簇检索内核 (local_plain)' }}</small>
                         </div>
                         <div class="stat-foot">
                             <span
@@ -439,8 +447,8 @@ const status = ref<any>({})
 // ── 「?」悬停人话说明：口径对齐公开帮助文档 docs/plugin-console.md 与后台实现 ──
 const heroHint = computed(() =>
     isEn.value
-        ? 'The Rolling Autonoetic Memory Engine is the local memory engine: every memory becomes a pure-math “wave fingerprint”. Retrieval and ranking are pure local math (SQLite FTS5/BM25 + information-gain weighting) — no embedding model, no large model, no network calls.'
-        : '「洛灵自知记忆引擎」是本机记忆引擎：每条记忆被编码为纯数学「波形指纹」；检索与排序全部由本机纯数学完成（SQLite FTS5/BM25 + 信息量加权），不需要任何向量嵌入模型或大模型，也不联网。'
+        ? 'The Rolling Autonoetic Memory Engine is the local memory engine: every memory becomes a pure-math “wave fingerprint”. Retrieval and ranking are pure local math (token-based cluster retrieval + self-information gain weighting) — no embedding model, no large model, no network calls.'
+        : '「洛灵自知记忆引擎」是本机记忆引擎：每条记忆被编码为纯数学「波形指纹」；检索与排序全部由本机纯数学完成（纯子串分词 + 实体簇/时空簇检索 + 自信息量加权），不需要任何向量嵌入模型或大模型，也不联网。'
 )
 
 const wsHint = computed(() =>
@@ -451,8 +459,8 @@ const wsHint = computed(() =>
 
 const vaultStageHint = computed(() =>
     isEn.value
-        ? 'All raw memories live in a local SQLite database. Retrieval uses the built-in full-text index (FTS5) with classic BM25 relevance scoring, re-weighted by Shannon self-information gain (rarer terms carry more signal) — pure local math. local_plain means plaintext, local-only storage: nothing is uploaded.'
-        : '记忆原文全部保存在本机的 SQLite 数据库里。全文检索用 SQLite 内置索引 FTS5，相关性打分用经典 BM25 算法，再用「香农自信息增益」（越罕见的词信息量越大）做连续加权——全部纯数学、本地完成。local_plain ＝ 本地明文模式：数据只存本机、不上传。'
+        ? 'All raw memories live in a local SQLite database. Retrieval runs a fully local deterministic kernel: pure-substring tokenization feeds an entity × spacetime cluster index, and ranking is re-weighted by Shannon self-information gain (rarer terms carry more signal) — no embedding model, no index server, no network call. local_plain means plaintext, local-only storage: nothing is uploaded.'
+        : '记忆原文全部保存在本机的 SQLite 数据库里。检索由完全本地的确定性内核完成：纯子串分词后进入实体 × 时空簇索引，排序再用「香农自信息增益」（越罕见的词信息量越大）做连续加权——不依赖向量嵌入模型、不连检索服务、不联网。local_plain ＝ 本地明文模式：数据只存本机、不上传。'
 )
 
 const recallStageHint = computed(() =>

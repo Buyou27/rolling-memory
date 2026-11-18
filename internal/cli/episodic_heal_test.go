@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -34,7 +34,7 @@ func TestHealDriftedEpisodicPointersReanchorsWithoutDeleting(t *testing.T) {
 	if err := os.WriteFile(goneSource, []byte(`{"type":"user","message":{"role":"user","content":"稍后删除。"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestHealDriftedEpisodicPointersReanchorsWithoutDeleting(t *testing.T) {
 func TestHealKeepsUnattributedAlternatesUntouched(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal-alt", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal-alt", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestHealReanchorsSameFileTurnDriftAndRecallRecovers(t *testing.T) {
 	if err := os.WriteFile(source, []byte(first+second), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(healTestConfig(t, home, "mem:heal-e2e"))
+	memory, err := facade.New(healTestConfig(t, home, "mem:heal-e2e"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestHealReanchorsSameFileTurnDriftAndRecallRecovers(t *testing.T) {
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())
 
-	req := api.RecallRequest{Cue: "quilted nebula checkpoint", NoCrystallize: true}
+	req := facade.RecallRequest{Cue: "quilted nebula checkpoint", NoCrystallize: true}
 	fresh, err := memory.Recall(req)
 	if err != nil || len(fresh.Bands) == 0 {
 		t.Fatalf("fresh recall should deliver: bands=%d gaps=%v err=%v", len(fresh.Bands), fresh.Gaps, err)
@@ -281,7 +281,7 @@ func TestHealSkipsTamperedIndexesWithoutTouchingRows(t *testing.T) {
 	if err := os.WriteFile(source, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal-tamper", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal-tamper", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestHealSkipsTamperedIndexesWithoutTouchingRows(t *testing.T) {
 func TestHealSweepCursorWrapsAndEventuallyRevisits(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal-wrap", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:heal-wrap", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestPruneReanchorsRenumberedUnitsInsteadOfDeletingThem(t *testing.T) {
 	if err := os.WriteFile(source, []byte(oldFirst+second), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune-guard", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune-guard", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +487,7 @@ func TestPruneReanchorsRenumberedUnitsInsteadOfDeletingThem(t *testing.T) {
 func TestPruneRefusesCrossSourceReanchorWithoutExplicitOptIn(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune-cross", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune-cross", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -626,6 +626,9 @@ func TestEpisodicIndexEnsureAndCrossInstance(t *testing.T) {
 		if _, err := db1.Exec(`DELETE FROM thin_vault_docs WHERE doc_id='doc'`); err != nil {
 			t.Fatal(err)
 		}
+		if err := v1.deleteCanonicalUnits("doc"); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(source, []byte(`{"type":"user","message":{"role":"user","content":"`+word+`"}}`+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -643,6 +646,9 @@ func TestEpisodicIndexEnsureAndCrossInstance(t *testing.T) {
 		}
 	}
 	if _, err := db1.Exec(`DELETE FROM thin_vault_docs WHERE doc_id='doc'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := v1.deleteCanonicalUnits("doc"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(source, []byte(`{"type":"user","message":{"role":"user","content":"quartz"}}`+"\n"), 0o600); err != nil {

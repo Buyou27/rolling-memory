@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
@@ -105,9 +105,9 @@ func loadConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
-func openMemory(t *testing.T) *api.Memory {
+func openMemory(t *testing.T) *facade.Memory {
 	t.Helper()
-	memory, err := api.New(loadConfig(t))
+	memory, err := facade.New(loadConfig(t))
 	if err != nil {
 		t.Fatalf("api: %v", err)
 	}
@@ -125,7 +125,7 @@ func openMemory(t *testing.T) *api.Memory {
 func seedCat(t *testing.T) {
 	t.Helper()
 	memory := openMemory(t)
-	if _, err := memory.Remember(api.RememberRequest{
+	if _, err := memory.Remember(facade.RememberRequest{
 		Content:    strPtr("我养了一只猫，叫小白。"),
 		AnchorText: strPtr("我养了一只猫，叫小白。"),
 		Assertion: map[string]any{
@@ -1646,7 +1646,7 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 		Session: "prev-sess", Turn: 2, Kind: "message", Author: "assistant", Audience: "shared",
 		OccurredAt: &nowReply, Meta: map[string]any{"locus": "rocareer/Rolling-Memory"},
 	})
-	if _, err := mem.Remember(api.RememberRequest{
+	if _, err := mem.Remember(facade.RememberRequest{
 		Content:    strPtr("增量批实施卡首版落于 docs/zh-CN/design.md。"),
 		AnchorText: strPtr("增量批实施卡首版落于 docs/zh-CN/design.md。"),
 		Assertion: map[string]any{
@@ -1691,7 +1691,7 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 	// 4. Scattered 2-char domain words ("开源", "记忆", "插件") in a long architectural prompt
 	// MUST NOT trigger a false-positive recall of an unrelated long mission band that merely
 	// shares a single 2-char word in its title and scattered 2-char words in its body.
-	if _, err := mem.Remember(api.RememberRequest{
+	if _, err := mem.Remember(facade.RememberRequest{
 		Content:    strPtr("Rolling-Memory 开源工作使命、三仓拓扑与零泄漏纪律：工作使命登记于本地 AGENTS.md，世界开源的记忆系统与全宿主插件。"),
 		AnchorText: strPtr("工作使命登记于本地 AGENTS.md，世界开源的记忆系统与全宿主插件。"),
 		Assertion: map[string]any{
@@ -1725,7 +1725,7 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 	// 6. Pre-retrieval subject probe + compact technical acronym ("w3:roi") must recall
 	// "Rolling-Memory 独立 ROI 监控屏", while a >=6-hanzi title ("机械核零 LLM 读链") sharing only
 	// a single 3-letter word ("llm") with zero ideographic overlap must stay silent.
-	if _, err := mem.Remember(api.RememberRequest{
+	if _, err := mem.Remember(facade.RememberRequest{
 		Content:    strPtr("Rolling-Memory 独立 ROI 监控屏落位于 admin/web/src/views/admin/dashboard/roi.vue。"),
 		AnchorText: strPtr("Rolling-Memory 独立 ROI 监控屏落位于 admin/web/src/views/admin/dashboard/roi.vue。"),
 		Assertion: map[string]any{
@@ -1737,7 +1737,7 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remember roi: %v", err)
 	}
-	if _, err := mem.Remember(api.RememberRequest{
+	if _, err := mem.Remember(facade.RememberRequest{
 		Content:    strPtr("机械核零 LLM 读链定义为种子门到图走与结构排序。"),
 		AnchorText: strPtr("机械核零 LLM 读链定义为种子门到图走与结构排序。"),
 		Assertion: map[string]any{
@@ -1764,7 +1764,7 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 	if stripped := ids.StripInjected(genUIPrompt); strings.Contains(stripped, "untrusted_gen_ui_state") || strings.Contains(stripped, "visualizations") {
 		t.Fatalf("expected StripInjected to remove <untrusted_gen_ui_state>, got: %q", stripped)
 	}
-	if paths := extractStructuralPathsFromText("访问 http://localhost:8008/ 首页", 4); len(paths) != 0 {
+	if paths := recall.ExtractStructuralPaths("访问 http://localhost:8008/ 首页", 4); len(paths) != 0 {
 		t.Fatalf("expected root localhost URL without SPA route to yield 0 file paths, got: %v", paths)
 	}
 	if !isEphemeralProbeSession("probe-boot-readonly") || isEphemeralProbeSession("session_493f1424b7") {
@@ -1803,11 +1803,11 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 // before the reminder-only ruling — recall as the deliverable reader, then the
 // deterministic specificity gate — so retrieval-quality assertions keep guarding
 // the agent-driven path without the hook performing any recall itself.
-func hookGateRecall(t *testing.T, mem *api.Memory, wsDir, session, prompt string) []map[string]any {
+func hookGateRecall(t *testing.T, mem *facade.Memory, wsDir, session, prompt string) []map[string]any {
 	t.Helper()
 	payload := map[string]any{"session_id": session, "cwd": wsDir}
 	reader := "deliverable"
-	res, err := mem.Recall(api.RecallRequest{
+	res, err := mem.Recall(facade.RecallRequest{
 		Cue: prompt, Reader: &reader, Presence: workspacePresence(payload), NoCrystallize: true,
 	})
 	if err != nil {

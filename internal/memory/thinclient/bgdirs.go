@@ -838,6 +838,16 @@ func (v *Vault) purgeBackgroundFileBatch(ctx context.Context, absPath string, un
 	if err := tx.Commit(); err != nil {
 		return start, false, fmt.Errorf("thinclient: commit background file purge %s: %w", absPath, err)
 	}
+	if len(batch) > 0 {
+		if err := v.deleteCanonicalUnits(batch...); err != nil {
+			return start, false, fmt.Errorf("thinclient: delete canonical background chunks for %s: %w", absPath, err)
+		}
+	}
+	if lastBatch {
+		if err := v.deleteCanonicalBackgroundFile(absPath); err != nil {
+			return start, false, fmt.Errorf("thinclient: delete canonical background file %s: %w", absPath, err)
+		}
+	}
 	return end, lastBatch, nil
 }
 
@@ -1280,7 +1290,7 @@ func (c *Client) uploadBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 
 // commitBackgroundFile serializes one staged file's local bookkeeping after its ingests drained:
 // purge obsolete trailing transport units before deleting their local metadata, refresh a metadata-only
-// touch, then write the chunk/FTS/file rows in bounded transactions while cascading `stale` to every
+// touch, then write the chunk/file rows in bounded transactions while cascading `stale` to every
 // Noetic record citing a changed chunk. Normal files (<= backgroundPurgeBatchUnits chunks within
 // backgroundPurgeBatchBudget) commit in one transaction; giant multi-thousand-chunk files split
 // across bounded batches and write the `thin_vault_bg_files` row in the final batch so the SQLite
@@ -1353,6 +1363,8 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			return nil, 0, err
 		}
 		batchStart := time.Now()
+		batchChanged := make([]int, 0, backgroundPurgeBatchUnits)
+		batchDeleted := make([]string, 0, backgroundPurgeBatchUnits)
 		ops := 0
 		for chunkIdx < len(up.chunks) && ops < backgroundPurgeBatchUnits {
 			i := chunkIdx
@@ -1378,11 +1390,10 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			if err != nil {
 				return rollback(fmt.Errorf("thinclient: encode kept indices for %s: %w", unitID, err))
 			}
-			slotsBlob := encodePacketWireBlob(up.packets[i])
 			if _, err := tx.Exec(`
 					INSERT INTO thin_vault_bg_chunks(
-						unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, inserted_at, address_uri, coord64, waveform_bar, kept_indices_json, slots_json
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+						unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, inserted_at, address_uri, coord64, waveform_bar, kept_indices_json
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT(unit_id) DO UPDATE SET
 						abs_path = excluded.abs_path,
 						rel_path = excluded.rel_path,
@@ -1393,13 +1404,13 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 						address_uri = excluded.address_uri,
 						coord64 = excluded.coord64,
 						waveform_bar = excluded.waveform_bar,
-						kept_indices_json = excluded.kept_indices_json,
-						slots_json = excluded.slots_json`,
+						kept_indices_json = excluded.kept_indices_json`,
 				unitID, up.absPath, up.relPath, chunk.ChunkIndex, chunk.Anchor, up.occurredAt, fileInsertedAt,
-				resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, string(keptJSON), slotsBlob,
+				resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, string(keptJSON),
 			); err != nil {
 				return rollback(fmt.Errorf("thinclient: save background chunk %s: %w", unitID, err))
 			}
+			batchChanged = append(batchChanged, i)
 			chunkIdx++
 			ops++
 			if (chunkIdx < len(up.chunks) || trailIdx < len(trailingUnits)) && time.Since(batchStart) >= backgroundPurgeBatchBudget {
@@ -1425,6 +1436,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			if _, err := tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
 				return rollback(fmt.Errorf("thinclient: delete trailing background chunks for %s: %w", up.absPath, err))
 			}
+			batchDeleted = append(batchDeleted, trailSlice...)
 			trailIdx = endTrail
 		}
 
@@ -1453,6 +1465,70 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, 0, fmt.Errorf("thinclient: commit background file %s: %w", up.absPath, err)
+		}
+		for _, idx := range batchChanged {
+			chunk := up.chunks[idx]
+			resp := up.responses[idx]
+			keptJSON, mErr := json.Marshal(resp.KeptSentenceIndices)
+			if mErr != nil {
+				return nil, 0, fmt.Errorf("thinclient: encode kept indices for %s: %w", up.newUnitIDs[idx], mErr)
+			}
+			pkt := up.packets[idx]
+			if err := c.Vault.ingestCanonicalText(up.newUnitIDs[idx], up.occurredAt, chunk.Text, canonicalUnitMeta{
+				Layer:           LayerBackground,
+				KeptIndicesJSON: string(keptJSON),
+				AddressURI:      resp.AddressURI,
+				Coord64:         int64(resp.AddressCoord64),
+				WaveformBar:     resp.WaveformBar,
+				DocMacroWave:    resp.DocMacroWaveform,
+				AssistantID:     c.Vault.identity.AssistantID,
+				IncarnationID:   c.Vault.identity.IncarnationID,
+				Locus:           c.Vault.identity.Locus,
+				InsertedAt:      fileInsertedAt,
+				DocHash:         pkt.DocHash,
+				BlockHash:       pkt.BlockHash,
+				LineStart:       pkt.LineStart,
+				LineEnd:         pkt.LineEnd,
+				StoreRawText:    false,
+			}); err != nil {
+				return nil, 0, fmt.Errorf("thinclient: ingest canonical background chunk %s: %w", up.newUnitIDs[idx], err)
+			}
+			if _, err := c.Vault.db.Exec(`
+				INSERT INTO rm_bg_chunks(
+					unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, inserted_at,
+					address_uri, coord64, waveform_bar, kept_indices_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(unit_id) DO UPDATE SET
+					abs_path = excluded.abs_path,
+					rel_path = excluded.rel_path,
+					chunk_index = excluded.chunk_index,
+					anchor = excluded.anchor,
+					occurred_at = excluded.occurred_at,
+					inserted_at = CASE WHEN rm_bg_chunks.inserted_at > 0 THEN rm_bg_chunks.inserted_at ELSE excluded.inserted_at END,
+					address_uri = excluded.address_uri,
+					coord64 = excluded.coord64,
+					waveform_bar = excluded.waveform_bar,
+					kept_indices_json = excluded.kept_indices_json`,
+				up.newUnitIDs[idx], up.absPath, up.relPath, chunk.ChunkIndex, chunk.Anchor, up.occurredAt, fileInsertedAt,
+				resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, string(keptJSON),
+			); err != nil {
+				return nil, 0, fmt.Errorf("thinclient: save canonical background chunk %s: %w", up.newUnitIDs[idx], err)
+			}
+		}
+		if len(batchDeleted) > 0 {
+			if err := c.Vault.deleteCanonicalUnits(batchDeleted...); err != nil {
+				return nil, 0, fmt.Errorf("thinclient: delete canonical background chunks for %s: %w", up.absPath, err)
+			}
+		}
+		if lastBatch {
+			if _, err := c.Vault.db.Exec(`
+				INSERT OR REPLACE INTO rm_bg_files(
+					abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, chunk_count, unit_ids_json, chunk_hashes_json, chunker_generation
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				up.absPath, up.dirID, up.relPath, up.mtimeNS, up.fileSize, up.contentSHA256, len(up.newUnitIDs), string(uidsJSON), string(hashesJSON), backgroundChunkerGeneration,
+			); err != nil {
+				return nil, 0, fmt.Errorf("thinclient: save canonical background file %s: %w", up.absPath, err)
+			}
 		}
 		if lastBatch {
 			c.Vault.ClearDeletedUnits(up.newUnitIDs...)
@@ -1498,7 +1574,7 @@ func (c *Client) rollbackPostFailureUploads(ctx context.Context, tail []backgrou
 
 // purgeTrackedBackgroundFile removes one previously indexed file from both planes: its transport
 // chunk units are purged first (so a failed purge keeps every retry row intact), then its local
-// file/chunk/FTS rows and the `stale` cascade into every Noetic record citing those chunks are
+// file/chunk rows and the `stale` cascade into every Noetic record citing those chunks are
 // written in bounded batches. It returns the invalidated Noetic IDs and is shared by the
 // deletion phase and the skipped-file path so both leave the index in exactly the same state.
 func (c *Client) purgeTrackedBackgroundFile(ctx context.Context, absPath string, prev backgroundTrackedFile, getCitations func() (*localNoeticCitationIndex, error)) (map[string]bool, error) {

@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 func TestDaemonRecallUsesCallerConfig(t *testing.T) {
@@ -39,7 +39,7 @@ func TestDaemonRecallUsesCallerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

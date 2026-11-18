@@ -14,10 +14,10 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 // scanSnapshotFixtureRows is one transcript that exercises the enumeration shapes
@@ -256,9 +256,9 @@ func TestEpisodicSourceScanSnapshotAndStreamingSaveIdenticalRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	sources := []episodicScanSource{{HarnessID: "claude-code", Kind: "jsonl", Path: path}}
-	newMemory := func(name string) *api.Memory {
+	newMemory := func(name string) *facade.Memory {
 		t.Helper()
-		memory, err := api.New(&config.Config{DB: filepath.Join(home, name), Scope: scope, Mode: "local"})
+		memory, err := facade.New(&config.Config{DB: filepath.Join(home, name), Scope: scope, Mode: "local"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -412,9 +412,9 @@ func TestEpisodicReconcileVerifiedSaveMatchesStreamingRows(t *testing.T) {
 	if err := olderSnapshot.Close(); err != nil {
 		t.Fatal(err)
 	}
-	newMemory := func(name string) *api.Memory {
+	newMemory := func(name string) *facade.Memory {
 		t.Helper()
-		memory, err := api.New(&config.Config{DB: filepath.Join(home, name), Scope: scope, Mode: "local"})
+		memory, err := facade.New(&config.Config{DB: filepath.Join(home, name), Scope: scope, Mode: "local"})
 		if err != nil {
 			t.Fatal(err)
 		}

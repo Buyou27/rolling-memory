@@ -6,13 +6,12 @@
 //
 // 为什么独立成包：同一个判定要被两端共用，且两端都不该为此引入对方的依赖——
 //   - `internal/eval`（评测流水线）用它解析 scope 轴；
-//   - `internal/api`（产品生命周期）用它把自动 L3 Noetic 结晶挡在评测空间之外。
+//   - `internal/memory/facade`（产品生命周期）用它把自动 L3 Noetic 结晶挡在评测空间之外。
 //
-// 命名空间闭集（正本 internal/eval/local_engine.go 的 ScopeForSuiteAndMode；现役新产物只产出 local_plain，
-// 历史形态仅按只读解析兼容）：
-//   - <user>-mem-eval-<locomo|atmbench>[-pulse-cipher][-<世代号>] => pulse_cipher（脉冲密文，历史只读值）
-//   - <user>-mem-eval-<locomo|atmbench>-pulse-plain[-<世代号>]    => pulse_plain （脉冲明文，历史只读值）
-//   - <user>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]    => local_plain （本地明文）
+// 命名空间闭集（正本 internal/eval/local_engine.go 的 ScopeForSuiteAndMode）：
+//   - <user>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]
+//
+// 其它形态一律 fail-closed：本项目只有本地明文一种模式。
 //
 // 引擎侧落库时 scope 还会带上分身前缀（`ast:default:inc:<user>-mem-eval-...`）。
 package evalns
@@ -30,11 +29,7 @@ const (
 	// SuiteATMWire 是 ATM-Bench 套件在 scope 中的线名（内部套件名是 "atm"）。
 	SuiteATMWire = "atmbench"
 
-	// ModePulseCipher 是脉冲密文模式（唯一合法名）。
-	ModePulseCipher = "pulse_cipher"
-	// ModePulsePlain 是脉冲明文模式（唯一合法名）。
-	ModePulsePlain = "pulse_plain"
-	// ModeLocalPlain 是本地明文离线模式（唯一合法名）。
+	// ModeLocalPlain 是唯一合法模式（本地明文离线）。
 	ModeLocalPlain = "local_plain"
 )
 
@@ -70,14 +65,13 @@ func IsBenchmarkScope(scope string) bool {
 	return false
 }
 
-// Split 解析规范评测 scope：返回 (suite, pulseMode, generation, ok)。
-// suite 取线名（`locomo` / `atmbench`），pulseMode 取 `pulse_cipher` / `pulse_plain` / `local_plain`。
-// 形态闭集：
-//   - <prefix>-mem-eval-<locomo|atmbench>[-<世代号>]              => pulse_cipher
-//   - <prefix>-mem-eval-<locomo|atmbench>-pulse-plain[-<世代号>]  => pulse_plain
-//   - <prefix>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]  => local_plain
+// Split 解析规范评测 scope：返回 (suite, mode, generation, ok)。
+// suite 取线名（`locomo` / `atmbench`），mode 恒为 `local_plain`。
+// 唯一合法形态：
+//   - <prefix>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]
 //
-// 含空白或 `:` 的 scope（引擎落库形态）一律不解析：它们不是一个可用于建引擎的规范 scope。
+// 任何其它形态（含历史脉冲后缀）一律 fail-closed：本项目只有本地明文一种模式。
+// 含空白或 `:` 的 scope（引擎落库形态）同样不解析。
 func Split(scope string) (string, string, string, bool) {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	if scope == "" || len(scope) > MaxScopeLen || strings.ContainsAny(scope, " \t\r\n:") {
@@ -105,17 +99,9 @@ func Split(scope string) (string, string, string, bool) {
 			return "", "", "", false
 		}
 	}
-	pulseMode := ModePulseCipher
 	genSegments := segments[1:]
-	if len(genSegments) >= 2 && genSegments[0] == "pulse" && genSegments[1] == "plain" {
-		pulseMode = ModePulsePlain
-		genSegments = genSegments[2:]
-	} else if len(genSegments) >= 2 && genSegments[0] == "pulse" && genSegments[1] == "cipher" {
-		pulseMode = ModePulseCipher
-		genSegments = genSegments[2:]
-	} else if len(genSegments) >= 2 && genSegments[0] == "local" && genSegments[1] == "plain" {
-		pulseMode = ModeLocalPlain
-		genSegments = genSegments[2:]
+	if len(genSegments) < 2 || genSegments[0] != "local" || genSegments[1] != "plain" {
+		return "", "", "", false
 	}
-	return suite, pulseMode, strings.Join(genSegments, "-"), true
+	return suite, ModeLocalPlain, strings.Join(genSegments[2:], "-"), true
 }

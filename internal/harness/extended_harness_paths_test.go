@@ -15,7 +15,31 @@ import (
 // ~/.cline/data/settings plus per-file project rules.
 func TestExtendedHarnessCurrentPaths(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	index := harnessIndex(BuildExtendedHarnesses(home))
+
+	opencode := index["opencode"]
+	if got, want := opencode.MCPPath, filepath.Join(home, "xdg", "opencode", "opencode.json"); got != want {
+		t.Fatalf("OpenCode mcp path = %q, want %q", got, want)
+	}
+	if got, want := opencode.SkillUser, filepath.Join(home, "xdg", "opencode", "skills"); got == nil || *got != want {
+		t.Fatalf("OpenCode skill root = %v, want %q", opencode.SkillUser, want)
+	}
+	if got, want := opencode.MCPProjectPath, filepath.Join(".opencode", "opencode.json"); got == nil || *got != want {
+		t.Fatalf("OpenCode project config = %v, want %q", opencode.MCPProjectPath, want)
+	}
+	if opencode.MCPKind != "json" || opencode.HooksKind != "" {
+		t.Fatalf("OpenCode adapter = %#v", opencode)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "xdg", "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "xdg", "opencode", "opencode.jsonc"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := harnessIndex(BuildExtendedHarnesses(home))["opencode"].MCPPath, filepath.Join(home, "xdg", "opencode", "opencode.jsonc"); got != want {
+		t.Fatalf("OpenCode existing config path = %q, want %q", got, want)
+	}
 
 	windsurf := index["windsurf"]
 	if got, want := windsurf.MCPPath, filepath.Join(home, ".config", "devin", "mcp_config.json"); got != want {

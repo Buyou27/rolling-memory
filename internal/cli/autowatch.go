@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/harness"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 const (
@@ -124,11 +124,11 @@ func SetEpisodicSyncPaused(db *sql.DB, paused bool) error {
 
 // RunAutoWatchTick executes one single-flight pass of the auto-watcher if enabled.
 // It returns true if a pass ran, along with counts of synced background chunks and episodic turns.
-func RunAutoWatchTick(ctx context.Context, memory *api.Memory, settleBG, quiesceEpi time.Duration) (ran bool, bgChunks int, epiPushed int) {
+func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quiesceEpi time.Duration) (ran bool, bgChunks int, epiPushed int) {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return false, 0, 0
 	}
-	if api.ShouldYieldToForegroundRecall() {
+	if facade.ShouldYieldToForegroundRecall() {
 		return false, 0, 0
 	}
 	cfgPath := ""
@@ -140,9 +140,9 @@ func RunAutoWatchTick(ctx context.Context, memory *api.Memory, settleBG, quiesce
 		return false, 0, 0
 	}
 	passCtx, cancel := context.WithCancel(ctx)
-	api.RegisterBackgroundWorkCancel(cancel)
+	facade.RegisterBackgroundWorkCancel(cancel)
 	defer func() {
-		api.RegisterBackgroundWorkCancel(nil)
+		facade.RegisterBackgroundWorkCancel(nil)
 		cancel()
 	}()
 	lease, ok := acquireAutoWatchLease(db, cancel)
@@ -201,7 +201,7 @@ func RunAutoWatchTick(ctx context.Context, memory *api.Memory, settleBG, quiesce
 const autoWatchReconcileBudget = 8 * time.Second
 
 // RunAutoWatchLoop runs the periodic background/episodic watcher until ctx is cancelled.
-func RunAutoWatchLoop(ctx context.Context, memory *api.Memory, interval time.Duration) {
+func RunAutoWatchLoop(ctx context.Context, memory *facade.Memory, interval time.Duration) {
 	if interval <= 0 {
 		interval = defaultAutoWatchTick
 	}
@@ -225,10 +225,10 @@ func (a *application) backgroundMCPAutoWatch(ctx context.Context) {
 	a.backgroundMCPAutoWatchWithMemory(ctx, nil)
 }
 
-func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, sharedMem *api.Memory) {
+func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, sharedMem *facade.Memory) {
 	ticker := time.NewTicker(defaultAutoWatchTick)
 	defer ticker.Stop()
-	var watchMem *api.Memory
+	var watchMem *facade.Memory
 	ownsMem := false
 	defer func() {
 		if ownsMem && watchMem != nil {
@@ -240,7 +240,7 @@ func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, shar
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if api.ShouldYieldToForegroundRecall() {
+			if facade.ShouldYieldToForegroundRecall() {
 				continue
 			}
 			cfgPath := strings.TrimSpace(a.args.String("config"))

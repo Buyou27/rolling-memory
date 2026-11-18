@@ -15,9 +15,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -163,7 +163,7 @@ func TestEpisodicCheckpointConcurrentWriters(t *testing.T) {
 func TestEpisodicBackfillTickResumesAndRetries(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DB: filepath.Join(dir, "memory.db"), Scope: "mem:backfill", Mode: "local"}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestEpisodicBackfillTickResumesAndRetries(t *testing.T) {
 func TestEpisodicBackfillTickStopsOnIndexWriteError(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DB: filepath.Join(dir, "memory.db"), Scope: "mem:backfill", Mode: "local"}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestEpisodicSyncPauseStepResumeAndProgress(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	cfg := &config.Config{DB: filepath.Join(dir, "memory.db"), Scope: "mem:pause-test", Mode: "local"}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

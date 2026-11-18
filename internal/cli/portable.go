@@ -11,13 +11,13 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/harness"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 func (a *application) runInitPortable(rawDir string) int {
-	targetRoot := expandUser(strings.TrimSpace(rawDir))
+	targetRoot := config.ExpandUserPath(strings.TrimSpace(rawDir))
 	if abs, err := filepath.Abs(targetRoot); err == nil {
 		targetRoot = abs
 	}
@@ -86,7 +86,7 @@ func (a *application) runInitPortable(rawDir string) int {
 
 	dbPath := filepath.Join(dataDir, "memory.db")
 	if explicitDB := a.args.StringPtr("db"); explicitDB != nil && *explicitDB != "" {
-		dbPath = expandUser(*explicitDB)
+		dbPath = config.ExpandUserPath(*explicitDB)
 		if !filepath.IsAbs(dbPath) {
 			dbPath = filepath.Join(targetRoot, dbPath)
 		}
@@ -111,7 +111,7 @@ func (a *application) runInitPortable(rawDir string) int {
 		return a.fail(err)
 	}
 
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		return a.fail(err)
 	}

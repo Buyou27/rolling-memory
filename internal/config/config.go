@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -342,8 +343,8 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 
 	configEnv, _ := env("ROLLING_MEMORY_CONFIG")
-	rawPath := firstNonEmpty(derefString(opts.Path), configEnv, DefaultConfigPath())
-	configPath := expandUser(rawPath)
+	rawPath := firstNonEmpty(ids.DerefString(opts.Path), configEnv, DefaultConfigPath())
+	configPath := ExpandUserPath(rawPath)
 	data := map[string]any{}
 	if info, err := os.Stat(configPath); err == nil {
 		if info.IsDir() {
@@ -375,10 +376,10 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 	storageTable := table(data, "storage")
 
-	dbValue := firstTruthy(deref(opts.DB), envValue(env, "ROLLING_MEMORY_DB"), core["db"], DefaultDBPath())
+	dbValue := firstTruthy(ids.OptionalNonEmptyString(opts.DB), envValue(env, "ROLLING_MEMORY_DB"), core["db"], DefaultDBPath())
 	logValue := firstTruthy(envValue(env, "ROLLING_MEMORY_LOG"), core["log"], filepath.Join(DefaultStateDir(), "rolling-memory.log"))
-	modeValue := firstTruthy(deref(opts.Mode), envValue(env, "ROLLING_MEMORY_MODE"), modeTable["name"], "local")
-	scopeValue := firstTruthy(deref(opts.Scope), envValue(env, "ROLLING_MEMORY_SCOPE"), core["scope"], DefaultScope)
+	modeValue := firstTruthy(ids.OptionalNonEmptyString(opts.Mode), envValue(env, "ROLLING_MEMORY_MODE"), modeTable["name"], "local")
+	scopeValue := firstTruthy(ids.OptionalNonEmptyString(opts.Scope), envValue(env, "ROLLING_MEMORY_SCOPE"), core["scope"], DefaultScope)
 	// 兼容键 `[cloud.sync] scope_from_workspace`：默认 scope（空 / "default" / 旧 "mem:self"）
 	// 派生为当前工作区名（ROLLING_MEMORY_LOCUS 覆盖，否则工作目录 basename），使每个工作区
 	// 落在独立分区；显式 scope（--scope / ROLLING_MEMORY_SCOPE / 自定义 [core] scope）优先。
@@ -390,7 +391,7 @@ func Load(opts LoadOptions) (*Config, error) {
 			}
 		}
 	}
-	readerValue := firstTruthy(deref(opts.Reader), envValue(env, "ROLLING_MEMORY_READER"), core["reader"], "deliverable")
+	readerValue := firstTruthy(ids.OptionalNonEmptyString(opts.Reader), envValue(env, "ROLLING_MEMORY_READER"), core["reader"], "deliverable")
 
 	llmConfig := LLMConfig{
 		Provider:   pyString(envOr(env, "ROLLING_MEMORY_LLM_PROVIDER", getDefault(llmTable, "provider", "none"))),
@@ -512,13 +513,13 @@ func Load(opts LoadOptions) (*Config, error) {
 
 // Validate enforces the closed sets and positive caps.
 func (c *Config) Validate() error {
-	if !contains(validModes, c.Mode) {
+	if !slices.Contains(validModes, c.Mode) {
 		return newConfigError("mode must be one of ('local'), got %s", pyRepr(c.Mode))
 	}
 	if c.Mode == "local" && c.Recall.AdvancedOps {
 		return newConfigError("advanced operators (recall.advanced_ops) are not allowed in local mode")
 	}
-	if !contains(validReader, c.Reader) {
+	if !slices.Contains(validReader, c.Reader) {
 		return newConfigError("reader must be one of ('owner', 'deliverable'), got %s", pyRepr(c.Reader))
 	}
 	if !scopeRE.MatchString(c.Scope) {
@@ -638,7 +639,7 @@ func (c *Config) ResolveSecret(envName, filePath string) (string, error) {
 	if filePath == "" {
 		return "", nil
 	}
-	path := expandUser(filePath)
+	path := ExpandUserPath(filePath)
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", newConfigError("cannot read secret file %s: %v", path, err)
@@ -758,7 +759,7 @@ func PortableRoot() string {
 				return filepath.Dir(exe)
 			}
 		}
-		return expandUser(raw)
+		return ExpandUserPath(raw)
 	}
 	if exe, err := os.Executable(); err == nil {
 		return PortableRootForExecutable(exe)
@@ -809,7 +810,7 @@ func resolveConfigPath(raw, portableRoot, portableDefault, hostDefaultLiteral st
 			return filepath.Join(portableRoot, trimmed)
 		}
 	}
-	return expandUser(raw)
+	return ExpandUserPath(raw)
 }
 
 // DefaultConfigPath returns $XDG_CONFIG_HOME/rolling-memory/config.toml (or
@@ -844,7 +845,7 @@ func DefaultStateDir() string {
 
 func xdgHome(envName, fallback string) string {
 	if value := os.Getenv(envName); value != "" {
-		return expandUser(value)
+		return ExpandUserPath(value)
 	}
 	return fallback
 }
@@ -859,7 +860,7 @@ func homeDir() string {
 
 // WriteDefault writes the default config if path does not exist (0600).
 func WriteDefault(path string) (string, error) {
-	path = expandUser(path)
+	path = ExpandUserPath(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
@@ -930,7 +931,7 @@ func isPortableConfigTarget(path string) bool {
 // SetConfigValue sets section.key with a minimal line edit that preserves
 // comments and layout.
 func SetConfigValue(path, dotted, rawValue string) (string, error) {
-	path = expandUser(path)
+	path = ExpandUserPath(path)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		if _, err := WriteDefault(path); err != nil {
 			return "", err
@@ -1071,20 +1072,6 @@ func envOr(env func(string) (string, bool), name string, fallback any) any {
 		return value
 	}
 	return fallback
-}
-
-func deref(value *string) any {
-	if value == nil || *value == "" {
-		return nil
-	}
-	return *value
-}
-
-func derefString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1231,23 +1218,22 @@ func asBool(value any, fallback bool) bool {
 	}
 }
 
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
+// ExpandUserPath expands a leading "~" or "~/" to the current user's home
+// directory; any other path passes through unchanged. A failed home probe also
+// returns the literal path (fail-open), so callers surface what the user wrote
+// instead of an empty string.
+func ExpandUserPath(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
 	}
-	return false
-}
-
-func expandUser(path string) string {
+	home := homeDir()
+	if home == "" {
+		return path
+	}
 	if path == "~" {
-		return homeDir()
+		return home
 	}
-	if strings.HasPrefix(path, "~/") {
-		return filepath.Join(homeDir(), path[2:])
-	}
-	return path
+	return filepath.Join(home, path[2:])
 }
 
 func pyRepr(value string) string {

@@ -263,6 +263,9 @@ func (s *vaultCorpusSnapshot) freshnessLine() string {
 	if s == nil {
 		return ""
 	}
+	if s.freshnessSignature != "" {
+		return s.freshnessSignature
+	}
 	return corpusFreshnessLine(
 		s.docCnt, s.docRowSum, s.maxRowID, s.docTextLen, s.docsRev,
 		s.bgCnt, s.bgMaxRowID, s.bgOccSum, s.bgSlotsLen, s.bgRev,
@@ -321,7 +324,7 @@ func (v *Vault) acquireCachedCSREngine(dbPath string) (*core.Engine, string, boo
 		return nil, "", false
 	}
 	genLine := strings.TrimSpace(string(rawGen))
-	if _, ok := parseCSRFreshnessLine(genLine); !ok {
+	if _, ok := parseCSRFreshnessLine(genLine); !ok && signatureCodecKey(genLine) == "" {
 		return nil, "", false
 	}
 	st, err := os.Stat(csrPath)
@@ -790,18 +793,16 @@ func persistSnapshotCoreCSR(dbPath, freshnessLine string, eng *core.Engine, v *V
 	if strings.TrimSpace(dbPath) == "" || strings.TrimSpace(freshnessLine) == "" || eng == nil {
 		return "", false
 	}
-	if eng.Index != nil {
-		// Release transient unit maps (UnitPositions/UnitBits/UnitFlags/Postings/DocTerms)
-		// before allocating the contiguous .zcsr serialization buffer so the two multi-GB
-		// structures never coexist on the Go heap.
-		eng.Index.ReleaseTransientUnitMaps()
-	}
+	// Serialization must see the complete index: the corpus digest is computed
+	// from term bits/flags/DF as well as the unit metadata, and
+	// ReleaseTransientUnitMaps clears those maps. AttachDiskClusterCSR(..., true)
+	// releases them after the segment is written and mounted.
 	csrPath, genPath := vaultCSRPaths(dbPath)
 	if err := core.WriteDiskClusterCSR(csrPath, eng); err != nil {
 		return "", false
 	}
 	if v != nil {
-		_, _ = v.persistCSRUnitFingerprints(dbPath, codecKey)
+		_ = v.persistCanonicalUnitRevisions(dbPath)
 	}
 	if err := os.WriteFile(genPath, []byte(strings.TrimSpace(freshnessLine)+"\n"), 0o600); err != nil {
 		return "", false

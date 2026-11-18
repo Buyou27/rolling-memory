@@ -732,7 +732,7 @@ func BuildFlatItemDelivery(
 				if c.RerankScore > turnBestRerank[h] {
 					turnBestRerank[h] = c.RerankScore
 				}
-				sh := "trace:" + shortHash(h)
+				sh := "trace:" + ids.ShortHash(h)
 				if c.RerankScore > turnBestRerank[sh] {
 					turnBestRerank[sh] = c.RerankScore
 				}
@@ -905,7 +905,7 @@ func BuildFlatItemDelivery(
 				occDate:  occD,
 				spkDate:  spkD,
 				text:     joined,
-				locator:  "trace:" + shortHash(th),
+				locator:  "trace:" + ids.ShortHash(th),
 				relScore: computeUnifiedCandidateRelevance(baseSc, joined, allTokens),
 				seq:      globalSeq,
 				srcHead:  firstSegment(c.Data.TraceText),

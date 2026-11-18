@@ -2798,7 +2798,7 @@ func parseJSONLTranscriptStats(path, harnessID string) *nativeSessionStats {
 			}
 			target := extractToolTargetFieldsOnly(line)
 			if target == "" {
-				for _, p := range extractStructuralPathsEfficacy(line, 3) {
+				for _, p := range recall.ExtractStructuralPaths(line, 3) {
 					target += " " + p
 				}
 			}
@@ -3257,7 +3257,7 @@ func isStructuralFilePath(token string) bool {
 	}
 	// Case 2: Directory path without extension must start with an explicit path root ("~/", "./", "/")
 	// so slash-separated command/concept lists (e.g. "panel/doctor/plugin-bundle/eval_local") are never
-	// misidentified as file coordinates. Rule shape mirrors hooks.extractStructuralPathsFromText exactly:
+	// misidentified as file coordinates. Rule shape mirrors recall.IsStructuralFilePath exactly:
 	// explicit root prefix + a slash that is not trailing + lowercase-only letter presence.
 	if strings.HasPrefix(token, "~/") || strings.HasPrefix(token, "./") || strings.HasPrefix(token, "/") {
 		if slashIdx >= 0 && slashIdx < len(token)-1 {
@@ -3714,10 +3714,6 @@ func buildEffectiveTurnCue(st *store.Store, scope, prompt, priorReply, workspace
 
 func detectTopGateFilteredCandidate(rawPrompt, workspace string, bands []map[string]any) string {
 	return recall.DetectTopGateFilteredBand(rawPrompt, workspace, bands)
-}
-
-func extractStructuralPathsEfficacy(text string, maxPaths int) []string {
-	return recall.ExtractStructuralPaths(text, maxPaths)
 }
 
 func filterBandsMathematically(rawPrompt, effectiveCue, workspace string, bands []map[string]any) []map[string]any {
@@ -4234,7 +4230,7 @@ func buildTurnToolTimeline(nStat *nativeSessionStats, promptAt, nextPromptAt int
 		if len(timeline) < 10 {
 			timeline = append(timeline, strconv.Itoa(len(timeline)+1)+". "+tag+" "+truncateStr(rawTarget, 90))
 		}
-		for _, p := range extractStructuralPathsEfficacy(rawTarget, 4) {
+		for _, p := range recall.ExtractStructuralPaths(rawTarget, 4) {
 			lp := strings.TrimPrefix(strings.TrimSpace(p), "./")
 			if idx := strings.Index(lp, "rolling-memory/"); idx >= 0 {
 				lp = lp[idx+len("rolling-memory/"):]
@@ -4361,7 +4357,7 @@ func computeEngineeringDiagnostics(report *Report, allSessions []SessionEvaluati
 		if (s.Outcome == "silenced" || s.Outcome == "noise") && s.ExploreSteps >= 2 {
 			paths := s.TargetFiles
 			if len(paths) == 0 {
-				paths = extractStructuralPathsEfficacy(s.Prompt+" "+s.RecalledSummary, 4)
+				paths = recall.ExtractStructuralPaths(s.Prompt+" "+s.RecalledSummary, 4)
 			}
 			gaps = append(gaps, BlindSearchGapItem{
 				SessionID:     s.SessionID,

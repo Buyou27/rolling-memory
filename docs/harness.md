@@ -31,7 +31,7 @@ rolling-memory install       ← Harness adapter: registry + conservative writer
         │  writes launcher shim & registrations
 MCP stdio · CLI · Hooks      ← Mechanical core: zero harness coupling, standard process protocols
         │
-SQLite (WAL + FTS5)          ← Storage layer: local plaintext vault
+SQLite (WAL)                 ← Storage layer: local plaintext vault
 ```
 
 - **Zero Harness Coupling in the Core (`api` / `mcp` / `cli` / `hooks`)**: Communicates strictly over standard process pipes (newline-delimited JSON-RPC 2.0 for MCP, argv/stdin for CLI, JSON stdin → JSON stdout for Hooks).
@@ -50,6 +50,7 @@ SQLite (WAL + FTS5)          ← Storage layer: local plaintext vault
 | **ZCode** | `~/.zcode/skills/` | `~/.zcode/cli/config.json` → `mcp.servers` | ✅ `hooks.events` (`hooks.enabled=true`) | `~/.zcode/AGENTS.md` / `AGENTS.md` |
 | **Claude Code** | `~/.claude/skills/` | `~/.claude.json` → `mcpServers` (project `.mcp.json`) | ✅ `~/.claude/settings.json` → `hooks` | `~/.claude/CLAUDE.md` / `CLAUDE.md` |
 | **Codex** | `~/.codex/skills/` | `~/.codex/config.toml` → `[mcp_servers.<name>]` | ✅ `~/.codex/hooks.json` (optional, `--with-hooks`; first run needs review/trust inside Codex) | `~/.codex/AGENTS.md` / `AGENTS.md` |
+| **OpenCode** | `~/.config/opencode/skills/` | `~/.config/opencode/opencode.json(c)` → `mcp.servers` (project `.opencode/opencode.json`) | — (Skill-driven) | — / `AGENTS.md` |
 | **DeepSeek Harness (`dsh`)** | `~/.dsh/skills/` (`$DSH_HOME`) | `~/.dsh/profiles/<profile>/cordis.patch.yml` → `dsh-mcp-client` | — (Skill-driven) | `~/.dsh/AGENTS.md` / `AGENTS.md` |
 | **CodeBuddy** | `~/.codebuddy/skills/` | `~/.codebuddy/mcp.json` → `mcpServers` | — (Skill-driven) | — / `CODEBUDDY.md` |
 
@@ -62,7 +63,7 @@ SQLite (WAL + FTS5)          ← Storage layer: local plaintext vault
 
 | Format | Target Harnesses | Write & Verification Strategy |
 |---|---|---|
-| **JSON Deep Merge** | ZCode / Claude Code / CodeBuddy / Cursor / Windsurf / Cline / WorkBuddy | Parses existing JSON, updates only the target server/hook entry, and preserves all other keys and ordering |
+| **JSON Deep Merge** | ZCode / Claude Code / CodeBuddy / OpenCode / Cursor / Windsurf / Cline / WorkBuddy | Parses existing JSON, updates only the target server/hook entry, and preserves all other keys and ordering |
 | **TOML Section Surgery** | Codex | Replaces or appends `[mcp_servers.<name>]` (and `.env` subtable) while keeping comments intact; re-parses with `go-toml` before writing |
 | **YAML Marker Block** | `dsh` | Appends or updates a `# >>> rolling-memory (<name>) >>>` block; uninstall removes only the marked block |
 
@@ -104,7 +105,7 @@ In the Doubao connector form choose **Streamable HTTP** and enter `http://127.0.
 
 ### 4.5 Conversation Collection and Manual Import
 
-Installing an MCP server or skill is separate from collecting conversation history. The background scanner reads ZCode's local session database and selected transcript locations for ZCode, Claude Code, Codex, DSH, CodeBuddy, and WorkBuddy. It supports Codex `.jsonl.zst` archives and DSH compressed `.jsonl.zstd` sessions in the observed v4 format: user messages must have `source.kind: user`, and a turn is imported only when its matching `turn/start` and `turn/end` events establish successful completion (`reason.kind: completed`). Unknown formats and turns without confirmed successful completion are not imported; subagent coverage is not guaranteed. CodeBuddy and WorkBuddy's configured JSONL locations may not match a host's actual store. Cursor, Windsurf, Cline, and Doubao have no automatic conversation scanner. Hooks, where installed and supported, do not make these sources complete.
+Installing an MCP server or skill is separate from collecting conversation history. The background scanner reads ZCode's local session database and selected transcript locations for ZCode, Claude Code, Codex, DSH, CodeBuddy, and WorkBuddy. It supports Codex `.jsonl.zst` archives and DSH compressed `.jsonl.zstd` sessions in the observed v4 format: user messages must have `source.kind: user`, and a turn is imported only when its matching `turn/start` and `turn/end` events establish successful completion (`reason.kind: completed`). Unknown formats and turns without confirmed successful completion are not imported; subagent coverage is not guaranteed. CodeBuddy and WorkBuddy's configured JSONL locations may not match a host's actual store. OpenCode, Cursor, Windsurf, Cline, and Doubao have no automatic conversation scanner. Hooks, where installed and supported, do not make these sources complete.
 
 For other sources, export or prepare a supported JSONL or text transcript and import it explicitly with `rolling-memory import /path/to/transcript`. File imports accept only `shared` or `public` audiences; restricted or unknown audiences are rejected because automatic scanning cannot enforce file-level access controls. Keep sensitive files outside scanned directories. Existing copies are not removed automatically. Review the result; import and background scanning do not guarantee complete or lossless capture. See [mcp.md](mcp.md) for the tool contract. Retrieval and storage run locally in `local_plain`; installing or updating software is a separate action that may require network access.
 
@@ -130,6 +131,10 @@ rolling-memory install --name rmem --skill-name rmem
 
 # 6. Wire specific harnesses or a specific dsh profile
 rolling-memory install zcode dsh --profile web
+
+# OpenCode: install the Skill and local MCP server in the user config
+rolling-memory install opencode
+rolling-memory install opencode --check
 
 # 7. Verify static registrations + run a live MCP initialize / tools/list handshake
 rolling-memory install --check

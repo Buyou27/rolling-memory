@@ -20,10 +20,16 @@ func DecayReferenceEnergy(hits []Hit) float64 {
 	if len(hits) == 0 {
 		return 0
 	}
-	if direct := hits[0].Direct; direct > 0 && !math.IsNaN(direct) && !math.IsInf(direct, 0) {
+	return DecayReferenceOf(hits[0].Direct, hits[0].Energy)
+}
+
+// DecayReferenceOf applies the same reference rule to one peak given by its direct
+// and total collision energies, so callers that hold the peak as scalars share it.
+func DecayReferenceOf(direct, energy float64) float64 {
+	if direct > 0 && !math.IsNaN(direct) && !math.IsInf(direct, 0) {
 		return direct
 	}
-	if energy := hits[0].Energy; energy > 0 && !math.IsNaN(energy) && !math.IsInf(energy, 0) {
+	if energy > 0 && !math.IsNaN(energy) && !math.IsInf(energy, 0) {
 		return energy
 	}
 	return 0
@@ -55,33 +61,6 @@ func NaturalDecayPrefixCount(hits []Hit, maxItems int) int {
 	count := 0
 	for i := 0; i < limit; i++ {
 		energy := hits[i].Energy
-		if math.IsNaN(energy) || math.IsInf(energy, 0) || energy < cutoff {
-			break
-		}
-		count++
-	}
-	return count
-}
-
-// NaturalDecayEnergiesPrefixCount is the energy-slice form of
-// NaturalDecayPrefixCount for callers that hold only scores. The slice must be in
-// ranked order; the reference is its first element.
-func NaturalDecayEnergiesPrefixCount(energies []float64, maxItems int) int {
-	if len(energies) == 0 || maxItems <= 0 {
-		return 0
-	}
-	limit := len(energies)
-	if limit > maxItems {
-		limit = maxItems
-	}
-	ref := energies[0]
-	if math.IsNaN(ref) || math.IsInf(ref, 0) || ref <= 0 {
-		return 0
-	}
-	cutoff := ref / math.E
-	count := 0
-	for i := 0; i < limit; i++ {
-		energy := energies[i]
 		if math.IsNaN(energy) || math.IsInf(energy, 0) || energy < cutoff {
 			break
 		}

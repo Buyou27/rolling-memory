@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 func TestBinaryFormsDeliverWithoutPlaceholders(t *testing.T) {
@@ -35,7 +35,7 @@ func TestBinaryFormsDeliverWithoutPlaceholders(t *testing.T) {
 		},
 	}
 	for _, item := range cases {
-		receipt, err := memory.Remember(api.RememberRequest{
+		receipt, err := memory.Remember(facade.RememberRequest{
 			Content: strPtr(item.content), AnchorText: strPtr(item.anchor),
 			Assertion: item.assertion, Author: "user", AutoSync: boolPtr(false),
 		})
@@ -47,7 +47,7 @@ func TestBinaryFormsDeliverWithoutPlaceholders(t *testing.T) {
 		}
 	}
 
-	result, err := memory.Recall(api.RecallRequest{Cue: "老张 地震"})
+	result, err := memory.Recall(facade.RecallRequest{Cue: "老张 地震"})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}

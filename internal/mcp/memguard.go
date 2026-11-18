@@ -73,3 +73,25 @@ func currentDaemonMemoryState() daemonMemoryState {
 	defer daemonMemoryMu.Unlock()
 	return daemonMemory
 }
+
+// coldBuildMemoryLimit returns the soft memory limit the engine may apply while
+// a cold full-corpus build runs. Such a build materialises the whole corpus
+// index before the .zcsr disk cluster exists, and its live set scales with the
+// corpus rather than with the steady-state cap; running it inside a cap several
+// times smaller degrades into GC thrash that never finishes. The window is
+// bounded by physical memory instead: three quarters of the machine, leaving a
+// quarter for the OS, host shells and the SQLite page cache.
+//
+// An operator-provided GOMEMLIMIT stays authoritative, a disabled limit already
+// leaves the runtime default in place, and an unknown memory size keeps the
+// current behaviour (no window).
+func coldBuildMemoryLimit(state daemonMemoryState) int64 {
+	if state.LimitSource == "env" || state.LimitSource == "off" || state.TotalRAM <= 0 {
+		return 0
+	}
+	window := state.TotalRAM / 4 * 3
+	if state.LimitBytes > window {
+		window = state.LimitBytes
+	}
+	return window
+}

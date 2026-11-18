@@ -29,9 +29,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
@@ -63,7 +63,7 @@ func RunHook(event string, payload map[string]any, o Options) (string, error) {
 }
 
 func runHook(cfg *config.Config, event string, payload map[string]any, o Options) (string, error) {
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -80,7 +80,7 @@ func runHook(cfg *config.Config, event string, payload map[string]any, o Options
 // importReplayEvent runs the start/close sweep: import transcript turns, replay
 // the pending traces, log the receipt, and (for start) render the boot line.
 func importReplayEvent(
-	memory *api.Memory, cfg *config.Config, event string, payload map[string]any, o Options,
+	memory *facade.Memory, cfg *config.Config, event string, payload map[string]any, o Options,
 ) (string, error) {
 	presence := workspacePresence(payload)
 	project := workspaceProject(payload)
@@ -163,7 +163,7 @@ func importReplayEvent(
 //     pulse: 1 status line + 1-line episodic tail ("What Just Happened") + 1-line
 //     anti-hallucination rule, deferring all specific memory retrieval to on-demand
 //     UserPromptSubmit (`recallHook`).
-func bootContext(memory *api.Memory, cfg *config.Config, payload map[string]any, o Options) (string, error) {
+func bootContext(memory *facade.Memory, cfg *config.Config, payload map[string]any, o Options) (string, error) {
 	status, err := memory.Status(cfg.Scope)
 	if err != nil {
 		return "", err
@@ -219,7 +219,7 @@ func buildLiveWorkspaceSkeleton(payload map[string]any) string {
 	if raw == nil {
 		return ""
 	}
-	dir := filepath.Clean(expandUser(pyStrip(pyStr(raw))))
+	dir := filepath.Clean(config.ExpandUserPath(pyStrip(pyStr(raw))))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
@@ -270,7 +270,7 @@ func buildLiveWorkspaceSkeleton(payload map[string]any) string {
 // extracts any module file paths, and verifies each path on the LIVE filesystem
 // via os.Stat(filepath.Join(cwd, path)). Only assertions whose referenced file
 // paths 100% exist on disk right now are emitted as compact 1-line landmarks!
-func queryDiskVerifiedWorkspaceAtlas(memory *api.Memory, scope, project string, payload map[string]any, maxItems int) string {
+func queryDiskVerifiedWorkspaceAtlas(memory *facade.Memory, scope, project string, payload map[string]any, maxItems int) string {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || project == "" || maxItems <= 0 {
 		return ""
 	}
@@ -278,7 +278,7 @@ func queryDiskVerifiedWorkspaceAtlas(memory *api.Memory, scope, project string, 
 	if raw == nil {
 		return ""
 	}
-	cwd := filepath.Clean(expandUser(pyStrip(pyStr(raw))))
+	cwd := filepath.Clean(config.ExpandUserPath(pyStrip(pyStr(raw))))
 	if info, err := os.Stat(cwd); err != nil || info == nil || !info.IsDir() {
 		return ""
 	}
@@ -311,7 +311,7 @@ func queryDiskVerifiedWorkspaceAtlas(memory *api.Memory, scope, project string, 
 		if s == "" || seenSubj[s] {
 			continue
 		}
-		candPaths := extractStructuralPathsFromText(s+" "+o, 16)
+		candPaths := recall.ExtractStructuralPaths(s+" "+o, 16)
 		var verifiedPaths []string
 		for _, p := range candPaths {
 			if !strings.Contains(p, "/") || strings.Contains(p, "*") || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
@@ -353,7 +353,7 @@ func queryDiskVerifiedWorkspaceAtlas(memory *api.Memory, scope, project string, 
 				if qText == "" || seenSubj[qText] {
 					continue
 				}
-				candPaths := extractStructuralPathsFromText(qText+" "+aText, 16)
+				candPaths := recall.ExtractStructuralPaths(qText+" "+aText, 16)
 				var verifiedPaths []string
 				for _, p := range candPaths {
 					if !strings.Contains(p, "/") || strings.Contains(p, "*") || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
@@ -389,7 +389,7 @@ func queryDiskVerifiedWorkspaceAtlas(memory *api.Memory, scope, project string, 
 // zero closed-set keyword tables: the capture side (Presence coordinates,
 // background-dir sync, raw prompt into `trace`) and, on the four-turn cadence,
 // a one-line reminder that `recall` exists.
-func recallHook(memory *api.Memory, cfg *config.Config, payload map[string]any, o Options) (string, error) {
+func recallHook(memory *facade.Memory, cfg *config.Config, payload map[string]any, o Options) (string, error) {
 	prompt := ""
 	if value := firstTruthy(payload["prompt"], payload["user_prompt"]); value != nil {
 		prompt = pyStrip(pyStr(value))
@@ -443,16 +443,16 @@ func additionalContext(text string, jsonOutput bool, eventName string) (string, 
 // importTurns resolves the payload's transcript path and
 // imports the next slice at the stored cursor. A missing file keeps the
 // missing-file receipt shape instead of failing the hook.
-func importTurns(memory *api.Memory, payload map[string]any) (map[string]any, error) {
+func importTurns(memory *facade.Memory, payload map[string]any) (map[string]any, error) {
 	rawPath := firstTruthy(payload["transcript_path"], payload["transcriptPath"])
 	if rawPath == nil {
 		return importFallbackAssistantTurn(memory, payload, map[string]any{"messages": 0, "inserted": 0})
 	}
-	path := expandUser(pyStr(rawPath))
+	path := config.ExpandUserPath(pyStr(rawPath))
 	if !filepath.IsAbs(path) {
 		base := ""
 		if cwd := firstTruthy(payload["cwd"]); cwd != nil {
-			base = expandUser(pyStr(cwd))
+			base = config.ExpandUserPath(pyStr(cwd))
 		}
 		if base == "" {
 			directory, err := os.Getwd()
@@ -490,7 +490,7 @@ func importTurns(memory *api.Memory, payload map[string]any) (map[string]any, er
 	return result, nil
 }
 
-func realignImportedEphemeralTurn(memory *api.Memory, session, path string, presence *text.PresenceCoordinates) {
+func realignImportedEphemeralTurn(memory *facade.Memory, session, path string, presence *text.PresenceCoordinates) {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return
 	}
@@ -531,7 +531,7 @@ func realignImportedEphemeralTurn(memory *api.Memory, session, path string, pres
 	}
 }
 
-func importFallbackAssistantTurn(memory *api.Memory, payload map[string]any, base map[string]any) (map[string]any, error) {
+func importFallbackAssistantTurn(memory *facade.Memory, payload map[string]any, base map[string]any) (map[string]any, error) {
 	lastMsg := firstTruthy(payload["last_assistant_message"], payload["lastAssistantMessage"])
 	if lastMsg == nil {
 		return base, nil
@@ -996,20 +996,6 @@ func pyPathSuffix(name string) string {
 	return name[index:]
 }
 
-// expandUser mirrors Path.expanduser for the current user.
-func expandUser(path string) string {
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			if path == "~" {
-				return home
-			}
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return path
-}
-
 func asIntDefault(value any, fallback int) int {
 	switch typed := value.(type) {
 	case int:
@@ -1031,7 +1017,7 @@ func workspaceProject(payload map[string]any) string {
 	if raw == nil {
 		return ""
 	}
-	cleaned := filepath.Clean(expandUser(pyStrip(pyStr(raw))))
+	cleaned := filepath.Clean(config.ExpandUserPath(pyStrip(pyStr(raw))))
 	if cleaned == "" || cleaned == "." || cleaned == "/" {
 		return ""
 	}
@@ -1047,7 +1033,7 @@ func workspacePresence(payload map[string]any) *text.PresenceCoordinates {
 	if raw == nil {
 		return nil
 	}
-	cleaned := filepath.Clean(expandUser(pyStrip(pyStr(raw))))
+	cleaned := filepath.Clean(config.ExpandUserPath(pyStrip(pyStr(raw))))
 	if cleaned == "" || cleaned == "." || cleaned == "/" {
 		return nil
 	}
@@ -1086,7 +1072,7 @@ func saveActiveWorkspacePresence(cfg *config.Config, coords text.PresenceCoordin
 	_ = text.SavePresenceFile(filepath.Dir(cfg.Log), coords, session, ids.UTCNow())
 }
 
-func nextSessionTurn(memory *api.Memory, scope, session string) int64 {
+func nextSessionTurn(memory *facade.Memory, scope, session string) int64 {
 	var maxTurn sql.NullInt64
 	_ = memory.Store.DB().QueryRow(
 		"SELECT MAX(turn) FROM trace WHERE scope = ? AND session = ?",
@@ -1104,7 +1090,7 @@ func nextSessionTurn(memory *api.Memory, scope, session string) int64 {
 // materialized into factual assertions before work is actually performed.
 // Moreover, we set Processed: true on the trace row so Stop/Start replay sweeps
 // do not turn raw user questions/commands into fake factual assertions either.
-func captureUserPrompt(memory *api.Memory, cfg *config.Config, session, prompt string, presence *text.PresenceCoordinates) int {
+func captureUserPrompt(memory *facade.Memory, cfg *config.Config, session, prompt string, presence *text.PresenceCoordinates) int {
 	cleaned := ids.StripInjected(pyStrip(prompt))
 	if cleaned == "" {
 		return 0
@@ -1156,17 +1142,13 @@ func captureUserPrompt(memory *api.Memory, cfg *config.Config, session, prompt s
 	return 0
 }
 
-func extractStructuralPathsFromText(text string, maxPaths int) []string {
-	return recall.ExtractStructuralPaths(text, maxPaths)
-}
-
 // queryWorkspaceEpisodicTail returns a concise 1-line summary of the most recent
 // user/assistant interaction in the current workspace locus, answering "What did
 // I just do right before this session?" using purely temporal/structural SQL.
 // It strictly locks onto a single target session belonging to this workspace in
 // two steps so interleaved parallel sessions never push the target session's
 // user prompt out of the query window, and skips synthetic remember anchor rows.
-func queryWorkspaceEpisodicTail(memory *api.Memory, scope, project, currentSession string) string {
+func queryWorkspaceEpisodicTail(memory *facade.Memory, scope, project, currentSession string) string {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || project == "" {
 		return ""
 	}
@@ -1246,7 +1228,7 @@ func queryWorkspaceEpisodicTail(memory *api.Memory, scope, project, currentSessi
 	return lastAssistant
 }
 
-func queryVaultWorkspaceEpisodicTail(memory *api.Memory, project string) string {
+func queryVaultWorkspaceEpisodicTail(memory *facade.Memory, project string) string {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || strings.TrimSpace(project) == "" {
 		return ""
 	}
@@ -1329,7 +1311,7 @@ func stripDegenerateTail(s string) string {
 // isCadenceReminderDue reports whether the current session has reached a 4-turn
 // cadence boundary (turn 4, 8, 12, ...) so a lightweight (~40-token) attention
 // anchor can be emitted on otherwise silent turns.
-func isCadenceReminderDue(memory *api.Memory, scope, session string) bool {
+func isCadenceReminderDue(memory *facade.Memory, scope, session string) bool {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || session == "" || session == "default" {
 		return false
 	}

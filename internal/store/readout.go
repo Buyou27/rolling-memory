@@ -99,7 +99,7 @@ func (s *Store) Health(scope string, since int64) (map[string]any, error) {
 	}
 	oldestAgeDays := 0.0
 	if oldest.Valid && oldest.Int64 != 0 {
-		oldestAgeDays = pyRound(math.Max(0.0, float64(now-oldest.Int64)/86400.0), 1)
+		oldestAgeDays = ids.PyRound(math.Max(0.0, float64(now-oldest.Int64)/86400.0), 1)
 	}
 
 	activeAssertions := 0
@@ -177,15 +177,15 @@ func (s *Store) Health(scope string, since int64) (map[string]any, error) {
 	}
 	unresolvedRatio := 0.0
 	if mentionTotal != 0 {
-		unresolvedRatio = pyRound(float64(unresolvedMentions)/float64(mentionTotal), 4)
+		unresolvedRatio = ids.PyRound(float64(unresolvedMentions)/float64(mentionTotal), 4)
 	}
 	convergenceRate := 0.0
 	if createdNodes != 0 {
-		convergenceRate = pyRound(float64(convergedNodes)/float64(createdNodes), 4)
+		convergenceRate = ids.PyRound(float64(convergedNodes)/float64(createdNodes), 4)
 	}
 	knownTimeRatio := 1.0
 	if activeAssertions != 0 {
-		knownTimeRatio = pyRound(1.0-float64(unknownTime)/float64(activeAssertions), 4)
+		knownTimeRatio = ids.PyRound(1.0-float64(unknownTime)/float64(activeAssertions), 4)
 	}
 	return map[string]any{
 		"ok":    true,
@@ -339,7 +339,7 @@ func (s *Store) AuditArtifactQuality(scope string) (map[string]any, error) {
 	if len(memAssertions) >= memcore.MinEvidenceQuorumRows && connMetrics.MultiEdgeEntityRatio < 0.50 {
 		score -= (0.50 - connMetrics.MultiEdgeEntityRatio) * 30.0
 	}
-	score = math.Max(0.0, math.Min(100.0, pyRound(score, 2)))
+	score = math.Max(0.0, math.Min(100.0, ids.PyRound(score, 2)))
 	grade := "S"
 	if score < 95.0 {
 		grade = "A"
@@ -649,7 +649,7 @@ func (s *Store) whyAssertion(data map[string]any) (map[string]any, error) {
 			"id":    holderIDValue,
 			"label": holderLabel,
 		},
-		"confidence":     pyRound(mapFloat(data, "confidence"), 3),
+		"confidence":     ids.PyRound(mapFloat(data, "confidence"), 3),
 		"status":         mapAny(data, "status"),
 		"audience":       mapAny(data, "audience"),
 		"bare":           mapBool(data, "bare"),

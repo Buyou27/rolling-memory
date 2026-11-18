@@ -31,6 +31,7 @@ func TestPortableCoreTypechecksWithoutAdapters(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	files := []string{
+		"cluster_state_aggregates.go",
 		"index.go",
 		"pipeline.go",
 		"pipeline_state.go",

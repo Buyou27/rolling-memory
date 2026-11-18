@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 // importScanCompletedTurn is one completed claude-code style turn: the assistant
@@ -47,9 +47,9 @@ func writeScannedSession(t *testing.T, home, body string) string {
 	return path
 }
 
-func newImportScanMemory(t *testing.T, scope string) *api.Memory {
+func newImportScanMemory(t *testing.T, scope string) *facade.Memory {
 	t.Helper()
-	memory, err := api.New(&config.Config{DB: filepath.Join(t.TempDir(), "memory.db"), Scope: scope, Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(t.TempDir(), "memory.db"), Scope: scope, Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func newImportScanMemory(t *testing.T, scope string) *api.Memory {
 	return memory
 }
 
-func episodicDocIDs(t *testing.T, memory *api.Memory) []string {
+func episodicDocIDs(t *testing.T, memory *facade.Memory) []string {
 	t.Helper()
 	rows, err := memory.Store.DB().Query(`SELECT doc_id FROM thin_vault_docs WHERE layer = 'episodic' OR layer = '' ORDER BY doc_id`)
 	if err != nil {
@@ -79,7 +79,7 @@ func episodicDocIDs(t *testing.T, memory *api.Memory) []string {
 	return ids
 }
 
-func countEpisodicDocs(t *testing.T, memory *api.Memory) int {
+func countEpisodicDocs(t *testing.T, memory *facade.Memory) int {
 	t.Helper()
 	var count int
 	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic' OR layer = ''`).Scan(&count); err != nil {

@@ -6,7 +6,6 @@ package eval
 import (
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
@@ -19,12 +18,7 @@ func Mean(values []float64) float64 {
 
 // PyRound mirrors round(value, digits) (binary-float half-even formatting).
 func PyRound(value float64, digits int) float64 {
-	text := strconv.FormatFloat(value, 'f', digits, 64)
-	parsed, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return value
-	}
-	return parsed
+	return ids.PyRound(value, digits)
 }
 
 type categoryBucket struct {

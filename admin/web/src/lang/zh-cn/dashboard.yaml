@@ -19,7 +19,7 @@ dbSize: 库体积
 conflicts: 陈旧结晶
 modeLabel: 运行模式
 localPlain: 本地明文 (local_plain)
-localPlainTip: 本地明文模式（local_plain）：100% 本地 SQLite 明文金库（FTS5/BM25 + 香农自信息连续增益），零云端外呼。
+localPlainTip: 本地明文模式（local_plain）：100% 本地 SQLite 明文金库（确定性簇检索内核 + 香农自信息连续增益），零云端外呼。
 pulsePreviewTip: 云端记忆服务预览：端到端密文、更强的高级算子、按申请接入。
 previewDetails: 预览与申请
 

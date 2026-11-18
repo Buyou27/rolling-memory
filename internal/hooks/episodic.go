@@ -29,11 +29,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
@@ -53,7 +53,7 @@ type episodicTurnRow struct {
 // uploadCurrentEpisodicTurn composes the newest turn of the session as segment
 // units and ingests each into the engine's episodic layer. The receipt is merged
 // into the hook log line (`uploaded` / `unit` / `units` / `tokens`).
-func uploadCurrentEpisodicTurn(memory *api.Memory, cfg *config.Config, session string, payload map[string]any) map[string]any {
+func uploadCurrentEpisodicTurn(memory *facade.Memory, cfg *config.Config, session string, payload map[string]any) map[string]any {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return map[string]any{"uploaded": 0}
 	}
@@ -104,10 +104,10 @@ func currentTurnUnits(scope, session string, payload map[string]any) ([]episodic
 func currentTurnUnitsChecked(scope, session string, payload map[string]any) ([]episodicunit.Unit, int, error) {
 	if payload != nil {
 		if rawPath := firstTruthy(payload["transcript_path"], payload["transcriptPath"]); rawPath != nil {
-			path := expandUser(pyStr(rawPath))
+			path := config.ExpandUserPath(pyStr(rawPath))
 			if !filepath.IsAbs(path) {
 				if cwd := firstTruthy(payload["cwd"]); cwd != nil {
-					path = pyJoin(expandUser(pyStr(cwd)), path)
+					path = pyJoin(config.ExpandUserPath(pyStr(cwd)), path)
 				} else if wd, err := os.Getwd(); err == nil {
 					path = pyJoin(wd, path)
 				}
@@ -198,7 +198,7 @@ const (
 // during UserPromptSubmit when at least one directory is mounted in `thin_vault_bg_dirs`
 // and the 60s cooldown window has elapsed. Unchanged files are skipped in O(1) via
 // `os.Stat(mtime_ns, size)` inside `SyncBackgroundDirs`.
-func maybeSyncBackgroundOnHook(memory *api.Memory) {
+func maybeSyncBackgroundOnHook(memory *facade.Memory) {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return
 	}

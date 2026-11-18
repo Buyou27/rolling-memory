@@ -109,6 +109,8 @@ rmem config set <section.key> <value>
 | 缓存 | 丢弃内存索引快照与读缓存（可再生成，记忆原文不动） | `rmem engine invalidate` |
 | 磁盘维护 | 只读扫描、备份与缓存清理、金库瘦身 | `rmem maintain status\|clean\|compact` |
 
+磁盘维护默认保留引擎的磁盘索引缓存：缓存缺失时下一次检索要重建整个索引（分钟级耗时、数 GB 内存峰值），因此释放这部分空间需显式开启：`rmem maintain clean --purge-engine-cache --apply --yes`。
+
 停止守护进程不会阻塞任何操作：下一次检索或后台同步会自动把它拉起。
 
 ---

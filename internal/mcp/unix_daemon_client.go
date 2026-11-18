@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/graphmodel"
 )
 
 // Call deadlines for the verified single-connection daemon clients (`engine` CLI
@@ -28,6 +29,9 @@ const (
 	// unixDaemonDocumentsCallTimeout bounds one local-document read batch on the
 	// verified connection.
 	unixDaemonDocumentsCallTimeout = 10 * time.Second
+	// unixDaemonGraphCallTimeout bounds one graph view. The first request after a
+	// corpus change may build the engine projection; later requests are cached.
+	unixDaemonGraphCallTimeout = 60 * time.Second
 	// unixDaemonControlCallTimeout bounds one control notification (cache invalidation),
 	// matching the deadline requestUnixDaemonControl uses for its control calls.
 	unixDaemonControlCallTimeout = 500 * time.Millisecond
@@ -141,6 +145,17 @@ func CallUnixDaemonDocuments(ctx context.Context, sockPath string, cfg *config.C
 			return &out, errors.New(out.Error)
 		}
 		return &out, errors.New("daemon documents reported not ok")
+	}
+	return &out, nil
+}
+
+// CallUnixDaemonGraph requests one engine-derived memory graph view over the
+// verified local daemon connection. The payload is the same contract the admin
+// console relays through `engine graph`; no cloud endpoint is ever consulted.
+func CallUnixDaemonGraph(ctx context.Context, sockPath string, cfg *config.Config, payload graphmodel.ViewRequest) (*graphmodel.Response, error) {
+	var out graphmodel.Response
+	if err := postVerifiedUnixDaemon(ctx, sockPath, cfg, "/v1/graph", payload, &out, unixDaemonGraphCallTimeout); err != nil {
+		return nil, err
 	}
 	return &out, nil
 }

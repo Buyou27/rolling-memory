@@ -1426,6 +1426,8 @@ const (
 	engineRecallExecSlack = 15 * time.Second
 	// engineDataExecTimeout 限定单次 hydrate/documents 子进程调用的整体时长。
 	engineDataExecTimeout = 20 * time.Second
+	// engineGraphExecTimeout 限定一次引擎图谱视图子进程调用（首帧可能构建投影）。
+	engineGraphExecTimeout = 70 * time.Second
 	// engineInvalidateExecTimeout 限定一次缓存失效通知的整体时长（尽力而为）。
 	engineInvalidateExecTimeout = 3 * time.Second
 	// engineResponseLimit 限定一次 engine 应答的捕获上限（守护进程自身按 8 MiB 截断
@@ -3420,6 +3422,7 @@ type GraphQueryRequest struct {
 	Limit        int                `json:"limit"`
 	Keyword      string             `json:"keyword"`
 	Layers       []string           `json:"layers,omitempty"`        // 来源层过滤
+	ClusterTypes []string           `json:"cluster_types,omitempty"` // 簇类型过滤：episode | entity | document
 	LayerWeights map[string]float64 `json:"layer_weights,omitempty"` // 层加权乘子
 }
 
@@ -3465,27 +3468,56 @@ type GraphMoleculeFragment struct {
 	UnitSpan   int      `json:"unit_span,omitempty"`   // 承载该分子的单元数
 }
 
+// GraphWordParticle 引擎投影的词族粒子（word 节点 / 单元词荷）。
+type GraphWordParticle struct {
+	Token    string  `json:"token"`
+	GroupHex string  `json:"group_hex,omitempty"`
+	DF       int     `json:"df"`
+	MassNats float64 `json:"mass_nats"`
+	Weight   float64 `json:"weight"`
+	UnitSpan int     `json:"unit_span,omitempty"`
+}
+
+// GraphPhraseFragment 引擎投影的二元短语片段（phrase 节点 / 单元短语荷）。
+type GraphPhraseFragment struct {
+	Left               string  `json:"left"`
+	Right              string  `json:"right"`
+	DF                 int     `json:"df"`
+	JointSurprisalNats float64 `json:"joint_surprisal_nats"`
+	BindingEnergyNats  float64 `json:"binding_energy_nats"`
+	UnitSpan           int     `json:"unit_span,omitempty"`
+}
+
 // GraphNodeItem 图谱节点（实体或值节点，内嵌一级原子粒子与二级分子波包投影）。
 type GraphNodeItem struct {
-	ID         int                     `json:"id"`
-	NodeKey    string                  `json:"node_key"`
-	Summary    string                  `json:"summary"`
-	Kind       string                  `json:"kind"`      // entity | literal | cell | unit
-	Layer      string                  `json:"layer"`     // background | episodic | noetic
-	Certainty  string                  `json:"certainty"` // high | medium | low
-	Intention  string                  `json:"intention"` // referential | experiential | procedural | performative
-	Status     string                  `json:"status"`
-	Confidence float64                 `json:"confidence"`
-	ObservedAt string                  `json:"observed_at"`
-	ValidFrom  string                  `json:"valid_from"`
-	ValidTo    string                  `json:"valid_to"`
-	Anchor     string                  `json:"anchor"`
-	Span       string                  `json:"span"`
-	Aliases    []string                `json:"aliases"`
-	Degree     int                     `json:"degree"`
-	Weight     float64                 `json:"weight"`
-	Atoms      []GraphAtomParticle     `json:"atoms,omitempty"`     // 该节点承载的 Top 核心原子粒子（AtomView）
-	Molecules  []GraphMoleculeFragment `json:"molecules,omitempty"` // 该节点承载的 Top 核心分子波包（MoleculeView）
+	ID                int                     `json:"id"`
+	NodeKey           string                  `json:"node_key"`
+	Summary           string                  `json:"summary"`
+	Kind              string                  `json:"kind"`      // cluster | unit | word | phrase | free_unit（LoCoMo 预览仍为 cell | unit | atom | molecule）
+	Layer             string                  `json:"layer"`     // background | episodic | noetic
+	Certainty         string                  `json:"certainty"` // high | medium | low
+	Intention         string                  `json:"intention"` // referential | experiential | procedural | performative
+	Status            string                  `json:"status"`
+	Confidence        float64                 `json:"confidence"`
+	ObservedAt        string                  `json:"observed_at"`
+	ValidFrom         string                  `json:"valid_from"`
+	ValidTo           string                  `json:"valid_to"`
+	Anchor            string                  `json:"anchor"`
+	Span              string                  `json:"span"`
+	Aliases           []string                `json:"aliases"`
+	Degree            int                     `json:"degree"`
+	Weight            float64                 `json:"weight"`
+	Label             string                  `json:"label,omitempty"`
+	ClusterType       string                  `json:"cluster_type,omitempty"`
+	MemberCount       int                     `json:"member_count,omitempty"`
+	Free              bool                    `json:"free,omitempty"`
+	PrimaryClusterKey string                  `json:"primary_cluster_key,omitempty"`
+	EnergyNats        float64                 `json:"energy_nats,omitempty"`
+	LayerMix          map[string]int          `json:"layer_mix,omitempty"`
+	Words             []GraphWordParticle     `json:"words,omitempty"`
+	Phrases           []GraphPhraseFragment   `json:"phrases,omitempty"`
+	Atoms             []GraphAtomParticle     `json:"atoms,omitempty"`     // 该节点承载的 Top 核心原子粒子（AtomView）
+	Molecules         []GraphMoleculeFragment `json:"molecules,omitempty"` // 该节点承载的 Top 核心分子波包（MoleculeView）
 }
 
 // GraphEdgeItem 图谱有向关系边。
@@ -3524,6 +3556,22 @@ type GraphRelationOption struct {
 	Classes  []GraphRelationClass `json:"classes"`
 }
 
+// GraphKindCounts 节点按结构类型计数（引擎投影）。
+type GraphKindCounts struct {
+	Units     int `json:"units"`
+	Words     int `json:"words"`
+	Phrases   int `json:"phrases"`
+	Clusters  int `json:"clusters"`
+	FreeUnits int `json:"free_units"`
+}
+
+// GraphClusterTypeCounts 簇按容器类型计数（引擎投影）。
+type GraphClusterTypeCounts struct {
+	Episode  int `json:"episode"`
+	Entity   int `json:"entity"`
+	Document int `json:"document"`
+}
+
 // GraphStats 图谱统计栏读数（含 M27/M28/M28b/M28c 连通率指标与五级粒子拓扑统计）。
 type GraphStats struct {
 	EventTotal           int                     `json:"event_total"`
@@ -3541,6 +3589,14 @@ type GraphStats struct {
 	DimerSynapseTotal    int                     `json:"dimer_synapse_total,omitempty"` // 全图二阶邻接分子突触总数
 	TopAtoms             []GraphAtomParticle     `json:"top_atoms,omitempty"`           // 全图高能枢纽原子榜（按跨地址/电位排序 Top-16）
 	TopMolecules         []GraphMoleculeFragment `json:"top_molecules,omitempty"`       // 全图核心分子波包榜（按二聚体突触/质量排序 Top-12）
+	WordTotal            int                     `json:"word_total,omitempty"`
+	PhraseTotal          int                     `json:"phrase_total,omitempty"`
+	ClusterTotal         int                     `json:"cluster_total,omitempty"`
+	FreeUnitTotal        int                     `json:"free_unit_total,omitempty"`
+	KindCounts           GraphKindCounts         `json:"kind_counts"`
+	ClusterTypeCounts    GraphClusterTypeCounts  `json:"cluster_type_counts"`
+	BuildMS              int64                   `json:"build_ms,omitempty"`
+	LabelCoveragePct     float64                 `json:"label_coverage_pct,omitempty"`
 }
 
 // GraphTruncated 图谱截断标志。
@@ -3551,14 +3607,15 @@ type GraphTruncated struct {
 
 // GraphQueryResponse 记忆图谱完整响应。
 type GraphQueryResponse struct {
-	Source    string                `json:"source"`
-	ScopeKey  string                `json:"scope_key"`
-	Scopes    []GraphScopeItem      `json:"scopes"`
-	Nodes     []GraphNodeItem       `json:"nodes"`
-	Edges     []GraphEdgeItem       `json:"edges"`
-	Relations []GraphRelationOption `json:"relations"`
-	Stats     GraphStats            `json:"stats"`
-	Truncated GraphTruncated        `json:"truncated"`
+	GraphSchemaVersion int                   `json:"graph_schema_version,omitempty"`
+	Source             string                `json:"source"`
+	ScopeKey           string                `json:"scope_key"`
+	Scopes             []GraphScopeItem      `json:"scopes"`
+	Nodes              []GraphNodeItem       `json:"nodes"`
+	Edges              []GraphEdgeItem       `json:"edges"`
+	Relations          []GraphRelationOption `json:"relations"`
+	Stats              GraphStats            `json:"stats"`
+	Truncated          GraphTruncated        `json:"truncated"`
 }
 
 func deterministicIntID(key string) int {
@@ -3601,18 +3658,35 @@ func graphHandler(c *gin.Context) {
 		return
 	}
 	home, _ := os.UserHomeDir()
-	// 记忆图谱为预览功能（真实图谱在下一代提供），统一展示预置的 LoCoMo 3D 记忆图谱数据，
-	// 零云端外呼且不暴露未成形的本地平面表；预置快照不可用时回落到本地金库合并路径。
-	if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
-		httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
-		return
-	}
-	if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
-		httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
-		return
-	}
 	dbPath := resolveMemoryDBPath(home)
-	httpx.Success(c, httpx.WithData(buildMemoryGraphWithLayers(dbPath, req.Scope, req.Limit, req.Keyword, req.Layers, req.LayerWeights)))
+	if graphSourceMode() == "legacy" {
+		if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
+			httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
+			return
+		}
+		if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
+			httpx.Success(c, httpx.WithData(buildLocomoSubgraph(corpus, req.Limit, req.Keyword, req.Layers)))
+			return
+		}
+		httpx.Success(c, httpx.WithData(buildMemoryGraphWithLayers(dbPath, req.Scope, req.Limit, req.Keyword, req.Layers, req.LayerWeights)))
+		return
+	}
+	payload := map[string]any{
+		"op":            "view",
+		"scope":         req.Scope,
+		"limit":         req.Limit,
+		"keyword":       req.Keyword,
+		"layers":        req.Layers,
+		"cluster_types": req.ClusterTypes,
+		"layer_weights": req.LayerWeights,
+	}
+	resp, err := engineGraphView(home, dbPath, payload)
+	if err != nil {
+		triggerConsoleDaemonBootstrap(home, dbPath)
+		httpx.Fail(c, httpx.WithMessage("记忆服务未启动或图谱构建失败："+err.Error()))
+		return
+	}
+	httpx.Success(c, httpx.WithData(resp))
 }
 
 func graphExpandHandler(c *gin.Context) {
@@ -3621,16 +3695,73 @@ func graphExpandHandler(c *gin.Context) {
 		return
 	}
 	home, _ := os.UserHomeDir()
-	if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
-		httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
-		return
-	}
-	if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
-		httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
-		return
-	}
 	dbPath := resolveMemoryDBPath(home)
-	httpx.Success(c, httpx.WithData(expandMemoryGraph(dbPath, req.Scope, req.SeedKeys, req.Depth, req.Limit)))
+	if graphSourceMode() == "legacy" {
+		if corpus, err := loadLocomoDemoCorpus(); err == nil && corpus != nil {
+			httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
+			return
+		}
+		if corpus, err := loadLocomoCorpus(); err == nil && corpus != nil {
+			httpx.Success(c, httpx.WithData(expandLocomoSubgraph(corpus, req.SeedKeys, req.Depth, req.Limit)))
+			return
+		}
+		httpx.Success(c, httpx.WithData(expandMemoryGraph(dbPath, req.Scope, req.SeedKeys, req.Depth, req.Limit)))
+		return
+	}
+	payload := map[string]any{
+		"op":        "expand",
+		"scope":     req.Scope,
+		"limit":     req.Limit,
+		"seed_keys": req.SeedKeys,
+		"depth":     req.Depth,
+	}
+	resp, err := engineGraphView(home, dbPath, payload)
+	if err != nil {
+		triggerConsoleDaemonBootstrap(home, dbPath)
+		httpx.Fail(c, httpx.WithMessage("记忆服务未启动或图谱展开失败："+err.Error()))
+		return
+	}
+	httpx.Success(c, httpx.WithData(resp))
+}
+
+// graphSourceMode selects the graph projection source. The engine projection
+// is the default; `legacy` keeps the previous SQL/LoCoMo path for one release
+// window so an operator can roll back without rebuilding.
+func graphSourceMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ROLLING_MEMORY_GRAPH_SOURCE"))) {
+	case "legacy", "sql":
+		return "legacy"
+	default:
+		return "engine"
+	}
+}
+
+// engineGraphView relays one graph view through the verified product CLI
+// channel. The admin module cannot import the engine's internal packages, so
+// this follows the existing hydrate/documents bridge.
+func engineGraphView(home, dbPath string, payload map[string]any) (GraphQueryResponse, error) {
+	var out GraphQueryResponse
+	bin := resolveBinary(home)
+	if strings.TrimSpace(bin) == "" {
+		return out, errors.New("rolling-memory binary not found")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return out, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), engineGraphExecTimeout)
+	defer cancel()
+	raw, err := engineCommandRunner(ctx, bin, "graph", []string{"--db", dbPath}, body)
+	if err != nil {
+		return out, err
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("decode engine graph response: %w", err)
+	}
+	if strings.TrimSpace(out.Source) == "" {
+		return out, errors.New("engine graph response is missing source")
+	}
+	return out, nil
 }
 
 func buildMemoryGraph(dbPath, reqScope string, limit int, keyword string) GraphQueryResponse {

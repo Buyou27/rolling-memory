@@ -127,9 +127,10 @@ func (c *Client) activeStore() PlaintextStore {
 
 // Remember stores a user Harness dialogue turn in `LayerEpisodic` ("episodic", the default conversational stream),
 // packs ONLY the blind `{h, b, f}` integer frame into the local vault, and records the
-// local retrieval address & dry-sentence indices.
+// local retrieval address & dry-sentence indices. It is the historical name of
+// RememberEpisodic and forwards to it.
 func (c *Client) Remember(ctx context.Context, docID string, plaintext string, occurredAt int64) (IngestResponse, error) {
-	return c.RememberWithLayer(ctx, docID, plaintext, occurredAt, LayerEpisodic, nil)
+	return c.RememberEpisodic(ctx, docID, plaintext, occurredAt)
 }
 
 // RememberEpisodic explicitly stores a user Harness conversation turn in `LayerEpisodic` ("episodic").

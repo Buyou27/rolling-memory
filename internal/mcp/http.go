@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 const (
@@ -72,7 +72,7 @@ type HTTPServer struct {
 	Path        string
 	SSEPath     string
 	MessagePath string
-	Memory      *api.Memory
+	Memory      *facade.Memory
 	Lazy        *LazyMemory
 	Err         io.Writer
 
@@ -136,7 +136,7 @@ func (s *HTTPServer) debugWriter() io.Writer {
 
 // ServeHTTP runs the streamable-HTTP and legacy SSE transports until the
 // listener fails; memory may be nil to open one lazily on first tool call.
-func ServeHTTP(addr, path string, memory *api.Memory) error {
+func ServeHTTP(addr, path string, memory *facade.Memory) error {
 	server := &HTTPServer{Addr: addr, Path: path, Memory: memory}
 	return server.ListenAndServe()
 }
@@ -333,7 +333,7 @@ func decodeBody(request *http.Request) (any, error) {
 
 // dispatch runs one decoded message and returns the response payload, or nil
 // when the message carried no id (a notification).
-func (s *HTTPServer) dispatch(message any, requestMemory *api.Memory) any {
+func (s *HTTPServer) dispatch(message any, requestMemory *facade.Memory) any {
 	memory := s.Memory
 	if requestMemory != nil {
 		memory = requestMemory
@@ -415,7 +415,7 @@ func (s *HTTPServer) handleStreamablePost(writer http.ResponseWriter, request *h
 	if sessionID == "" && !initialized(message) {
 		// Stateless clients skip initialize; accept them instead of rejecting the
 		// request, but do not mint a session for them.
-		requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*api.Memory)
+		requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*facade.Memory)
 		response := s.dispatch(message, requestMemory)
 		if response == nil {
 			writer.WriteHeader(http.StatusAccepted)
@@ -428,7 +428,7 @@ func (s *HTTPServer) handleStreamablePost(writer http.ResponseWriter, request *h
 		_, id := s.newSession()
 		writer.Header().Set(HTTPSessionHeader, id)
 	}
-	requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*api.Memory)
+	requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*facade.Memory)
 	response := s.dispatch(message, requestMemory)
 	if response == nil {
 		writer.WriteHeader(http.StatusAccepted)
@@ -537,7 +537,7 @@ func (s *HTTPServer) handleSSEMessage(writer http.ResponseWriter, request *http.
 		http.Error(writer, "parse error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*api.Memory)
+	requestMemory, _ := request.Context().Value(unixDaemonMemoryKey{}).(*facade.Memory)
 	response := s.dispatch(message, requestMemory)
 	if response == nil {
 		writer.WriteHeader(http.StatusAccepted)

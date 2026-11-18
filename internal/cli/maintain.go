@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 // maintain 是面向用户的空间维护入口（体检 / 清理 / 瘦身）。
@@ -137,9 +137,11 @@ func maintainScanBackups(dirs []string, keep int, now time.Time) []maintainItem 
 	return items
 }
 
-// maintainScanCaches 扫描受管的可再生成缓存：状态目录缓存清单 + 金库引擎的 .zcsr
-// 磁盘簇（数万单元规模下可达 GB 级；删除后首次召回按需重建，属预期代价）。
-func maintainScanCaches(stateDir, dbPath string, now time.Time) []maintainItem {
+// maintainScanCaches 扫描状态目录下的可再生成缓存（仅清单内的文件模式）。
+//
+// 金库引擎的 .zcsr 磁盘簇不在此列：它不是一次性产物，而是冷启动索引本身，
+// 由 maintainScanEngineCache 单独管理并默认保留。
+func maintainScanCaches(stateDir string, now time.Time) []maintainItem {
 	var items []maintainItem
 	for _, pattern := range maintainCachePatterns {
 		matches, err := filepath.Glob(filepath.Join(stateDir, pattern))
@@ -160,20 +162,36 @@ func maintainScanCaches(stateDir, dbPath string, now time.Time) []maintainItem {
 			})
 		}
 	}
-	if strings.TrimSpace(dbPath) != "" {
-		for _, path := range []string{dbPath + ".zcsr", dbPath + ".zcsr.gen"} {
-			info, statErr := os.Lstat(path)
-			if statErr != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			items = append(items, maintainItem{
-				Path:    path,
-				Bytes:   info.Size(),
-				AgeDays: int(now.Sub(info.ModTime()).Hours() / 24),
-				Action:  "clear",
-				mod:     info.ModTime(),
-			})
+	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
+	return items
+}
+
+// maintainScanEngineCache 返回金库引擎磁盘簇缓存（.zcsr 与指纹档 .zcsr.gen）的条目。
+//
+// 该缓存缺失时，守护进程会在启动路径上重建索引与簇状态：数万单元规模下耗时以分钟计，
+// 构建期堆峰值可达数 GB，期间召回排队甚至超时。因此默认保留（Action=keep）并只读展示，
+// 仅在显式 purge（CLI --purge-engine-cache）时才标记为可清除。
+func maintainScanEngineCache(dbPath string, purge bool, now time.Time) []maintainItem {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil
+	}
+	action := "keep"
+	if purge {
+		action = "clear"
+	}
+	var items []maintainItem
+	for _, path := range []string{dbPath + ".zcsr", dbPath + ".zcsr.gen"} {
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.Mode().IsRegular() {
+			continue
 		}
+		items = append(items, maintainItem{
+			Path:    path,
+			Bytes:   info.Size(),
+			AgeDays: int(now.Sub(info.ModTime()).Hours() / 24),
+			Action:  action,
+			mod:     info.ModTime(),
+		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
 	return items
@@ -209,7 +227,7 @@ func maintainFileBytes(path string) int64 {
 }
 
 // maintainVaultStat 汇总金库与侧车的文件占用、空闲页，以及管理后台数据库体量。
-func maintainVaultStat(memory *api.Memory, dataDir string) map[string]any {
+func maintainVaultStat(memory *facade.Memory, dataDir string) map[string]any {
 	dbPath := memory.Config.DB
 	adminDB := filepath.Join(dataDir, "admin", "rolling-admin.db")
 	stat := map[string]any{
@@ -355,7 +373,7 @@ type maintainCompactReport struct {
 }
 
 // maintainCompactRun 对目标金库与其侧车执行 VACUUM（apply=false 时只取读数）。
-func maintainCompactRun(memory *api.Memory, apply, restartDaemon bool, now time.Time) (*maintainCompactReport, error) {
+func maintainCompactRun(memory *facade.Memory, apply, restartDaemon bool, now time.Time) (*maintainCompactReport, error) {
 	report := &maintainCompactReport{}
 	dbPath := memory.Config.DB
 	report.beforeBytes = maintainFileBytes(dbPath)
@@ -456,7 +474,7 @@ func maintainCompactRun(memory *api.Memory, apply, restartDaemon bool, now time.
 // --------------------------------------------------------------- command impl
 
 // runMaintainCommand 分派 maintain 的三种动作。
-func (a *application) runMaintainCommand(memory *api.Memory) (int, error) {
+func (a *application) runMaintainCommand(memory *facade.Memory) (int, error) {
 	sub := strings.TrimSpace(a.args.Subcommand())
 	if sub == "" {
 		sub = "status"
@@ -473,34 +491,37 @@ func (a *application) runMaintainCommand(memory *api.Memory) (int, error) {
 }
 
 // runMaintainStatus 输出只读体检报告（含各动作的可回收量与执行命令）。
-func (a *application) runMaintainStatus(memory *api.Memory) (int, error) {
+func (a *application) runMaintainStatus(memory *facade.Memory) (int, error) {
 	now := time.Now()
 	dataDir := filepath.Dir(memory.Config.DB)
 	stateDir := config.DefaultStateDir()
 	backupItems := maintainScanBackups(maintainScanDirs(dataDir), maintainDefaultBackupKeep, now)
-	cacheItems := maintainScanCaches(stateDir, memory.Config.DB, now)
+	cacheItems := maintainScanCaches(stateDir, now)
+	engineCacheItems := maintainScanEngineCache(memory.Config.DB, false, now)
 	logItems := maintainScanLogs(stateDir, now)
 	vault := maintainVaultStat(memory, dataDir)
 	daemon := maintainDaemonStat()
 
 	backups := maintainSection("backups", backupItems)
 	caches := maintainSection("caches", cacheItems)
+	engineCache := maintainSection("engine_cache", engineCacheItems)
 	logs := maintainSection("logs", logItems)
 	reclaimBackups := backups["reclaimable_bytes"].(int64)
 	reclaimCaches := caches["reclaimable_bytes"].(int64)
 	reclaimCompact, _ := vault["free_bytes"].(int64)
 
 	report := map[string]any{
-		"ok":        true,
-		"action":    "status",
-		"apply":     false,
-		"data_dir":  dataDir,
-		"state_dir": stateDir,
-		"backups":   backups,
-		"caches":    caches,
-		"logs":      logs,
-		"vault":     vault,
-		"daemon":    daemon,
+		"ok":           true,
+		"action":       "status",
+		"apply":        false,
+		"data_dir":     dataDir,
+		"state_dir":    stateDir,
+		"backups":      backups,
+		"caches":       caches,
+		"logs":         logs,
+		"vault":        vault,
+		"daemon":       daemon,
+		"engine_cache": engineCache,
 		"keep_policy": map[string]any{
 			"backup_keep_per_family": maintainDefaultBackupKeep,
 		},
@@ -515,7 +536,7 @@ func (a *application) runMaintainStatus(memory *api.Memory) (int, error) {
 }
 
 // runMaintainClean 预演/执行旧备份与缓存清理。
-func (a *application) runMaintainClean(memory *api.Memory) (int, error) {
+func (a *application) runMaintainClean(memory *facade.Memory) (int, error) {
 	apply := a.args.Flag("apply")
 	confirm := a.args.Flag("yes")
 	if apply && !confirm {
@@ -523,14 +544,17 @@ func (a *application) runMaintainClean(memory *api.Memory) (int, error) {
 	}
 	keep := a.args.Int("keep")
 	includeCaches := a.args.Flag("caches")
+	purgeEngineCache := a.args.Flag("purge_engine_cache")
 	now := time.Now()
 	dataDir := filepath.Dir(memory.Config.DB)
 	stateDir := config.DefaultStateDir()
 
 	plan := maintainScanBackups(maintainScanDirs(dataDir), keep, now)
 	if includeCaches {
-		plan = append(plan, maintainScanCaches(stateDir, memory.Config.DB, now)...)
+		plan = append(plan, maintainScanCaches(stateDir, now)...)
 	}
+	// 引擎磁盘簇默认以 keep 进计划（只展示、不删除）；显式 purge 才标记 clear。
+	plan = append(plan, maintainScanEngineCache(memory.Config.DB, purgeEngineCache, now)...)
 	var plannedBytes int64
 	for _, item := range plan {
 		if item.Action == "delete" || item.Action == "clear" {
@@ -538,20 +562,27 @@ func (a *application) runMaintainClean(memory *api.Memory) (int, error) {
 		}
 	}
 	report := map[string]any{
-		"ok":             true,
-		"action":         "clean",
-		"apply":          apply,
-		"keep":           keep,
-		"include_caches": includeCaches,
-		"plan":           plan,
-		"planned_bytes":  plannedBytes,
+		"ok":                 true,
+		"action":             "clean",
+		"apply":              apply,
+		"keep":               keep,
+		"include_caches":     includeCaches,
+		"purge_engine_cache": purgeEngineCache,
+		"plan":               plan,
+		"planned_bytes":      plannedBytes,
 	}
 	if apply {
-		if includeCaches {
+		if includeCaches || purgeEngineCache {
 			notified, err := mcp.InvalidateUnixDaemonCachesVerified(context.Background(), mcp.DefaultUnixSocketPath(), memory.Config)
 			report["daemon_caches_invalidated"] = notified
 			if err != nil {
 				report["daemon_cache_note"] = err.Error()
+			}
+		}
+		if purgeEngineCache {
+			if daemonStat := maintainDaemonStat(); daemonStat["running"] == true {
+				// 运行中的守护进程持有 .zcsr 的 mmap：删除后空间要到进程退出才真正释放。
+				report["engine_cache_note"] = "engine cache space is released when the running daemon exits; the next recall rebuilds it"
 			}
 		}
 		result, err := maintainApplyClean(plan, stateDir, now)
@@ -566,7 +597,7 @@ func (a *application) runMaintainClean(memory *api.Memory) (int, error) {
 }
 
 // runMaintainCompact 预演/执行金库瘦身。
-func (a *application) runMaintainCompact(memory *api.Memory) (int, error) {
+func (a *application) runMaintainCompact(memory *facade.Memory) (int, error) {
 	apply := a.args.Flag("apply")
 	confirm := a.args.Flag("yes")
 	if apply && !confirm {
@@ -639,6 +670,13 @@ func (a *application) printMaintainStatus(report map[string]any) {
 			printed++
 		}
 	}
+	if section, _ := report["engine_cache"].(map[string]any); section != nil {
+		if items, _ := section["items"].([]maintainItem); len(items) > 0 {
+			a.printf("  engine cache: %s · kept by default (a missing cache rebuilds the index: minutes, multi-GB peak)\n",
+				maintainHumanBytes(section["total_bytes"].(int64)))
+			a.printLine("    purge: rmem maintain clean --purge-engine-cache --apply --yes")
+		}
+	}
 	vault, _ := report["vault"].(map[string]any)
 	if vault != nil {
 		a.printf("  vault: %s (free pages %s, reclaimable by compact) · WAL %s · efficacy %s\n",
@@ -679,14 +717,17 @@ func (a *application) printMaintainClean(report map[string]any) {
 	plan, _ := report["plan"].([]maintainItem)
 	planned := countMaintainAction(plan)
 	if apply, _ := report["apply"].(bool); !apply {
-		a.printf("clean preview: %d files · %s reclaimable (keep newest %d per backup family, caches included: %v)\n",
+		a.printf("clean preview: %d files · %s reclaimable (keep newest %d per backup family, caches included: %v, engine cache purged: %v)\n",
 			planned, maintainHumanBytes(report["planned_bytes"].(int64)),
-			report["keep"], report["include_caches"])
-		a.printLine("  run: rmem maintain clean --apply --yes [--caches]")
+			report["keep"], report["include_caches"], report["purge_engine_cache"])
+		a.printLine("  run: rmem maintain clean --apply --yes [--caches] [--purge-engine-cache]")
 		return
 	}
 	a.printf("cleaned: %d files removed · %s freed\n",
 		report["removed"], maintainHumanBytes(report["freed_bytes"].(int64)))
+	if note, _ := report["engine_cache_note"].(string); note != "" {
+		a.printf("  engine cache: %s\n", note)
+	}
 	if failed, ok := report["failed"].([]string); ok {
 		for _, line := range failed {
 			a.printf("  failed: %s\n", line)

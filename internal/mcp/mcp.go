@@ -23,7 +23,7 @@
 // standard passes them through and fails deeper (AttributeError) or echoes the
 // raw value; this adapter rejects string slots it cannot represent with a Go
 // error, stringifies scope/reader (standard echoes the original), and drops
-// non-object `aliases` entries, which api.Memory cannot carry (standard records
+// non-object `aliases` entries, which facade.Memory cannot carry (standard records
 // one "invalid alias entry" skip per entry). NaN/Infinity are rejected here,
 // invalid UTF-8 aborts the session, and a lone surrogate escape decodes to
 // U+FFFD because Go strings cannot hold one.
@@ -46,9 +46,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
@@ -79,8 +79,8 @@ var protocolVersions = []string{protocolVersion20241105, protocolVersion20250618
 // reopens the new database file instead of writing to an unlinked orphan inode.
 type LazyMemory struct {
 	mu      sync.Mutex
-	memory  *api.Memory
-	retired []*api.Memory
+	memory  *facade.Memory
+	retired []*facade.Memory
 	err     error
 	dbPath  string
 	dbInfo  os.FileInfo
@@ -93,7 +93,7 @@ func NewLazyMemory() *LazyMemory {
 
 // Get returns the shared Memory, opening it on first use (and reopening if the
 // underlying database file on disk was replaced with a new inode).
-func (l *LazyMemory) Get() (*api.Memory, error) {
+func (l *LazyMemory) Get() (*facade.Memory, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.memory != nil && l.dbPath != "" && l.dbInfo != nil {
@@ -121,7 +121,7 @@ func (l *LazyMemory) Get() (*api.Memory, error) {
 	return l.memory, l.err
 }
 
-func (l *LazyMemory) closeRetiredOne(target *api.Memory) {
+func (l *LazyMemory) closeRetiredOne(target *facade.Memory) {
 	if target == nil {
 		return
 	}
@@ -163,12 +163,12 @@ func (l *LazyMemory) Close() error {
 
 // openMemory mirrors Memory() with no arguments: configuration from the
 // environment, then the store.
-func openMemory() (*api.Memory, error) {
+func openMemory() (*facade.Memory, error) {
 	cfg, err := config.Load(config.LoadOptions{})
 	if err != nil {
 		return nil, err
 	}
-	return api.New(cfg)
+	return facade.New(cfg)
 }
 
 // Server is one stdio session. Zero fields fall back to the process streams.
@@ -176,7 +176,7 @@ type Server struct {
 	In     io.Reader // defaults to os.Stdin
 	Out    io.Writer // defaults to os.Stdout
 	Err    io.Writer // diagnostics, defaults to os.Stderr
-	Memory *api.Memory
+	Memory *facade.Memory
 	Lazy   *LazyMemory
 	// IdleExit bounds the input silence the session tolerates before it exits
 	// on its own; the host respawns the server on the next call. Zero falls
@@ -271,7 +271,7 @@ func ServeWithDaemonProxy(in io.Reader, out io.Writer) error {
 }
 
 // Serve runs the loop over in/out; memory may be nil to open one lazily.
-func Serve(in io.Reader, out io.Writer, memory *api.Memory) error {
+func Serve(in io.Reader, out io.Writer, memory *facade.Memory) error {
 	return (&Server{In: in, Out: out, Memory: memory}).Run()
 }
 
@@ -432,7 +432,7 @@ func (s *Server) retire(reason string, inFlight *atomic.Int64, lazy *LazyMemory)
 // Handle processes one decoded JSON-RPC message for tests and embedders. A nil
 // response means "no response" (notification). Tool exceptions become isError
 // results, so the error is always nil in this port.
-func Handle(request any, memory *api.Memory, lazy *LazyMemory) (any, error) {
+func Handle(request any, memory *facade.Memory, lazy *LazyMemory) (any, error) {
 	return handle(request, memory, lazy, os.Stderr), nil
 }
 
@@ -573,11 +573,11 @@ func normalizeJSONValue(value any) any {
 }
 
 // handle dispatches one decoded message; nil means "notification, no response".
-func handle(request any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer) any {
+func handle(request any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer) any {
 	return handleWithMemoryMode(request, memory, lazy, debugOut, memory == nil)
 }
 
-func handleWithMemoryMode(request any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
+func handleWithMemoryMode(request any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
 	request = normalizeJSONValue(request)
 	object, ok := request.(map[string]any)
 	if !ok {
@@ -624,7 +624,7 @@ func handleWithMemoryMode(request any, memory *api.Memory, lazy *LazyMemory, deb
 
 // toolCall runs recall and turns every failure into an isError result, never a
 // crash.
-func toolCall(requestID any, rawParams any, memory *api.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
+func toolCall(requestID any, rawParams any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
 	params, ok := rawParams.(map[string]any)
 	if !ok {
 		return errorResponse(requestID, codeInvalidParams, "params must be an object")
@@ -680,9 +680,9 @@ func toolError(requestID any, err error, debugOut io.Writer) any {
 	})
 }
 
-// recallRequest maps the tool arguments onto api.RecallRequest. Depth and
+// recallRequest maps the tool arguments onto facade.RecallRequest. Depth and
 // RawLimit carry api.recall's keyword defaults, which mcp never passes.
-func recallRequest(arguments map[string]any) (api.RecallRequest, error) {
+func recallRequest(arguments map[string]any) (facade.RecallRequest, error) {
 	window := map[string]any{}
 	if typed, ok := arguments["window"].(map[string]any); ok {
 		window = typed
@@ -695,7 +695,7 @@ func recallRequest(arguments map[string]any) (api.RecallRequest, error) {
 	if pyTruthy(arguments["offset"]) {
 		parsed, err := pyInt(arguments["offset"])
 		if err != nil {
-			return api.RecallRequest{}, err
+			return facade.RecallRequest{}, err
 		}
 		offset = parsed
 	}
@@ -704,10 +704,10 @@ func recallRequest(arguments map[string]any) (api.RecallRequest, error) {
 		rawLimit = *value
 	}
 	if rawLimit < 1 || rawLimit > 64 {
-		return api.RecallRequest{}, fmt.Errorf("caps.raw must be between 1 and 64")
+		return facade.RecallRequest{}, fmt.Errorf("caps.raw must be between 1 and 64")
 	}
 	if bands := intOrNil(caps["bands"]); bands != nil && (*bands < 0 || *bands > 64) {
-		return api.RecallRequest{}, fmt.Errorf("caps.bands must be between 0 and 64")
+		return facade.RecallRequest{}, fmt.Errorf("caps.bands must be between 0 and 64")
 	}
 	var sessionPtr *string
 	if value, ok := arguments["session"]; ok && value != nil {
@@ -730,12 +730,12 @@ func recallRequest(arguments map[string]any) (api.RecallRequest, error) {
 	}
 	if deliveryWindow != "" {
 		if _, _, ok := config.NormalizeDeliveryWindow(deliveryWindow, "0-16"); !ok {
-			return api.RecallRequest{}, fmt.Errorf("delivery_window must be one of ('auto', '0-16', '0-32', '0-64')")
+			return facade.RecallRequest{}, fmt.Errorf("delivery_window must be one of ('auto', '0-16', '0-32', '0-64')")
 		}
 	} else if caps["bands"] == nil && caps["raw"] == nil {
 		deliveryWindow = "auto"
 	}
-	return api.RecallRequest{
+	return facade.RecallRequest{
 		Cue:            cue,
 		Scope:          scope,
 		Reader:         reader,
@@ -760,7 +760,7 @@ func recallRequest(arguments map[string]any) (api.RecallRequest, error) {
 }
 
 // recallResponse assembles the probe/full payload and its text rendering.
-func recallResponse(memory *api.Memory, arguments map[string]any, presence *text.PresenceCoordinates) (any, string, error) {
+func recallResponse(memory *facade.Memory, arguments map[string]any, presence *text.PresenceCoordinates) (any, string, error) {
 	request, err := recallRequest(arguments)
 	if err != nil {
 		return nil, "", err
@@ -875,7 +875,7 @@ func debugTrace(out io.Writer, err error) {
 // Explicit arguments ("cwd", "locus", "incarnation") or ROLLING_MEMORY_WORKSPACE always take priority;
 // in live stdio daemon mode (liveDaemon=true), it also checks the hook-written active_workspace.json
 // or the daemon's own git repository cwd.
-func resolveMCPPresence(active *api.Memory, arguments map[string]any, liveDaemon bool) *text.PresenceCoordinates {
+func resolveMCPPresence(active *facade.Memory, arguments map[string]any, liveDaemon bool) *text.PresenceCoordinates {
 	var explicit text.PresenceCoordinates
 	if arguments != nil {
 		if rawCwd := arguments["cwd"]; pyTruthy(rawCwd) {

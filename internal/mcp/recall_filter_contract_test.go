@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -49,7 +49,7 @@ func TestRecallSessionPresence(t *testing.T) {
 	}
 }
 
-func newVaultOnlyMemory(t *testing.T) *api.Memory {
+func newVaultOnlyMemory(t *testing.T) *facade.Memory {
 	t.Helper()
 	directory := t.TempDir()
 	dbPath := filepath.Join(directory, "memory.db")
@@ -74,7 +74,7 @@ func newVaultOnlyMemory(t *testing.T) *api.Memory {
 		t.Fatal(err)
 	}
 	cfg.Log = filepath.Join(directory, "state", "rolling-memory.log")
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

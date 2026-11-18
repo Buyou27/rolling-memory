@@ -4,6 +4,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -152,9 +153,9 @@ func (b *SQLiteBackend) AppendAssertion(_ context.Context, a memcore.Assertion, 
 		label = memcore.FormatAssertionLabel(a.SubjectID, a.RelID, a.ObjectID, a.SubjectAbsent, a.SubjectGap, a.ObjectGap)
 	}
 	normLabel := ids.NormalizeLabel(label)
-	audience := defaultIfEmpty(a.Audience, "shared")
-	warrant := defaultIfEmpty(a.Warrant, "referential")
-	status := defaultIfEmpty(a.Status, "active")
+	audience := cmp.Or(a.Audience, "shared")
+	warrant := cmp.Or(a.Warrant, "referential")
+	status := cmp.Or(a.Status, "active")
 	loopState := memcore.InitialLoopState(warrant, a.LoopState)
 	a.LoopState = loopState
 
@@ -200,7 +201,7 @@ func (b *SQLiteBackend) AppendAssertion(_ context.Context, a memcore.Assertion, 
 	if conf <= 0 || conf > 1 {
 		conf = 0.7
 	}
-	srcTrace := defaultIfEmpty(a.SourceTraceHash, a.AnchorTraceHash)
+	srcTrace := cmp.Or(a.SourceTraceHash, a.AnchorTraceHash)
 	anchorStart := a.AnchorStart
 	anchorEnd := a.AnchorEnd
 	if anchorEnd <= anchorStart {
@@ -338,7 +339,7 @@ func (b *SQLiteBackend) RecordMemoryHot(_ context.Context, h memcore.MemoryHot) 
 	if kind != "experience" {
 		kind = "recall"
 	}
-	sess := defaultIfEmpty(h.SessionKey, "default")
+	sess := cmp.Or(h.SessionKey, "default")
 	now := defaultInt64(h.CreatedAt, ids.UTCNow())
 	nodesJSON, _ := json.Marshal(h.HitNodeIDs)
 	assertsJSON, _ := json.Marshal(h.HitAssertionIDs)
@@ -402,8 +403,8 @@ func (b *SQLiteBackend) UpsertEpisodeContainer(_ context.Context, c memcore.Epis
 	if lvl <= 0 {
 		lvl = 1
 	}
-	world := defaultIfEmpty(c.World, "actual")
-	carrier := defaultIfEmpty(c.Carrier, "virtual")
+	world := cmp.Or(c.World, "actual")
+	carrier := cmp.Or(c.Carrier, "virtual")
 	return db.WithImmediateTx(b.store.conn, func(tx *sql.Tx) error {
 		if _, err := tx.Exec(
 			`INSERT INTO episode(scope, ep_key, generation, level, world, carrier, locus, session_key, t_start, t_end, t_source_min, t_source_max, member_count, updated_at)
@@ -425,13 +426,13 @@ func (b *SQLiteBackend) UpsertEpisodeContainer(_ context.Context, c memcore.Epis
 			return err
 		}
 		for _, m := range members {
-			mk := defaultIfEmpty(m.MemberKind, "assertion")
-			facet := defaultIfEmpty(m.Facet, "event")
+			mk := cmp.Or(m.MemberKind, "assertion")
+			facet := cmp.Or(m.Facet, "event")
 			mCreated := defaultInt64(m.CreatedAt, now)
 			if _, err := tx.Exec(
 				`INSERT OR REPLACE INTO episode_member(episode_id, scope, member_id, member_kind, facet, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
-				epID, defaultIfEmpty(m.Scope, c.Scope), m.MemberID, mk, facet, mCreated,
+				epID, cmp.Or(m.Scope, c.Scope), m.MemberID, mk, facet, mCreated,
 			); err != nil {
 				return err
 			}

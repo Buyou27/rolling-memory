@@ -45,22 +45,13 @@ const (
 	// EvalScope LoCoMo 评测专属作用域基名，与真实用户数据物理隔离；
 	// 现役评测 scope = 基名 + `-local-plain`（本地明文通道，见 evalScopeForSuite）。
 	EvalScope = "u10-mem-eval-locomo"
-	// 评测传输标识：现役唯一合法值 = 本地明文离线通道（与 rmem internal/eval 的
-	// LocalPlainTransport 逐字同源）；两个历史脉冲通道取值只用于读取旧制品（只读兼容白名单），
-	// 本版本绝不再写出。
+	// 评测传输标识：唯一合法值 = 本地明文离线通道（与 rmem internal/eval 的
+	// LocalPlainTransport 逐字同源）。
 	evalLocalPlainTransport = "ramesdk.local_plain.offline-v1"
-	legacyCipherTransport   = "ramesdk.pulse_cipher.open-memory-v1"
-	legacyPlainTransport    = "ramesdk.pulse_plain.open-memory-v1"
 	// 现役唯一评测臂 = 本地明文（sdk-local-plain），另加 Oracle 金标上限诊断臂。
-	EvalArmSDKLocalPlain = "sdk-local-plain"
-	EvalArmOracle        = "oracle"
-	// 历史（已停用）脉冲臂与脉冲模式名：只读兼容取值（读取旧台账 / 旧制品时识别，
-	// 并据此 fail-closed 明确拒收），本版本不再产出、不再执行。
-	EvalArmSDKPulseCipher    = "sdk-pulse-cipher"
-	EvalArmSDKPulsePlain     = "sdk-pulse-plain"
-	EvalPulseModePulseCipher = "pulse_cipher"
-	EvalPulseModePulsePlain  = "pulse_plain"
-	EvalPulseModeLocalPlain  = "local_plain"
+	EvalArmSDKLocalPlain    = "sdk-local-plain"
+	EvalArmOracle           = "oracle"
+	EvalPulseModeLocalPlain = "local_plain"
 
 	// evalVerifyCodeManifestMismatch 与引擎 rmem eval 的稳定错误码契约同名：
 	// verify-prepare 判定 manifest 与当前语料确定性失配（语料正文口径已更新等），
@@ -602,8 +593,8 @@ type evalRunRequest struct {
 	Mode          string         `json:"mode"`                 // single | batch | status | stop | detail | delete | test_ai | check_ai | ai_channels | ai_apply_channel
 	Action        string         `json:"action"`               // start | attach
 	Tier          string         `json:"tier"`                 // 100 | 200 | 1540
-	ArmMode       string         `json:"arm_mode"`             // sdk-pulse-cipher | sdk-pulse-plain | sdk-local-plain | oracle
-	PulseMode     string         `json:"pulse_mode,omitempty"` // pulse_cipher | pulse_plain | local_plain
+	ArmMode       string         `json:"arm_mode"`             // sdk-local-plain | oracle
+	PulseMode     string         `json:"pulse_mode,omitempty"` // local_plain
 	UseAgents     bool           `json:"use_agents"`
 	Category      string         `json:"category"`
 	RawLimit      int            `json:"raw_limit"`
@@ -1677,8 +1668,8 @@ func evalScopeForSuite(suite string) string {
 	return base + "-local-plain"
 }
 
-// evalScopeSuiteModeGeneration 解析评测 scope 的 (suite, pulseMode, generation, ok)：
-// 形态 <prefix>-mem-eval-<locomo|atmbench>[-pulse-plain|-local-plain][-<世代号>]。
+// evalScopeSuiteModeGeneration 解析评测 scope 的 (suite, mode, generation, ok)：
+// 唯一形态 <prefix>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]。
 // 与 rmem（internal/eval 的 SplitEvalScopeWithMode）逐条同源：改一处必须同改另一处（parity 由两侧
 // 同名测试表守护）。
 func evalScopeSuiteModeGeneration(scope string) (string, string, string, bool) {
@@ -1705,19 +1696,11 @@ func evalScopeSuiteModeGeneration(scope string) (string, string, string, bool) {
 	if segments[0] == "atmbench" {
 		suite = SuiteATM
 	}
-	pulseMode := EvalPulseModePulseCipher
 	genSegments := segments[1:]
-	if len(genSegments) >= 2 && genSegments[0] == "pulse" && genSegments[1] == "plain" {
-		pulseMode = EvalPulseModePulsePlain
-		genSegments = genSegments[2:]
-	} else if len(genSegments) >= 2 && genSegments[0] == "pulse" && genSegments[1] == "cipher" {
-		pulseMode = EvalPulseModePulseCipher
-		genSegments = genSegments[2:]
-	} else if len(genSegments) >= 2 && genSegments[0] == "local" && genSegments[1] == "plain" {
-		pulseMode = EvalPulseModeLocalPlain
-		genSegments = genSegments[2:]
+	if len(genSegments) < 2 || genSegments[0] != "local" || genSegments[1] != "plain" {
+		return "", "", "", false
 	}
-	return suite, pulseMode, strings.Join(genSegments, "-"), true
+	return suite, EvalPulseModeLocalPlain, strings.Join(genSegments[2:], "-"), true
 }
 
 func evalScopeSuiteName(scope string) (string, bool) {
@@ -1743,8 +1726,8 @@ func currentEvalScope(storePath, suite string) string {
 	return evalScopeForSuite(suite)
 }
 
-// normalizeEvalArm 归一化评测臂：现役只支持本地明文（sdk-local-plain，默认）与 oracle 金标上限诊断臂。
-// 历史脉冲臂名（sdk-pulse-cipher / sdk-pulse-plain）与兼容档位臂（zero / pro / max / ...）一律显式拒收。
+// normalizeEvalArm 归一化评测臂：只支持本地明文（sdk-local-plain，默认）与 oracle 金标上限诊断臂。
+// 其余取值（含历史脉冲臂）一律显式拒收。
 func normalizeEvalArm(armMode string) (string, error) {
 	arm := strings.ToLower(strings.TrimSpace(armMode))
 	switch arm {
@@ -1752,8 +1735,6 @@ func normalizeEvalArm(armMode string) (string, error) {
 		return EvalArmSDKLocalPlain, nil
 	case EvalArmOracle:
 		return EvalArmOracle, nil
-	case EvalArmSDKPulseCipher, EvalArmSDKPulsePlain, EvalPulseModePulseCipher, EvalPulseModePulsePlain:
-		return "", fmt.Errorf("评测臂 %q 已停用：本版本评测只走本地明文通道（零脉冲 · 零云端请求），仅支持 sdk-local-plain（默认）或 oracle", armMode)
 	default:
 		return "", fmt.Errorf("评测臂 %q 非法；仅支持 sdk-local-plain（本地明文，默认）或 oracle", armMode)
 	}

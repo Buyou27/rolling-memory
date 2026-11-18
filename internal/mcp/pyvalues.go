@@ -284,15 +284,6 @@ func pyIntFromFloat(value float64) (int, error) {
 	return int(value), nil
 }
 
-// firstChars truncates text to at most limit Unicode code points (runes, not bytes).
-func firstChars(text string, limit int) string {
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return string(runes[:limit])
-}
-
 // textOrEmpty reads an optional string argument (absent -> "").
 func textOrEmpty(value any) string {
 	if text, ok := value.(string); ok {

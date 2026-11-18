@@ -2851,16 +2851,12 @@ const evalScopeMatches = (scope: unknown, suite: string, pulseMode: string): boo
     if (index <= 0) return false
     const parts = text.slice(index + '-mem-eval-'.length).split('-')
     if (parts.some((part) => !part) || parts[0] !== (suite === 'atm' ? 'atmbench' : 'locomo')) return false
-    const mode = parts[1] === 'local' && parts[2] === 'plain' ? 'local_plain'
-        : parts[1] === 'pulse' && parts[2] === 'plain' ? 'pulse_plain'
-        : parts[1] === 'pulse' && parts[2] === 'cipher' ? 'pulse_cipher' : ''
+    const mode = parts[1] === 'local' && parts[2] === 'plain' ? 'local_plain' : ''
     return mode === pulseMode
 }
 
 const expectedEvalScope = computed(() => {
     const base = query.suite === 'atm' ? 'u10-mem-eval-atmbench' : 'u10-mem-eval-locomo'
-    if (evalConfig.arm_mode === 'sdk-pulse-plain') return `${base}-pulse-plain`
-    if (evalConfig.arm_mode === 'sdk-pulse-cipher') return `${base}-pulse-cipher`
     if (evalConfig.arm_mode === 'sdk-local-plain') return `${base}-local-plain`
     return '—'
 })
@@ -2886,7 +2882,7 @@ const evalStorePath = computed(() => {
     const actual = String(overview.value.store_path || evalManifest.value?.store_path || '').trim()
     if (actual) return actual
     const base = query.suite === 'atm' ? 'eval-atm' : 'eval-locomo'
-    const suffix = evalConfig.arm_mode === 'sdk-pulse-plain' ? '-pulse-plain' : evalConfig.arm_mode === 'sdk-pulse-cipher' ? '-pulse-cipher' : '-local-plain'
+    const suffix = '-local-plain'
     return `~/.local/state/rolling-memory/eval/${base}${suffix}.json`
 })
 
@@ -2897,8 +2893,8 @@ const evalCorpusReady = computed(() => {
     if (evalConfig.arm_mode === 'oracle') return false
     if (evalConfig.arm_mode !== `sdk-${evalConfig.pulse_mode.replace('_', '-')}`) return false
     const mode = evalConfig.pulse_mode
-    const transport = mode === 'local_plain' ? 'ramesdk.local_plain.offline-v1'
-        : mode === 'pulse_plain' ? 'ramesdk.pulse_plain.open-memory-v1' : 'ramesdk.pulse_cipher.open-memory-v1'
+    if (mode !== 'local_plain') return false
+    const transport = 'ramesdk.local_plain.offline-v1'
     const endpoint = String(manifest.endpoint || '')
     return (
         manifest.local_fallback === false &&
@@ -2906,7 +2902,7 @@ const evalCorpusReady = computed(() => {
         evalScopeMatches(manifest.scope, query.suite, mode) &&
         String(manifest.user_id || '') === '10' &&
         String(manifest.transport || '') === transport &&
-        (mode === 'local_plain' ? endpoint.startsWith('local://') : /^https?:\/\//.test(endpoint) && endpoint.includes('/open/memory/v1')) &&
+        endpoint.startsWith('local://') &&
         Number(manifest.documents || 0) > 0 &&
         String(manifest.corpus_sha256 || '').trim() !== ''
     )
@@ -3294,7 +3290,6 @@ const shortChartLabel = (item: EvalRunRecord) => {
     if (arm.includes('oracle') || rawLbl.includes('Oracle')) return 'Oracle · ceiling'
     if (arm.includes('hipporag') || rawLbl.includes('HippoRAG')) return 'HippoRAG 2'
     if (arm.startsWith('mem0') || rawLbl.startsWith('Mem0')) return 'Mem0'
-    if (arm.includes('sdk-pulse-cipher')) return 'SDK Pulse Cipher'
     const tag = tierOptionTag(item.tier)
     if (item.is_baseline) {
         return `RAME · ${tag}`
@@ -4327,7 +4322,7 @@ const subscribeEvalRoom = (expectedJobId: string, onTerminalState?: (snap: EvalJ
 
 const requestRunBatchEval = async () => {
     // Oracle 只读金标证据，不经过云端语料，后端 worker 对 oracle 明确跳过 prepare；
-    // 因此语料门禁只约束 sdk-pulse-cipher 臂，不能把唯一不依赖语料的臂一并挡死。
+    // 因此语料门禁只约束本地明文评测臂。
     if (evalConfig.arm_mode !== 'oracle' && !evalCorpusReady.value) {
         corpusModalVisible.value = true
         ElMessage.warning(isEn.value ? 'Prepare and Verify must pass before starting a batch' : '必须先完成 Prepare 并通过 Verify 才能启动批次')
@@ -4740,7 +4735,7 @@ const openQuestionResultProbe = (item: any) => {
 
 const executeProbe = async (withAgents: boolean) => {
     if (!probeTarget.value) return
-    // 单题探针必须跟随当前选择的臂：sdk-pulse-cipher / sdk-pulse-plain / sdk-local-plain 需要已核验语料；oracle 只读金标证据，不需要语料。
+    // 单题探针必须跟随当前选择的臂：本地明文评测臂需要已核验语料；oracle 只读金标证据，不需要语料。
     const probeArm = evalConfig.arm_mode === 'oracle' ? 'oracle' : evalConfig.arm_mode
     if (probeArm !== 'oracle' && !evalCorpusReady.value) {
         corpusModalVisible.value = true

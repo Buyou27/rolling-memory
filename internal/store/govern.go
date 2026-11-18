@@ -4,6 +4,7 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 // NodeLabels resolves node ids to labels.
@@ -292,7 +294,7 @@ func (s *Store) FindNodes(query, scope string, limit int) ([]map[string]any, err
 			"status":   node.Status,
 			"audience": node.Audience,
 			"aliases":  aliases,
-			"score":    pyRound(seed.Score, 4),
+			"score":    ids.PyRound(seed.Score, 4),
 			"legs":     legs,
 		})
 	}
@@ -376,7 +378,7 @@ func (s *Store) GovernanceReport(scope string, limit int) (map[string]any, error
 				}
 				similar = append(similar, map[string]any{
 					"kind":  kind,
-					"ratio": pyRound(ratio, 3),
+					"ratio": ids.PyRound(ratio, 3),
 					"left": map[string]any{
 						"id":    mapString(left, "id"),
 						"label": mapString(left, "label"),
@@ -458,7 +460,7 @@ func (s *Store) GovernanceReport(scope string, limit int) (map[string]any, error
 
 // RetractAssertion marks one assertion retracted (append-only audit row).
 func (s *Store) RetractAssertion(nodeID, reason, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	row, err := queryOneMap(s.conn, "SELECT * FROM assertion WHERE node_id = ?", nodeID)
 	if err != nil {
 		return nil, err
@@ -502,7 +504,7 @@ func (s *Store) RetractAssertion(nodeID, reason, createdBy string) (map[string]a
 
 // ResolveConflict records a winner and demotes the loser; it never deletes.
 func (s *Store) ResolveConflict(winnerID, loserID, reason string, retractLoser bool, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	winner, err := queryOneMap(s.conn, "SELECT * FROM assertion WHERE node_id = ?", winnerID)
 	if err != nil {
 		return nil, err
@@ -534,7 +536,7 @@ func (s *Store) ResolveConflict(winnerID, loserID, reason string, retractLoser b
 			   (scope, meta_kind, lhs_id, rhs_id, status, evidence_anchor, created_at, created_by)
 			 VALUES (?, 'supersedes', ?, ?, 'active', ?, ?, ?)`,
 			scope, winnerID, loserID,
-			fmt.Sprintf("conflict:%s>%s", firstChars(winnerID, 8), firstChars(loserID, 8)),
+			fmt.Sprintf("conflict:%s>%s", text.FirstRunes(winnerID, 8), text.FirstRunes(loserID, 8)),
 			now, createdBy,
 		); err != nil {
 			return err
@@ -575,7 +577,7 @@ func (s *Store) ResolveConflict(winnerID, loserID, reason string, retractLoser b
 
 // AddMetaEdge registers subtype-of / inverse-of nomination edges.
 func (s *Store) AddMetaEdge(scope, metaKind, lhsID, rhsID, evidence, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	if metaKind != "subtype-of" && metaKind != "inverse-of" {
 		return nil, fmt.Errorf("meta kind must be one of: subtype-of, inverse-of")
 	}
@@ -627,7 +629,7 @@ func (s *Store) AddMetaEdge(scope, metaKind, lhsID, rhsID, evidence, createdBy s
 
 // RemoveMetaEdge reverts an active subtype-of / inverse-of edge.
 func (s *Store) RemoveMetaEdge(scope, metaKind, lhsID, rhsID, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	if metaKind != "subtype-of" && metaKind != "inverse-of" {
 		return nil, fmt.Errorf("meta kind must be one of: subtype-of, inverse-of")
 	}
@@ -656,7 +658,7 @@ func (s *Store) RemoveMetaEdge(scope, metaKind, lhsID, rhsID, createdBy string) 
 
 // MergeNodes folds drop into keep with aliases, a same-as edge and a merge bit.
 func (s *Store) MergeNodes(keepID, dropID, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	keep, keepOK, err := s.Node(keepID)
 	if err != nil {
 		return nil, err
@@ -716,7 +718,7 @@ func (s *Store) MergeNodes(keepID, dropID, createdBy string) (map[string]any, er
 			`INSERT OR IGNORE INTO meta_edge
 			   (scope, meta_kind, lhs_id, rhs_id, status, evidence_anchor, created_at, created_by)
 			 VALUES (?, 'same-as', ?, ?, 'active', ?, ?, ?)`,
-			scope, keepID, dropID, "merge:"+firstChars(dropID, 8), now, createdBy,
+			scope, keepID, dropID, "merge:"+text.FirstRunes(dropID, 8), now, createdBy,
 		); err != nil {
 			return err
 		}
@@ -744,7 +746,7 @@ func (s *Store) MergeNodes(keepID, dropID, createdBy string) (map[string]any, er
 
 // UnmergeNodes reverts a same-as merge and revives the dropped node.
 func (s *Store) UnmergeNodes(keepID, dropID, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	err := db.WithImmediateTx(s.conn, func(tx *sql.Tx) error {
 		affected, err := execCount(tx,
 			`UPDATE meta_edge SET status = 'reverted'
@@ -785,7 +787,7 @@ func (s *Store) UnmergeNodes(keepID, dropID, createdBy string) (map[string]any, 
 // restoring the dropped node from merged -> active while keeping append-only historical aliases,
 // and recording a node.split audit event).
 func (s *Store) SplitNodes(keepID, dropID, reason, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	reason = strings.TrimSpace(reason)
 	edgeRows, err := queryMaps(s.conn,
 		`SELECT id, scope, lhs_id, rhs_id, status, COALESCE(evidence_anchor, '') AS evidence_anchor
@@ -821,7 +823,7 @@ func (s *Store) SplitNodes(keepID, dropID, reason, createdBy string) (map[string
 		return nil, fmt.Errorf("drop node not found")
 	}
 	priorStatus := dropNode.Status
-	splitAnchor := "split:" + firstChars(dropID, 8)
+	splitAnchor := "split:" + text.FirstRunes(dropID, 8)
 	if reason != "" {
 		splitAnchor = "split:" + reason
 	}
@@ -859,7 +861,7 @@ func (s *Store) SplitNodes(keepID, dropID, reason, createdBy string) (map[string
 
 // PromoteNode flips a provisional node to active.
 func (s *Store) PromoteNode(nodeID, createdBy string) (map[string]any, error) {
-	createdBy = defaultIfEmpty(createdBy, "user")
+	createdBy = cmp.Or(createdBy, "user")
 	node, ok, err := s.Node(nodeID)
 	if err != nil {
 		return nil, err

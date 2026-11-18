@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/harness"
 )
 
@@ -96,7 +97,7 @@ func skillFileOption(value *string) *string {
 	if value == nil || *value == "" {
 		return nil
 	}
-	expanded := expandUser(*value)
+	expanded := config.ExpandUserPath(*value)
 	return &expanded
 }
 

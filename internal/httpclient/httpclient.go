@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -151,15 +152,15 @@ func request(method, url string, payload any, headers map[string]string, timeout
 		if len(raw) > MaxResponseBytes {
 			return nil, &HTTPError{Status: response.StatusCode, Msg: "response too large"}
 		}
-		text := strings.ToValidUTF8(string(raw), "\uFFFD")
-		if strings.TrimSpace(text) == "" {
+		body := strings.ToValidUTF8(string(raw), "\uFFFD")
+		if strings.TrimSpace(body) == "" {
 			return map[string]any{}, nil
 		}
 		var parsed any
-		if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		if err := json.Unmarshal([]byte(body), &parsed); err != nil {
 			return nil, &HTTPError{
 				Status: response.StatusCode,
-				Body:   firstRunes(text, 400),
+				Body:   text.FirstRunes(body, 400),
 				Msg:    "response is not JSON",
 			}
 		}
@@ -193,13 +194,4 @@ func backoff(attempt int) time.Duration {
 		seconds = 2.0
 	}
 	return time.Duration(seconds * float64(time.Second))
-}
-
-// firstRunes caps value at limit runes for error bodies.
-func firstRunes(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }

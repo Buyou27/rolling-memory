@@ -16,12 +16,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/speech"
 )
@@ -181,7 +181,7 @@ func resolveJSONLTranscriptLocus(path string) (string, bool) {
 					if !filepath.IsAbs(cwd) {
 						return "", false
 					}
-					return api.ResolveWorkspaceLocus(cwd), true
+					return facade.ResolveWorkspaceLocus(cwd), true
 				}
 			}
 		}
@@ -264,7 +264,7 @@ func streamEpisodicScanSourceFrom(ctx context.Context, source episodicScanSource
 			source.Locus, source.LocusKnown = resolveJSONLTranscriptLocus(source.Path)
 		case "zcode":
 			if filepath.IsAbs(source.RawDir) {
-				source.Locus = api.ResolveWorkspaceLocus(source.RawDir)
+				source.Locus = facade.ResolveWorkspaceLocus(source.RawDir)
 				source.LocusKnown = true
 			}
 		}
@@ -478,7 +478,7 @@ func zcodeTurnCompleted(ctx context.Context, db episodic.ZCodeQueryer, sessionID
 // runEpisodicSourceScanTick keeps the history scan independent of the foreground
 // reconcile window. A completed cycle starts over so changes and streaming tails
 // are revisited, while each checkpoint contains only successfully saved work.
-func runEpisodicSourceScanTick(ctx context.Context, memory *api.Memory, home string) error {
+func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home string) error {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return errors.New("episodic source scan requires an open local store")
 	}

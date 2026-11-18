@@ -433,7 +433,7 @@ func TestThinClientSQLiteAndHTTPBlindBrainEndToEnd(t *testing.T) {
 }
 
 // TestClientSDKDefaultRecall_StandaloneAndOfflineFallback verifies that the Client SDK Default Recall
-// (`SearchClientSDKDefault` / `RecallDefault` using SQLite FTS5 trigram + integer IDF coverage + same-day continuity)
+// (`SearchClientSDKDefault` / `RecallDefault` using the deterministic cluster kernel + integer self-information coverage + same-day continuity)
 // works out of the box as a system default capability on the client without requiring an upstream connection.
 // TestClientSDKDefaultRecallCacheInvalidatesChangedDocument prevents the
 // shared blind-slot cache from serving stale atoms after a docID is rewritten.

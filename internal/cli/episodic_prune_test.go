@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -34,7 +34,7 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 	if err := os.WriteFile(goneSource, []byte(`{"type":"user","message":{"role":"user","content":"稍后删除。"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}

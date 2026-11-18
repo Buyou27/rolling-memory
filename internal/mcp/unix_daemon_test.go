@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 func TestUnixDaemonMCPPinsValidatedMemory(t *testing.T) {
@@ -149,7 +149,7 @@ func TestUnixDaemonMCPPinsValidatedMemory(t *testing.T) {
 func TestUnixDaemonServeRecallAndStdioProxy(t *testing.T) {
 	memory := newMemory(t)
 	catText := "老张养了一只橘猫叫大黄。"
-	if _, err := memory.Remember(api.RememberRequest{
+	if _, err := memory.Remember(facade.RememberRequest{
 		Content:    &catText,
 		Assertions: []map[string]any{{"s": "老张", "x": "养了", "o": "橘猫"}},
 	}); err != nil {

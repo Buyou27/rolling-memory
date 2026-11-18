@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
-func newMemoryWithToml(t *testing.T, toml string) *api.Memory {
+func newMemoryWithToml(t *testing.T, toml string) *facade.Memory {
 	t.Helper()
 	restore := clock.SetForTest(time.Unix(testNow, 0), 1_000_000_000)
 	t.Cleanup(restore)
@@ -40,7 +40,7 @@ func newMemoryWithToml(t *testing.T, toml string) *api.Memory {
 		t.Fatalf("config: %v", err)
 	}
 	cfg.Log = filepath.Join(directory, "state", "rolling-memory.log")
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
 	}
@@ -69,7 +69,7 @@ func bandFor(t *testing.T, bands []map[string]any, titlePart string) map[string]
 }
 
 func TestDeliveryChainCapParameterised(t *testing.T) {
-	facts := func(memory *api.Memory) {
+	facts := func(memory *facade.Memory) {
 		writeFact(t, memory, "老张养了猫。", "老张", "养", map[string]any{"label": "猫"}, nil)
 		writeFact(t, memory, "老张养了狗。", "老张", "养", map[string]any{"label": "狗"}, nil)
 		writeFact(t, memory, "老张养了鱼。", "老张", "养", map[string]any{"label": "鱼"}, nil)
@@ -77,7 +77,7 @@ func TestDeliveryChainCapParameterised(t *testing.T) {
 
 	capped := newMemoryWithToml(t, "[recall]\nchains = 1\n")
 	facts(capped)
-	result, err := capped.Recall(api.RecallRequest{Cue: "老张"})
+	result, err := capped.Recall(facade.RecallRequest{Cue: "老张"})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestDeliveryChainCapParameterised(t *testing.T) {
 
 	plain := newMemory(t)
 	facts(plain)
-	def, err := plain.Recall(api.RecallRequest{Cue: "老张"})
+	def, err := plain.Recall(facade.RecallRequest{Cue: "老张"})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestDeliveryChainCapParameterised(t *testing.T) {
 }
 
 func TestDeliveryRowCapParameterised(t *testing.T) {
-	facts := func(memory *api.Memory) {
+	facts := func(memory *facade.Memory) {
 		writeFact(t, memory, "老张养了猫。", "老张", "养", map[string]any{"label": "猫"}, nil)
 		writeFact(t, memory, "老张喜欢猫。", "老张", "喜欢", map[string]any{"label": "猫"}, nil)
 		writeFact(t, memory, "老张抱了猫。", "老张", "抱", map[string]any{"label": "猫"}, nil)
@@ -116,7 +116,7 @@ func TestDeliveryRowCapParameterised(t *testing.T) {
 
 	capped := newMemoryWithToml(t, "[recall]\nrows = 2\n")
 	facts(capped)
-	result, err := capped.Recall(api.RecallRequest{Cue: "老张 猫"})
+	result, err := capped.Recall(facade.RecallRequest{Cue: "老张 猫"})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestDeliveryRowCapParameterised(t *testing.T) {
 
 	plain := newMemory(t)
 	facts(plain)
-	def, err := plain.Recall(api.RecallRequest{Cue: "老张 猫"})
+	def, err := plain.Recall(facade.RecallRequest{Cue: "老张 猫"})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestDeliveryRowCapParameterised(t *testing.T) {
 		t.Fatalf("default chain rows = %d, want 3 (default cap keeps them)", len(nodes))
 	}
 	one := 1
-	reqCapped, err := plain.Recall(api.RecallRequest{
+	reqCapped, err := plain.Recall(facade.RecallRequest{
 		Cue: "老张 猫", CapsChains: &one, CapsRows: &one,
 	})
 	if err != nil {

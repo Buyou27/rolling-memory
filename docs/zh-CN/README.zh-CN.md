@@ -2,7 +2,7 @@
 
 **[简体中文](README.zh-CN.md) · [English](../../README.md) · [官方网站](https://rolling-memory.rocareer.com/) · [文档中心](README.md) · [省 Token 算账与边界](token-economics.md) · [常见问答](faq.md) · [评测与复现](benchmarks.md) · [立场与免责声明](DECLARATION.md)**
 
-**Rolling Memory**（中文品牌「洛灵」）是一个源码公开、本地优先的记忆工具，面向 AI 编程助手与 Agent——Claude Code、Codex、Cursor、Windsurf、Cline、ZCode 等——由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。它在本地索引受支持的对话来源与挂载文件，经唯一 MCP 工具 `recall`（回忆）提供给接入的编程助手；对话采集范围和手工导入方式见[接入指南](harness.md#45-对话采集范围与手工导入)。**无需云端、无向量、无后台大模型调用**；非商业用途免费。
+**Rolling Memory**（中文品牌「洛灵」）是一个源码公开、本地优先的记忆工具，面向 AI 编程助手与 Agent——Claude Code、Codex、OpenCode、Cursor、Windsurf、Cline、ZCode 等——由 **Rolling Autonoetic Memory Engine（洛灵自知记忆引擎）** 驱动。它在本地索引受支持的对话来源与挂载文件，经唯一 MCP 工具 `recall`（回忆）提供给接入的编程助手；对话采集范围和手工导入方式见[接入指南](harness.md#45-对话采集范围与手工导入)。**无需云端、无向量、无后台大模型调用**；非商业用途免费。
 
 ![Rolling Memory Live Console — 本地金库遥测、MCP recall 账本与记忆资产增长](../assets/live-console-zh.webp)
 
@@ -73,7 +73,7 @@
 | 环节 | 位置与实现 | 具体做什么 |
 |---|---|---|
 | **1. 存原文** | 本地 SQLite 文件（默认 `~/.local/share/rolling-memory/memory.db`，目录 `0700`，文件 `0600`） | 保存对话片段、挂载文档的分块偏移量、时间戳、来源标识和内容哈希。挂载本地代码或文档目录时只记录文件路径与偏移量，按需原位读取，不会把整个代码库重复复制进数据库。 |
-| **2. 建索引与检索** | 同一个 SQLite 文件内的本地索引 | 在 SQLite FTS5 三元组（trigram）与 BM25 基础上，融合三项非向量信息论机制：**① 在线自适应信息量与同日刷屏折叠**（词项稀有度权重完全随你本地记忆库的真实分布动态演化，不依赖外部冻结词表，且同一天内重复粘贴的刷屏日志会自动按对数折叠，绝不冲垮稀有词权重）；**② 跨形式确定性对齐**（无需向量模型即可将 `"May 12, 2025"` 与 ISO `"2025-05-12"`、词形时态变体、复合标识符以及 `"500ms"` / `"16GiB"` 等内联数字与计量单位对齐）；**③ 多线索事件链共鸣**（当提问中的多个稀有线索在候选记录中同时出现且时间邻近时，按无量纲信息重合度放大权重）。索引随时可从原文重建。 |
+| **2. 建索引与检索** | 由金库原文派生的本地索引（可随时重建） | 在本地明文金库上运行完全确定性的无向量信息论检索内核：纯子串分词后，由簇检索排序器融合三项机制：**① 在线自适应信息量与同日刷屏折叠**（词项稀有度权重完全随你本地记忆库的真实分布动态演化，不依赖外部冻结词表，且同一天内重复粘贴的刷屏日志会自动按对数折叠，绝不冲垮稀有词权重）；**② 跨形式确定性对齐**（无需向量模型即可将 `"May 12, 2025"` 与 ISO `"2025-05-12"`、词形时态变体、复合标识符以及 `"500ms"` / `"16GiB"` 等内联数字与计量单位对齐）；**③ 多线索事件链共鸣**（当提问中的多个稀有线索在候选记录中同时出现且时间邻近时，按无量纲信息重合度放大权重）。全程不依赖外部模型、冻结词表或网络请求。 |
 | **3. 阅读与判断** | 你的宿主 Agent 或你自己 | Agent 通过唯一的 MCP 工具 `recall` 拿到相关原文片段和出处后，结合当前问题去阅读、核对和作答。 |
 
 日常使用时不需要 Agent 手动调用“写记忆”接口：后台进程可导入受支持来源的对话轮次；其他来源可能需要手工导入。当 `recall` 查到有用片段时，系统也会在本地记录这次查询与命中片段的关联。
@@ -162,7 +162,7 @@ rolling-memory update --release-base https://your-mirror.example.com/releases/la
 
 ## 7. MCP 与多宿主接入
 
-执行 `rolling-memory install --with-hooks` 会自动检测并填入本机真实路径，一键接入 **ZCode、Claude Code、Codex、Cursor、Windsurf、Cline、dsh、CodeBuddy、WorkBuddy、豆包** 等宿主。如需在其他支持 stdio MCP 的客户端中手动配置，将下方 `<YOUR_HOME>` 替换为你的家目录路径（例如 macOS 的 `/Users/alice` 或 Linux 的 `/home/alice`）：
+执行 `rolling-memory install --with-hooks` 会自动检测并填入本机真实路径，一键接入 **ZCode、Claude Code、Codex、OpenCode、Cursor、Windsurf、Cline、dsh、CodeBuddy、WorkBuddy、豆包** 等宿主。如需在其他支持 stdio MCP 的客户端中手动配置，将下方 `<YOUR_HOME>` 替换为你的家目录路径（例如 macOS 的 `/Users/alice` 或 Linux 的 `/home/alice`）：
 
 ```json
 {

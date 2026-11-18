@@ -75,6 +75,12 @@ type Engine struct {
 	Stage3Plugin       Stage3Plugin
 
 	clusterState *rmClusterState
+	// prevClusterState 承载一次增量重建前的簇状态：ensureClusterState 校验通过后
+	// 走增量扩展（复用族统计量与短语倒排、按 prevDrops 扣减），否则回退全量重建。
+	prevClusterState *rmClusterState
+	// prevDrops 是本次重建中被移除或覆盖的旧单元 ID（删除 + 同 ID 覆盖），
+	// 增量路径需要据此从族统计量中扣减旧贡献。
+	prevDrops    map[string]struct{}
 	queryScratch *rmQueryScratch
 	mmapUnmap    func() error
 
@@ -341,47 +347,6 @@ func (e *Engine) OverlayDelta(deltaDocs []Doc, maskedUnitIDs []string) *Engine {
 	return derived
 }
 
-// ApplyDelta 在当前 Engine 的增量叠加层上流式应用一批新增/更新文档与删除单元 ID，
-// 保持底层基线索引/.zcsr 映射区零拷贝不动，仅重建小体积的 deltaEngine 微簇。
-func (e *Engine) ApplyDelta(upserts []Doc, deletedUnitIDs []string) {
-	if e == nil || (len(upserts) == 0 && len(deletedUnitIDs) == 0) {
-		return
-	}
-	if e.deltaMasked == nil {
-		e.deltaMasked = make(map[string]struct{}, len(upserts)+len(deletedUnitIDs))
-	}
-	if e.deltaDocs == nil {
-		e.deltaDocs = make(map[string]Doc, len(upserts))
-	}
-	for _, id := range deletedUnitIDs {
-		if id == "" {
-			continue
-		}
-		e.deltaMasked[id] = struct{}{}
-		delete(e.deltaDocs, id)
-	}
-	for _, d := range upserts {
-		if d.UnitID == "" {
-			continue
-		}
-		e.deltaMasked[d.UnitID] = struct{}{}
-		if _, exists := e.deltaDocs[d.UnitID]; !exists {
-			e.deltaOrder = append(e.deltaOrder, d.UnitID)
-		}
-		e.deltaDocs[d.UnitID] = d
-	}
-	keptOrder := e.deltaOrder[:0]
-	dedupDocs := make([]Doc, 0, len(e.deltaDocs))
-	for _, id := range e.deltaOrder {
-		if d, ok := e.deltaDocs[id]; ok {
-			keptOrder = append(keptOrder, id)
-			dedupDocs = append(dedupDocs, d)
-		}
-	}
-	e.deltaOrder = keptOrder
-	e.deltaEngine = e.newOverlayChildEngine(dedupDocs)
-}
-
 // ExportDocs 从当前 Engine（含内存态 Index、.zcsr 磁盘 mmap 零拷贝态及增量叠加层）无损还原全部活跃文档快照。
 func (e *Engine) ExportDocs() []Doc {
 	if e == nil {
@@ -509,6 +474,18 @@ func (e *Engine) exportBaseDocs() []Doc {
 	return docs
 }
 
+// stageIncrementalBasis 记录本次重建的增量基座与待扣减 ID 集（删除 + 同 ID 覆盖）；
+// 旧状态缺统计量、存在 overlay 或空库时清空基座，由 ensureClusterState 走全量重建。
+func (e *Engine) stageIncrementalBasis(drops map[string]struct{}, n int) {
+	if e.ClusterPipeline && e.clusterState != nil && e.clusterState.agg != nil && !e.HasDelta() && n > 0 {
+		e.prevClusterState = e.clusterState
+		e.prevDrops = drops
+		return
+	}
+	e.prevClusterState = nil
+	e.prevDrops = nil
+}
+
 // AppendDocs 将新增或更新的文档批次流式并入当前 Engine（支持内存态与 .zcsr mmap 零拷贝态热升迁），
 // 自动同步底层 Index 与双簇 CSR 状态，保证分批流式写入与一次性全量构建 100% 0-ULP 逐位全等。
 func (e *Engine) AppendDocs(docs []Doc) {
@@ -529,6 +506,22 @@ func (e *Engine) AppendDocs(docs []Doc) {
 	if e.mmapUnmap != nil {
 		_ = e.Close()
 	}
+	// 增量基座：同 ID 覆盖记入 prevDrops（扣减旧贡献）。
+	var replaced map[string]struct{}
+	if e.ClusterPipeline && e.clusterState != nil && e.clusterState.agg != nil && !e.HasDelta() && e.Index != nil {
+		for _, doc := range docs {
+			if doc.UnitID == "" {
+				continue
+			}
+			if _, exists := e.Index.LookupUnit(doc.UnitID); exists {
+				if replaced == nil {
+					replaced = make(map[string]struct{}, len(docs))
+				}
+				replaced[doc.UnitID] = struct{}{}
+			}
+		}
+	}
+	e.stageIncrementalBasis(replaced, rebuilt.N)
 	e.Index = rebuilt
 	e.clusterState = nil
 	e.queryScratch = nil
@@ -576,6 +569,14 @@ func (e *Engine) DeleteDocs(unitIDs ...string) int {
 	if !present {
 		return 0
 	}
+	drops := make(map[string]struct{}, len(delSet))
+	if e.Index != nil {
+		for id := range delSet {
+			if _, ok := e.Index.LookupUnit(id); ok {
+				drops[id] = struct{}{}
+			}
+		}
+	}
 	removed := 0
 	var rebuilt *Index
 	if !e.HasDelta() {
@@ -613,6 +614,95 @@ func (e *Engine) DeleteDocs(unitIDs ...string) int {
 	if e.mmapUnmap != nil {
 		_ = e.Close()
 	}
+	e.stageIncrementalBasis(drops, rebuilt.N)
+	e.Index = rebuilt
+	e.clusterState = nil
+	e.queryScratch = nil
+	e.ClearDelta()
+	if e.ClusterPipeline && rebuilt.N > 0 {
+		_ = e.ensureClusterState()
+	}
+	e.syncStage3Plugin()
+	return removed
+}
+
+// ApplyDocs 在一次重建中应用一批删除与新增/更新：先剔除 unitIDs，再并入 upserts。// 语义与顺序调用 DeleteDocs(unitIDs...) 再 AppendDocs(upserts) 完全一致，但索引、
+// 双簇状态与 Phase-3 外挂各只结算一次，混合批（生产 drain 的删除+追加重合场景）
+// 不再付两遍 O(N) 重建。同一 ID 同时出现在两侧时按顺序语义保留 upsert。
+func (e *Engine) ApplyDocs(unitIDs []string, upserts []Doc) int {
+	if e == nil {
+		return 0
+	}
+	delSet := make(map[string]struct{}, len(unitIDs))
+	for _, id := range unitIDs {
+		if id != "" {
+			delSet[id] = struct{}{}
+		}
+	}
+	if len(delSet) == 0 {
+		e.AppendDocs(upserts)
+		return 0
+	}
+	if len(upserts) == 0 || e.HasDelta() || e.Index == nil || e.Index.N == 0 {
+		removed := e.DeleteDocs(unitIDs...)
+		e.AppendDocs(upserts)
+		return removed
+	}
+	removed := 0
+	drops := make(map[string]struct{}, len(delSet)+len(upserts))
+	for id := range delSet {
+		if _, ok := e.Index.LookupUnit(id); ok {
+			removed++
+			drops[id] = struct{}{}
+		}
+	}
+	for _, doc := range upserts {
+		if doc.UnitID == "" {
+			continue
+		}
+		if _, ok := e.Index.LookupUnit(doc.UnitID); ok {
+			drops[doc.UnitID] = struct{}{}
+		}
+	}
+	if removed == 0 {
+		e.AppendDocs(upserts)
+		return 0
+	}
+	// 顺序语义下「删除后紧接同 ID 追加」以追加为准：该 ID 若仍留在 drop 集，
+	// buildIndexWithDeltaDrop 会把 delta 一并排除，因此按需复制并剔除重叠项。
+	drop := delSet
+	copied := false
+	for _, doc := range upserts {
+		if _, overlap := delSet[doc.UnitID]; !overlap {
+			continue
+		}
+		if !copied {
+			clone := make(map[string]struct{}, len(delSet))
+			for id := range delSet {
+				clone[id] = struct{}{}
+			}
+			drop = clone
+			copied = true
+		}
+		delete(drop, doc.UnitID)
+	}
+	rebuilt := e.buildIndexWithDeltaDrop(upserts, drop)
+	if rebuilt == nil {
+		existing := e.ExportDocs()
+		kept := make([]Doc, 0, len(existing))
+		for _, d := range existing {
+			if _, gone := delSet[d.UnitID]; gone {
+				continue
+			}
+			kept = append(kept, d)
+		}
+		kept = append(kept, upserts...)
+		rebuilt = BuildIndex(kept)
+	}
+	if e.mmapUnmap != nil {
+		_ = e.Close()
+	}
+	e.stageIncrementalBasis(drops, rebuilt.N)
 	e.Index = rebuilt
 	e.clusterState = nil
 	e.queryScratch = nil

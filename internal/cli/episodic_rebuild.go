@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
@@ -36,7 +36,7 @@ type EpisodicRebuildReport struct {
 }
 
 // rebuildEpisodicUnits estimates segment units without modifying the corpus.
-func rebuildEpisodicUnits(ctx context.Context, memory *api.Memory, apply bool) (EpisodicRebuildReport, error) {
+func rebuildEpisodicUnits(ctx context.Context, memory *facade.Memory, apply bool) (EpisodicRebuildReport, error) {
 	report := EpisodicRebuildReport{Mode: "dry_run"}
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return report, fmt.Errorf("episodic rebuild requires an open local store")

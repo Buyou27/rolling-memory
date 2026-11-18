@@ -543,8 +543,8 @@ func layersDeleteHandler(c *gin.Context) {
 	}))
 }
 
-// deleteMemoryUnitsByPKs 在本地金库中按主键删除记忆单元，并完整维护 FTS5 映射、
-// 谱系行、防同步复活墓碑（thin_vault_deleted_units）、背景文件记账收敛与 L3 引证级联置 stale。
+// deleteMemoryUnitsByPKs 在本地金库中按主键删除记忆单元，并完整维护谱系行、
+// 防同步复活墓碑（thin_vault_deleted_units）、背景文件记账收敛与 L3 引证级联置 stale。
 func deleteMemoryUnitsByPKs(db *sql.DB, cleanPKs []string) (deleted int, invalidatedNoetic int, purgedIDs []string, err error) {
 	return deleteMemoryUnits(db, cleanPKs, false)
 }

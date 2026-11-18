@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -38,7 +38,7 @@ func boolPtr(value bool) *bool { return &value }
 
 func intPtr(value int) *int { return &value }
 
-func newMemory(t *testing.T) *api.Memory {
+func newMemory(t *testing.T) *facade.Memory {
 	t.Helper()
 	restore := clock.SetForTest(time.Unix(testNow, 0), 1_000_000_000)
 	t.Cleanup(restore)
@@ -56,7 +56,7 @@ func newMemory(t *testing.T) *api.Memory {
 		t.Fatalf("config: %v", err)
 	}
 	cfg.Log = filepath.Join(directory, "state", "rolling-memory.log")
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
 	}
@@ -73,7 +73,7 @@ func newMemory(t *testing.T) *api.Memory {
 	return memory
 }
 
-func writeFact(t *testing.T, memory *api.Memory, content, s, x string, o any, extra map[string]any) map[string]any {
+func writeFact(t *testing.T, memory *facade.Memory, content, s, x string, o any, extra map[string]any) map[string]any {
 	t.Helper()
 	assertion := map[string]any{
 		"s": map[string]any{"label": s},
@@ -83,7 +83,7 @@ func writeFact(t *testing.T, memory *api.Memory, content, s, x string, o any, ex
 	for key, value := range extra {
 		assertion[key] = value
 	}
-	receipt, err := memory.Remember(api.RememberRequest{
+	receipt, err := memory.Remember(facade.RememberRequest{
 		Content: strPtr(content), AnchorText: strPtr(content), Assertion: assertion,
 		Author: "user", AutoSync: boolPtr(false),
 	})
@@ -93,7 +93,7 @@ func writeFact(t *testing.T, memory *api.Memory, content, s, x string, o any, ex
 	return receipt
 }
 
-func seedGraph(t *testing.T, memory *api.Memory) {
+func seedGraph(t *testing.T, memory *facade.Memory) {
 	t.Helper()
 	writeFact(t, memory, "我养了一只猫，叫小白。", "我", "养", map[string]any{"label": "小白"},
 		map[string]any{"t_valid_from": "2026-03-02", "world": "actual", "carrier": "real", "locus": "北京"})
@@ -107,9 +107,9 @@ func seedGraph(t *testing.T, memory *api.Memory) {
 		map[string]any{"world": "actual", "carrier": "real"})
 }
 
-func recallCue(t *testing.T, memory *api.Memory, cue string, includeRaw bool) *recall.Result {
+func recallCue(t *testing.T, memory *facade.Memory, cue string, includeRaw bool) *recall.Result {
 	t.Helper()
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: cue, IncludeRaw: boolPtr(includeRaw), RawLimit: 5, Depth: 2,
 	})
 	if err != nil {
@@ -275,7 +275,7 @@ func TestPrivateRawIsNotDelivered(t *testing.T) {
 	if len(deliverable.RawHits) != 0 {
 		t.Fatalf("deliverable raw hits = %#v", deliverable.RawHits)
 	}
-	owner, err := memory.Recall(api.RecallRequest{
+	owner, err := memory.Recall(facade.RecallRequest{
 		Cue: "绝密线索 XYZ", Reader: strPtr("owner"), IncludeRaw: boolPtr(true),
 	})
 	if err != nil {
@@ -294,7 +294,7 @@ func TestCapsAndProbe(t *testing.T) {
 	for _, object := range []string{"咖啡", "茶", "牛奶", "果汁", "汽水"} {
 		writeFact(t, memory, "我喜欢"+object+"。", "我", "喜欢", map[string]any{"label": object}, nil)
 	}
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "我 喜欢", IncludeRaw: boolPtr(false),
 		CapsBands: intPtr(1), CapsNodes: intPtr(2),
 	})
@@ -347,7 +347,7 @@ func TestSessionFilter(t *testing.T) {
 		{"s1", "老张养了一只猫。", "猫"},
 		{"s2", "老张养了一只狗。", "狗"},
 	} {
-		if _, err := memory.Remember(api.RememberRequest{
+		if _, err := memory.Remember(facade.RememberRequest{
 			Content: strPtr(item.content), AnchorText: strPtr(item.content),
 			Assertion: map[string]any{
 				"s": map[string]any{"label": "老张"}, "x": "养",
@@ -359,7 +359,7 @@ func TestSessionFilter(t *testing.T) {
 		}
 	}
 	session := "s1"
-	if result, err := memory.Recall(api.RecallRequest{Cue: "老张", Session: &session, IncludeRaw: boolPtr(false)}); err == nil || result != nil {
+	if result, err := memory.Recall(facade.RecallRequest{Cue: "老张", Session: &session, IncludeRaw: boolPtr(false)}); err == nil || result != nil {
 		t.Fatalf("graph facade must reject unsupported session filtering: %#v, %v", result, err)
 	}
 	result, err := recall.Recall(memory.Store, memory.Config, recall.Options{
@@ -420,7 +420,7 @@ func TestOffsetPagination(t *testing.T) {
 	memory := newMemory(t)
 	seedGraph(t, memory)
 	first := recallCue(t, memory, "我 小白", false)
-	second, err := memory.Recall(api.RecallRequest{
+	second, err := memory.Recall(facade.RecallRequest{
 		Cue: "我 小白", IncludeRaw: boolPtr(false), Offset: 1,
 	})
 	if err != nil {
@@ -439,7 +439,7 @@ func TestAsOfHidesLaterAssertions(t *testing.T) {
 	memory := newMemory(t)
 	writeFact(t, memory, "我搬到北京。", "我", "住在", map[string]any{"label": "北京"},
 		map[string]any{"t_valid_from": "2026-06-01"})
-	if result, err := memory.Recall(api.RecallRequest{Cue: "北京", AsOf: "2026-03-01", IncludeRaw: boolPtr(false)}); err == nil || result != nil {
+	if result, err := memory.Recall(facade.RecallRequest{Cue: "北京", AsOf: "2026-03-01", IncludeRaw: boolPtr(false)}); err == nil || result != nil {
 		t.Fatalf("graph facade must reject unsupported asof filtering: %#v, %v", result, err)
 	}
 	before, err := recall.Recall(memory.Store, memory.Config, recall.Options{
@@ -531,7 +531,7 @@ func TestConflictsSurfaceOnTheReadSide(t *testing.T) {
 // TestPrivateAssertionIsNotDelivered verifies audience filtering between deliverable and owner readers.
 func TestPrivateAssertionIsNotDelivered(t *testing.T) {
 	memory := newMemory(t)
-	receipt, err := memory.Remember(api.RememberRequest{
+	receipt, err := memory.Remember(facade.RememberRequest{
 		Content:    strPtr("绝密信息：老张的暗号是蓝鸟。"),
 		AnchorText: strPtr("老张的暗号是蓝鸟"),
 		Assertion: map[string]any{
@@ -549,7 +549,7 @@ func TestPrivateAssertionIsNotDelivered(t *testing.T) {
 	if !recallCue(t, memory, "绝密 暗号", false).Absent {
 		t.Fatal("deliverable reader must not see a private assertion")
 	}
-	owner, err := memory.Recall(api.RecallRequest{
+	owner, err := memory.Recall(facade.RecallRequest{
 		Cue: "绝密 暗号", Reader: strPtr("owner"), IncludeRaw: boolPtr(false),
 	})
 	if err != nil {
@@ -569,7 +569,7 @@ func TestMonthOnlyDateWindowSupplementsRaw(t *testing.T) {
 		store.TraceOptions{Session: "month-window", Author: "user", OccurredAt: &occurred}); err != nil {
 		t.Fatalf("trace: %v", err)
 	}
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "zebra migration in July", IncludeRaw: boolPtr(false), RawLimit: 5,
 	})
 	if err != nil {
@@ -593,7 +593,7 @@ func TestImplausibleYearWindowIsRejected(t *testing.T) {
 		store.TraceOptions{Session: "year-window", Author: "user", OccurredAt: &occurred}); err != nil {
 		t.Fatalf("trace: %v", err)
 	}
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "Cyberpunk 2077 zebra migration", IncludeRaw: boolPtr(false),
 	})
 	if err != nil {
@@ -614,7 +614,7 @@ func TestExplicitRawSupplementSurvivesDenseGraph(t *testing.T) {
 		store.TraceOptions{Session: "raw", Author: "user"}); err != nil {
 		t.Fatalf("trace: %v", err)
 	}
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "unique zebra", IncludeRaw: boolPtr(true), RawLimit: 3,
 	})
 	if err != nil {
@@ -642,7 +642,7 @@ func TestSessionFilterLimitsRawHits(t *testing.T) {
 		}
 	}
 	session := "s1"
-	if result, err := memory.Recall(api.RecallRequest{Cue: "unique zebra", Session: &session, IncludeRaw: boolPtr(true), RawLimit: 5}); err == nil || result != nil {
+	if result, err := memory.Recall(facade.RecallRequest{Cue: "unique zebra", Session: &session, IncludeRaw: boolPtr(true), RawLimit: 5}); err == nil || result != nil {
 		t.Fatalf("graph facade must reject unsupported session filtering: %#v, %v", result, err)
 	}
 	result, err := recall.Recall(memory.Store, memory.Config, recall.Options{
@@ -721,7 +721,7 @@ func TestGraphLexicalSynergyAndChainRowCapSelection(t *testing.T) {
 		text := "Caroline had a casual chat " + num + " today."
 		writeFact(t, memory, text, "Caroline", "states", map[string]any{"literal": "casual chat " + num}, map[string]any{"occurred_at": int64(1700001000 + i)})
 	}
-	res, err := memory.Recall(api.RecallRequest{
+	res, err := memory.Recall(facade.RecallRequest{
 		Cue:       "Where did Caroline move from?",
 		CapsBands: intPtr(4),
 		CapsNodes: intPtr(30),

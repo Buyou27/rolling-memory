@@ -43,6 +43,7 @@ const (
 	streamKindTerminal  streamKind = "terminal"
 	streamKindROI       streamKind = "roi"
 	streamKindEval      streamKind = "eval"
+	streamKindSystem    streamKind = "system"
 )
 
 // streamKey 是一条共享流的身份：同一 key 的全部连接共享一个 watcher，
@@ -432,6 +433,8 @@ func buildStreamHub(key streamKey) *streamHub {
 		return newROIStreamHub(key, home)
 	case streamKindEval:
 		return newEvalStreamHub(key)
+	case streamKindSystem:
+		return newSystemStreamHub(key, home)
 	}
 	return nil
 }

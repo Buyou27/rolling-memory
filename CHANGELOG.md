@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-19
+
+### Added
+
+- **OpenCode integration**: `rolling-memory install opencode` now wires the skill and the local MCP server into OpenCode V2 with its native configuration shape (`mcp.servers` → `type: local`, array `command`, `environment`), including project-scoped installs (`--project`) and `--check` / `--uninstall` support. The adapter writes the user skill root (`~/.config/opencode/skills`, honoring `XDG_CONFIG_HOME`) or `.opencode/skills` for projects, and leaves unrelated providers, models, and servers untouched.
+
 ### Changed
 
+- Disk maintenance keeps the engine's on-disk index cache by default. Deleting that cache forced the next recall to rebuild the whole index — minutes of work and a multi-GB memory peak — so freeing the space is now an explicit opt-in (`rmem maintain clean --purge-engine-cache --apply --yes`), and the read-only scan reports the cache separately as kept instead of counting it as reclaimable space.
 - Remembering a long text now stores it as several sentence-aligned memory units of at most 8,192 tokens each (identical chunks collapse), so oversized pastes stay recallable and never hit the single-payload ceiling; a text that fits within one unit keeps its existing memory id.
 
 ### Fixed
@@ -98,7 +105,9 @@ Initial public release.
 - **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
 - **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
 
-[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/rocareer/rolling-memory/compare/v0.0.4...v0.0.5
+[0.0.4]: https://github.com/rocareer/rolling-memory/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/rocareer/rolling-memory/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/rocareer/rolling-memory/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/rocareer/rolling-memory/releases/tag/v0.0.1

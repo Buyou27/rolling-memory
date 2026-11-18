@@ -109,6 +109,8 @@ Open the console and choose **System → Memory Service** in the sidebar:
 | Cache | Drop in-memory index snapshots and read caches (regenerable; stored memory is untouched) | `rmem engine invalidate` |
 | Disk Maintenance | Read-only scan, backup/cache cleanup, vault compaction | `rmem maintain status\|clean\|compact` |
 
+Disk maintenance keeps the engine's on-disk index cache by default. A missing cache makes the next recall rebuild the whole index (minutes of work and a multi-GB memory peak), so freeing that space is an explicit opt-in: `rmem maintain clean --purge-engine-cache --apply --yes`.
+
 Stopping the daemon blocks nothing: the next recall or background sync starts it again automatically.
 
 ---

@@ -238,7 +238,7 @@ func TestCLIInstallListDryRunAndCheck(t *testing.T) {
 	}
 	wantDetected := map[string]bool{
 		"zcode": true, "claude-code": true, "codex": true, "dsh": true, "codebuddy": true,
-		"cursor": false, "windsurf": false, "cline": false, "workbuddy": false, "doubao": false,
+		"opencode": false, "cursor": false, "windsurf": false, "cline": false, "workbuddy": false, "doubao": false,
 	}
 	if len(rows) != len(wantDetected) {
 		t.Fatalf("install --list rows = %d, want %d", len(rows), len(wantDetected))

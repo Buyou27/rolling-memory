@@ -72,7 +72,7 @@ func TestGoldenReplay(t *testing.T) {
 			}
 			compared, err := runner.CompareProduced()
 			if err != nil {
-				t.Fatalf("compare: %v", err)
+				t.Fatalf("compare: %v\n%s", err, ResealHint)
 			}
 			if compared == 0 {
 				t.Fatal("no expectation files compared")
@@ -172,7 +172,7 @@ func TestGoldenFrozenReadPaths(t *testing.T) {
 			}
 			compared, err := runner.CompareProduced()
 			if err != nil {
-				t.Fatalf("compare: %v", err)
+				t.Fatalf("compare: %v\n%s", err, ResealHint)
 			}
 			if compared == 0 {
 				// A scenario whose only expectations are writes has nothing to

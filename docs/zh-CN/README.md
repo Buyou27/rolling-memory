@@ -16,7 +16,7 @@
 | **[DECLARATION.md](DECLARATION.md)** | 开源边界（本仓库发布什么、不发布什么）、贡献入口与按原样（AS IS）免责声明 | [../../DECLARATION.md](../../DECLARATION.md) |
 | **[faq.md](faq.md)** | 常见问答（FAQ）：与 `grep` / `ripgrep`、向量 RAG、LLM 抽取服务以及各家 Harness 自带记忆功能（`CLAUDE.md` / `MEMORY.md` / Rules）的区别与互补配合 | [docs/faq.md](../faq.md) |
 | **[mcp.md](mcp.md)** | MCP 单工具契约：`recall`（回忆）的完整参数、回执与后台自动收录规范 | [docs/mcp.md](../mcp.md) |
-| **[harness.md](harness.md)** | 多宿主一键接入指南：ZCode / Claude Code / Codex / dsh / CodeBuddy 及 Cursor / Windsurf / Cline / WorkBuddy / 豆包 的注册矩阵与 `install --check` 自检 | [docs/harness.md](../harness.md) |
+| **[harness.md](harness.md)** | 多宿主一键接入指南：ZCode / Claude Code / Codex / OpenCode / dsh / CodeBuddy 及 Cursor / Windsurf / Cline / WorkBuddy / 豆包 的注册矩阵与 `install --check` 自检 | [docs/harness.md](../harness.md) |
 | **[usb-portable.md](usb-portable.md)** | U 盘便携模式指南：现实适用前提（跨电脑开发同一项目）、`rmem init --portable` 一键制盘、挂载点漂移自愈锚点与 `rmem eject` 安全拔盘 | [docs/usb-portable.md](../usb-portable.md) |
 | **[plugin-console.md](plugin-console.md)** | Web 管理控制台指南：本地管理面板、WebSocket 实时流、粗略 ROI 趋势估算模块、体验评价 Hook 开关、记忆图谱与评测实验室 | [docs/plugin-console.md](../plugin-console.md) |
 | **[console-terminal.md](console-terminal.md)** | Web 控制台内置命令行（终端）使用指南：入口与界面构成、recall/Hook 实时流与水合正文回显、快捷命令与常用命令对照表（status / doctor / recent / check / `sync prune` 只读预演）、白名单执行与显式确认边界 | [docs/console-terminal.md](../console-terminal.md) |

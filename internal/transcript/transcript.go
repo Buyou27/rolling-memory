@@ -250,7 +250,7 @@ func looksLikeJSONL(path string, lines []string) bool {
 		return false
 	}
 	for _, line := range lines {
-		stripped := pyStrip(line)
+		stripped := speech.TrimSpace(line)
 		if stripped != "" {
 			return strings.HasPrefix(stripped, "{")
 		}
@@ -259,7 +259,7 @@ func looksLikeJSONL(path string, lines []string) bool {
 }
 
 func parseJSONLLine(line string, index int, defaultSession string) *Message {
-	stripped := pyStrip(line)
+	stripped := speech.TrimSpace(line)
 	if stripped == "" {
 		return nil
 	}
@@ -433,25 +433,6 @@ func expandUser(path string) string {
 		}
 	}
 	return filepath.Clean(path)
-}
-
-func pyStrip(value string) string {
-	return strings.TrimFunc(value, isPySpace)
-}
-
-func isPySpace(char rune) bool {
-	switch char {
-	case '\t', '\n', '\v', '\f', '\r', ' ', '\u0085', '\u00a0', '\u1680',
-		'\u2028', '\u2029', '\u202f', '\u205f', '\u3000':
-		return true
-	}
-	if char >= '\u001c' && char <= '\u001f' {
-		return true
-	}
-	if char >= '\u2000' && char <= '\u200a' {
-		return true
-	}
-	return false
 }
 
 func truthy(value any) bool {

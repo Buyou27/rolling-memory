@@ -151,6 +151,7 @@ overview:
     reconcileAllBtn: Reconcile All 3 Layers
     reconcileLayerBtn: Reconcile Layer
     checkHealthBtn: Re-check
+    systemServiceBtn: System Service
     harnessesTitle: Coding Harness Environment Detection & Dialogue Scan (Claude Code / ZCode / Codex)
     healthChecksTitle: 5-Dimension Memory Health & Local ⇄ Cloud 3-Layer Alignment
     healthChecksTitleLocal: 5-Dimension Memory Health & Local 3-Layer Vault
@@ -630,3 +631,70 @@ system:
     cleanConfirm: Removes expired backups and regenerable caches (stored memory is untouched). Continue?
     compactConfirm: Compaction stops the daemon, rebuilds the database file and restarts it; recall is unavailable meanwhile. Continue?
     doneToast: Maintenance completed
+    # —— dashboard (live frame / KPIs / details) ——
+    modePill: local plaintext local_plain
+    liveConnected: Live
+    liveConnecting: Connecting
+    liveReconnecting: Reconnecting
+    liveDisabled: Live channel unavailable
+    refreshFailedToast: Refresh failed; the previous reading is kept
+    statusError: Error
+    detailsTitle: Runtime Details
+    startedAtLbl: Started At
+    socketLbl: Socket
+    dbPathLbl: Database
+    configPathLbl: Config File
+    configMatchLbl: Config Fingerprint
+    configMatchOk: Matches
+    configMatchMismatch: Mismatch
+    healthErrorTitle: Daemon Error
+    retryBtn: Retry
+    offlineEmptyTitle: Daemon Not Running
+    offlineEmptyDesc: The next recall or background sync starts it automatically; you can also start it manually
+    kpiHeapOfLimit: of cap
+    kpiSysMemLbl: Process Memory
+    kpiSysOfRam: of physical RAM
+    kpiNotRunning: Not running
+    presetLbl: Cap Preset
+    presetCustom: Custom
+    customPlaceholder: e.g. 768MiB
+    restartBanner: Cap saved; restart the daemon to apply it
+    restartNowBtn: Restart Now
+    memoryDirtyHint: Unsaved changes
+    keepLbl: Backup Retention
+    keepDefault: Engine Default
+    keepOption: '{n} copies'
+    scanFirstHint: 'Not scanned yet: click "Scan Space" to read reclaimable space and details'
+    logsLbl: Logs
+    vaultSizeLbl: Vault Size
+    vaultDetailTitle: Vault Breakdown
+    backupsItemsLbl: Old Backups
+    cachesItemsLbl: Regenerable Caches
+    logsItemsLbl: Log Files
+    itemsCount: '{n} items'
+    keepPolicyLbl: Retention Policy
+    receiptLbl: Receipt
+    copyBtn: Copy
+    copiedToast: Copied to clipboard
+    detailTitle: Space Details
+    lastClearedLbl: Last Cleared
+    neverCleared: Never cleared
+    infoTitle: System Info
+    modeLbl: Runtime Mode
+    modeValue: local plaintext local_plain
+    cliTitle: Equivalent CLI Commands
+    cliSub: Run directly in a terminal
+    cliStatusLbl: Daemon status
+    cliLimitLbl: Set memory cap
+    cliMaintainLbl: Space inspection
+    confirmOk: Run
+    confirmCancel: Cancel
+    staleBadge: Reading is stale
+    lastUpdatedLbl: Last updated
+    envOverrideTitle: Environment variable overrides this page
+    envOverrideDesc: 'The daemon sees GOMEMLIMIT={value}, which wins over the configured cap. Clear that variable and restart the daemon to make this page''s setting effective.'
+    openOverviewBtn: Reclaim & self-heal runs in the Memory Overview maintenance card →
+    linksTitle: Related Entry Points
+    linksSub: The Memory Console owns runtime switches and data assets; this page owns the process, resources and maintenance
+    openConsoleBtn: Memory Console (runtime switches · data assets) →
+    openOverviewIndexBtn: Memory Overview (browse · maintenance · reclaim) →

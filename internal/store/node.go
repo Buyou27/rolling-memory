@@ -4,14 +4,17 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 // Node returns one node row.
@@ -78,15 +81,15 @@ func (s *Store) NodeByLabel(scope, label, kind string) (Node, bool, error) {
 
 // EnsureNode returns the id of a live node, creating or reviving it.
 func (s *Store) EnsureNode(scope, kind, label string, o NodeOptions) (string, error) {
-	if !containsValue(ids.NodeKinds, kind) {
-		return "", fmt.Errorf("invalid node kind %s", pyRepr(kind))
+	if !slices.Contains(ids.NodeKinds, kind) {
+		return "", fmt.Errorf("invalid node kind %s", ids.QuotePyString(kind))
 	}
 	clean := pyStrip(label)
 	if clean == "" {
 		return "", fmt.Errorf("empty node label")
 	}
-	audience := defaultIfEmpty(o.Audience, "shared")
-	status := defaultIfEmpty(o.Status, "provisional")
+	audience := cmp.Or(o.Audience, "shared")
+	status := cmp.Or(o.Status, "provisional")
 	norm := ids.NormalizeLabel(clean)
 	existing, found, err := s.NodeByLabel(scope, clean, kind)
 	if err != nil {
@@ -179,7 +182,7 @@ func (s *Store) AddAlias(nodeID, alias, source string) (bool, error) {
 	if clean == "" {
 		return false, nil
 	}
-	source = defaultIfEmpty(source, "manual")
+	source = cmp.Or(source, "manual")
 	norm := ids.NormalizeLabel(clean)
 	affected, err := execCount(s.conn,
 		"INSERT OR IGNORE INTO node_alias(node_id, alias, norm_alias, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -207,7 +210,7 @@ func (s *Store) ReconcileAliasDuplicateNodes(scope, keepNodeID, alias, source st
 	if strings.TrimSpace(scope) == "" || strings.TrimSpace(keepNodeID) == "" || clean == "" {
 		return 0, nil
 	}
-	source = defaultIfEmpty(source, "remember")
+	source = cmp.Or(source, "remember")
 	norm := ids.NormalizeLabel(clean)
 	if norm == "" {
 		return 0, nil
@@ -242,7 +245,7 @@ func (s *Store) ReconcileAliasDuplicateNodes(scope, keepNodeID, alias, source st
 			for _, ar := range aliasRows {
 				al := pyStrip(mapString(ar, "alias"))
 				na := mapString(ar, "norm_alias")
-				src := defaultIfEmpty(mapString(ar, "source"), source)
+				src := cmp.Or(mapString(ar, "source"), source)
 				if al == "" || na == "" {
 					continue
 				}
@@ -266,7 +269,7 @@ func (s *Store) ReconcileAliasDuplicateNodes(scope, keepNodeID, alias, source st
 				`INSERT OR IGNORE INTO meta_edge
 				   (scope, meta_kind, lhs_id, rhs_id, status, evidence_anchor, created_at, created_by)
 				 VALUES (?, 'same-as', ?, ?, 'active', ?, ?, ?)`,
-				scope, keepNodeID, dupID, "alias-reconcile:"+firstChars(dupID, 8), now, source,
+				scope, keepNodeID, dupID, "alias-reconcile:"+text.FirstRunes(dupID, 8), now, source,
 			); err != nil {
 				return err
 			}

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
@@ -30,7 +30,7 @@ func TestEvaluateCrossHarnessEfficacy(t *testing.T) {
 	}
 	cfg.Log = logPath
 
-	mem, err := api.New(cfg)
+	mem, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestEvaluateCrossHarnessEfficacy(t *testing.T) {
 	}
 
 	// Seed a high-value assertion with a code coordinate.
-	_, err = mem.Remember(api.RememberRequest{
+	_, err = mem.Remember(facade.RememberRequest{
 		Content: strPtr("帮助中心路由定为 views/admin/help/index.vue 与 repos.vue。"),
 		Assertion: map[string]any{
 			"s":          map[string]any{"label": "帮助中心路由"},
@@ -128,7 +128,7 @@ func TestEvaluateCrossHarnessEfficacy(t *testing.T) {
 
 	// 5. Simulate an L2 piggybacked self-healing writeback (`closes_prior: true`) in a live session.
 	now5 := now + 40
-	_, err = mem.Remember(api.RememberRequest{
+	_, err = mem.Remember(facade.RememberRequest{
 		Content: strPtr("帮助中心路由已迁移至 views/admin/help/v2.vue。"),
 		Assertion: map[string]any{
 			"s":            map[string]any{"label": "帮助中心路由"},
@@ -153,7 +153,7 @@ func TestEvaluateCrossHarnessEfficacy(t *testing.T) {
 	//    - Turn 1: user asks general architecture question; assistant proposes editing views/admin/dashboard.vue;
 	//    - Turn 2: user types ONLY "同意 实施" (4 chars). Because prior assistant reply named views/admin/dashboard.vue
 	//      and its band has NOT yet been injected in this session, Delta-Band Carry-Over injects it!
-	_, err = mem.Remember(api.RememberRequest{
+	_, err = mem.Remember(facade.RememberRequest{
 		Content: strPtr("实时看板图标规范落位于 views/admin/dashboard.vue 必须使用全小写 el-circle-check。"),
 		Assertion: map[string]any{
 			"s":          map[string]any{"label": "实时看板图标规范"},

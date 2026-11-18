@@ -7,6 +7,7 @@ package store
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,10 +36,10 @@ func TestClosureCapsHopsAndFanout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("closure: %v", err)
 	}
-	if !containsValue(closure, first) || !containsValue(closure, third) {
+	if !slices.Contains(closure, first) || !slices.Contains(closure, third) {
 		t.Fatalf("closure = %v, want 甲 and 丙 reachable", closure)
 	}
-	if containsValue(closure, fourth) {
+	if slices.Contains(closure, fourth) {
 		t.Fatalf("closure = %v, want 丁 (3 hops) pruned by the hop cap", closure)
 	}
 

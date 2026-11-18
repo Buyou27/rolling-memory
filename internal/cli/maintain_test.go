@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
 // maintainTestWrite 在目录里落一个指定体积与年龄的文件。
@@ -113,20 +113,38 @@ func TestMaintainScanCachesOnlyManagedPatterns(t *testing.T) {
 	csrGen := maintainTestWrite(t, dbDir, "memory.db.zcsr.gen", time.Hour, 4)
 
 	byPath := map[string]maintainItem{}
-	for _, item := range maintainScanCaches(stateDir, dbPath, now) {
+	for _, item := range maintainScanCaches(stateDir, now) {
 		byPath[item.Path] = item
 	}
 	if byPath[part].Action != "clear" || byPath[turn].Action != "clear" {
 		t.Fatalf("managed caches must be clearable: part=%q turn=%q", byPath[part].Action, byPath[turn].Action)
 	}
-	if byPath[csr].Action != "clear" || byPath[csrGen].Action != "clear" {
-		t.Fatalf("vault disk-cluster cache must be clearable: csr=%q gen=%q", byPath[csr].Action, byPath[csrGen].Action)
+	if _, listed := byPath[csr]; listed {
+		t.Fatalf("engine disk-cluster cache is not a state cache; must not be listed")
+	}
+	if _, listed := byPath[csrGen]; listed {
+		t.Fatalf("engine disk-cluster fingerprint is not a state cache; must not be listed")
 	}
 	if _, listed := byPath[ledger]; listed {
 		t.Fatalf("roi ledger is live state, not a cache; must not be listed")
 	}
 	if _, listed := byPath[backup]; listed {
 		t.Fatalf("non-matching suffix must not be listed")
+	}
+
+	kept := map[string]maintainItem{}
+	for _, item := range maintainScanEngineCache(dbPath, false, now) {
+		kept[item.Path] = item
+	}
+	if kept[csr].Action != "keep" || kept[csrGen].Action != "keep" {
+		t.Fatalf("engine cache must be kept by default: csr=%q gen=%q", kept[csr].Action, kept[csrGen].Action)
+	}
+	purged := map[string]maintainItem{}
+	for _, item := range maintainScanEngineCache(dbPath, true, now) {
+		purged[item.Path] = item
+	}
+	if purged[csr].Action != "clear" || purged[csrGen].Action != "clear" {
+		t.Fatalf("explicit purge must mark the engine cache clearable: csr=%q gen=%q", purged[csr].Action, purged[csrGen].Action)
 	}
 }
 
@@ -200,6 +218,8 @@ func TestMaintainStatusAndCleanEndToEnd(t *testing.T) {
 	maintainTestWrite(t, binDir, "rmem.bak-0202", 40*time.Hour, 100)
 	maintainTestWrite(t, binDir, "rmem.bak-0303", 2*time.Hour, 100)
 	cachePath := maintainTestWrite(t, stateDir, "native_part_cache_v6.json", time.Hour, 50)
+	engineCSR := maintainTestWrite(t, dbDir, "memory.db.zcsr", time.Hour, 70)
+	engineGen := maintainTestWrite(t, dbDir, "memory.db.zcsr.gen", time.Hour, 7)
 
 	code, stdout, stderr := maintainRun(t, "maintain", "status", "--json", "--db", dbPath)
 	if code != 0 {
@@ -219,6 +239,16 @@ func TestMaintainStatusAndCleanEndToEnd(t *testing.T) {
 	caches, _ := report["caches"].(map[string]any)
 	if got := int(caches["reclaimable_bytes"].(float64)); got != 50 {
 		t.Fatalf("caches reclaimable=%d, want 50", got)
+	}
+	engineCache, _ := report["engine_cache"].(map[string]any)
+	if engineCache == nil {
+		t.Fatalf("status must carry an engine_cache section: %s", stdout)
+	}
+	if got := int(engineCache["reclaimable_bytes"].(float64)); got != 0 {
+		t.Fatalf("engine cache reclaimable=%d, want 0 (kept by default)", got)
+	}
+	if got := int(engineCache["total_bytes"].(float64)); got != 77 {
+		t.Fatalf("engine cache total=%d, want 77", got)
 	}
 	reclaim, _ := report["reclaimable"].(map[string]any)
 	if reclaim == nil || reclaim["total_bytes"] == nil {
@@ -257,6 +287,12 @@ func TestMaintainStatusAndCleanEndToEnd(t *testing.T) {
 	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
 		t.Fatalf("cache must be cleared with --caches")
 	}
+	if _, err := os.Stat(engineCSR); err != nil {
+		t.Fatalf("engine cache must survive a --caches cleanup: %v", err)
+	}
+	if _, err := os.Stat(engineGen); err != nil {
+		t.Fatalf("engine cache fingerprint must survive a --caches cleanup: %v", err)
+	}
 	result := map[string]any{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("clean JSON: %v", err)
@@ -267,6 +303,28 @@ func TestMaintainStatusAndCleanEndToEnd(t *testing.T) {
 	if got := int(result["freed_bytes"].(float64)); got != 150 {
 		t.Fatalf("freed_bytes=%d, want 150", got)
 	}
+
+	// 显式 --purge-engine-cache：此时才删除引擎磁盘簇缓存。
+	code, stdout, stderr = maintainRun(t, "maintain", "clean", "--json", "--db", dbPath, "--apply", "--yes", "--purge-engine-cache")
+	if code != 0 {
+		t.Fatalf("clean purge apply exit=%d stderr=%s", code, stderr)
+	}
+	if _, err := os.Stat(engineCSR); !os.IsNotExist(err) {
+		t.Fatalf("engine cache must be removed with --purge-engine-cache")
+	}
+	if _, err := os.Stat(engineGen); !os.IsNotExist(err) {
+		t.Fatalf("engine cache fingerprint must be removed with --purge-engine-cache")
+	}
+	purged := map[string]any{}
+	if err := json.Unmarshal([]byte(stdout), &purged); err != nil {
+		t.Fatalf("purge JSON: %v", err)
+	}
+	if got := int(purged["removed"].(float64)); got != 2 {
+		t.Fatalf("removed=%d, want 2 (engine cache + fingerprint)", got)
+	}
+	if got := int(purged["freed_bytes"].(float64)); got != 77 {
+		t.Fatalf("freed_bytes=%d, want 77", got)
+	}
 }
 
 func TestMaintainCompactPreviewThenApply(t *testing.T) {
@@ -275,7 +333,7 @@ func TestMaintainCompactPreviewThenApply(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		t.Fatalf("mkdir vault: %v", err)
 	}
-	memory, err := api.New(&config.Config{DB: dbPath, Scope: "mem:maintain-test", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: dbPath, Scope: "mem:maintain-test", Mode: "local"})
 	if err != nil {
 		t.Fatalf("seed vault: %v", err)
 	}

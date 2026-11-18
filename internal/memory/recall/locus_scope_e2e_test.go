@@ -6,7 +6,7 @@ package recall_test
 import (
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 )
 
@@ -34,7 +34,7 @@ func TestRecallLocusAnchorPromotesSameWorkspaceDelivery(t *testing.T) {
 	}
 
 	for _, anchor := range []string{"Rolling-Memory", "Other-Workspace"} {
-		result, err := memory.Recall(api.RecallRequest{Cue: "[" + anchor + "] 首次进入控制台卡住的守卫记录"})
+		result, err := memory.Recall(facade.RecallRequest{Cue: "[" + anchor + "] 首次进入控制台卡住的守卫记录"})
 		if err != nil {
 			t.Fatalf("recall with anchor %q: %v", anchor, err)
 		}
@@ -46,7 +46,7 @@ func TestRecallLocusAnchorPromotesSameWorkspaceDelivery(t *testing.T) {
 		}
 	}
 
-	result, err := memory.Recall(api.RecallRequest{Cue: "首次进入控制台卡住的守卫记录"})
+	result, err := memory.Recall(facade.RecallRequest{Cue: "首次进入控制台卡住的守卫记录"})
 	if err != nil {
 		t.Fatalf("recall without anchor: %v", err)
 	}

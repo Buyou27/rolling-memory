@@ -103,19 +103,35 @@ func TestNaturalDecayPrefixCountCases(t *testing.T) {
 	}
 }
 
-func TestNaturalDecayEnergiesPrefixCountScaleInvariance(t *testing.T) {
-	base := []float64{24.0, 6.2, 5.1, 4.0}
+func TestNaturalDecayPrefixCountScaleInvariance(t *testing.T) {
+	base := []Hit{{Energy: 24.0, Direct: 24.0}, {Energy: 6.2, Direct: 1.0}, {Energy: 5.1, Direct: 0.5}, {Energy: 4.0, Direct: 0.2}}
 	for _, scale := range []float64{0.25, 1.0, 3.5} {
-		scaled := make([]float64, len(base))
-		for i, v := range base {
-			scaled[i] = scale * v
+		scaled := make([]Hit, len(base))
+		for i, h := range base {
+			scaled[i] = Hit{Energy: scale * h.Energy, Direct: scale * h.Direct}
 		}
-		if got, want := NaturalDecayEnergiesPrefixCount(scaled, 64), 1; got != want {
-			t.Fatalf("scale %v: NaturalDecayEnergiesPrefixCount = %d, want %d", scale, got, want)
+		if got, want := NaturalDecayPrefixCount(scaled, 64), 1; got != want {
+			t.Fatalf("scale %v: NaturalDecayPrefixCount = %d, want %d", scale, got, want)
 		}
 	}
-	if got := NaturalDecayEnergiesPrefixCount([]float64{0, 0}, 64); got != 0 {
+	zero := []Hit{{Energy: 0, Direct: 0}, {Energy: 0, Direct: 0}}
+	if got := NaturalDecayPrefixCount(zero, 64); got != 0 {
 		t.Fatalf("zero energies must yield an empty window, got %d", got)
+	}
+}
+
+func TestDecayReferenceOfFallsBackToTotalEnergy(t *testing.T) {
+	if got := DecayReferenceOf(3, 9); got != 3 {
+		t.Fatalf("positive direct energy is the reference, got %v", got)
+	}
+	if got := DecayReferenceOf(0, 9); got != 9 {
+		t.Fatalf("zero direct energy falls back to total energy, got %v", got)
+	}
+	if got := DecayReferenceOf(math.Inf(1), 9); got != 9 {
+		t.Fatalf("infinite direct energy falls back to total energy, got %v", got)
+	}
+	if got := DecayReferenceOf(0, 0); got != 0 {
+		t.Fatalf("no collision energy yields a zero reference, got %v", got)
 	}
 }
 

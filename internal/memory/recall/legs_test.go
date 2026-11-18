@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -88,7 +88,7 @@ func TestTokenCorrectionRecoversATypo(t *testing.T) {
 	memory.Config.Recall.Vector = false
 	writeFact(t, memory, "老张赢得了 tournament。", "老张", "赢得",
 		map[string]any{"label": "tournament"}, nil)
-	on, err := memory.Recall(api.RecallRequest{
+	on, err := memory.Recall(facade.RecallRequest{
 		Cue: "torunament", IncludeRaw: boolPtr(false), TokenCorrect: boolPtr(true),
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestTokenCorrectionRecoversATypo(t *testing.T) {
 	if !strings.Contains(on.Render(8000), "tournament") {
 		t.Fatalf("render = %s", on.Render(8000))
 	}
-	off, err := memory.Recall(api.RecallRequest{
+	off, err := memory.Recall(facade.RecallRequest{
 		Cue: "torunament", IncludeRaw: boolPtr(false), TokenCorrect: boolPtr(false),
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func TestRawLegExpandsWithSeedAliases(t *testing.T) {
 		store.TraceOptions{Session: "s2", Turn: 1, Author: "user"}); err != nil {
 		t.Fatalf("trace: %v", err)
 	}
-	on, err := memory.Recall(api.RecallRequest{
+	on, err := memory.Recall(facade.RecallRequest{
 		Cue: "老张", IncludeRaw: boolPtr(true), RawLimit: 4, AliasExpand: boolPtr(true),
 	})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestRawLegExpandsWithSeedAliases(t *testing.T) {
 	if !anyRawHitContains(on, "张先生") {
 		t.Fatalf("alias-expanded raw hits = %#v", on.RawHits)
 	}
-	off, err := memory.Recall(api.RecallRequest{
+	off, err := memory.Recall(facade.RecallRequest{
 		Cue: "老张", IncludeRaw: boolPtr(true), RawLimit: 4, AliasExpand: boolPtr(false),
 	})
 	if err != nil {
@@ -155,7 +155,7 @@ func TestRawLegExpandsWithSeedAliases(t *testing.T) {
 func TestRelativeTagAnnotatesAnchorWithTheRowClock(t *testing.T) {
 	memory := newMemory(t)
 	reference := testNow // 2026-10-27T12:00:00Z
-	if _, err := memory.Remember(api.RememberRequest{
+	if _, err := memory.Remember(facade.RememberRequest{
 		Content:    strPtr("老张昨天拜访了医生。"),
 		AnchorText: strPtr("老张昨天拜访了医生。"),
 		Assertion: map[string]any{
@@ -165,7 +165,7 @@ func TestRelativeTagAnnotatesAnchorWithTheRowClock(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
-	on, err := memory.Recall(api.RecallRequest{
+	on, err := memory.Recall(facade.RecallRequest{
 		Cue: "老张", IncludeRaw: boolPtr(false), RelativeTag: boolPtr(true),
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func TestRelativeTagAnnotatesAnchorWithTheRowClock(t *testing.T) {
 	if !strings.Contains(on.Render(8000), "相对时点") {
 		t.Fatalf("render = %s", on.Render(8000))
 	}
-	off, err := memory.Recall(api.RecallRequest{
+	off, err := memory.Recall(facade.RecallRequest{
 		Cue: "老张", IncludeRaw: boolPtr(false), RelativeTag: boolPtr(false),
 	})
 	if err != nil {
@@ -208,7 +208,7 @@ func TestTimeRefResolvesRelativeCueIntoaSoftWindow(t *testing.T) {
 	if target == 0 {
 		t.Fatal("parse_time('昨天') returned 0")
 	}
-	if _, err := memory.Remember(api.RememberRequest{
+	if _, err := memory.Remember(facade.RememberRequest{
 		Content:    strPtr("老张开了项目会。"),
 		AnchorText: strPtr("老张开了项目会。"),
 		Assertion: map[string]any{
@@ -218,7 +218,7 @@ func TestTimeRefResolvesRelativeCueIntoaSoftWindow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
-	hit, err := memory.Recall(api.RecallRequest{
+	hit, err := memory.Recall(facade.RecallRequest{
 		Cue: "昨天 老张", IncludeRaw: boolPtr(false), TimeRef: reference,
 	})
 	if err != nil {
@@ -235,7 +235,7 @@ func TestTimeRefResolvesRelativeCueIntoaSoftWindow(t *testing.T) {
 	if boosted, ok := window["boosted"].(int); !ok || boosted < 1 {
 		t.Fatalf("date_window = %#v", window)
 	}
-	plain, err := memory.Recall(api.RecallRequest{Cue: "昨天 老张", IncludeRaw: boolPtr(false)})
+	plain, err := memory.Recall(facade.RecallRequest{Cue: "昨天 老张", IncludeRaw: boolPtr(false)})
 	if err != nil {
 		t.Fatalf("plain recall: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestTimeRefResolvesRelativeCueIntoaSoftWindow(t *testing.T) {
 func TestRawHitsPullTheirDerivedAssertionsBack(t *testing.T) {
 	memory := newMemory(t)
 	writeFact(t, memory, "老张在旧桥边看见了那只猫。", "老张", "看见", map[string]any{"label": "猫"}, nil)
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "旧桥", IncludeRaw: boolPtr(true), RawLimit: 4,
 	})
 	if err != nil {
@@ -270,7 +270,7 @@ func TestRawHitsPullTheirDerivedAssertionsBack(t *testing.T) {
 func TestBackfillCanBeDisabled(t *testing.T) {
 	memory := newMemory(t)
 	writeFact(t, memory, "老张在旧桥边看见了那只猫。", "老张", "看见", map[string]any{"label": "猫"}, nil)
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "旧桥", IncludeRaw: boolPtr(true), RawLimit: 4, MentionBackfill: boolPtr(false),
 	})
 	if err != nil {

@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 )
 
 // writeLiteralSubjectFact writes one structured memory assertion whose S is a literal (value
 // slot) instead of a node; only the misc band can deliver this shape.
 func writeLiteralSubjectFact(
-	t *testing.T, memory *api.Memory, content, subjectLiteral, relation string, object any,
+	t *testing.T, memory *facade.Memory, content, subjectLiteral, relation string, object any,
 ) string {
 	t.Helper()
-	receipt, err := memory.Remember(api.RememberRequest{
+	receipt, err := memory.Remember(facade.RememberRequest{
 		Content:    strPtr(content),
 		AnchorText: strPtr(content),
 		Assertion: map[string]any{

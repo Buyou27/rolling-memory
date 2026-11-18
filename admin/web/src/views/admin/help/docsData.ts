@@ -517,12 +517,12 @@ export const OPEN_SOURCE_DOCS: OpenSourceDocItem[] = [
         summaryEn:
             'The default evaluation arm is local_plain (local plaintext vault + local retrieval, zero network requests). Runs are isolated in a dedicated evaluation namespace, recording corpus SHA-256, commit, per-question Unit IDs, and raw JSONL.',
         sectionsZh: [
-            '默认臂 local_plain：本地明文金库 + FTS5/BM25 本地检索，0 网络请求、完全离线可复现',
+            '默认臂 local_plain：本地明文金库 + 本地确定性检索内核，0 网络请求、完全离线可复现',
             '评测命名空间：每次运行分配独立世代 scope，空闲自动回收；绝不触碰你的个人记忆空间',
             '溯源与复算：corpus SHA-256、commit、逐题 Unit ID 与原始 JSONL 独立复算；关闭 Answer/Judge 不等于离线',
         ],
         sectionsEn: [
-            'Default arm local_plain: local plaintext vault + FTS5/BM25 local retrieval; zero network requests, reproducible fully offline',
+            'Default arm local_plain: local plaintext vault + local deterministic retrieval kernel; zero network requests, reproducible fully offline',
             'Evaluation namespaces: each run gets its own generation scope, idle generations are reclaimed, and your personal memory space is never touched',
             'Provenance and recomputation: corpus SHA-256, commit, per-question Unit IDs, and independent raw JSONL recomputation; disabling Answer/Judge is not an offline run',
         ],

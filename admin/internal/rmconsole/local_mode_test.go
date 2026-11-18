@@ -2,6 +2,7 @@
 package rollingmemory
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -141,18 +142,24 @@ func TestWidgetAndGraphHandlersMakeZeroCloudCalls(t *testing.T) {
 	}
 
 	InvalidateLocomoPublicCorpusCache()
+	previousRunner := engineCommandRunner
+	engineCommandRunner = func(_ context.Context, _ string, op string, _ []string, _ []byte) ([]byte, error) {
+		if op != "graph" {
+			t.Fatalf("unexpected engine op %q", op)
+		}
+		return []byte(`{"graph_schema_version":2,"source":"local-vault","scope_key":"default","scopes":[],"nodes":[],"edges":[],"relations":[],"stats":{"event_total":0,"link_total":0,"node_shown":0,"edge_shown":0,"isolated_shown":0,"kind_counts":{},"cluster_type_counts":{}},"truncated":{"nodes":false,"edges":false}}`), nil
+	}
+	t.Cleanup(func() { engineCommandRunner = previousRunner })
+
 	graphRaw := callPluginHandler(t, graphHandler, "/graph", `{"scope":"default","limit":50}`)
-	// 源码树不随包分发 LoCoMo 演示快照（CC BY-NC 语料）：缺夹具时 /graph 合法走本地预览
-	// 回退，预设图谱契约仅在快照可用时钉住（与 locomo_public_graph_shape_test.go 同口径）。
-	if _, err := loadLocomoDemoCorpus(); err != nil {
-		t.Logf("LoCoMo 演示快照不可用（%v）：跳过预设图谱断言，仅校验零外呼契约", err)
-	} else {
-		if !strings.Contains(graphRaw, `"suite":"locomo"`) {
-			t.Fatalf("local graph must return preset LoCoMo preview graph: %s", clipTest(graphRaw, 400))
-		}
-		if strings.Contains(graphRaw, "local_graph_1") {
-			t.Fatalf("preview graph must not expose raw local vault docs: %s", clipTest(graphRaw, 400))
-		}
+	if !strings.Contains(graphRaw, `"source":"local-vault"`) {
+		t.Fatalf("local graph must be the engine vault projection: %s", clipTest(graphRaw, 400))
+	}
+	if strings.Contains(graphRaw, `"suite":"locomo"`) {
+		t.Fatalf("engine graph must not fall back to the LoCoMo preview: %s", clipTest(graphRaw, 400))
+	}
+	if strings.Contains(graphRaw, "local_graph_1") {
+		t.Fatalf("engine graph must not expose raw local vault docs: %s", clipTest(graphRaw, 400))
 	}
 
 	if got := atomic.LoadInt32(&hits); got != 0 {
@@ -182,14 +189,14 @@ func TestEvalArmGuardOnlyAllowsLocalPlain(t *testing.T) {
 			t.Fatalf("arm %q must be accepted: %v", arm, err)
 		}
 	}
-	for _, arm := range []string{EvalArmSDKPulsePlain, EvalArmSDKPulseCipher, EvalPulseModePulsePlain, EvalPulseModePulseCipher} {
+	for _, arm := range []string{"sdk-retired", "sdk-retired-plain", "retired_mode", "retired_mode_plain"} {
 		_, err := normalizeEvalArm(arm)
-		if err == nil || !strings.Contains(err.Error(), "已停用") {
-			t.Fatalf("arm %s error = %v, want the explicit retired message", arm, err)
+		if err == nil {
+			t.Fatalf("arm %s must be rejected", arm)
 		}
 	}
-	if _, err := validateEvalRunRequest(evalRunRequest{Suite: SuiteLoCoMo, Tier: "100", ArmMode: EvalArmSDKPulseCipher}); err == nil {
-		t.Fatal("pulse arm must fail closed at the run request validator")
+	if _, err := validateEvalRunRequest(evalRunRequest{Suite: SuiteLoCoMo, Tier: "100", ArmMode: "sdk-retired"}); err == nil {
+		t.Fatal("retired arm must fail closed at the run request validator")
 	}
 }
 
@@ -203,7 +210,7 @@ func TestEvalIngestRejectsPulseArm(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_MODE", "")
 	writeLocalModeConfig(t, home, "local")
 
-	raw := callPluginHandler(t, evalIngestHandler, "/eval/ingest", `{"suite":"locomo","action":"prepare","arm_mode":"sdk-pulse-cipher","pulse_mode":"pulse_cipher"}`)
+	raw := callPluginHandler(t, evalIngestHandler, "/eval/ingest", `{"suite":"locomo","action":"prepare","arm_mode":"sdk-retired","pulse_mode":"retired_mode"}`)
 	var envelope struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
@@ -211,7 +218,7 @@ func TestEvalIngestRejectsPulseArm(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		t.Fatalf("decode ingest response: %v (%s)", err, raw)
 	}
-	if envelope.Code == 0 || !strings.Contains(envelope.Message, "已停用") {
-		t.Fatalf("pulse ingest = %s, want fail-closed retired-arm error", raw)
+	if envelope.Code == 0 || !strings.Contains(envelope.Message, "仅支持") {
+		t.Fatalf("retired arm ingest = %s, want fail-closed error", raw)
 	}
 }

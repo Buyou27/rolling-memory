@@ -3,7 +3,7 @@
 
 // 本件是增量摄取架构批（P2b/P3b）的等价器材：为 rmClusterState 提供固定顺序的
 // canonical digest，并钉住 append/delete 后与全量重建逐字段一致。digest 只覆盖
-// 派生状态内容，不覆盖 builtIndexGen/builtDigest 生命周期字段。
+// 派生状态内容，不覆盖 builtIndex/builtIndexGen 生命周期字段。
 package core
 
 import (
@@ -142,7 +142,7 @@ func (d *digestWriter) positionsMap(m map[uint32]TermPosition) {
 
 // clusterStateCanonicalDigest hashes every content-bearing rmClusterState field
 // in a fixed order (maps by ascending key, floats by Float64bits). Lifecycle
-// fields (builtIndexGen/builtDigest) are excluded: two engines built by
+// fields (builtIndex/builtIndexGen) are excluded: two engines built by
 // different paths must agree on state content even when their generation
 // counters differ.
 func clusterStateCanonicalDigest(st *rmClusterState) string {

@@ -96,12 +96,6 @@ func ResolveMemoryLimit(raw string, totalRAM int64) MemoryLimitResolved {
 	return MemoryLimitResolved{Value: formatMemorySize(derived), Bytes: derived, Source: "auto"}
 }
 
-// AutoMemoryLimitForRAM exposes the auto derivation for the console preview so
-// the UI can show the concrete cap before the setting is saved.
-func AutoMemoryLimitForRAM(totalRAM int64) int64 {
-	return ResolveMemoryLimit(MemoryLimitAuto, totalRAM).Bytes
-}
-
 func parseMemorySize(value string) (int64, bool) {
 	digitsEnd := 0
 	for digitsEnd < len(value) && value[digitsEnd] >= '0' && value[digitsEnd] <= '9' {

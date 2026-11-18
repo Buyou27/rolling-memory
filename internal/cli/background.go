@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -60,7 +60,7 @@ func backgroundSkipNote(report thinclient.BackgroundSyncReport) string {
 
 // runBackground exposes the canonical thinclient Background mount pipeline to
 // hosts that cannot import internal/thinclient directly.
-func (a *application) runBackground(memory *api.Memory) (int, error) {
+func (a *application) runBackground(memory *facade.Memory) (int, error) {
 	client, err := memory.ThinClient()
 	if err != nil {
 		return 1, err

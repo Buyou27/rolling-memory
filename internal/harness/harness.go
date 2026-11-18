@@ -32,6 +32,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/speech"
 )
 
@@ -215,7 +216,7 @@ func harnessIndex(harnesses []Harness) map[string]Harness {
 }
 
 // BuildExtendedHarnesses returns additional open-source coding agent harnesses
-// (Cursor, Windsurf, Cline) that can be explicitly targeted by ID without
+// (OpenCode, Cursor, Windsurf, Cline) that can be explicitly targeted by ID without
 // altering the frozen 5-harness default registry.
 //
 // windsurfDetectPath prefers the current Windsurf (Devin Desktop) state
@@ -235,7 +236,29 @@ func BuildExtendedHarnesses(home string) []Harness {
 			home = resolved
 		}
 	}
+	opencodeConfigDir := os.Getenv("XDG_CONFIG_HOME")
+	if opencodeConfigDir == "" {
+		opencodeConfigDir = filepath.Join(home, ".config")
+	}
+	opencodeConfigDir = filepath.Join(opencodeConfigDir, "opencode")
+	opencodeConfigFile := filepath.Join(opencodeConfigDir, "opencode.json")
+	if fileExists(filepath.Join(opencodeConfigDir, "opencode.jsonc")) {
+		opencodeConfigFile = filepath.Join(opencodeConfigDir, "opencode.jsonc")
+	}
 	return []Harness{
+		{
+			ID:                  "opencode",
+			Label:               "OpenCode",
+			Detect:              opencodeConfigDir,
+			SkillUser:           stringPtr(filepath.Join(opencodeConfigDir, "skills")),
+			SkillProject:        ".opencode/skills",
+			MCPKind:             "json",
+			MCPPath:             opencodeConfigFile,
+			MCPKeys:             []string{"mcp", "servers"},
+			MCPProjectPath:      stringPtr(filepath.Join(".opencode", "opencode.json")),
+			InstructionsProject: "AGENTS.md",
+			Notes:               "V2 local MCP entry; user skills in " + filepath.Join(opencodeConfigDir, "skills") + " or .opencode/skills",
+		},
 		{
 			ID:                  "cursor",
 			Label:               "Cursor",
@@ -382,7 +405,7 @@ func NormalizeInstallLang(raw string) (string, error) {
 	case "zh", "zh-cn", "zh-hans", "cn", "chinese":
 		return "zh-CN", nil
 	default:
-		return "", fmt.Errorf("invalid language %s: expected 'en' or 'zh-CN'", pyRepr(trimmed))
+		return "", fmt.Errorf("invalid language %s: expected 'en' or 'zh-CN'", ids.QuotePyString(trimmed))
 	}
 }
 
@@ -670,14 +693,14 @@ func ValidateInstallOptions(options InstallOptions) error {
 func validateDSHProfile(profile string) error {
 	if profile == "" || profile == "." || profile == ".." || filepath.IsAbs(profile) ||
 		strings.ContainsAny(profile, `/\:`) {
-		return fmt.Errorf("invalid dsh profile %s: expected a single directory name", pyRepr(profile))
+		return fmt.Errorf("invalid dsh profile %s: expected a single directory name", ids.QuotePyString(profile))
 	}
 	return nil
 }
 
 func validateName(value, what string) error {
 	if !nameRE.MatchString(value) {
-		return fmt.Errorf("invalid %s %s: must match %s", what, pyRepr(value), nameRE.String())
+		return fmt.Errorf("invalid %s %s: must match %s", what, ids.QuotePyString(value), nameRE.String())
 	}
 	return nil
 }
@@ -786,13 +809,6 @@ func pyStripRight(text string) string {
 	return strings.TrimRightFunc(text, isPySpace)
 }
 
-// pyRepr mirrors a simple repr() for error messages.
-func pyRepr(value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
-	return "'" + escaped + "'"
-}
-
 // pyString mirrors str() for the scalar values that reach detail strings.
 func pyString(value any) string {
 	switch typed := value.(type) {
@@ -822,7 +838,7 @@ func pyListRepr(values []any) string {
 	parts := make([]string, 0, len(values))
 	for _, value := range values {
 		if text, ok := value.(string); ok {
-			parts = append(parts, pyRepr(text))
+			parts = append(parts, ids.QuotePyString(text))
 			continue
 		}
 		parts = append(parts, pyString(value))

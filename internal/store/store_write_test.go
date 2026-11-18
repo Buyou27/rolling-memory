@@ -5,6 +5,7 @@ package store
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -510,7 +511,7 @@ func TestEventPayloads(t *testing.T) {
 	if seen["trace.add"]["session"] != "default" {
 		t.Fatalf("trace.add refs = %v", seen["trace.add"])
 	}
-	if !containsValue(nodeLabels, "老张") {
+	if !slices.Contains(nodeLabels, "老张") {
 		t.Fatalf("node.add labels = %v", nodeLabels)
 	}
 	if seen["assert.add"]["hash"] == nil {

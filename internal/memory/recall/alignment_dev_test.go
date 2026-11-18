@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/clock"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -28,7 +28,7 @@ func TestRawLegRespectsAsOf(t *testing.T) {
 	if !anyRawHitContains(visible, "旧桥") {
 		t.Fatalf("raw hits = %#v, want the recorded trace", visible.RawHits)
 	}
-	if result, err := memory.Recall(api.RecallRequest{Cue: "旧桥", IncludeRaw: boolPtr(true), RawLimit: 4, AsOf: clock.Unix()}); err == nil || result != nil {
+	if result, err := memory.Recall(facade.RecallRequest{Cue: "旧桥", IncludeRaw: boolPtr(true), RawLimit: 4, AsOf: clock.Unix()}); err == nil || result != nil {
 		t.Fatalf("graph facade must reject unsupported asof filtering: %#v, %v", result, err)
 	}
 	past, err := recall.Recall(memory.Store, memory.Config, recall.Options{
@@ -115,7 +115,7 @@ func TestRawErrorIsLoudButFailOpen(t *testing.T) {
 	if _, err := memory.Store.DB().Exec("DROP TABLE trace_fts"); err != nil {
 		t.Fatalf("drop trace_fts: %v", err)
 	}
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue: "旧桥边", IncludeRaw: boolPtr(true), RawLimit: 4,
 	})
 	if err != nil {

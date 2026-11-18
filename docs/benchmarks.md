@@ -76,7 +76,7 @@ The ATM-Bench corpus digest is additionally compiled into the runner as an enfor
 
 ### 1.3 Execution plane
 
-- **On-device**: retrieval runs against the local SQLite plaintext vault (FTS5 + BM25 + integer IDF), which also stores the resolved plaintext for every returned Unit ID.
+- **On-device**: retrieval runs against the local SQLite plaintext vault with the deterministic cluster kernel and integer self-information gain; the vault also stores the resolved plaintext for every returned Unit ID.
 - **Zero egress**: an evaluation never sends conversations, questions, or results to a remote endpoint; it is reproducible offline.
 - **Fail-closed**: a failed vault open, missing data directory, corpus digest mismatch, or prepare-manifest mismatch aborts the run; results are never padded from a second source.
 - **Missing corpus is never silently scored — and never breaks the test suite**: corpus-dependent tests **skip** rather than fail when no corpus is present, so the repository's own test suite stays green without one; `rmem eval` itself exits with a clear, actionable "data directory not found" error instead of emitting an empty or fabricated reading.
@@ -155,7 +155,7 @@ Each run writes `summary-sdk-<arm>-*.json` and `results-sdk-<arm>-*.jsonl` under
 
 ## 6. Local-Mode Reference Disclosure (`local_plain`)
 
-The default `local_plain` arm runs 100% offline over the local SQLite plaintext vault (`FTS5` + `BM25` + integer self-information continuous gain and dimensionless event-chain coherence) with zero network requests, zero vector indexes, and zero ingestion LLM calls. Daily plugin usage (`rmem recall` / MCP `recall`) and the `rmem eval` runner share the exact same local engine, sentence-harmonic encoder, and ranker.
+The default `local_plain` arm runs 100% offline over the local SQLite plaintext vault (deterministic cluster kernel + integer self-information continuous gain and dimensionless event-chain coherence) with zero network requests, zero vector indexes, and zero ingestion LLM calls. Daily plugin usage (`rmem recall` / MCP `recall`) and the `rmem eval` runner share the exact same local engine, sentence-harmonic encoder, and ranker.
 
 | Suite / Split | Corpus Units (`corpus_sha256` prefix) | Official `Recall@10` (GT Coverage Mean) | Auxiliary `Any-Hit@10` | `Recall@10GT` (All Gold in Top-10) | End-to-End `QS` (`gpt-5-mini` minimal judge) |
 |---|---:|---:|---:|---:|---:|

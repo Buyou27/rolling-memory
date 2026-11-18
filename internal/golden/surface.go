@@ -4,6 +4,7 @@
 package golden
 
 import (
+	"cmp"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -40,14 +41,6 @@ func temporaryEnv(values map[string]string) func() {
 			_ = os.Setenv(name, *value)
 		}
 	}
-}
-
-// orString returns fallback when value is empty.
-func orString(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 // orInt returns fallback when value is zero.
@@ -123,7 +116,7 @@ func plainScriptedMap(value any) map[string]any {
 // load one configuration with the case environment and flags (flags > env >
 // file > defaults) and return its public dict or the ConfigError receipt.
 func (r *Runner) opConfigLoad(args map[string]any) (any, error) {
-	caseDir, err := r.surfaceCaseDir("config", orString(argString(args, "case"), "case"))
+	caseDir, err := r.surfaceCaseDir("config", cmp.Or(argString(args, "case"), "case"))
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +138,7 @@ func (r *Runner) opConfigLoad(args map[string]any) (any, error) {
 	// $ROLLING_MEMORY_CONFIG or the default config file of the synthetic HOME;
 	// the scenario case directory is the hermetic stand-in for that default
 	// (the receipt's path only normalizes to <CFG>, never compares).
-	path := orString(env["ROLLING_MEMORY_CONFIG"], filepath.Join(caseDir, "config.toml"))
+	path := cmp.Or(env["ROLLING_MEMORY_CONFIG"], filepath.Join(caseDir, "config.toml"))
 	if pathValue, ok := args["config_path"]; ok && pathValue != nil {
 		path = filepath.Join(caseDir, asString(pathValue))
 	}
@@ -180,11 +173,11 @@ func (r *Runner) opConfigLoad(args map[string]any) (any, error) {
 // longer validates (e.g., a retired mode left over from an upgrade) is pinned
 // as a load-error receipt, the same fail-closed shape config_load records.
 func (r *Runner) opConfigEgress(args map[string]any) (any, error) {
-	caseDir, err := r.surfaceCaseDir("config", orString(argString(args, "case"), "egress"))
+	caseDir, err := r.surfaceCaseDir("config", cmp.Or(argString(args, "case"), "egress"))
 	if err != nil {
 		return nil, err
 	}
-	mode := orString(argString(args, "mode"), "local")
+	mode := cmp.Or(argString(args, "mode"), "local")
 	path := filepath.Join(caseDir, "config.toml")
 	loaded, err := config.Load(config.LoadOptions{Path: &path, Mode: &mode, Env: map[string]string{}})
 	if err != nil {
@@ -216,7 +209,7 @@ func (r *Runner) opConfigEgress(args map[string]any) (any, error) {
 // (default text golden-key-value, default mode 0600), point the LLM key slots
 // at it, and report status plus the resolved value under the case environment.
 func (r *Runner) opConfigSecret(args map[string]any) (any, error) {
-	caseName := orString(argString(args, "case"), "secret")
+	caseName := cmp.Or(argString(args, "case"), "secret")
 	caseDir, err := r.surfaceCaseDir("config", caseName)
 	if err != nil {
 		return nil, err
@@ -227,7 +220,7 @@ func (r *Runner) opConfigSecret(args map[string]any) (any, error) {
 		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 			return nil, err
 		}
-		text := orString(argString(args, "file_text"), "golden-key-value\n")
+		text := cmp.Or(argString(args, "file_text"), "golden-key-value\n")
 		if err := os.WriteFile(filePath, []byte(text), 0o600); err != nil {
 			return nil, err
 		}

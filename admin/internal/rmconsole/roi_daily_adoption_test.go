@@ -19,7 +19,10 @@ func TestROIFactsDailySeriesCarryAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Anchor fixtures at local noon so "today"-relative offsets stay inside
+	// today's bucket even when the suite runs just after midnight.
 	nowT := time.Now()
+	nowT = time.Date(nowT.Year(), nowT.Month(), nowT.Day(), 12, 0, 0, 0, time.Local)
 	nowUnix := nowT.Unix()
 	yNoon := nowT.AddDate(0, 0, -1)
 	yNoon = time.Date(yNoon.Year(), yNoon.Month(), yNoon.Day(), 12, 0, 0, 0, time.Local)

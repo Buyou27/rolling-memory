@@ -16,12 +16,12 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/eval"
 	"github.com/rocareer/rolling-memory/internal/hooks"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
@@ -168,7 +168,7 @@ func (a *application) dispatch() int {
 	case "update", "upgrade":
 		return a.runUpdate()
 	case "export":
-		return a.fail(api.ExportUnavailable())
+		return a.fail(facade.ExportUnavailable())
 	case "engine":
 		return a.runEngine()
 	case "daemon":
@@ -192,7 +192,7 @@ func (a *application) dispatch() int {
 	return a.withMemory(a.runWithMemory)
 }
 
-func (a *application) withMemory(fn func(*api.Memory) (int, error)) int {
+func (a *application) withMemory(fn func(*facade.Memory) (int, error)) int {
 	memory, err := a.openMemory()
 	if err != nil {
 		return a.fail(err)
@@ -205,7 +205,7 @@ func (a *application) withMemory(fn func(*api.Memory) (int, error)) int {
 	return code
 }
 
-func (a *application) openMemory() (*api.Memory, error) {
+func (a *application) openMemory() (*facade.Memory, error) {
 	cfg, err := config.Load(config.LoadOptions{
 		Path:  a.args.StringPtr("config"),
 		DB:    a.args.StringPtr("db"),
@@ -215,10 +215,10 @@ func (a *application) openMemory() (*api.Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	return api.New(cfg)
+	return facade.New(cfg)
 }
 
-func (a *application) runWithMemory(memory *api.Memory) (int, error) {
+func (a *application) runWithMemory(memory *facade.Memory) (int, error) {
 	switch a.args.Command() {
 	case "recall":
 		return a.runRecall(memory)
@@ -437,7 +437,7 @@ func (a *application) tryDaemonRecall() (int, bool) {
 	return 0, true
 }
 
-func (a *application) runRecall(memory *api.Memory) (int, error) {
+func (a *application) runRecall(memory *facade.Memory) (int, error) {
 	if a.args.Flag("stdin_batch") {
 		return a.runRecallStdinBatch(memory)
 	}
@@ -480,7 +480,7 @@ func (a *application) runRecall(memory *api.Memory) (int, error) {
 			presence = &coords
 		}
 	}
-	result, err := memory.Recall(api.RecallRequest{
+	result, err := memory.Recall(facade.RecallRequest{
 		Cue:             cue,
 		Reader:          a.args.StringPtr("reader"),
 		Mode:            a.args.String("result_mode"),
@@ -515,7 +515,7 @@ func (a *application) runRecall(memory *api.Memory) (int, error) {
 	// A one-shot process must not exit before the L3 crystallization pulse it scheduled:
 	// the wait is bounded and normally instant, and dropping it would leave the engine
 	// without the noetic node this recall just produced.
-	defer api.WaitForPendingNoeticPulses(api.NoeticPulseBudget)
+	defer facade.WaitForPendingNoeticPulses(facade.NoeticPulseBudget)
 	if a.args.Flag("json") || a.args.String("result_mode") == "probe" {
 		payload := result.ToDict()
 		if a.args.String("result_mode") == "probe" {
@@ -609,7 +609,7 @@ func (a *application) runInit() int {
 			}
 		}
 	}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -768,7 +768,7 @@ func (a *application) runMCP() int {
 
 func (a *application) runHook() int {
 	if value := a.args.String("config"); value != "" {
-		os.Setenv("ROLLING_MEMORY_CONFIG", expandUser(value))
+		os.Setenv("ROLLING_MEMORY_CONFIG", config.ExpandUserPath(value))
 	}
 	hookArgs := []string{a.args.String("event")}
 	if a.args.Flag("json") {

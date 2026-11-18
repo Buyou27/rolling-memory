@@ -176,8 +176,8 @@ func (a *application) printCheck(result map[string]any) {
 
 func (a *application) printReindex(result map[string]any) {
 	// "vectors" and "fts" are the JSON receipt keys; the human line reports the
-	// lexical index plus the local compatibility index, which never feeds engine
-	// retrieval.
+	// legacy assertion-graph index plus the local compatibility index, which never
+	// feeds the local plaintext vault retrieval.
 	a.printf("reindex: fts=%s local_compat_index=%s\n", pyStr(result["fts"]), pyStr(result["vectors"]))
 	if truthy(result["warning"]) {
 		a.printf("  warning: %s\n", pyStr(result["warning"]))

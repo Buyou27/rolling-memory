@@ -52,12 +52,12 @@ type Options struct {
 	NoVerify        bool
 	// DenoiseRatio 是分形干句降噪比例（--denoise-ratio：0.0=零损，0.25=安全，0.50=推荐，0.75=激进）。
 	DenoiseRatio float64
-	// PulseTokenizer 选择盲态脉冲切词臂：standard（SDK 原生表面词 + 子词/谐波切词）
-	// 或 fts5-bm25 / fts5-trigram（对照臂）。各臂都只消费本臂结果，不融合其它检索。
+	// PulseTokenizer 选择盲态脉冲切词臂：product（产品同配，默认）、standard 或 trigram（对照臂）。
+	// 各臂都只消费本臂结果，不融合其它检索。
 	PulseTokenizer string
 	// PulseMode 选择评测脉冲运行模式。现役唯一合法值 = "local_plain"（本地明文离线检索，
 	// 独立 scope *-mem-eval-<suite>-local-plain[-<世代>]，零云端请求）。
-	// 空值默认 local_plain；历史脉冲模式名（pulse_cipher / pulse_plain）一律 fail-closed 拒绝。
+	// 空值默认 local_plain；任何非本地模式一律 fail-closed 拒绝。
 	PulseMode string
 	Log       func(format string, args ...any)
 }

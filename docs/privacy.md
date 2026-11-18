@@ -15,7 +15,7 @@ This is not a policy promise: it is enforced by the architecture (the memory com
 | Raw conversations, mounted documents, and recall results | Local SQLite vault (default `~/.local/share/rolling-memory/memory.db`) | **0 — never sent by Rolling Memory** |
 | Consolidated L3 `Noetic` traces ($Q$ + `cited_unit_ids[]` + $A$) | Same local vault | **0** |
 | Local master key / vault metadata | Same local vault (directory `0700`, file `0600`) | **0** |
-| Recall indexes (SQLite FTS5 `trigram` + BM25) | Same local vault | **0** |
+| Recall index (deterministic local cluster index derived from the vault) | Local vault directory | **0** |
 
 - **This release is 100% local**: no cloud account, no registration, no background upload, no analytics, no crash reporting, no telemetry.
 - **Historical audience restrictions**: Do not rely on `private` labels or `reader=deliverable` to protect sensitive content across all sources. Review recall results before sharing them or sending them to a model.
@@ -43,10 +43,10 @@ When you mount local knowledge bases or codebases into L1 `Background`:
 
 Historical records may carry audience labels, but restrictions may not be enforced across all sources. Do not rely on these labels or the `reader` setting as an access-control boundary. Keep credentials and other sensitive material out of shared contexts, and review recall results before sharing them or sending them to a model.
 
-### 2.4 Built-in Local FTS5 Recall & 100% Zero Vendor Lock-In
+### 2.4 Built-in Local Recall & 100% Zero Vendor Lock-In
 
 1. **Offline-First Recall (`Client SDK Default Recall`)**:
-   - Your local vault maintains a native SQLite FTS5 lexical-temporal index alongside citation chains. Even offline, on a plane, or with every network interface down, your local memory assets remain 100% searchable and readable;
+   - Your local vault powers a deterministic, vector-free retrieval kernel (a built-in pure-substring tokenizer plus an index cache derived from the vault) alongside citation chains. Even offline, on a plane, or with every network interface down, your local memory assets remain 100% searchable and readable;
 2. **100% Open Format & BYO-Storage Freedom**:
    - The local vault uses SQLite. Some memories reference conversation and mounted files outside the database; preserving the vault alone does not preserve those sources.
 

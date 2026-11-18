@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
@@ -76,7 +76,7 @@ type EpisodicPruneOptions struct {
 // enumeration can no longer produce (and, when includeUnreadable is set, pointer
 // rows whose underlying transcript or session is gone). Dry-run by default; apply
 // requires --yes and also heals relocatable or unindexed pointers in-place.
-func pruneEpisodicUnits(ctx context.Context, memory *api.Memory, limit int, apply, confirmed bool, includeUnreadable ...bool) (EpisodicPruneReport, error) {
+func pruneEpisodicUnits(ctx context.Context, memory *facade.Memory, limit int, apply, confirmed bool, includeUnreadable ...bool) (EpisodicPruneReport, error) {
 	return pruneEpisodicUnitsWithOptions(ctx, memory, EpisodicPruneOptions{
 		Limit:             limit,
 		Apply:             apply,
@@ -87,7 +87,7 @@ func pruneEpisodicUnits(ctx context.Context, memory *api.Memory, limit int, appl
 
 // pruneEpisodicUnitsWithOptions is pruneEpisodicUnits with the full switch set; the
 // CLI surface feeds it so explicit flags cannot silently widen a pass.
-func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *api.Memory, opts EpisodicPruneOptions) (EpisodicPruneReport, error) {
+func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, opts EpisodicPruneOptions) (EpisodicPruneReport, error) {
 	limit := opts.Limit
 	apply, confirmed := opts.Apply, opts.Confirmed
 	pruneUnreadable := opts.IncludeUnreadable
@@ -377,7 +377,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 						if sRows.Scan(&sid, &dir) == nil && sid != "" && dir != "" {
 							loc, cached := dirLocusCache[dir]
 							if !cached {
-								loc = api.ResolveWorkspaceLocus(dir)
+								loc = facade.ResolveWorkspaceLocus(dir)
 								dirLocusCache[dir] = loc
 							}
 							// A resolved empty locus (session outside any repository) is a

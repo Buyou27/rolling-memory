@@ -19,8 +19,8 @@ import (
 )
 
 // The MCP surface has three writers: a JSON deep merge (zcode / claude-code /
-// codebuddy), a TOML section replacement (codex) and a marker block inside the
-// dsh profile patch.
+// codebuddy / opencode), a TOML section replacement (codex) and a marker block
+// inside the dsh profile patch.
 
 func mcpEnv(options InstallOptions) ids.OrderedMap {
 	env := make(ids.OrderedMap, 0, 2)
@@ -33,8 +33,18 @@ func mcpEnv(options InstallOptions) ids.OrderedMap {
 	return env
 }
 
-// mcpEntry is the JSON shape written into zcode / claude-code / codebuddy.
-func mcpEntry(options InstallOptions) ids.OrderedMap {
+// mcpEntry is the JSON shape written into harness config files.
+func mcpEntry(harness Harness, options InstallOptions) ids.OrderedMap {
+	if harness.ID == "opencode" {
+		entry := ids.OrderedMap{
+			{Key: "type", Value: "local"},
+			{Key: "command", Value: []any{options.ResolvedBinary(), "mcp"}},
+		}
+		if env := mcpEnv(options); len(env) > 0 {
+			entry = append(entry, ids.JSONPair{Key: "environment", Value: env})
+		}
+		return entry
+	}
 	entry := ids.OrderedMap{
 		{Key: "type", Value: "stdio"},
 		{Key: "command", Value: options.ResolvedBinary()},
@@ -126,10 +136,16 @@ func entryIsOurs(entry any, options InstallOptions) bool {
 	}
 	argsValue, _ := objectGet(object, "args")
 	args, ok := asArray(argsValue)
+	command, _ := objectGet(object, "command")
+	if commandArgs, commandIsArray := asArray(command); commandIsArray {
+		if len(commandArgs) != 2 || commandArgs[1] != "mcp" || argsValue != nil {
+			return false
+		}
+		return isOurBinary(pyString(commandArgs[0]), options)
+	}
 	if !ok || len(args) != 1 || args[0] != "mcp" {
 		return false
 	}
-	command, _ := objectGet(object, "command")
 	return isOurBinary(pyString(command), options)
 }
 
@@ -141,16 +157,42 @@ func jsonEntryIsManaged(entry any, options InstallOptions) bool {
 	if !ok {
 		return false
 	}
+	commandValue, _ := objectGet(object, "command")
+	_, commandIsArray := asArray(commandValue)
+	if commandIsArray {
+		transport, found := objectGet(object, "type")
+		if !found || transport != "local" {
+			return false
+		}
+	}
 	for _, pair := range object {
 		switch pair.Key {
-		case "command", "args":
+		case "command":
+			if commandIsArray {
+				commands, _ := asArray(pair.Value)
+				if len(commands) != 2 || commands[1] != "mcp" {
+					return false
+				}
+			} else if _, ok := pair.Value.(string); !ok {
+				return false
+			}
+		case "args":
+			if commandIsArray {
+				return false
+			}
 		case "type":
+			if commandIsArray && pair.Value == "local" {
+				continue
+			}
 			if pair.Value != "stdio" {
 				return false
 			}
-		case "env":
+		case "env", "environment":
 			env, ok := asObject(pair.Value)
 			if !ok {
+				return false
+			}
+			if commandIsArray && pair.Key != "environment" {
 				return false
 			}
 			for _, item := range env {
@@ -171,6 +213,13 @@ func jsonEntryIsManaged(entry any, options InstallOptions) bool {
 func entryCommand(entry any) string {
 	if object, ok := asObject(entry); ok {
 		if command, found := objectGet(object, "command"); found {
+			if args, ok := asArray(command); ok {
+				parts := make([]string, 0, len(args))
+				for _, arg := range args {
+					parts = append(parts, pyString(arg))
+				}
+				return strings.Join(parts, " ")
+			}
 			return pyString(command)
 		}
 	}
@@ -282,7 +331,7 @@ func installMCP(harness Harness, options InstallOptions, report *Report) {
 		case "dsh":
 			installMCPDsh(harness, options, path, report)
 		default:
-			report.Add(harness.ID, "mcp", path, StatusError, "unknown mcp kind "+pyRepr(harness.MCPKind))
+			report.Add(harness.ID, "mcp", path, StatusError, "unknown mcp kind "+ids.QuotePyString(harness.MCPKind))
 		}
 	}
 }
@@ -413,7 +462,11 @@ func installMCPJSON(harness Harness, options InstallOptions, path string, report
 	present := found && existing != nil
 	if present && jsonEntryIsManaged(existing, options) {
 		object, _ := asObject(existing)
-		if value, found := objectGet(object, "env"); found {
+		envKey := "env"
+		if harness.ID == "opencode" {
+			envKey = "environment"
+		}
+		if value, found := objectGet(object, envKey); found {
 			env, _ := asObject(value)
 			if options.DB == "" {
 				if db, found := objectGet(env, "ROLLING_MEMORY_DB"); found {
@@ -427,7 +480,7 @@ func installMCPJSON(harness Harness, options InstallOptions, path string, report
 			}
 		}
 	}
-	entry := mcpEntry(options)
+	entry := mcpEntry(harness, options)
 	if present && jsonEqual(existing, entry) {
 		report.Add(harness.ID, "mcp", path, StatusUnchanged, "")
 		return

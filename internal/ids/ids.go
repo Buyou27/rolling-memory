@@ -353,7 +353,7 @@ func EscapeLike(value string) string {
 // `file://C:%5C...`, the drive letter becomes the URI authority, and the
 // driver rejects the DSN with "invalid uri authority".
 func SQLiteFileURI(path string) string {
-	if uriPath, ok := windowsURIPath(path); ok {
+	if uriPath, ok := WindowsURIPath(path); ok {
 		return (&url.URL{Scheme: "file", Path: uriPath}).String()
 	}
 	if !strings.ContainsAny(path, "?#") {
@@ -362,10 +362,10 @@ func SQLiteFileURI(path string) string {
 	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
-// windowsURIPath reports the file: URI path form of a Windows drive or UNC
+// WindowsURIPath reports the file: URI path form of a Windows drive or UNC
 // path, rewriting the separators to forward slashes; other paths return
 // ok=false unchanged.
-func windowsURIPath(path string) (string, bool) {
+func WindowsURIPath(path string) (string, bool) {
 	if len(path) >= 2 && path[1] == ':' {
 		if c := path[0]; 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' {
 			return "/" + strings.ReplaceAll(path, `\`, "/"), true
@@ -1172,6 +1172,64 @@ func isPySpace(char rune) bool {
 
 func pyTrimSpace(value string) string {
 	return speech.TrimSpace(value)
+}
+
+// PyRound mirrors Python's round(value, digits) as a rendered-and-reparsed
+// decimal, which is the form every delivered receipt and fixture asserts on.
+func PyRound(value float64, digits int) float64 {
+	text := strconv.FormatFloat(value, 'f', digits, 64)
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return value
+	}
+	return parsed
+}
+
+// QuotePyString renders a string as a single-quoted Python literal for
+// diagnostic text. It escapes backslashes and single quotes only; callers that
+// need full Python repr semantics (newlines, control bytes) keep their own
+// renderer.
+func QuotePyString(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
+}
+
+// ShortHash keeps the leading eight bytes of a digest string for anchors and
+// diagnostics; shorter values pass through unchanged. Digests are ASCII hex, so
+// the byte cut is also a character cut.
+func ShortHash(value string) string {
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
+}
+
+// DerefString dereferences an optional string for value rendering: nil becomes
+// the empty string.
+func DerefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// OptionalString maps an optional string onto Python's None convention for
+// payload fields: nil becomes nil, present values pass through.
+func OptionalString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+// OptionalNonEmptyString is OptionalString that additionally treats the empty
+// string as absent, so an explicitly blank field never renders as a value.
+func OptionalNonEmptyString(value *string) any {
+	if value == nil || *value == "" {
+		return nil
+	}
+	return *value
 }
 
 func isASCIIDigits(value string) bool {

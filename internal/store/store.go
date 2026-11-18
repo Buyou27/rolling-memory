@@ -13,6 +13,7 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -489,13 +490,13 @@ func (s *Store) DB() *sql.DB {
 
 // Event appends one audit row and returns its id.
 func (s *Store) Event(scope, op string, refs map[string]any, note, createdBy string) (int64, error) {
-	createdBy = defaultIfEmpty(createdBy, "system")
+	createdBy = cmp.Or(createdBy, "system")
 	return insertEvent(s.conn, scope, op, refs, note, createdBy, false)
 }
 
 // EventTx appends one audit row inside tx and returns its id.
 func (s *Store) EventTx(tx *sql.Tx, scope, op string, refs map[string]any, note, createdBy string) (int64, error) {
-	createdBy = defaultIfEmpty(createdBy, "system")
+	createdBy = cmp.Or(createdBy, "system")
 	return insertEvent(tx, scope, op, refs, note, createdBy, false)
 }
 
@@ -765,26 +766,9 @@ func cloneMap(item map[string]any) map[string]any {
 	return copied
 }
 
-// pyRound rounds value to digits decimal places using half-even float formatting.
-func pyRound(value float64, digits int) float64 {
-	text := strconv.FormatFloat(value, 'f', digits, 64)
-	parsed, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return value
-	}
-	return parsed
-}
-
 // pyStrip mirrors str.strip() for the whitespace set used by ids.
 func pyStrip(value string) string {
 	return speech.TrimSpace(value)
-}
-
-// pyRepr mirrors a simple repr() for error messages.
-func pyRepr(value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
-	return "'" + escaped + "'"
 }
 
 func runeCount(value string) int {
@@ -815,23 +799,8 @@ func sliceRunesBounded(value string, start, end int) string {
 	return memcore.SliceRunesBounded(value, start, end)
 }
 
-func firstChars(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
-}
-
-func shortHash(value string) string {
-	if len(value) <= 8 {
-		return value
-	}
-	return value[:8]
-}
-
 func anchorRef(traceHash string, start, end int64) string {
-	return fmt.Sprintf("trace:%s#%d-%d", shortHash(traceHash), start, end)
+	return fmt.Sprintf("trace:%s#%d-%d", ids.ShortHash(traceHash), start, end)
 }
 
 func pyIntValue(value any) int64 {
@@ -858,15 +827,6 @@ func pyIntValue(value any) int64 {
 	return 0
 }
 
-func containsValue(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func isSafeColumn(name string) bool {
 	if name == "" {
 		return false
@@ -877,13 +837,6 @@ func isSafeColumn(name string) bool {
 		}
 	}
 	return true
-}
-
-func defaultIfEmpty(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 // monthOf mirrors time.localtime(epoch).tm_mon.

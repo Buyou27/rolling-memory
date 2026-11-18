@@ -66,6 +66,31 @@ func BenchmarkAppendCostProbe(b *testing.B) {
 				eng.AppendDocs([]Doc{extra})
 			}
 		})
+		// Phase split of the incremental path: CSR-direct index merge alone and
+		// cluster-state rebuild alone, so P2b slices target the dominant term.
+		b.Run("DeltaRebuild/"+key, func(b *testing.B) {
+			extra := appendProbeDocs(n + 1)[n]
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				eng := NewEngine(BuildIndex(docs))
+				eng.ensureClusterState()
+				b.StartTimer()
+				_ = eng.buildIndexWithDelta([]Doc{extra})
+			}
+		})
+		b.Run("ClusterRebuild/"+key, func(b *testing.B) {
+			extra := appendProbeDocs(n + 1)[n]
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				eng := NewEngine(BuildIndex(docs))
+				eng.ensureClusterState()
+				idx := eng.buildIndexWithDelta([]Doc{extra})
+				b.StartTimer()
+				_ = NewEngine(idx).ensureClusterState()
+			}
+		})
 	}
 }
 

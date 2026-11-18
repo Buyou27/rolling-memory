@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/rocareer/rolling-memory/internal/api"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/hooks"
+	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	_ "modernc.org/sqlite"
 )
 
@@ -49,7 +49,7 @@ func TestEpisodicSourceCompletionIdentityAndUnknownTime(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:completion", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:completion", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestEpisodicSourceIdentityRepairAndIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:identity", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:identity", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestEpisodicSourceConcurrentHostsKeepIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:concurrent", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:concurrent", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestEpisodicReconcileHostScopeAndDeletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:scope", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:scope", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestEpisodicDSHCompressedDiscoveryAndHydration(t *testing.T) {
 	if err != nil || len(sources) != 1 {
 		t.Fatalf("dsh sources=%+v err=%v", sources, err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:dsh", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:dsh", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 	if err := os.WriteFile(second, []byte(later.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:legacy", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:legacy", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +522,7 @@ func TestEpisodicSourceScanWriteAcrossScales(t *testing.T) {
 				`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"later answer"}}`+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:scale", Mode: "local"})
+			memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:scale", Mode: "local"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -669,7 +669,7 @@ func TestEpisodicReconcileCancellationDoesNotImport(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:cancel", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:cancel", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +689,7 @@ func TestEpisodicStatusRejectsMalformedCheckpoint(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("DSH_HOME", filepath.Join(home, ".dsh"))
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:checkpoint", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:checkpoint", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,7 +824,7 @@ func TestEpisodicHookThenScanKeepsIdentityTimestampsAndDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -885,7 +885,7 @@ func TestEpisodicSourceDeletionAfterSnapshotIsSkipped(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:delete-race", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:delete-race", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1024,7 +1024,7 @@ func TestEpisodicSourceScanTickRestartFailureAndFairness(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:scan-test", Mode: "local"}
-	memory, err := api.New(cfg)
+	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1038,7 +1038,7 @@ func TestEpisodicSourceScanTickRestartFailureAndFairness(t *testing.T) {
 	if err := memory.Close(); err != nil {
 		t.Fatal(err)
 	}
-	memory, err = api.New(cfg)
+	memory, err = facade.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1113,7 +1113,7 @@ func TestEpisodicSourceScanIndependentScopesAndSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, scope := range []string{"mem:scan-one", "mem:scan-two"} {
-		memory, err := api.New(&config.Config{DB: filepath.Join(home, fmt.Sprintf("memory-%d.db", i)), Scope: scope, Mode: "local"})
+		memory, err := facade.New(&config.Config{DB: filepath.Join(home, fmt.Sprintf("memory-%d.db", i)), Scope: scope, Mode: "local"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1141,7 +1141,7 @@ func TestEpisodicSourceScanRetainsDuplicateLineage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	memory, err := api.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:lineage", Mode: "local"})
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:lineage", Mode: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}

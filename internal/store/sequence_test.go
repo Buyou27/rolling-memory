@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/rocareer/rolling-memory/internal/ids"
 )
 
 type sequenceRatioVectors struct {
@@ -74,8 +76,8 @@ func TestPyRoundMatchesPython(t *testing.T) {
 		{2.5, 0, 2},
 		{0.16666666666666666, 4, 0.1667},
 	} {
-		if got := pyRound(testCase.value, testCase.digits); got != testCase.want {
-			t.Fatalf("pyRound(%v,%d) = %v, want %v",
+		if got := ids.PyRound(testCase.value, testCase.digits); got != testCase.want {
+			t.Fatalf("ids.PyRound(%v,%d) = %v, want %v",
 				testCase.value, testCase.digits, got, testCase.want)
 		}
 	}
