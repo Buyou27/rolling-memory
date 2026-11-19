@@ -5,6 +5,7 @@ package harness
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,8 @@ func Check(harnesses []Harness, options InstallOptions, live bool) *Report {
 		report.Add("*", "binary", "-", StatusError, err.Error())
 		return report
 	}
+	report.Options.Lang = resolveInstallLang(report.Options)
+	checkLauncher(report.Options, report)
 	if live {
 		server := Handshake(report.Options, 30*time.Second)
 		report.Extra["server"] = server
@@ -80,6 +83,66 @@ func Check(harnesses []Harness, options InstallOptions, live bool) *Report {
 		}
 	}
 	return report
+}
+
+func resolveLauncherPath(value string) (string, error) {
+	if filepath.IsAbs(value) || strings.ContainsAny(value, `/\`) {
+		return value, nil
+	}
+	return exec.LookPath(value)
+}
+
+// checkLauncher reports whether the command every host registration points at
+// is present and current. It is the static contract that used to pass when the
+// launcher was missing; a live handshake is reported separately.
+func checkLauncher(options InstallOptions, report *Report) {
+	if options.Binary != "" {
+		path := options.ResolvedBinary()
+		resolved, resolveErr := resolveLauncherPath(path)
+		if resolveErr != nil {
+			report.Add("*", "binary", path, StatusError, "custom launcher unavailable: "+resolveErr.Error())
+			return
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			report.Add("*", "binary", path, StatusError, "custom launcher unavailable: "+err.Error())
+			return
+		}
+		if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
+			report.Add("*", "binary", path, StatusError, "custom launcher is not an executable file")
+			return
+		}
+		report.Add("*", "binary", path, StatusOK, "custom launcher")
+		return
+	}
+	path := DefaultShimPath(options.Home)
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			report.Add("*", "binary", path, StatusMissing, "launcher missing; run `rolling-memory install`")
+			return
+		}
+		report.Add("*", "binary", path, StatusError, "cannot inspect launcher: "+err.Error())
+		return
+	}
+	if !info.Mode().IsRegular() {
+		report.Add("*", "binary", path, StatusConflict, "launcher is not a regular file")
+		return
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		report.Add("*", "binary", path, StatusError, "cannot read launcher: "+err.Error())
+		return
+	}
+	if string(raw) == expectedShimText() {
+		report.Add("*", "binary", path, StatusOK, "")
+		return
+	}
+	if generatedShim(string(raw)) {
+		report.Add("*", "binary", path, StatusOutdated, "launcher points at a different binary; run `rolling-memory install`")
+		return
+	}
+	report.Add("*", "binary", path, StatusConflict, "file is not our shim; not touching it")
 }
 
 // validateMCPRegistration checks the stored registration without executing it.

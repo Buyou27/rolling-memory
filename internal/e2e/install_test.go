@@ -179,7 +179,7 @@ func TestInstallCheckAcrossHarnesses(t *testing.T) {
 
 	// The bare form (no harness names) rediscovers exactly the three
 	// installations from the temporary HOME: detection plus the installed filter.
-	bare := sb.run("install", "--check", "--binary", binaryPath, "--json")
+	bare := sb.run("install", "--check", "--binary", binaryPath, "--skill-file", sb.skillFile(), "--json")
 	assertExit(t, bare, 0, "install --check (detected)")
 	bareReport := jsonObject(t, bare.stdout)
 	if bareReport["ok"] != true {
@@ -191,9 +191,9 @@ func TestInstallCheckAcrossHarnesses(t *testing.T) {
 		if !ok {
 			t.Fatalf("action is not an object: %#v", item)
 		}
-		if stringField(t, action, "component") == "server" {
-			// The server-level action rides every report under harness "*"; it is not a
-			// harness installation and must not count towards the detected set.
+		if component := stringField(t, action, "component"); component == "server" || component == "binary" {
+			// Report-level actions ride every report under harness "*"; they are not
+			// harness installations and must not count towards the detected set.
 			continue
 		}
 		selected[stringField(t, action, "harness")] = true

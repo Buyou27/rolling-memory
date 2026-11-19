@@ -197,7 +197,7 @@
     "install/240-install/expected/050-force.report.json": "76f6e7c3480736f185578270252dcb0deade713b1f7369a73cd72042732805c3",
     "install/240-install/expected/050-force.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "install/240-install/expected/060-check.exit.txt": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
-    "install/240-install/expected/060-check.report.json": "9f3cf213bafb1ee7ba3c1781d43f32488d6512831974451e5ca1dcb9a824d1c2",
+    "install/240-install/expected/060-check.report.json": "0ed3316dc3a958d29bfaa6f8038e46eb0e3d807fa64dbd85c7c527d1cd4acdb8",
     "install/240-install/expected/060-check.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "install/240-install/expected/070-uninstall.exit.txt": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
     "install/240-install/expected/070-uninstall.report.json": "5d4b240122e0abf449d22e01410f076a3da6f773688eba251d14060f79c810fa",
@@ -227,7 +227,7 @@
     "vectors/time.json": "ad9afaba9f3d8fcbd3b28c968f4be3ac1978e2beb0678f1a43c8ed1979e571e7",
     "vectors/tokenize.json": "b0279bcf10b5f3e8d6f5f2dd94f9bba9f03df77f686279802df16de5f80a10e5"
   },
-  "seal_sha256": "73bf3b9f0c898278690118a367488e23a6caba36ac195875d14688cd6a5e21ba",
+  "seal_sha256": "b3613558bff7ae6c6a6be22a05e2827dd27860e9da83d4e84ffcc57f895b7745",
   "frozen_at": 1793102400,
   "frozen_at_iso": "2026-10-27T12:00:00Z",
   "generator": {

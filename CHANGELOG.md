@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The retrieval engine's cluster state is now materialized once from the on-disk baseline and shared by later incremental snapshots, so continuous background ingestion no longer makes each recall wait for a full cluster rebuild while the previous build is still in flight.
+- Re-running `rolling-memory install` after the binary moved no longer stops on its own generated launcher: an owned launcher is updated in place with a backup, while a foreign script still reports a conflict.
+- `rolling-memory install --check` now compares the installed skill with the current release and inspects the launcher. An older owned copy reports `outdated`, a user-edited copy reports `conflict`, and a missing launcher fails the check instead of passing with a live probe against a different executable.
+- An enabled native plugin no longer ends up with a second skill, MCP entry, or prompt hook beside it: `--force` cannot duplicate a plugin-provided surface, and `--dedupe` removes only this tool's owned copy. A plugin MCP command that is not available is reported as a conflict rather than trusted.
+- After an in-place upgrade, `rolling-memory daemon restart` can retire a daemon that still serves the previous binary. The command authenticates the stale socket by ownership, vault path, and protocol identity; `install` prints it when the mismatch is present.
+- Plugin cache directories are ordered by semantic version, so `0.10.0` is selected over `0.9.0`.
 - Preparing the evaluation workbench no longer stops with an identity-mismatch error when the evaluation store was written by an earlier engine build: the stored corpus is re-ingested under the current endpoint and tokenizer instead. A resumed ingest also re-encodes every unit whenever the tokenizer arm changes, so a warm store is never searched with the wrong vocabulary. Evaluation receipts now report the number of units actually written, so a warm-store run shows zero instead of the corpus size.
 
 ### Added

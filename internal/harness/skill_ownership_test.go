@@ -31,7 +31,7 @@ func TestSkillOwnershipProtectsUserFiles(t *testing.T) {
 	}
 	check := &Report{}
 	checkSkill(h, options, check)
-	if check.Actions[0].Status != StatusOK || check.Actions[0].Detail == "" {
+	if check.Actions[0].Status != StatusConflict || check.Actions[0].Detail == "" {
 		t.Fatalf("check custom skill: %#v", check.Actions)
 	}
 	for _, force := range []bool{false, true} {
@@ -133,7 +133,7 @@ func TestSkillOwnershipUpdateAndModifiedConflict(t *testing.T) {
 	}
 	report = &Report{}
 	checkSkill(h, options, report)
-	if report.Actions[0].Status != StatusOK || report.Actions[0].Detail == "" {
+	if report.Actions[0].Status != StatusConflict || report.Actions[0].Detail == "" {
 		t.Fatalf("check modified skill: %#v", report.Actions)
 	}
 	report = &Report{}

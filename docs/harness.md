@@ -57,7 +57,7 @@ SQLite (WAL)                 ← Storage layer: local plaintext vault
 ### 4.2 Other Harnesses & Native Plugins
 
 - **Other Targets**: The installer also detects **Cursor**, **Windsurf**, **Cline / Roo Code**, **WorkBuddy**, and **Doubao**. To select a specific target, pass its harness ID (`rolling-memory install <id>`). Check the installation output and your host's current settings location: host versions can use different paths. WorkBuddy's plugin includes a skill, an MCP registration, and a prompt hook, but requires a separately installed local CLI. If the host does not provide the plugin root, the MCP launcher uses that installed CLI; without it the server cannot start and does not download one automatically. Doubao's MCP connector requires manual setup (see §4.4).
-- **Native Plugins**: When an enabled plugin declares the same skill or MCP server, `install` preserves existing entries and reports a conflict where applicable instead of automatically removing them. Review the host configuration and plugin state before resolving duplicates; a plugin declaration does not confirm that the host loaded it.
+- **Native Plugins**: When an enabled plugin declares the same skill or MCP server, `install` never creates a second copy beside it. An existing copy written by this tool is reported as a duplicate; run `rolling-memory install <id> --dedupe` to remove only this tool's owned copy. Review the host configuration and plugin state before resolving duplicates; a plugin declaration does not confirm that the host loaded it.
 
 ### 4.3 Three Safe Config Writers
 
@@ -141,6 +141,9 @@ rolling-memory install --check
 
 # 8. Safely uninstall all entries written by Rolling Memory (preserves foreign entries)
 rolling-memory install --uninstall
+
+# 9. Remove this tool's duplicate copy when a native plugin provides the same surface
+rolling-memory install zcode --dedupe
 ```
 
 ---
@@ -151,8 +154,8 @@ rolling-memory install --uninstall
 
 | Tier | Check | Verification Method |
 |---|---|---|
-| **Tier 1: Skill Discovered** | `SKILL.md` exists under the harness skill root with valid frontmatter | `rolling-memory install --check` |
-| **Tier 2: MCP Registered** | Valid `rolling-memory` server entry exists in the harness configuration file | `rolling-memory install --check` |
+| **Tier 1: Skill Current** | `SKILL.md` exists under the harness skill root, carries valid frontmatter, and matches the current release; an older owned copy reports `outdated`, a user-modified copy reports `conflict` | `rolling-memory install --check` |
+| **Tier 2: MCP Registered** | Valid `rolling-memory` server entry exists in the harness configuration file; the launcher is present and current | `rolling-memory install --check` |
 | **Tier 3: Live MCP Handshake** | Spawns the launcher, sends `initialize` and `tools/list`, and confirms the single `recall` tool | `install --check` (`server ok · rolling-memory ... · tools: recall`) |
 | **Tier 4: Session Behavior** | Check whether the agent calls `recall` and whether the intended source was imported | Ask a history question in a new session and inspect the local records; source coverage is limited as described in §4.5 |
 
@@ -173,7 +176,7 @@ exec "<absolute>/bin/rolling-memory" "$@"
 - **Self-Contained Execution**: The Go binary embeds SQLite and all runtime logic; the shim performs a single `exec`.
 - **Windows Support**: Generates `%LOCALAPPDATA%\rolling-memory\bin\rolling-memory.cmd` (`@echo off` + absolute path + `%*`).
 - **Portable USB Host Anchor**: When `install` is executed from a `.portable` USB payload, the generated launcher automatically upgrades to a **mount-drift-healing Host Anchor** — executing the original path when mounted at the same location, or scanning removable-media mount roots (`/Volumes/*`, `/media/*`, `/run/media/*`, `/mnt/*`, and Windows `D:..Z:`) when mount names or drive letters shift (see [usb-portable.md](usb-portable.md)).
-- **Ownership Guard**: Shims carry the `Rolling-Memory launcher` header comment so subsequent `install` runs update them idempotently while foreign scripts report `conflict`.
+- **Ownership Guard**: Shims carry the exact generated header comment. A later `install` adopts its own launcher even when the absolute binary path changed, backing up the previous file first; foreign scripts still report `conflict`.
 
 ---
 
@@ -181,7 +184,7 @@ exec "<absolute>/bin/rolling-memory" "$@"
 
 - **Automatic Pre-Write Backups**: Every modified configuration file is backed up to `<file>.rolling-memory.<YYYYmmddHHMMSS>.bak` before writing.
 - **Strict Idempotency**: Re-running `install` when nothing changed reports `unchanged` without creating redundant backups.
-- **Conflict Protection**: Existing entries not owned by this instance report `conflict` unless `--force` is explicitly supplied.
+- **Conflict Protection**: Existing entries not owned by this instance report `conflict` unless `--force` is explicitly supplied. A native-plugin duplicate is resolved only by `--dedupe`, which removes this tool's owned copy; `--force` never creates a second copy beside an active plugin.
 - **One-Command Rollback**: Restore any `.bak` file or run `rolling-memory install --uninstall` to remove all registered entries cleanly.
 
 ---
@@ -227,7 +230,7 @@ rolling-memory update --schedule remove
 - **Source Tag Rebuild**: source installs can rebuild from a specific tag with `ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh` (or `bash install.sh --ref v0.0.6`). On Windows use `powershell -ExecutionPolicy Bypass -File install.ps1 --ref v0.0.6`. The installer clones that tag, builds the CLI, and records the source provenance; it does not overwrite the vault.
 - **Automatic-Check Controls**: set `ROLLING_MEMORY_UPDATE_CHECK=off` to disable background checks, or `ROLLING_MEMORY_UPDATE_API_BASE` to use an enterprise mirror for tag discovery. `update --check` remains available explicitly.
 - **Fail-Closed SHA-256 Verification**: Downloaded artifacts are checked against the release channel's `SHA256SUMS` before replacing local files; a digest mismatch aborts the update.
-- **Local Daemon Safety**: A shared local daemon can be controlled only after its user, identity, and configuration are verified. An old or unverifiable daemon is not stopped automatically; requests that cannot verify it return an error. If a request fails after being sent, it is not automatically retried. The shared daemon assumes a trusted local user and does not protect against arbitrary code running as that same user.
+- **Local Daemon Safety**: A shared local daemon can be controlled only after its user, identity, and configuration are verified. When an upgrade leaves an older daemon serving the previous binary, ordinary requests fail closed; `rolling-memory daemon restart` authenticates that same-owner socket by vault path and protocol identity, retires it, and starts the current binary. `install` prints that command when it detects the condition. If a request fails after being sent, it is not automatically retried. The shared daemon assumes a trusted local user and does not protect against arbitrary code running as that same user.
 - **Vault Safety Guarantee**: Updating never modifies, truncates, or overwrites your local SQLite memory vault (`~/.local/share/rolling-memory/memory.db`); schema migrations are applied idempotently in place when the database is opened.
 - **Zero-Environment Design (No Git / Go / Node.js / Python Required)**:
   - Both `install.sh` and `install.ps1` fetch prebuilt static binaries verified against `SHA256SUMS` (supporting `curl` or `wget` on POSIX, native x64 and ARM64 on Windows, and automatic release-mirror fallback when the primary channel is unreachable).

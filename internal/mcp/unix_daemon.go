@@ -52,6 +52,12 @@ const (
 	daemonIdentityVersion = 1
 )
 
+// errUnixDaemonExecutableMismatch marks a same-owner socket served by a
+// different binary. It is recoverable through the explicit daemon restart path,
+// which authenticates the stale process by socket ownership and vault identity
+// before asking it to step down.
+var errUnixDaemonExecutableMismatch = errors.New("daemon executable mismatch")
+
 // DefaultUnixSocketPath returns the canonical Unix domain socket path for the
 // shared local memory daemon (`~/.local/state/rolling-memory/engine.sock`).
 func DefaultUnixSocketPath() string {
@@ -457,6 +463,8 @@ func requestUnixDaemonShutdown(sockPath string) {
 
 // ShutdownUnixDaemon asks the local Unix domain socket daemon (if running) to
 // step down cleanly so a freshly updated binary takes over on the next request.
+// A daemon still serving an older binary is authenticated by socket ownership,
+// vault path, and protocol identity, then asked to step down as well.
 func ShutdownUnixDaemon(sockPath string) error {
 	if sockPath == "" {
 		sockPath = DefaultUnixSocketPath()
@@ -472,8 +480,18 @@ func ShutdownUnixDaemon(sockPath string) error {
 		return err
 	}
 	if err := requestUnixDaemonControl(sockPath, "/v1/shutdown", cfg); err != nil {
-		return err
+		if !errors.Is(err, errUnixDaemonExecutableMismatch) {
+			return err
+		}
+		if staleErr := shutdownStaleUnixDaemon(sockPath, info, cfg); staleErr != nil {
+			return fmt.Errorf("%w (stale daemon shutdown failed: %v)", err, staleErr)
+		}
+		return nil
 	}
+	return waitUnixDaemonSocketGone(info, sockPath)
+}
+
+func waitUnixDaemonSocketGone(info os.FileInfo, sockPath string) error {
 	deadline := time.Now().Add(daemonStartupWait)
 	for time.Now().Before(deadline) {
 		current, err := os.Lstat(sockPath)
@@ -486,6 +504,88 @@ func ShutdownUnixDaemon(sockPath string) error {
 		time.Sleep(30 * time.Millisecond)
 	}
 	return errors.New("daemon shutdown was not confirmed")
+}
+
+func sameVaultPath(left, right string) bool {
+	if left == right {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+// shutdownStaleUnixDaemon retires a same-owner socket that is served by a
+// different executable. It carries no business request: peer ownership is
+// checked first, then the health identity must describe this vault and this
+// forwarding protocol before a shutdown request is written.
+func shutdownStaleUnixDaemon(sockPath string, info os.FileInfo, cfg *config.Config) error {
+	conn, err := net.DialTimeout("unix", sockPath, daemonPingTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	pid, err := verifyUnixDaemonPeerOwner(conn)
+	if err != nil {
+		return fmt.Errorf("daemon peer verification: %w", err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(conn)
+	request, err := http.NewRequest(http.MethodGet, "http://unix/v1/health", nil)
+	if err != nil {
+		return err
+	}
+	if err := request.Write(conn); err != nil {
+		return err
+	}
+	response, err := http.ReadResponse(reader, request)
+	if err != nil {
+		return err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxHTTPBody+1))
+	_ = response.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if response.StatusCode != http.StatusOK || len(body) > maxHTTPBody {
+		return errors.New("stale daemon health is not readable")
+	}
+	var health UnixHealthResponse
+	if err := json.Unmarshal(body, &health); err != nil {
+		return fmt.Errorf("stale daemon health: %w", err)
+	}
+	if !health.OK || health.PID != pid || !sameVaultPath(health.DB, cfg.DB) ||
+		(health.IdentityVersion != 0 && health.IdentityVersion != daemonIdentityVersion) ||
+		(health.Mode != "" && health.Mode != "local") {
+		return errors.New("stale daemon identity does not match this vault")
+	}
+	current, err := os.Lstat(sockPath)
+	if err != nil || !os.SameFile(info, current) {
+		return errors.New("stale daemon socket changed during recovery")
+	}
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return err
+	}
+	shutdown, err := http.NewRequest(http.MethodPost, "http://unix/v1/shutdown", strings.NewReader(`{}`))
+	if err != nil {
+		return err
+	}
+	shutdown.Header.Set("Content-Type", "application/json")
+	if err := shutdown.Write(conn); err != nil {
+		return err
+	}
+	reply, err := http.ReadResponse(reader, shutdown)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(reply.Body, maxHTTPBody+1))
+	_ = reply.Body.Close()
+	if reply.StatusCode != http.StatusOK {
+		return fmt.Errorf("stale daemon shutdown returned status %d", reply.StatusCode)
+	}
+	return waitUnixDaemonSocketGone(info, sockPath)
 }
 
 // InvalidateUnixDaemonCaches notifies the running local Unix domain socket daemon
@@ -741,6 +841,9 @@ func ensureUnixDaemonContext(ctx context.Context, sockPath string, cfg *config.C
 		conn, _, verifyErr := verifiedUnixDaemonConnContext(ctx, sockPath, cfg)
 		if verifyErr == nil {
 			return conn.Close()
+		}
+		if errors.Is(verifyErr, errUnixDaemonExecutableMismatch) {
+			return fmt.Errorf("%w: an older daemon is running; run `rolling-memory daemon restart` to replace it", verifyErr)
 		}
 		if !unixDaemonConnectionRefused(verifyErr) {
 			return verifyErr

@@ -5,19 +5,24 @@ package harness
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 // zcodePluginInfo describes an enabled self-contained harness plugin for Rolling-Memory.
 type zcodePluginInfo struct {
-	ID       string
-	Dir      string
-	SkillMD  string
-	HasSkill bool
-	HasMCP   bool
-	HasHooks bool
+	ID        string
+	Dir       string
+	SkillMD   string
+	HasSkill  bool
+	HasMCP    bool
+	MCPUsable bool
+	MCPDetail string
+	HasHooks  bool
 }
 
 // activeNativePlugin discovers enabled native plugin declarations. Has* fields
@@ -106,11 +111,23 @@ func inspectPluginDir(pluginDir, manifestDir, pluginID string, options InstallOp
 	}
 	skillMD := filepath.Join(pluginDir, "skills", options.SkillName, "SKILL.md")
 	hasSkill := fileExists(skillMD)
-	_, hasMCP := jsonLookup(manifest, []string{"mcpServers", options.Name})
+	var mcpEntry any
+	hasMCP := false
+	if entry, found := jsonLookup(manifest, []string{"mcpServers", options.Name}); found {
+		hasMCP = true
+		mcpEntry = entry
+	}
 	if !hasMCP {
 		if data, err := loadJSONFile(filepath.Join(pluginDir, ".mcp.json")); err == nil {
-			_, hasMCP = jsonLookup(data, []string{"mcpServers", options.Name})
+			if entry, found := jsonLookup(data, []string{"mcpServers", options.Name}); found {
+				hasMCP = true
+				mcpEntry = entry
+			}
 		}
+	}
+	mcpUsable, mcpDetail := false, ""
+	if hasMCP {
+		mcpUsable, mcpDetail = pluginMCPCommandUsable(mcpEntry, pluginDir, options)
 	}
 	hasHooks := pluginHasHooks(filepath.Join(pluginDir, "hooks", "hooks.json"), pluginDir)
 	if !hasSkill && !hasMCP && !hasHooks {
@@ -119,13 +136,78 @@ func inspectPluginDir(pluginDir, manifestDir, pluginID string, options InstallOp
 	// Local files cannot establish that the host loaded the plugin. None of the
 	// declared surfaces is a verified replacement for an existing registration.
 	return zcodePluginInfo{
-		ID:       pluginID,
-		Dir:      pluginDir,
-		SkillMD:  skillMD,
-		HasSkill: hasSkill,
-		HasMCP:   hasMCP,
-		HasHooks: hasHooks,
+		ID:        pluginID,
+		Dir:       pluginDir,
+		SkillMD:   skillMD,
+		HasSkill:  hasSkill,
+		HasMCP:    hasMCP,
+		MCPUsable: mcpUsable,
+		MCPDetail: mcpDetail,
+		HasHooks:  hasHooks,
 	}, true
+}
+
+// pluginMCPCommandUsable checks the declared command itself. Interpreter
+// arguments are not resolved: a plugin may ship a launcher that only exists in
+// the host's materialised copy, and the host still performs its own check.
+func pluginMCPCommandUsable(entry any, pluginDir string, options InstallOptions) (bool, string) {
+	object, ok := asObject(entry)
+	if !ok {
+		return false, "entry is not an object"
+	}
+	commandValue, found := objectGet(object, "command")
+	if !found {
+		return false, "missing command"
+	}
+	command := ""
+	if items, isArray := asArray(commandValue); isArray {
+		if len(items) == 0 {
+			return false, "empty command array"
+		}
+		command = pyString(items[0])
+	} else {
+		command = pyString(commandValue)
+	}
+	command = expandPluginRoot(strings.TrimSpace(command), pluginDir)
+	if command == "" {
+		return false, "empty command"
+	}
+	if isOurBinary(command, options) {
+		return true, ""
+	}
+	if !strings.ContainsAny(command, `/\`) {
+		if _, err := exec.LookPath(command); err == nil {
+			return true, ""
+		}
+		return false, "command " + command + " is not on PATH"
+	}
+	path := command
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(pluginDir, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, "command " + command + " is not available"
+	}
+	if info.IsDir() {
+		return false, "command " + command + " is a directory"
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		return false, "command " + command + " is not executable"
+	}
+	return true, ""
+}
+
+func expandPluginRoot(value, root string) string {
+	for _, token := range []string{
+		"${CLAUDE_PLUGIN_ROOT}",
+		"${ZCODE_PLUGIN_ROOT}",
+		"${CURSOR_PLUGIN_ROOT}",
+		"${CODEBUDDY_PLUGIN_ROOT}",
+	} {
+		value = strings.ReplaceAll(value, token, root)
+	}
+	return value
 }
 
 // activeWorkBuddyPlugin resolves the enabled native plugin for WorkBuddy. The
@@ -352,7 +434,9 @@ func resolvePluginCacheDirFor(cacheRoot, market, pluginName, manifestDir string)
 		if len(versions) == 0 {
 			continue
 		}
-		sort.Strings(versions)
+		sort.Slice(versions, func(left, right int) bool {
+			return comparePluginVersions(versions[left], versions[right]) < 0
+		})
 		for i := len(versions) - 1; i >= 0; i-- {
 			candidate := filepath.Join(base, versions[i])
 			if fileExists(filepath.Join(candidate, manifestDir, "plugin.json")) {
@@ -388,4 +472,58 @@ func zcodeHasGlobalHooks(harness Harness, options InstallOptions) bool {
 		}
 	}
 	return false
+}
+
+// comparePluginVersions orders cached plugin directories by semantic version
+// rather than by byte order. Host caches use plain "0.9.0" / "0.10.0" names; a
+// leading "v" and a prerelease suffix are accepted.
+func comparePluginVersions(left, right string) int {
+	leftCore, leftPre, leftOK := parsePluginVersion(left)
+	rightCore, rightPre, rightOK := parsePluginVersion(right)
+	if !leftOK || !rightOK {
+		return strings.Compare(left, right)
+	}
+	for index := 0; index < len(leftCore) || index < len(rightCore); index++ {
+		var a, b int
+		if index < len(leftCore) {
+			a = leftCore[index]
+		}
+		if index < len(rightCore) {
+			b = rightCore[index]
+		}
+		if a != b {
+			if a < b {
+				return -1
+			}
+			return 1
+		}
+	}
+	if leftPre == rightPre {
+		return strings.Compare(left, right)
+	}
+	if leftPre == "" {
+		return 1
+	}
+	if rightPre == "" {
+		return -1
+	}
+	return strings.Compare(leftPre, rightPre)
+}
+
+func parsePluginVersion(value string) ([]int, string, bool) {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "v"))
+	core, pre, _ := strings.Cut(trimmed, "-")
+	parts := strings.Split(core, ".")
+	if len(parts) == 0 {
+		return nil, "", false
+	}
+	numbers := make([]int, 0, len(parts))
+	for _, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, "", false
+		}
+		numbers = append(numbers, number)
+	}
+	return numbers, pre, true
 }

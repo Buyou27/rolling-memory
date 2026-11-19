@@ -146,12 +146,24 @@ func installSkill(harness Harness, options InstallOptions, report *Report) {
 		report.Add(harness.ID, "skill", "-", StatusSkipped, "no skill root for this scope")
 		return
 	}
-	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasSkill && !options.Force {
+	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasSkill {
 		target := targets[0]
 		if _, err := os.Lstat(target); err == nil {
-			report.Add(harness.ID, "skill", target, StatusConflict, "plugin "+plugin.ID+" also declares this skill; existing file kept for manual review")
+			if options.Dedupe {
+				start := len(report.Actions)
+				uninstallSkill(harness, options, report)
+				for index := start; index < len(report.Actions); index++ {
+					action := &report.Actions[index]
+					if action.Component == "skill" && (action.Status == StatusRemoved || action.Status == StatusPlanned) {
+						action.Detail = "deduplicated; plugin " + plugin.ID + " provides this skill"
+					}
+				}
+				return
+			}
+			report.Add(harness.ID, "skill", target, StatusConflict,
+				"plugin "+plugin.ID+" also declares this skill; run `rolling-memory install "+harness.ID+" --dedupe` to remove this tool's copy")
 		} else if errors.Is(err, os.ErrNotExist) {
-			report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" declares this skill; host loading is not verified")
+			report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" provides this skill; host loading is not verified")
 		} else {
 			report.Add(harness.ID, "skill", target, StatusError, "cannot inspect: "+err.Error())
 		}
@@ -172,7 +184,19 @@ func installSkill(harness Harness, options InstallOptions, report *Report) {
 		status := StatusInstalled
 		if readErr == nil {
 			if !skillOwned(target, current) {
-				report.Add(harness.ID, "skill", target, StatusConflict, "skill is not owned or was modified; not touching it")
+				if string(current) != text {
+					report.Add(harness.ID, "skill", target, StatusConflict, "skill is not owned or was modified; not touching it")
+					continue
+				}
+				if options.DryRun {
+					report.Add(harness.ID, "skill", target, StatusPlanned, "restore ownership marker")
+					continue
+				}
+				if err := os.WriteFile(marker, []byte(skillDigest(current)), 0o600); err != nil {
+					report.Add(harness.ID, "skill", target, StatusError, "cannot restore ownership marker: "+err.Error())
+					continue
+				}
+				report.Add(harness.ID, "skill", target, StatusUnchanged, "ownership marker restored")
 				continue
 			}
 			if string(current) == text {
@@ -293,6 +317,11 @@ func checkSkill(harness Harness, options InstallOptions, report *Report) {
 		report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" declares this skill; host loading is not verified")
 		return
 	}
+	expected, textErr := skillText(options)
+	if textErr != nil {
+		report.Add(harness.ID, "skill", targets[0], StatusError, textErr.Error())
+		return
+	}
 	for _, target := range targets {
 		if !fileExists(target) {
 			report.Add(harness.ID, "skill", target, StatusMissing, "")
@@ -303,19 +332,29 @@ func checkSkill(harness Harness, options InstallOptions, report *Report) {
 			report.Add(harness.ID, "skill", target, StatusError, "cannot read: "+err.Error())
 			continue
 		}
+		if !skillOwned(target, raw) {
+			if string(raw) == expected {
+				report.Add(harness.ID, "skill", target, StatusOK,
+					"content matches the current release; run `rolling-memory install "+harness.ID+"` to restore the ownership marker")
+			} else {
+				report.Add(harness.ID, "skill", target, StatusConflict, "skill is not owned or was modified; not touching it")
+			}
+			continue
+		}
 		lines := pySplitLines(string(raw))
 		if len(lines) > 8 {
 			lines = lines[:8]
 		}
 		head := strings.Join(lines, "\n")
-		if strings.Contains(head, "name: "+options.SkillName) && strings.Contains(head, "description:") {
-			detail := ""
-			if !skillOwned(target, raw) {
-				detail = "custom or modified skill; installation and removal require manual review"
-			}
-			report.Add(harness.ID, "skill", target, StatusOK, detail)
-		} else {
+		if !strings.Contains(head, "name: "+options.SkillName) || !strings.Contains(head, "description:") {
 			report.Add(harness.ID, "skill", target, StatusConflict, "frontmatter missing name/description")
+			continue
 		}
+		if string(raw) == expected {
+			report.Add(harness.ID, "skill", target, StatusOK, "")
+			continue
+		}
+		report.Add(harness.ID, "skill", target, StatusOutdated,
+			"installed skill differs from the current release; run `rolling-memory install "+harness.ID+"`")
 	}
 }

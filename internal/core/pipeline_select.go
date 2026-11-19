@@ -603,7 +603,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 			best.remaining = rem
 			rawScore := c.lex + c.phrase + c.entity + c.structure + rem + c.stSpread + c.stCorrob
 			if c.clonePenalty > 0 {
-				rawScore *= (1.0 - cloneDampingKernel*c.clonePenalty)
+				rawScore *= math.Max(0, 1.0-cloneDampingKernel*c.clonePenalty)
 			}
 			best.score = rawScore
 			best.epoch = len(out)
@@ -614,7 +614,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		hop1 := c.stSpread
 		hop2 := c.stCorrob
 		if c.clonePenalty > 0 {
-			scale := 1.0 - cloneDampingKernel*c.clonePenalty
+			scale := math.Max(0, 1.0-cloneDampingKernel*c.clonePenalty)
 			direct *= scale
 			hop1 *= scale
 			hop2 *= scale

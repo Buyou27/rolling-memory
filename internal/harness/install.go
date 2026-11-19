@@ -19,13 +19,7 @@ func Install(harnesses []Harness, options InstallOptions) *Report {
 	// A bare install (no --lang) resumes the persisted language preference so a
 	// zh-CN user's re-run never silently flips the installed skill to English;
 	// the first install on a fresh machine keeps the documented "en" default.
-	if report.Options.Lang == "" {
-		if saved := ReadSavedInstallLang(report.Options.Home); saved != "" {
-			report.Options.Lang = saved
-		} else {
-			report.Options.Lang = "en"
-		}
-	}
+	report.Options.Lang = resolveInstallLang(report.Options)
 	ensureBinary(report.Options, report)
 	if len(report.Failures()) > 0 {
 		return report
@@ -106,4 +100,17 @@ func Uninstall(harnesses []Harness, options InstallOptions) *Report {
 func newReport(mode string, options InstallOptions) *Report {
 	options = options.normalized()
 	return &Report{Mode: mode, Options: options, Extra: map[string]any{}}
+}
+
+// resolveInstallLang returns the explicit language, then the saved preference,
+// then the documented English default. Install and Check share it so a check
+// never compares an English skill against a Chinese installation.
+func resolveInstallLang(options InstallOptions) string {
+	if norm, err := NormalizeInstallLang(options.Lang); err == nil && norm != "" {
+		return norm
+	}
+	if saved := ReadSavedInstallLang(options.Home); saved != "" {
+		return saved
+	}
+	return "en"
 }

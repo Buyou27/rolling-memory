@@ -1,6 +1,13 @@
 {
   "actions": [
     {
+      "component": "binary",
+      "detail": "custom launcher",
+      "harness": "*",
+      "path": "<CASE>/bin/rolling-memory",
+      "status": "ok"
+    },
+    {
       "component": "server",
       "detail": "selected launcher probe only; host registrations are not executed",
       "harness": "*",

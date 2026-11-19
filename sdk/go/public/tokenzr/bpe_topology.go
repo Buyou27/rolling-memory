@@ -463,10 +463,9 @@ func AtomInitialEnergyBits(word string) float64 {
 	if effBPE <= 0 {
 		return carry
 	}
-	invE := 1.0 / math.E
-	energy := (1.0-invE)*effBPE + invE*carry
+	energy := (1.0-transmissionPerHop)*effBPE + transmissionPerHop*carry
 	if IsBPEProperNounPrior(s) {
-		energy += math.E * math.Ln2
+		energy += eulerNumber * math.Ln2
 	}
 	return energy
 }
@@ -513,7 +512,7 @@ func EffectiveLexicalBits(word string) float64 {
 	}
 	r0, _ := utf8.DecodeRuneInString(s)
 	if isUnspacedScriptRune(r0) {
-		return prior + (1.0/math.E)*BPETreeCohesionBits(s)
+		return prior + (1.0/eulerNumber)*BPETreeCohesionBits(s)
 	}
 	return prior
 }

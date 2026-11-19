@@ -1023,6 +1023,8 @@ func BuildParser() *Parser {
 				"also create a desktop launcher that opens the local web console"),
 			flagOption([]string{"--force"}, "force", false,
 				"overwrite same-named foreign entries"),
+			flagOption([]string{"--dedupe"}, "dedupe", false,
+				"remove this tool's duplicate skill, MCP entry, and hook when a native plugin provides the same surface"),
 			stringOption([]string{"--profile"}, "profile", "web",
 				"dsh profile for the MCP patch (default: web)"),
 			flagOption([]string{"--json"}, "json", false, ""),

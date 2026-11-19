@@ -51,6 +51,104 @@ func setupZCodePluginCache(t *testing.T, fx *fixture, version string) string {
 	return pluginDir
 }
 
+func enableZCodePlugin(t *testing.T, fx *fixture) {
+	t.Helper()
+	data, err := loadJSONFile(fx.zcodeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = jsonTableWith(data, []string{"plugins", "enabledPlugins"}, true, func(current ids.OrderedMap) ids.OrderedMap {
+		return objectSet(current, "rolling-memory@marketplace", true)
+	})
+	raw, err := dumpJSON(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeText(fx.zcodeConfig(), raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallDedupesOwnedSurfacesWhenPluginProvidesThem(t *testing.T) {
+	fx := newFixture(t)
+	options := fx.options()
+	options.Name = DefaultName
+	options.SkillName = DefaultName
+	options.Hooks = true
+	zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFailures(t, Install(zcode, options))
+	setupZCodePluginCache(t, fx, "0.7.4")
+	enableZCodePlugin(t, fx)
+
+	options.Dedupe = true
+	report := Install(zcode, options)
+	for _, component := range []string{"skill", "mcp", "hooks"} {
+		action := firstAction(t, report, "zcode", component)
+		if action.Status != StatusRemoved {
+			t.Fatalf("%s dedupe = %#v, want removed", component, action)
+		}
+		if !strings.Contains(action.Detail, "plugin") {
+			t.Fatalf("%s dedupe detail = %q", component, action.Detail)
+		}
+	}
+	if fileExists(filepath.Join(fx.home, ".zcode", "skills", DefaultName, "SKILL.md")) {
+		t.Fatalf("dedupe left the CLI skill in place")
+	}
+	data, err := loadJSONFile(fx.zcodeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := jsonLookup(data, []string{"mcp", "servers", DefaultName}); found {
+		t.Fatalf("dedupe left the CLI MCP entry in place")
+	}
+	if zcodeHasGlobalHooks(zcode[0], options) {
+		t.Fatalf("dedupe left the CLI hook in place")
+	}
+	assertNoFailures(t, Check(zcode, options, false))
+}
+
+func TestForceDoesNotDuplicatePluginOwnedSurfaces(t *testing.T) {
+	fx := newFixture(t)
+	options := fx.options()
+	options.Name = DefaultName
+	options.SkillName = DefaultName
+	zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupZCodePluginCache(t, fx, "0.7.4")
+	enableZCodePlugin(t, fx)
+	options.Force = true
+	assertNoFailures(t, Install(zcode, options))
+	if fileExists(filepath.Join(fx.home, ".zcode", "skills", DefaultName, "SKILL.md")) {
+		t.Fatalf("--force wrote a duplicate skill beside the active plugin")
+	}
+}
+
+func TestPluginCacheOrderUsesSemanticVersions(t *testing.T) {
+	root := t.TempDir()
+	for _, version := range []string{"0.9.0", "0.10.0", "0.0.6"} {
+		manifest := filepath.Join(root, "marketplace", DefaultName, version, ".zcode-plugin", "plugin.json")
+		if _, err := writeText(manifest, `{"name":"rolling-memory"}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := resolvePluginCacheDirFor(root, "marketplace", DefaultName, ".zcode-plugin")
+	want := filepath.Join(root, "marketplace", DefaultName, "0.10.0")
+	if got != want {
+		t.Fatalf("resolved plugin cache = %q, want %q", got, want)
+	}
+	if comparePluginVersions("1.0.0-rc.1", "1.0.0") >= 0 {
+		t.Fatalf("prerelease must sort before the release")
+	}
+	if comparePluginVersions("0.9.0", "0.10.0") >= 0 {
+		t.Fatalf("0.9.0 must sort before 0.10.0")
+	}
+}
+
 func TestPluginSameNameDoesNotProveUsableMCP(t *testing.T) {
 	fx := newFixture(t)
 	options := fx.options()
@@ -871,5 +969,36 @@ func TestInstallScriptNonDevEnvironmentContract(t *testing.T) {
 	}
 	if !strings.Contains(string(out4), "普通用户（免装 Git/Go）") {
 		t.Fatalf("expected end-user friendly guidance in output, got:\n%s", string(out4))
+	}
+}
+
+func TestDedupeKeepsWorkingMCPWhenPluginCommandUnavailable(t *testing.T) {
+	fx := newFixture(t)
+	options := fx.options()
+	options.Name = DefaultName
+	options.SkillName = DefaultName
+	zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFailures(t, Install(zcode, options))
+	pluginDir := setupZCodePluginCache(t, fx, "0.7.4")
+	if _, err := writeText(filepath.Join(pluginDir, ".zcode-plugin", "plugin.json"),
+		`{"name":"rolling-memory","mcpServers":{"rolling-memory":{"type":"stdio","command":"/missing/rolling-memory","args":["mcp"]}}}`); err != nil {
+		t.Fatal(err)
+	}
+	enableZCodePlugin(t, fx)
+	options.Dedupe = true
+	report := Install(zcode, options)
+	action := firstAction(t, report, "zcode", "mcp")
+	if action.Status != StatusConflict || !strings.Contains(action.Detail, "unavailable") {
+		t.Fatalf("dedupe with an unusable plugin command = %#v", action)
+	}
+	data, err := loadJSONFile(fx.zcodeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := jsonLookup(data, []string{"mcp", "servers", DefaultName}); !found {
+		t.Fatalf("working MCP entry was removed for an unusable plugin command")
 	}
 }

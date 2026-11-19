@@ -81,11 +81,12 @@ const (
 	StatusConflict  = "conflict"
 	StatusError     = "error"
 	StatusMissing   = "missing"
+	StatusOutdated  = "outdated"
 	StatusOK        = "ok"
 )
 
 func failedStatus(status string) bool {
-	return status == StatusConflict || status == StatusError || status == StatusMissing
+	return status == StatusConflict || status == StatusError || status == StatusMissing || status == StatusOutdated
 }
 
 // Harness describes where one harness keeps its skills, MCP servers, hooks and
@@ -340,6 +341,7 @@ type InstallOptions struct {
 	Instructions    bool
 	MCPOnly         bool
 	Force           bool
+	Dedupe          bool
 	DryRun          bool
 	DesktopShortcut bool
 	DSHProfile      string

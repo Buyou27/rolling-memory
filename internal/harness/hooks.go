@@ -239,9 +239,21 @@ func installHooks(harness Harness, options InstallOptions, report *Report) {
 	if !hooksEnabled(harness, options, data, path, report) {
 		return
 	}
-	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasHooks && !options.Force {
+	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasHooks {
 		if zcodeHasGlobalHooks(harness, options) {
-			report.Add(harness.ID, "hooks", path, StatusConflict, "existing hooks retained; plugin "+plugin.ID+" is also active")
+			if options.Dedupe {
+				start := len(report.Actions)
+				uninstallHooks(harness, options, report)
+				for index := start; index < len(report.Actions); index++ {
+					action := &report.Actions[index]
+					if action.Component == "hooks" && (action.Status == StatusRemoved || action.Status == StatusPlanned) {
+						action.Detail = "deduplicated; plugin " + plugin.ID + " provides this hook"
+					}
+				}
+				return
+			}
+			report.Add(harness.ID, "hooks", path, StatusConflict,
+				"existing hooks retained; plugin "+plugin.ID+" is also active; run `rolling-memory install "+harness.ID+" --with-hooks --dedupe` to remove this tool's hook")
 			return
 		}
 		report.Add(harness.ID, "hooks", path, StatusUnchanged, "1 event (declared by plugin "+plugin.ID+")")

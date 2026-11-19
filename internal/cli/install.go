@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/harness"
+	"github.com/rocareer/rolling-memory/internal/mcp"
 )
 
 // runInstall handles the `install` subcommand. The registry lives in internal/harness;
@@ -32,6 +34,7 @@ func (a *application) runInstall() int {
 		Instructions: a.args.Flag("with_instructions"),
 		MCPOnly:      a.args.Flag("mcp_only"),
 		Force:        a.args.Flag("force"),
+		Dedupe:       a.args.Flag("dedupe"),
 		DryRun:       a.args.Flag("dry_run"),
 		// A desktop launcher for the web console (--desktop-shortcut).
 		DesktopShortcut: a.args.Flag("desktop_shortcut"),
@@ -86,6 +89,12 @@ func (a *application) runInstall() int {
 		}
 	} else {
 		a.printInstallReport(report)
+		if !options.DryRun && !a.args.Flag("check") && !a.args.Flag("uninstall") {
+			if _, err := mcp.PingUnixDaemon(mcp.DefaultUnixSocketPath(), 500*time.Millisecond); err != nil &&
+				strings.Contains(err.Error(), "daemon executable mismatch") {
+				a.printf("  daemon       stale binary; run `rolling-memory daemon restart` to replace it\n")
+			}
+		}
 	}
 	if len(report.Failures()) > 0 {
 		return 1

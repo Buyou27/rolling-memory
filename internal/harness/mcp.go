@@ -118,11 +118,59 @@ func dshBlock(options InstallOptions) (string, error) {
 	return strings.Join(lines, "\n") + "\n", nil
 }
 
-// isOurBinary reports whether value is the resolved launcher, the bare command
-// name, or a launcher shim path for this platform.
+// isOurBinary reports whether value names this product's executable or the
+// launcher this package manages. Path equality alone is too strict: one
+// installation can be reached through ~/.local/bin, the XDG data launcher, a
+// plugin-supplied path, or the binary that is running the installer.
 func isOurBinary(value string, options InstallOptions) bool {
-	resolved := options.ResolvedBinary()
-	return value == resolved || value == "rolling-memory" || value == "rmem" || value == DefaultShimPath(options.Home)
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	if !strings.ContainsAny(trimmed, `/\`) {
+		switch strings.ToLower(trimmed) {
+		case "rolling-memory", "rolling-memory.exe", "rmem", "rmem.exe":
+			return true
+		}
+		return false
+	}
+	shim := DefaultShimPath(options.Home)
+	dataDir := filepath.Dir(shim)
+	candidates := []string{
+		options.ResolvedBinary(),
+		shim,
+		filepath.Join(dataDir, "rolling-memory"),
+		filepath.Join(dataDir, "rolling-memory.exe"),
+		filepath.Join(dataDir, "rmem"),
+		filepath.Join(dataDir, "rmem.exe"),
+		filepath.Join(options.Home, ".local", "bin", "rolling-memory"),
+		filepath.Join(options.Home, ".local", "bin", "rolling-memory.exe"),
+		executablePath(),
+	}
+	for _, candidate := range candidates {
+		if sameBinary(trimmed, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameBinary compares two paths by the file they resolve to. Relative paths
+// are compared textually against the candidate directory-relative form only
+// when both are already absolute; installers write absolute commands.
+func sameBinary(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return os.SameFile(leftInfo, rightInfo)
 }
 func hasShimSuffixFor(value, goos string) bool {
 	name := shimNameFor(goos)
@@ -430,7 +478,7 @@ func jsonPathIsObject(data ids.OrderedMap, keys []string) bool {
 }
 
 func installMCPJSON(harness Harness, options InstallOptions, path string, report *Report) {
-	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasMCP && !options.Force {
+	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasMCP {
 		data, err := loadJSONFile(path)
 		if err != nil {
 			report.Add(harness.ID, "mcp", path, StatusError, "cannot parse: "+err.Error())
@@ -438,10 +486,33 @@ func installMCPJSON(harness Harness, options InstallOptions, path string, report
 		}
 		keys := append(append([]string{}, harness.MCPKeys...), options.Name)
 		if existing, found := jsonLookup(data, keys); found && existing != nil {
-			report.Add(harness.ID, "mcp", path, StatusConflict, "existing MCP entry retained; plugin "+plugin.ID+" is also active")
+			if !plugin.MCPUsable {
+				report.Add(harness.ID, "mcp", path, StatusConflict,
+					"plugin "+plugin.ID+" declares an unavailable MCP command: "+plugin.MCPDetail+"; keeping this tool's entry")
+				return
+			}
+			if options.Dedupe {
+				start := len(report.Actions)
+				uninstallMCPJSON(harness, options, path, report)
+				for index := start; index < len(report.Actions); index++ {
+					action := &report.Actions[index]
+					if action.Component == "mcp" && (action.Status == StatusRemoved || action.Status == StatusPlanned) {
+						action.Detail = "deduplicated; plugin " + plugin.ID + " provides this MCP entry"
+					}
+				}
+				return
+			}
+			report.Add(harness.ID, "mcp", path, StatusConflict,
+				"existing MCP entry retained; plugin "+plugin.ID+" is also active; run `rolling-memory install "+harness.ID+" --dedupe` to remove this tool's entry")
 			return
 		}
-		report.Add(harness.ID, "mcp", path, StatusConflict, "plugin "+plugin.ID+" declares an MCP entry; host activation is unverified")
+		if !plugin.MCPUsable {
+			report.Add(harness.ID, "mcp", path, StatusConflict,
+				"plugin "+plugin.ID+" declares an unavailable MCP command: "+plugin.MCPDetail)
+			return
+		}
+		report.Add(harness.ID, "mcp", path, StatusSkipped,
+			"plugin "+plugin.ID+" provides this MCP entry; host loading is not verified")
 		return
 	}
 	data, err := loadJSONFile(path)
@@ -571,10 +642,16 @@ func checkMCPJSON(harness Harness, options InstallOptions, path string, report *
 	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasMCP {
 		if found && entry != nil {
 			report.Add(harness.ID, "mcp", path, StatusConflict,
-				"duplicate MCP: both "+filepath.Base(path)+" and plugin "+plugin.ID+" active (run `rolling-memory install "+harness.ID+"` to deduplicate)")
+				"duplicate MCP: both "+filepath.Base(path)+" and plugin "+plugin.ID+" active (run `rolling-memory install "+harness.ID+" --dedupe` to remove this tool's entry)")
 			return
 		}
-		report.Add(harness.ID, "mcp", path, StatusConflict, "plugin "+plugin.ID+" declares MCP; host activation unverified")
+		if !plugin.MCPUsable {
+			report.Add(harness.ID, "mcp", path, StatusConflict,
+				"plugin "+plugin.ID+" declares an unavailable MCP command: "+plugin.MCPDetail)
+			return
+		}
+		report.Add(harness.ID, "mcp", path, StatusSkipped,
+			"plugin "+plugin.ID+" provides MCP; host loading is not verified")
 		return
 	}
 	if !found || entry == nil {

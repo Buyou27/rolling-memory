@@ -26,3 +26,7 @@ func unixDaemonConnectionRefused(error) bool { return false }
 func verifyUnixDaemonPeer(net.Conn) (int, error) {
 	return 0, errors.New("daemon peer verification is unavailable on this platform")
 }
+
+func verifyUnixDaemonPeerOwner(net.Conn) (int, error) {
+	return 0, errors.New("daemon peer verification is unavailable on this platform")
+}

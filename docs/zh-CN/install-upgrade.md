@@ -264,6 +264,7 @@ ROLLING_MEMORY_SOURCE_REF=v0.0.5 bash install.sh
 - `stable` / `beta`：每个下载产物都与渠道的 `SHA256SUMS` 比对；不匹配立即中止。
 - `dev`：没有发布校验和，Git commit 就是锚点；`dev` 有意设计为源码构建路径，绝不静默替换二进制。
 - 本地守护进程与控制台二进制采用原子替换；下载失败会保留原二进制。
+- 文件替换后，运行中的守护进程可能仍映射上一版二进制。`rolling-memory install` 会报告该状态并打印恢复命令；`rolling-memory daemon restart` 会核验同用户套接字并启动当前二进制。
 - 更新检查是本流程唯一的网络出口；记忆读写、召回、结晶与图谱保持离线。
 - `ROLLING_MEMORY_UPDATE_CHECK=off` 可关闭后台检查；显式 `update --check` 仍然可用。
 - `ROLLING_MEMORY_UPDATE_API_BASE` 可改用企业镜像做版本发现；`ROLLING_MEMORY_RELEASE_BASE` 可改用产物镜像。

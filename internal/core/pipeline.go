@@ -40,6 +40,8 @@ const shellScatterFloor = 0.1353352832366127
 // e^-2 plateau (raising the dose past it regressed), so the value coincides with e^-2
 // but is a calibrated kernel, not a derivation. Recalibrate only with a paired ATM
 // dose arm.
+// The damping factor is math.Max(0, 1-k*penalty) at its call sites, so the factor
+// stays inside [0,1] even if the calibrated kernel or the penalty range changes.
 const cloneDampingKernel = 0.1353352832366127
 
 // 透射率与亲和地板三件套的包级唯一声明；此前评分、关系与筛选各函数内的

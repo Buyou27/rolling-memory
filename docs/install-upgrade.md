@@ -264,6 +264,7 @@ Downgrades are not a substitute for restoring a vault backup after an incompatib
 - `stable` / `beta`: every downloaded artifact is checked against the channel's `SHA256SUMS`; a mismatch aborts the update.
 - `dev`: there is no release checksum; the Git commit is the anchor. `dev` is intentionally a source-build path and never silently replaces a binary.
 - The local daemon and console binaries are replaced atomically; a failed download leaves the previous binary in place.
+- A running daemon may still map the previous binary after the file is replaced. `rolling-memory install` reports that state and prints the recovery command; `rolling-memory daemon restart` authenticates the same-owner socket and starts the current binary.
 - Update checks are the only network egress in this flow; memory read/write, recall, crystallization, and the graph remain offline.
 - Set `ROLLING_MEMORY_UPDATE_CHECK=off` to disable background checks. Explicit `update --check` still works.
 - Set `ROLLING_MEMORY_UPDATE_API_BASE` to use an enterprise mirror for tag discovery; set `ROLLING_MEMORY_RELEASE_BASE` to use a mirror for artifacts.

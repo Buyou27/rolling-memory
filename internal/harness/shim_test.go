@@ -114,6 +114,52 @@ func TestEnsureBinaryShimLifecycle(t *testing.T) {
 	}
 }
 
+func TestEnsureBinaryAdoptsGeneratedShim(t *testing.T) {
+	fx := newFixture(t)
+	shim := DefaultShimPath(fx.home)
+	if err := os.MkdirAll(filepath.Dir(shim), 0o755); err != nil {
+		t.Fatalf("mkdir shim dir: %v", err)
+	}
+	previous := shimTextFor(runtime.GOOS, filepath.Join(fx.home, "old", "rolling-memory"))
+	if err := os.WriteFile(shim, []byte(previous), 0o755); err != nil {
+		t.Fatalf("write generated shim: %v", err)
+	}
+	report := Install(fx.registry(), fx.options())
+	actions := actionsFor(report, "*", "binary")
+	if len(actions) != 1 || actions[0].Status != StatusUpdated {
+		t.Fatalf("binary actions = %#v, want one updated action", actions)
+	}
+	if got := readFile(t, shim); got != ShimText() {
+		t.Fatalf("shim was not adopted:\n--- got ---\n%q\n--- want ---\n%q", got, ShimText())
+	}
+	backups, err := filepath.Glob(shim + ".rolling-memory.*.bak")
+	if err != nil || len(backups) == 0 {
+		t.Fatalf("previous launcher was not backed up: %v %v", backups, err)
+	}
+}
+
+func TestEnsureBinaryPlansGeneratedShimAdoptionInDryRun(t *testing.T) {
+	fx := newFixture(t)
+	shim := DefaultShimPath(fx.home)
+	if err := os.MkdirAll(filepath.Dir(shim), 0o755); err != nil {
+		t.Fatalf("mkdir shim dir: %v", err)
+	}
+	previous := shimTextFor(runtime.GOOS, filepath.Join(fx.home, "old", "rolling-memory"))
+	if err := os.WriteFile(shim, []byte(previous), 0o755); err != nil {
+		t.Fatalf("write generated shim: %v", err)
+	}
+	options := fx.options()
+	options.DryRun = true
+	report := Install(fx.registry(), options)
+	actions := actionsFor(report, "*", "binary")
+	if len(actions) != 1 || actions[0].Status != StatusPlanned {
+		t.Fatalf("binary actions = %#v, want one planned action", actions)
+	}
+	if got := readFile(t, shim); got != previous {
+		t.Fatalf("dry-run changed the shim: %q", got)
+	}
+}
+
 func TestEnsureBinaryConflictsOnForeignShim(t *testing.T) {
 	fx := newFixture(t)
 	shim := DefaultShimPath(fx.home)
@@ -130,6 +176,39 @@ func TestEnsureBinaryConflictsOnForeignShim(t *testing.T) {
 	}
 	if content := readFile(t, shim); content != "#!/bin/sh\necho foreign\n" {
 		t.Fatalf("foreign shim overwritten: %q", content)
+	}
+}
+
+func TestEntryIsOursRecognizesStandardInstallBinary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data"))
+	options := DefaultInstallOptions(home, home)
+	dataBinary := filepath.Join(filepath.Dir(DefaultShimPath(home)), "rolling-memory")
+	if err := os.MkdirAll(filepath.Dir(dataBinary), 0o755); err != nil {
+		t.Fatalf("mkdir data bin: %v", err)
+	}
+	if err := os.WriteFile(dataBinary, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write data binary: %v", err)
+	}
+	entry := map[string]any{"type": "local", "command": []any{dataBinary, "mcp"}}
+	if !entryIsOurs(entry, options) {
+		t.Fatalf("standard data-dir binary was not recognised")
+	}
+	link := filepath.Join(home, ".local", "bin", "rolling-memory")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err == nil {
+		if err := os.Symlink(dataBinary, link); err == nil {
+			linked := map[string]any{"type": "local", "command": []any{link, "mcp"}}
+			if !entryIsOurs(linked, options) {
+				t.Fatalf("symlinked ~/.local/bin binary was not recognised")
+			}
+		}
+	}
+	foreign := filepath.Join(home, "foreign-binary")
+	if err := os.WriteFile(foreign, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write foreign binary: %v", err)
+	}
+	if entryIsOurs(map[string]any{"type": "local", "command": []any{foreign, "mcp"}}, options) {
+		t.Fatalf("foreign binary was claimed as ours")
 	}
 }
 

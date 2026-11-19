@@ -57,7 +57,7 @@ SQLite 明文金库 (WAL)         ← 本地存储层：本地明文金库
 ### 4.2 其他宿主与原生插件
 
 - **其他宿主**：安装器也会探测 **Cursor**、**Windsurf**、**Cline / Roo Code**、**WorkBuddy** 和**豆包**。如需只选择特定宿主，可通过 `rolling-memory install <id>` 指定。请检查安装输出和宿主当前的配置位置：不同宿主版本使用的路径可能不同。WorkBuddy 插件包含技能、MCP 注册项和提示钩子，但需要先单独安装本地 CLI；宿主不提供插件根路径时，MCP 启动器使用已安装的本地 CLI，缺少 CLI 则无法启动，也不会自动下载。豆包的 MCP 连接器需手工配置（见 §4.4）。
-- **原生插件**：启用的插件声明了同名技能或 MCP 服务时，`install` 会保留已有配置，并在需要时报告冲突，不会自动删除。请核查宿主配置和插件状态；插件声明不代表宿主已加载。
+- **原生插件**：启用的插件声明了同名技能或 MCP 服务时，`install` 不会在旁边再写一份。已有副本若由本工具写入，会报告为重复项；运行 `rolling-memory install <id> --dedupe` 只移除本工具拥有并写入的那一份。请核查宿主配置和插件状态；插件声明不代表宿主已加载。
 
 ### 4.3 三类安全配置文件写手
 
@@ -141,6 +141,9 @@ rolling-memory install --check
 
 # 8. 安全卸载（仅移除本工具写入的条目，外来配置原样保留）
 rolling-memory install --uninstall
+
+# 9. 原生插件已提供同一面时，移除本工具写入的重复副本
+rolling-memory install zcode --dedupe
 ```
 
 ---
@@ -151,8 +154,8 @@ rolling-memory install --uninstall
 
 | 层级 | 验收项 | 核验方式 |
 |---|---|---|
-| **第 1 层：技能就位** | 宿主技能目录存在 `SKILL.md` 且包含完整 frontmatter | 运行 `rolling-memory install --check`；新开会话可见对应技能名称 |
-| **第 2 层：MCP 已注册** | 宿主配置文件中存在合法的 `rolling-memory` 服务条目 | 运行 `rolling-memory install --check` 自动解析校验 |
+| **第 1 层：技能为当前版本** | 宿主技能目录存在 `SKILL.md`、frontmatter 完整，且内容与当前发行版一致；旧的已拥有副本报 `outdated`，用户改过的副本报 `conflict` | 运行 `rolling-memory install --check`；新开会话可见对应技能名称 |
+| **第 2 层：MCP 已注册** | 宿主配置文件中存在合法的 `rolling-memory` 服务条目，且启动器存在并为当前版本 | 运行 `rolling-memory install --check` 自动解析校验 |
 | **第 3 层：进程握手通过** | 真实拉起 MCP 子进程，校验 `initialize` 与 `tools/list` 恰返回 `recall` 单工具 | `install --check` 顶部 `server ok · rolling-memory ... · tools: recall` |
 | **第 4 层：会话行为** | 检查 Agent 是否调用 `recall`，以及预期来源是否已导入 | 在新会话中追问历史并检查本地记录；来源覆盖范围见 §4.5 |
 
@@ -173,7 +176,7 @@ exec "<absolute>/bin/rolling-memory" "$@"
 - **零外部运行时依赖**：Go 编译产物自包含 SQLite 与全部运行逻辑，启动器仅执行一次轻量 `exec`。
 - **Windows 原生支持**：在 Windows 下自动生成 `%LOCALAPPDATA%\rolling-memory\bin\rolling-memory.cmd`（`@echo off` + 绝对路径 + `%*`）。
 - **U 盘便携模式（Portable Host Anchor）**：当从带有 `.portable` 标记的 U 盘便携载荷执行 `install` 时，生成的启动器自动升级为**跨挂载点自愈锚点**——优先直连原路径；若发生盘符或挂载点名称漂移（如 macOS `/Volumes/USB 1` 或 Windows `F:\`），则自动扫描可移动介质挂载根寻回 `.portable` 载荷（完整制盘与安全拔盘规程见 [usb-portable.md](usb-portable.md)）。
-- **所有权识别**：启动器头部包含 `Rolling-Memory launcher` 签名注释，重复运行 `install` 可幂等更新；若检测到非本工具生成的同名脚本，则报告 `conflict` 并拒绝覆盖。
+- **所有权识别**：启动器头部包含精确的生成签名注释。后续 `install` 即使发现绝对二进制路径变化，也会先备份旧文件再接管自己的启动器；非本工具生成的同名脚本仍报告 `conflict` 并拒绝覆盖。
 
 ---
 
@@ -181,7 +184,7 @@ exec "<absolute>/bin/rolling-memory" "$@"
 
 - **改前自动备份**：修改任何既有宿主配置文件前，自动生成带时间戳的备份文件 `<file>.rolling-memory.<YYYYmmddHHMMSS>.bak`。
 - **严格幂等**：配置未发生变化时，重复执行 `install` 报告 `unchanged`，不产生多余写入或重复备份。
-- **冲突保护**：若目标配置中已存在非本实例管理的同名条目，默认报告 `conflict` 而不覆盖；仅当显式传入 `--force` 时才执行替换。
+- **冲突保护**：若目标配置中已存在非本实例管理的同名条目，默认报告 `conflict` 而不覆盖；仅当显式传入 `--force` 时才执行替换。原生插件造成的重复只用 `--dedupe` 处理，它只移除本工具拥有并写入的副本；`--force` 不会在启用中的插件旁边再写一份。
 - **一键回滚**：可将 `.bak` 备份文件直接还原，或执行 `rolling-memory install --uninstall` 精准移除全部已注册条目。
 
 ---
@@ -227,7 +230,7 @@ rolling-memory update --schedule remove
 - **源码标签重建**：源码安装可用 `ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh`（或 `bash install.sh --ref v0.0.6`）从指定标签重新克隆并编译；Windows 可用 `powershell -ExecutionPolicy Bypass -File install.ps1 --ref v0.0.6`。安装元数据会记录来源；不会改动本地金库。
 - **自动检查开关**：设置 `ROLLING_MEMORY_UPDATE_CHECK=off` 可关闭后台检查；设置 `ROLLING_MEMORY_UPDATE_API_BASE` 可改用企业镜像做版本发现。显式执行 `update --check` 始终可用。
 - **SHA-256 强校验（Fail-Closed）**：每个下载产物（`rolling-memory-<os>-<arch>`、`rolling-admin-<os>-<arch>`、`web-dist.tar.gz`）在替换本地文件前均强制比对发布渠道的 `SHA256SUMS`；若校验缺失或不匹配则立即中止，绝不污染既有二进制。
-- **本地守护进程安全边界**：共享的本地守护进程只有在用户、身份和配置核验通过后才能被控制。旧版或无法核验的守护进程不会被自动停止；无法完成核验的请求会报错。请求发送后若发生失败，不会自动重试。共享守护进程以可信的本机用户为边界，不能保证抵御同一用户运行的任意代码。
+- **本地守护进程安全边界**：共享的本地守护进程只有在用户、身份和配置核验通过后才能被控制。升级后若旧守护进程仍加载上一版二进制，普通请求会失败关闭；`rolling-memory daemon restart` 会按套接字所有权、金库路径与协议身份核验该同用户实例，令其退出并启动当前二进制。`install` 检测到该情况时会直接打印这条命令。请求发送后若发生失败，不会自动重试。共享守护进程以可信的本机用户为边界，不能保证抵御同一用户运行的任意代码。
 - **本地金库零触碰安全承诺**：升级全过程仅替换可执行文件、前端静态资源与宿主配置项，**永不修改、清空或覆盖用户的本地 SQLite 明文金库（`~/.local/share/rolling-memory/memory.db`）**；数据库表结构演进均在打开时原位幂等迁移。
 - **零开发环境依赖（免装 Git / Go / Node.js / Python）**：
   - `install.sh` 与 `install.ps1` 默认直接拉取经 `SHA256SUMS` 强校验的预编译静态二进制（POSIX 下自适应 `curl` 或 `wget`，Windows 下原生支持 x64 与 ARM64，并在主发布源不可达时自动回退备用镜像源）。
