@@ -512,3 +512,37 @@ func TestPartnerScanAdversarialEdges(t *testing.T) {
 		}
 	}
 }
+
+func TestSparseAlgebraResidualPrimitives(t *testing.T) {
+	a := SparseVector{Entries: []SparseEntry{{ID: 1, WeightNats: 2, IsCore: true}, {ID: 2, WeightNats: 3, IsCore: true}, {ID: 3, WeightNats: 1, IsCore: true}}}
+	b := SparseVector{Entries: []SparseEntry{{ID: 2, WeightNats: 1}, {ID: 4, WeightNats: 9}}}
+
+	diff := ResidualDifference(a, b)
+	if len(diff.Entries) != 2 || diff.Entries[0].ID != 1 || diff.Entries[1].ID != 3 {
+		t.Fatalf("ResidualDifference must keep supp(a)\\supp(b): %+v", diff.Entries)
+	}
+	if diff.Entries[0].WeightNats != 2 || diff.Entries[1].WeightNats != 1 {
+		t.Fatalf("ResidualDifference must preserve weights: %+v", diff.Entries)
+	}
+
+	// The salient residual keeps core coordinates above the level ruler mu and reports
+	// the excess w-mu: ID 1 (w=2) yields 0.5, ID 3 (w=1) does not qualify.
+	salient := SalientResidual(a, b, 1.5)
+	if len(salient.Entries) != 1 || salient.Entries[0].ID != 1 {
+		t.Fatalf("SalientResidual must keep only supp(a\\b) above mu: %+v", salient.Entries)
+	}
+	if salient.Entries[0].WeightNats != 0.5 {
+		t.Fatalf("SalientResidual must report the excess w-mu, got %v", salient.Entries[0].WeightNats)
+	}
+	nonCore := SparseVector{Entries: []SparseEntry{{ID: 5, WeightNats: 9}}}
+	if got := SalientResidual(nonCore, SparseVector{}, 1); len(got.Entries) != 0 {
+		t.Fatalf("non-core coordinates must be dropped by SalientResidual: %+v", got.Entries)
+	}
+
+	if empty := ResidualDifference(a, a); len(empty.Entries) != 0 {
+		t.Fatalf("ResidualDifference(a,a) must be empty, got %+v", empty.Entries)
+	}
+	if len(a.Entries) != 3 || len(b.Entries) != 2 {
+		t.Fatalf("inputs must not be mutated")
+	}
+}
