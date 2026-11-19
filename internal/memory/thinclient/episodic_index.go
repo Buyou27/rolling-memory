@@ -29,16 +29,20 @@ import (
 
 const episodicCodecVersion = "episodic-rmbp-v1"
 
-const episodicIndexDDL = `CREATE TABLE IF NOT EXISTS thin_vault_episodic_index (
+const episodicIndexDDL = `CREATE TABLE IF NOT EXISTS rm_episodic_index (
  doc_id TEXT NOT NULL, ref_pointer TEXT NOT NULL, codec_key BLOB NOT NULL, payload BLOB NOT NULL, content_digest BLOB, payload_mac BLOB,
  PRIMARY KEY (doc_id, codec_key)
 );
-CREATE TABLE IF NOT EXISTS thin_vault_episodic_revision (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL);
-INSERT OR IGNORE INTO thin_vault_episodic_revision(id, revision) VALUES (1, 0);
-CREATE TRIGGER IF NOT EXISTS thin_episodic_index_insert AFTER INSERT ON thin_vault_episodic_index BEGIN UPDATE thin_vault_episodic_revision SET revision = revision + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_episodic_index_update AFTER UPDATE ON thin_vault_episodic_index BEGIN UPDATE thin_vault_episodic_revision SET revision = revision + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_episodic_index_delete AFTER DELETE ON thin_vault_episodic_index BEGIN UPDATE thin_vault_episodic_revision SET revision = revision + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_episodic_source_delete AFTER DELETE ON thin_vault_docs BEGIN DELETE FROM thin_vault_episodic_index WHERE doc_id = OLD.doc_id; END;`
+CREATE TRIGGER IF NOT EXISTS thin_episodic_source_delete AFTER DELETE ON thin_vault_docs BEGIN DELETE FROM rm_episodic_index WHERE doc_id = OLD.doc_id; END;`
+
+// initEpisodicIndex ensures the canonical episodic index schema.
+func initEpisodicIndex(db *sql.DB) error {
+	if db == nil {
+		return errors.New("thinclient: nil sql.DB")
+	}
+	_, err := db.Exec(episodicIndexDDL)
+	return err
+}
 
 // episodicCodecKey binds the secret, SDK version and explicit encoder options.
 // Only named project language-pack functions are stable across process restarts;
@@ -121,15 +125,15 @@ func (v *Vault) recordEpisodicSource(tx *sql.Tx, docID, turnRef, refPointer stri
 	if turnRef == "" || pointerStem(refPointer) != turnRef || len(digest) != sha256.Size {
 		return errors.New("thinclient: invalid episodic source identity")
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`INSERT INTO thin_vault_episodic_sources(turn_ref, doc_id, ref_pointer, content_digest, source_mac) VALUES (?, ?, ?, ?, ?) ON CONFLICT(turn_ref, doc_id, ref_pointer) DO NOTHING`, turnRef, docID, refPointer, digest, v.episodicSourceMAC(docID, turnRef, refPointer, digest))
+	_, err := tx.Exec(`INSERT INTO rm_episodic_sources(turn_ref, doc_id, ref_pointer, content_digest, source_mac) VALUES (?, ?, ?, ?, ?) ON CONFLICT(turn_ref, doc_id, ref_pointer) DO NOTHING`, turnRef, docID, refPointer, digest, v.episodicSourceMAC(docID, turnRef, refPointer, digest))
 	if err != nil {
 		return err
 	}
 	var storedDigest, mac []byte
-	if err := tx.QueryRow(`SELECT content_digest, source_mac FROM thin_vault_episodic_sources WHERE turn_ref = ? AND doc_id = ? AND ref_pointer = ?`, turnRef, docID, refPointer).Scan(&storedDigest, &mac); err != nil {
+	if err := tx.QueryRow(`SELECT content_digest, source_mac FROM rm_episodic_sources WHERE turn_ref = ? AND doc_id = ? AND ref_pointer = ?`, turnRef, docID, refPointer).Scan(&storedDigest, &mac); err != nil {
 		return err
 	}
 	if !hmac.Equal(storedDigest, digest) || !v.validEpisodicSourceMAC(docID, turnRef, refPointer, storedDigest, mac) {
@@ -146,7 +150,7 @@ type episodicSource struct {
 }
 
 func (v *Vault) episodicSources(docID, turnRef string) ([]episodicSource, error) {
-	query := `SELECT turn_ref, ref_pointer, content_digest, source_mac FROM thin_vault_episodic_sources WHERE doc_id = ?`
+	query := `SELECT turn_ref, ref_pointer, content_digest, source_mac FROM rm_episodic_sources WHERE doc_id = ?`
 	args := []any{docID}
 	if turnRef != "" {
 		query += ` AND turn_ref = ?`
@@ -176,7 +180,7 @@ var ErrEpisodicUnitDeleted = errors.New("thinclient: episodic unit was deleted")
 
 func checkEpisodicTombstone(tx *sql.Tx, docID string) error {
 	var deleted int
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = ? AND (layer = 'episodic' OR layer = ''))`, strings.TrimSpace(docID)).Scan(&deleted); err != nil {
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_deleted_units WHERE unit_id = ? AND (layer = 'episodic' OR layer = ''))`, strings.TrimSpace(docID)).Scan(&deleted); err != nil {
 		return fmt.Errorf("thinclient: check episodic tombstone: %w", err)
 	}
 	if deleted != 0 {
@@ -331,7 +335,7 @@ func (v *Vault) ClassifyAndHealEpisodicUnitContext(ctx context.Context, scope, d
 	}
 	var indexedRef string
 	var digest, payload, mac, storedKey []byte
-	err = v.db.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&indexedRef, &digest, &payload, &mac, &storedKey)
+	err = v.db.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM rm_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&indexedRef, &digest, &payload, &mac, &storedKey)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EpisodicContentUnreadable
 	}
@@ -419,7 +423,7 @@ func (v *Vault) ClassifyAndHealEpisodicUnitContext(ctx context.Context, scope, d
 }
 
 func (v *Vault) repointEpisodicIndexes(tx *sql.Tx, docID, oldRef, newRef string, digest []byte) error {
-	rows, err := tx.Query(`SELECT codec_key, payload, content_digest, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ?`, docID, oldRef)
+	rows, err := tx.Query(`SELECT codec_key, payload, content_digest, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND ref_pointer = ?`, docID, oldRef)
 	if err != nil {
 		return err
 	}
@@ -445,7 +449,7 @@ func (v *Vault) repointEpisodicIndexes(tx *sql.Tx, docID, oldRef, newRef string,
 		return err
 	}
 	for _, r := range indexes {
-		if _, err := tx.Exec(`UPDATE thin_vault_episodic_index SET ref_pointer = ?, payload_mac = ? WHERE doc_id = ? AND codec_key = ? AND ref_pointer = ?`, newRef, v.episodicPayloadMAC(docID, newRef, r.key, r.payload, r.digest), docID, r.key, oldRef); err != nil {
+		if _, err := tx.Exec(`UPDATE rm_episodic_index SET ref_pointer = ?, payload_mac = ? WHERE doc_id = ? AND codec_key = ? AND ref_pointer = ?`, newRef, v.episodicPayloadMAC(docID, newRef, r.key, r.payload, r.digest), docID, r.key, oldRef); err != nil {
 			return err
 		}
 	}
@@ -483,7 +487,7 @@ func (v *Vault) healEpisodicPointerUnit(docID string, occurredAt int64, oldRaw, 
 	}
 	var existingRef string
 	var existingDigest, existingPayload, existingMAC, existingKey []byte
-	err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&existingRef, &existingDigest, &existingPayload, &existingMAC, &existingKey)
+	err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM rm_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&existingRef, &existingDigest, &existingPayload, &existingMAC, &existingKey)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -503,7 +507,7 @@ func (v *Vault) healEpisodicPointerUnit(docID string, occurredAt int64, oldRaw, 
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id, codec_key) DO UPDATE SET ref_pointer = excluded.ref_pointer, payload = excluded.payload, content_digest = excluded.content_digest, payload_mac = excluded.payload_mac`, docID, targetRef, key, payload, digest, mac); err != nil {
+	if _, err := tx.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id, codec_key) DO UPDATE SET ref_pointer = excluded.ref_pointer, payload = excluded.payload, content_digest = excluded.content_digest, payload_mac = excluded.payload_mac`, docID, targetRef, key, payload, digest, mac); err != nil {
 		return err
 	}
 	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
@@ -541,7 +545,7 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 	defer func() { _ = tx.Rollback() }()
 	// Any separately recorded source can change after classification. Keep the
 	// document when one exists, including malformed rows whose identity is unknown.
-	result, err := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ? AND raw_text = ? AND (layer = 'episodic' OR layer = '') AND NOT EXISTS (SELECT 1 FROM thin_vault_episodic_sources s WHERE s.doc_id = thin_vault_docs.doc_id AND s.turn_ref <> ?)`, docID, expectPointer, pointerStem(expectPointer))
+	result, err := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ? AND raw_text = ? AND (layer = 'episodic' OR layer = '') AND NOT EXISTS (SELECT 1 FROM rm_episodic_sources s WHERE s.doc_id = thin_vault_docs.doc_id AND s.turn_ref <> ?)`, docID, expectPointer, pointerStem(expectPointer))
 	if err != nil {
 		return false, err
 	}
@@ -552,10 +556,10 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 	if changed == 0 {
 		return false, nil
 	}
-	if _, err = tx.Exec(`DELETE FROM thin_vault_episodic_lineage WHERE doc_id = ?`, docID); err != nil {
+	if _, err = tx.Exec(`DELETE FROM rm_episodic_lineage WHERE doc_id = ?`, docID); err != nil {
 		return false, err
 	}
-	if _, err = tx.Exec(`DELETE FROM thin_vault_episodic_sources WHERE doc_id = ?`, docID); err != nil {
+	if _, err = tx.Exec(`DELETE FROM rm_episodic_sources WHERE doc_id = ?`, docID); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -728,7 +732,7 @@ func (v *Vault) loadVerifiedEpisodicPointer(docID, refPointer string, allowAlter
 	}
 	var primary string
 	var payload, digest, mac, storedKey []byte
-	err = v.db.QueryRow(`SELECT d.raw_text, i.payload, i.content_digest, i.payload_mac, i.codec_key FROM thin_vault_docs d JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id AND i.ref_pointer = d.raw_text WHERE d.doc_id = ? ORDER BY (i.codec_key = ?) DESC, i.rowid DESC LIMIT 1`, docID, key).Scan(&primary, &payload, &digest, &mac, &storedKey)
+	err = v.db.QueryRow(`SELECT d.raw_text, i.payload, i.content_digest, i.payload_mac, i.codec_key FROM thin_vault_docs d JOIN rm_episodic_index i ON i.doc_id = d.doc_id AND i.ref_pointer = d.raw_text WHERE d.doc_id = ? ORDER BY (i.codec_key = ?) DESC, i.rowid DESC LIMIT 1`, docID, key).Scan(&primary, &payload, &digest, &mac, &storedKey)
 	if err != nil {
 		return "", "", fmt.Errorf("thinclient: episodic index identity unavailable for %s: %w", docID, err)
 	}
@@ -789,7 +793,7 @@ func (v *Vault) loadVerifiedEpisodicPointer(docID, refPointer string, allowAlter
 // EpisodicTurnDocuments returns only stored identities explicitly linked to a turn.
 // Callers must still verify each pointer before delivering its content.
 func (v *Vault) EpisodicTurnDocuments(turnRef string) (map[string]string, error) {
-	rows, err := v.db.Query(`SELECT d.doc_id, d.raw_text FROM thin_vault_episodic_lineage l JOIN thin_vault_docs d ON d.doc_id = l.doc_id WHERE l.turn_ref = ?`, turnRef)
+	rows, err := v.db.Query(`SELECT d.doc_id, d.raw_text FROM rm_episodic_lineage l JOIN thin_vault_docs d ON d.doc_id = l.doc_id WHERE l.turn_ref = ?`, turnRef)
 	if err != nil {
 		return nil, err
 	}
@@ -810,7 +814,7 @@ func (v *Vault) EpisodicTurnDocuments(turnRef string) (map[string]string, error)
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	sourceRows, err := v.db.Query(`SELECT doc_id, ref_pointer, content_digest, source_mac FROM thin_vault_episodic_sources WHERE turn_ref = ? ORDER BY doc_id, ref_pointer`, turnRef)
+	sourceRows, err := v.db.Query(`SELECT doc_id, ref_pointer, content_digest, source_mac FROM rm_episodic_sources WHERE turn_ref = ? ORDER BY doc_id, ref_pointer`, turnRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1016,7 +1020,7 @@ func (v *Vault) saveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 	var storedDigest, storedPayload, storedMAC []byte
 	repoint, alternate := false, false
 	if err == nil {
-		err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, existingRaw, codecKey).Scan(&storedPointer, &storedDigest, &storedPayload, &storedMAC)
+		err = tx.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, existingRaw, codecKey).Scan(&storedPointer, &storedDigest, &storedPayload, &storedMAC)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: existing episodic document identity is unverified; ensure index first", ErrEpisodicIndexItem)
 		}
@@ -1072,7 +1076,7 @@ func (v *Vault) saveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id, codec_key) DO NOTHING`, docID, refPointer, codecKey, payload, digest, v.episodicPayloadMAC(docID, refPointer, codecKey, payload, digest)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id, codec_key) DO NOTHING`, docID, refPointer, codecKey, payload, digest, v.episodicPayloadMAC(docID, refPointer, codecKey, payload, digest)); err != nil {
 		return err
 	}
 	if repoint {
@@ -1151,7 +1155,7 @@ func (v *Vault) HasLocalEpisodicIndex(docID, refPointer string) bool {
 		return false
 	}
 	var payload, digest, mac []byte
-	if err := v.db.QueryRow(`SELECT payload, content_digest, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, strings.TrimSpace(refPointer), key).Scan(&payload, &digest, &mac); err != nil {
+	if err := v.db.QueryRow(`SELECT payload, content_digest, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND ref_pointer = ? AND codec_key = ?`, docID, strings.TrimSpace(refPointer), key).Scan(&payload, &digest, &mac); err != nil {
 		return false
 	}
 	return v.validEpisodicPayloadMAC(docID, strings.TrimSpace(refPointer), key, payload, digest, mac)
@@ -1180,7 +1184,7 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 	var roRaw, roRef string
 	var roPayload, roDigest, roMAC []byte
 	if v.db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&roRaw) == nil && roRaw == refPointer {
-		if v.db.QueryRow(`SELECT ref_pointer, payload, content_digest, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key = ?`, docID, key).Scan(&roRef, &roPayload, &roDigest, &roMAC) == nil {
+		if v.db.QueryRow(`SELECT ref_pointer, payload, content_digest, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND codec_key = ?`, docID, key).Scan(&roRef, &roPayload, &roDigest, &roMAC) == nil {
 			if roRef == refPointer && len(roDigest) == 32 && hmac.Equal(roDigest, digest) && len(roMAC) == 32 && v.validEpisodicPayloadMAC(docID, roRef, key, roPayload, roDigest, roMAC) {
 				if _, _, dErr := plain.DecodeWireBytes(roPayload); dErr == nil {
 					return false, nil
@@ -1223,7 +1227,7 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 	}
 	var storedRef string
 	var storedPayload, storedDigest, storedMAC []byte
-	err = tx.QueryRow(`SELECT ref_pointer, payload, content_digest, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key = ?`, docID, key).Scan(&storedRef, &storedPayload, &storedDigest, &storedMAC)
+	err = tx.QueryRow(`SELECT ref_pointer, payload, content_digest, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND codec_key = ?`, docID, key).Scan(&storedRef, &storedPayload, &storedDigest, &storedMAC)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
@@ -1237,10 +1241,10 @@ func (v *Vault) ensureLocalEpisodicIndex(scope, docID, refPointer, text string, 
 			}
 			return false, nil
 		}
-		if _, err = tx.Exec(`UPDATE thin_vault_episodic_index SET content_digest = ?, payload_mac = ? WHERE doc_id = ? AND codec_key = ?`, digest, mac, docID, key); err != nil {
+		if _, err = tx.Exec(`UPDATE rm_episodic_index SET content_digest = ?, payload_mac = ? WHERE doc_id = ? AND codec_key = ?`, digest, mac, docID, key); err != nil {
 			return false, err
 		}
-	} else if _, err = tx.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?)`, docID, refPointer, key, payload, digest, mac); err != nil {
+	} else if _, err = tx.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?)`, docID, refPointer, key, payload, digest, mac); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -1294,7 +1298,7 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 	// ordered so the current generation wins per document; both the full load
 	// and the incremental catch-up share the same query shape so rows written
 	// by a differently-configured sibling process are never missed.
-	selCols := `SELECT i.rowid, d.doc_id, d.layer, d.occurred_at, d.address_uri, d.coord64, d.waveform_bar, COALESCE(d.locus, ''), i.ref_pointer, i.codec_key, i.payload, i.content_digest, i.payload_mac FROM thin_vault_docs d JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id AND i.ref_pointer = d.raw_text WHERE d.layer = 'episodic'`
+	selCols := `SELECT i.rowid, d.doc_id, d.layer, d.occurred_at, d.address_uri, d.coord64, d.waveform_bar, COALESCE(d.locus, ''), i.ref_pointer, i.codec_key, i.payload, i.content_digest, i.payload_mac FROM thin_vault_docs d JOIN rm_episodic_index i ON i.doc_id = d.doc_id AND i.ref_pointer = d.raw_text WHERE d.layer = 'episodic'`
 	if minIndexRowID > 0 {
 		rows, err = v.db.QueryContext(ctx, selCols+` AND i.rowid > ? ORDER BY d.doc_id, (i.codec_key = ?) DESC, i.rowid DESC`, minIndexRowID, key)
 	} else {

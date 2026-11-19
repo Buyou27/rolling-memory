@@ -78,10 +78,10 @@ func BackupPreflight(ctx context.Context, path, zcodePath string) (BackupPreflig
 		query string
 		kind  string
 	}{
-		{"thin_vault_docs", `SELECT doc_id, raw_text FROM thin_vault_docs WHERE substr(trim(raw_text), 1, 5) = '@ref:' ORDER BY doc_id`, "episodic"},
-		{"thin_vault_bg_files", `SELECT abs_path, abs_path FROM thin_vault_bg_files ORDER BY abs_path`, "background_file"},
-		{"thin_vault_bg_chunks", `SELECT unit_id, abs_path FROM thin_vault_bg_chunks ORDER BY unit_id`, "background_chunk"},
-		{"thin_vault_bg_dirs", `SELECT dir_id, root_path FROM thin_vault_bg_dirs ORDER BY dir_id`, "background_directory"},
+		{"rm_docs", `SELECT d.unit_id, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE substr(trim(COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text)), 1, 5) = '@ref:' ORDER BY d.unit_id`, "episodic"},
+		{"rm_bg_files", `SELECT abs_path, abs_path FROM rm_bg_files ORDER BY abs_path`, "background_file"},
+		{"rm_bg_chunks", `SELECT unit_id, abs_path FROM rm_bg_chunks ORDER BY unit_id`, "background_chunk"},
+		{"rm_bg_dirs", `SELECT dir_id, root_path FROM rm_bg_dirs ORDER BY dir_id`, "background_directory"},
 	} {
 		var exists int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, item.table).Scan(&exists); err != nil {

@@ -33,7 +33,7 @@ func TestROIFactsDailySeriesCarryAdoption(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
@@ -54,7 +54,7 @@ func TestROIFactsDailySeriesCarryAdoption(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`
-		INSERT INTO thin_vault_noetic VALUES
+		INSERT INTO rm_noetic VALUES
 			('nt_tool_1', ?, 'active', 'ComputeDBFingerprint bug', 'Check admin/internal/rmconsole/roi_facts.go and ComputeDBFingerprint', '["ep_src_1"]', '["admin/internal/rmconsole/roi_facts.go"]', 'C6:L3:B001#05', '', 'zcode', 'inc1'),
 			('nt_ctx_2', ?, 'active', 'laya CPU performance', 'Base zero-shot score is 0.362 on ModernBERT-large', '["ep_src_2"]', '["ModernBERT-large 0.362"]', 'C6:L3:B002#05', '', 'zcode', 'inc1'),
 			('nt_unadopted_3', ?, 'active', 'unrelated query token_xyz', 'Check internal/store/unused_file.go', '[]', '["internal/store/unused_file.go"]', 'C6:L3:B003#01', '', 'zcode', 'inc1'),

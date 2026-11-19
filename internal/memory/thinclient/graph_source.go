@@ -100,7 +100,7 @@ func (v *Vault) GraphUnits(ctx context.Context) ([]graphmodel.UnitRow, error) {
 	bgRows, err := v.db.QueryContext(ctx, `
 		SELECT unit_id, COALESCE(rel_path, ''), COALESCE(abs_path, ''), COALESCE(anchor, ''),
 		       occurred_at, inserted_at, COALESCE(address_uri, '')
-		FROM thin_vault_bg_chunks`)
+		FROM rm_bg_chunks`)
 	if err != nil && !isMissingTableErr(err) {
 		return nil, fmt.Errorf("thinclient: graph background chunks: %w", err)
 	}
@@ -134,7 +134,7 @@ func (v *Vault) GraphUnits(ctx context.Context) ([]graphmodel.UnitRow, error) {
 		SELECT noetic_id, occurred_at, inserted_at,
 		       COALESCE(query_text, ''), COALESCE(answer_text, ''),
 		       COALESCE(cited_unit_ids_json, '[]'), COALESCE(address_uri, '')
-		FROM thin_vault_noetic
+		FROM rm_noetic
 		WHERE COALESCE(NULLIF(status, ''), 'active') = 'active'`)
 	if err != nil && !isMissingTableErr(err) {
 		return nil, fmt.Errorf("thinclient: graph noetic: %w", err)
@@ -209,7 +209,7 @@ func (v *Vault) GraphCitations(ctx context.Context) (map[string][]string, error)
 	}
 	rows, err := v.db.QueryContext(ctx, `
 		SELECT noetic_id, COALESCE(cited_unit_ids_json, '[]')
-		FROM thin_vault_noetic
+		FROM rm_noetic
 		WHERE COALESCE(NULLIF(status, ''), 'active') = 'active'`)
 	if err != nil {
 		if isMissingTableErr(err) {

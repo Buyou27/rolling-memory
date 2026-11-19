@@ -32,5 +32,9 @@
     "relative_tag": false,
     "token_correct": false
   },
-  "scope": "mem:golden:208"
+  "scope": "mem:golden:208",
+  "update": {
+    "channel": "dev",
+    "source": "github"
+  }
 }

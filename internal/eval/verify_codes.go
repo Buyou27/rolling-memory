@@ -10,6 +10,11 @@ const (
 	// EvalVerifyCodeManifestMismatch：manifest 与当前请求的语料逐字段不等
 	// （scope / suite / corpus_sha256 / documents），复用不可能、重灌即自愈。
 	EvalVerifyCodeManifestMismatch = "manifest_corpus_mismatch"
+	// EvalVerifyCodeManifestIdentityMismatch：manifest 的写入身份（endpoint / tenant / user、
+	// 切词臂）与现役客户端不一致——旧版本写下的库，复用不可能；语料本身仍可按现役装配
+	// 原地重灌自愈（断点续灌封条同样按身份对账，不会跳过旧单元）。脉冲模式属契约轴，
+	// 失配仍由 Prepare fail-closed 拒绝，绝不触发清库。
+	EvalVerifyCodeManifestIdentityMismatch = "manifest_identity_mismatch"
 )
 
 // EvalVerifyError 为评测验证类失效提供稳定错误码。

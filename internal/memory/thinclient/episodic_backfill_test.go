@@ -164,10 +164,10 @@ func TestEpisodicBackfillEncodingFailureDoesNotAdvancePage(t *testing.T) {
 		t.Fatalf("good page: %+v %v", page, err)
 	}
 	var badCount, goodCount int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, badID).Scan(&badCount); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?`, badID).Scan(&badCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, goodID).Scan(&goodCount); err != nil || badCount != 0 || goodCount != 1 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?`, goodID).Scan(&goodCount); err != nil || badCount != 0 || goodCount != 1 {
 		t.Fatalf("index counts: bad=%d good=%d err=%v", badCount, goodCount, err)
 	}
 	page, err = v.BackfillEpisodicIndexes(context.Background(), scope, "", 1)
@@ -212,7 +212,7 @@ func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 	if err := v.SaveLocalEpisodicPointerIndexed(badID, 1, ref, "", badText, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = x'01' WHERE doc_id = ?`, badID); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload_mac = x'01' WHERE doc_id = ?`, badID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := v.EnsureLocalEpisodicIndex(scope, badID, ref, badText); !errors.Is(err, ErrEpisodicIndexItem) {
@@ -236,14 +236,14 @@ func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Exercise an error inside Ensure after the page query has already succeeded.
-	if _, err := db.Exec(`ALTER TABLE thin_vault_episodic_index RENAME TO backfill_test_index`); err != nil {
+	if _, err := db.Exec(`ALTER TABLE rm_episodic_index RENAME TO backfill_test_index`); err != nil {
 		t.Fatal(err)
 	}
 	page, err := v.BackfillEpisodicIndexes(context.Background(), scope, "", 1)
 	if err == nil || errors.Is(err, ErrEpisodicIndexItem) || page.Cursor != "" || page.Scanned != 0 || page.Failed != 0 {
 		t.Fatalf("index database error: %+v %v", page, err)
 	}
-	if _, err := db.Exec(`ALTER TABLE backfill_test_index RENAME TO thin_vault_episodic_index`); err != nil {
+	if _, err := db.Exec(`ALTER TABLE backfill_test_index RENAME TO rm_episodic_index`); err != nil {
 		t.Fatal(err)
 	}
 	page, err = v.BackfillEpisodicIndexes(context.Background(), scope, "", 1)
@@ -255,11 +255,11 @@ func TestEpisodicBackfillIntegrityConflictDoesNotBlockNextPage(t *testing.T) {
 		t.Fatalf("next page: %+v %v", page, err)
 	}
 	var mac []byte
-	if err := db.QueryRow(`SELECT payload_mac FROM thin_vault_episodic_index WHERE doc_id = ?`, badID).Scan(&mac); err != nil || string(mac) != "\x01" {
+	if err := db.QueryRow(`SELECT payload_mac FROM rm_episodic_index WHERE doc_id = ?`, badID).Scan(&mac); err != nil || string(mac) != "\x01" {
 		t.Fatalf("conflicting row changed: %x %v", mac, err)
 	}
 	var goodCount int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, goodID).Scan(&goodCount); err != nil || goodCount != 1 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?`, goodID).Scan(&goodCount); err != nil || goodCount != 1 {
 		t.Fatalf("good index: %d %v", goodCount, err)
 	}
 	page, err = v.BackfillEpisodicIndexes(context.Background(), scope, "", 1)

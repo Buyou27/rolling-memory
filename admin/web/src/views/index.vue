@@ -141,8 +141,8 @@
                     <p>{{ t('index.ledgerMiss') }}</p>
                     <p class="qa-note">{{ t('index.ledgerBench', { score: ledger.recallAt10 }) }}</p>
                     <div class="link-row">
-                        <button type="button" class="text-link" @click="goDoc('docs-token-economics')">{{ t('index.ledgerDocLink') }}</button>
-                        <button type="button" class="text-link" @click="goDoc('docs-benchmarks')">{{ t('index.ledgerBenchLink') }}</button>
+                        <a class="text-link" :href="tokenEconomicsUrl" target="_blank" rel="noopener noreferrer">{{ t('index.ledgerDocLink') }}</a>
+                        <a class="text-link" :href="benchmarksUrl" target="_blank" rel="noopener noreferrer">{{ t('index.ledgerBenchLink') }}</a>
                     </div>
                 </div>
             </section>
@@ -262,13 +262,13 @@
                             <a class="text-link" :href="repoUrl" target="_blank" rel="noopener noreferrer">{{ t('index.linkGithub') }}</a>
                         </li>
                         <li>
-                            <button type="button" class="text-link" @click="goPath('/admin/help/repos')">{{ t('index.linkMirror') }}</button>
+                            <a class="text-link" :href="giteeRepoUrl" target="_blank" rel="noopener noreferrer">{{ t('index.linkMirror') }}</a>
                         </li>
                         <li>
                             <button type="button" class="text-link" @click="goDocs">{{ t('index.linkDocs') }}</button>
                         </li>
                         <li>
-                            <button type="button" class="text-link" @click="goDoc('root-declaration')">{{ t('index.linkDeclaration') }}</button>
+                            <a class="text-link" :href="declarationUrl" target="_blank" rel="noopener noreferrer">{{ t('index.linkDeclaration') }}</a>
                         </li>
                         <li>
                             <a class="text-link" :href="`mailto:${contacts.support}`">{{ t('index.contactTeam') }}</a>
@@ -315,6 +315,11 @@ const { isDark, toggleDark } = useDark()
 const isZh = computed(() => config.lang.active === 'zh-cn')
 const releaseVersion = 'v' + __RM_VERSION__
 const repoUrl = 'https://github.com/rocareer/rolling-memory'
+const giteeRepoUrl = 'https://gitee.com/rocareer/Rolling-Memory'
+const declarationUrl = `${repoUrl}/blob/main/DECLARATION.md`
+const docsLangPath = computed(() => (isZh.value ? 'docs/zh-CN/' : 'docs/'))
+const tokenEconomicsUrl = computed(() => `${repoUrl}/blob/main/${docsLangPath.value}token-economics.md`)
+const benchmarksUrl = computed(() => `${repoUrl}/blob/main/${docsLangPath.value}benchmarks.md`)
 const isScrolled = ref(false)
 const mobileOpen = ref(false)
 const activeSection = ref('what')
@@ -373,10 +378,6 @@ function goConsole() {
 }
 function goDocs() {
     goPath('/admin/help/docs')
-}
-function goDoc(docId: string) {
-    mobileOpen.value = false
-    router.push({ path: '/admin/help/docs', query: { doc: docId } })
 }
 function goPath(path: string) {
     mobileOpen.value = false

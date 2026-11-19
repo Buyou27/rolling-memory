@@ -3,9 +3,9 @@
 //
 // 三层语义（不得破坏）：
 //
-//	· L1 Background = 用户自己挂载的本地目录文件底物（thin_vault_bg_dirs → thin_vault_bg_files → thin_vault_bg_chunks）；
+//	· L1 Background = 用户自己挂载的本地目录文件底物（rm_bg_dirs → rm_bg_files → rm_bg_chunks）；
 //	· L2 Episodic   = Harness 对话记录单元（thin_vault_docs，layer='episodic'，空 layer 按旧口径回退为 episodic）；
-//	· L3 Noetic     = Agent 提问 + 检索证据固化（thin_vault_noetic，cited_unit_ids_json 指回 L1/L2 单元）。
+//	· L3 Noetic     = Agent 提问 + 检索证据固化（rm_noetic，cited_unit_ids_json 指回 L1/L2 单元）。
 //
 // 三层不是三张同构表，而是「两张物理表 + 一个派生层标签」；本文件把它们投影成一张统一视图，
 // 让筛选 / 排序 / 分页全部在 SQLite 侧完成。早期实现把三张表的全量行读进 Go、在内存里过滤排序分页，
@@ -59,7 +59,7 @@ func countMetric(dbPath, query string, dst *int) {
 
 // noeticCitedLinkCount L3 活跃引证链总数（仅统计 status='active' 的结晶，与 ROI 监控屏口径一致）。
 func noeticCitedLinkCount(dbPath string) int {
-	rows, err := sqliteQueryJSON(dbPath, `SELECT cited_unit_ids_json FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') = 'active';`)
+	rows, err := sqliteQueryJSON(dbPath, `SELECT cited_unit_ids_json FROM rm_noetic WHERE COALESCE(NULLIF(status, ''), 'active') = 'active';`)
 	if err != nil {
 		return 0
 	}
@@ -116,9 +116,9 @@ func fillCachedLayerGlobalCounts(dbPath string, resp *LayerStatsResponse) {
 	layerGlobalCountsMu.Unlock()
 
 	var c layerGlobalCounts
-	countMetric(dbPath, `SELECT COUNT(*) AS cnt FROM thin_vault_bg_dirs`, &c.bgDirs)
-	countMetric(dbPath, `SELECT COUNT(*) AS cnt FROM thin_vault_bg_files`, &c.bgFiles)
-	countMetric(dbPath, `SELECT COUNT(*) AS cnt FROM thin_vault_bg_chunks`, &c.bgChunks)
+	countMetric(dbPath, `SELECT COUNT(*) AS cnt FROM rm_bg_dirs`, &c.bgDirs)
+	countMetric(dbPath, `SELECT COUNT(*) AS cnt FROM rm_bg_files`, &c.bgFiles)
+	countMetric(dbPath, `SELECT COUNT(*) AS cnt FROM rm_bg_chunks`, &c.bgChunks)
 	var bgDocsCnt int
 	if rows, err := sqliteQueryJSON(dbPath, `
 		SELECT
@@ -132,7 +132,7 @@ func fillCachedLayerGlobalCounts(dbPath string, resp *LayerStatsResponse) {
 		c.epCells = asInt(rows[0]["ep_cells"])
 	}
 	c.bgCount = bgDocsCnt + c.bgChunks
-	if rows, err := sqliteQueryJSON(dbPath, `SELECT COALESCE(NULLIF(status, ''), 'active') AS st, cited_unit_ids_json FROM thin_vault_noetic;`); err == nil {
+	if rows, err := sqliteQueryJSON(dbPath, `SELECT COALESCE(NULLIF(status, ''), 'active') AS st, cited_unit_ids_json FROM rm_noetic;`); err == nil {
 		for _, r := range rows {
 			if asString(r["st"]) == "active" {
 				c.noeticActive++
@@ -864,7 +864,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 		}
 		var branches []string
 		want := func(name string) bool { return q.layer == "" || q.layer == name }
-		if want(noeticLayer) && vaultTablePresent(dbPath, "thin_vault_noetic") {
+		if want(noeticLayer) && vaultTablePresent(dbPath, "rm_noetic") {
 			noeticWhere := "1=1"
 			if q.status == "active" {
 				noeticWhere = "COALESCE(NULLIF(status, ''), 'active') = 'active'"
@@ -880,7 +880,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 					       '' AS address_uri, '' AS rel_path, '' AS anchor, '' AS abs_path,
 					       occurred_at AS occurred_at,
 					       COALESCE(cited_unit_ids_json, '[]') AS cited_json
-					FROM thin_vault_noetic
+					FROM rm_noetic
 					WHERE %s
 					ORDER BY %s LIMIT %d
 				)`, noeticWhere, noeticOrder, branchCap))
@@ -908,7 +908,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 				ORDER BY %s LIMIT %d
 			)`, docWhere, docOrder, branchCap))
 		}
-		if want(backgroundLayer) && vaultTablePresent(dbPath, "thin_vault_bg_chunks") {
+		if want(backgroundLayer) && vaultTablePresent(dbPath, "rm_bg_chunks") {
 			branches = append(branches, fmt.Sprintf(`SELECT * FROM (
 				SELECT 'background' AS layer, 'chunk' AS src, unit_id AS id, 'active' AS status,
 				       (rel_path || ' #' || anchor) AS title,
@@ -917,7 +917,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 				       COALESCE(address_uri, '') AS address_uri,
 				       rel_path AS rel_path, anchor AS anchor, abs_path AS abs_path,
 				       occurred_at AS occurred_at, '' AS cited_json
-				FROM thin_vault_bg_chunks
+				FROM rm_bg_chunks
 				ORDER BY %s LIMIT %d
 			)`, chunkOrder, branchCap))
 		}
@@ -996,7 +996,7 @@ func layerUnionSQLMode(dbPath string, q layerListQuery, excludeDocPointers bool)
 	want := func(name string) bool { return q.layer == "" || q.layer == name }
 
 	// ── L3 Noetic：Agent 提问 + 检索证据固化 ───────────────────────────────────────────
-	if want(noeticLayer) && vaultTablePresent(dbPath, "thin_vault_noetic") {
+	if want(noeticLayer) && vaultTablePresent(dbPath, "rm_noetic") {
 		sel := `
 			SELECT
 				'noetic' AS layer, 'noetic' AS src,
@@ -1008,7 +1008,7 @@ func layerUnionSQLMode(dbPath string, q layerListQuery, excludeDocPointers bool)
 				'' AS address_uri, '' AS rel_path, '' AS anchor, '' AS abs_path,
 				occurred_at AS occurred_at,
 				COALESCE(cited_unit_ids_json, '[]') AS cited_json
-			FROM thin_vault_noetic
+			FROM rm_noetic
 			WHERE (? = '' OR COALESCE(NULLIF(status, ''), 'active') = ?)`
 		args = append(args, q.status, q.status)
 		if q.keyword != "" {
@@ -1061,7 +1061,7 @@ func layerUnionSQLMode(dbPath string, q layerListQuery, excludeDocPointers bool)
 	}
 
 	// ── L1 Background：挂载目录文件分块（目录 → 文件 → 分块 的第三级）────────────────────
-	if want(backgroundLayer) && vaultTablePresent(dbPath, "thin_vault_bg_chunks") {
+	if want(backgroundLayer) && vaultTablePresent(dbPath, "rm_bg_chunks") {
 		sel := `
 			SELECT
 				'background' AS layer, 'chunk' AS src,
@@ -1074,10 +1074,10 @@ func layerUnionSQLMode(dbPath string, q layerListQuery, excludeDocPointers bool)
 				rel_path AS rel_path, anchor AS anchor, abs_path AS abs_path,
 				occurred_at AS occurred_at,
 				'' AS cited_json
-			FROM thin_vault_bg_chunks`
+			FROM rm_bg_chunks`
 		cond := []string{}
-		if q.dirID != "" && vaultTablePresent(dbPath, "thin_vault_bg_files") {
-			cond = append(cond, `abs_path IN (SELECT abs_path FROM thin_vault_bg_files WHERE dir_id = ?)`)
+		if q.dirID != "" && vaultTablePresent(dbPath, "rm_bg_files") {
+			cond = append(cond, `abs_path IN (SELECT abs_path FROM rm_bg_files WHERE dir_id = ?)`)
 			args = append(args, q.dirID)
 		}
 		if q.relPath != "" {

@@ -174,7 +174,7 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 				return err
 			} else if verifyEpisodicPointerSource(refPointer, livePlaintext) == nil {
 				var sameInline int
-				checkErr := c.Vault.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs d WHERE d.doc_id = ? AND d.raw_text = ? AND (d.layer = 'episodic' OR d.layer = '') AND NOT EXISTS (SELECT 1 FROM thin_vault_episodic_index i WHERE i.doc_id = d.doc_id) AND NOT EXISTS (SELECT 1 FROM thin_vault_episodic_lineage l WHERE l.doc_id = d.doc_id AND l.turn_ref = d.raw_text))`, docID, livePlaintext).Scan(&sameInline)
+				checkErr := c.Vault.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs d WHERE d.doc_id = ? AND d.raw_text = ? AND (d.layer = 'episodic' OR d.layer = '') AND NOT EXISTS (SELECT 1 FROM rm_episodic_index i WHERE i.doc_id = d.doc_id) AND NOT EXISTS (SELECT 1 FROM rm_episodic_lineage l WHERE l.doc_id = d.doc_id AND l.turn_ref = d.raw_text))`, docID, livePlaintext).Scan(&sameInline)
 				if checkErr != nil {
 					return checkErr
 				}
@@ -617,7 +617,7 @@ func (c *Client) RecallDefault(queryPlaintext string, topK int) ([]LocalResolved
 }
 
 // RememberNoetic stores an L3 Noetic memory record (Query + Retrieved Sentences + Answer)
-// directly in the client's own local SQLite table (`thin_vault_noetic`).
+// directly in the client's own local SQLite table (`rm_noetic`).
 func (c *Client) RememberNoetic(noeticID string, queryText string, citedUnitIDs []string, citedSentences []string, answerText string, occurredAt int64) error {
 	return c.Vault.SaveLocalNoetic(LocalNoeticRecord{
 		NoeticID:       noeticID,
@@ -711,7 +711,7 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 	var cnt, maxRowID, occSum int64
 	hasFP := false
 	if v.slotCacheMu != nil && v.snapRef != nil {
-		if v.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(SUM(occurred_at), 0) FROM thin_vault_noetic WHERE status = 'active'`).Scan(&cnt, &maxRowID, &occSum) == nil {
+		if v.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(SUM(occurred_at), 0) FROM rm_noetic WHERE status = 'active'`).Scan(&cnt, &maxRowID, &occSum) == nil {
 			hasFP = true
 			v.slotCacheMu.RLock()
 			if v.snapRef.noeticReady &&
@@ -743,7 +743,7 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 				SELECT noetic_id, occurred_at, COALESCE(inserted_at, occurred_at), status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json,
 				       COALESCE(address_uri, ''), COALESCE(coord64, 0), COALESCE(waveform_bar, ''),
 				       COALESCE(assistant_id, ''), COALESCE(incarnation_id, '')
-				FROM thin_vault_noetic
+				FROM rm_noetic
 				WHERE status = 'active'
 				ORDER BY occurred_at DESC
 			`)
@@ -820,7 +820,7 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 	return list, nil
 }
 
-// RecallNoetic searches the client's local `thin_vault_noetic` table using keyed HMAC root commitments.
+// RecallNoetic searches the client's local `rm_noetic` table using keyed HMAC root commitments.
 func (c *Client) RecallNoetic(queryPlaintext string, topK int) ([]LocalNoeticRecord, error) {
 	if c.Vault == nil || c.Vault.db == nil {
 		return nil, nil
@@ -923,7 +923,7 @@ func (v *Vault) verifyTransportScope(scope string) error {
 	}
 	if reqScope != "" {
 		var populated int
-		_ = v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs LIMIT 1) OR EXISTS(SELECT 1 FROM thin_vault_noetic LIMIT 1)`).Scan(&populated)
+		_ = v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs LIMIT 1) OR EXISTS(SELECT 1 FROM rm_noetic LIMIT 1)`).Scan(&populated)
 		if populated != 0 {
 			return fmt.Errorf("thinclient: local_plain vault scope is unbound; cannot serve explicit scope %q", reqScope)
 		}

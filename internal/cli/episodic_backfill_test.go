@@ -255,7 +255,7 @@ func TestEpisodicBackfillTickStopsOnIndexWriteError(t *testing.T) {
 	}
 	sort.Strings(ids)
 	db := memory.Store.DB()
-	if _, err := db.Exec(`CREATE TRIGGER backfill_test_failure BEFORE INSERT ON thin_vault_episodic_index WHEN NEW.doc_id = '` + ids[0] + `' BEGIN SELECT RAISE(ABORT, 'write failed'); END`); err != nil {
+	if _, err := db.Exec(`CREATE TRIGGER backfill_test_failure BEFORE INSERT ON rm_episodic_index WHEN NEW.doc_id = '` + ids[0] + `' BEGIN SELECT RAISE(ABORT, 'write failed'); END`); err != nil {
 		t.Fatal(err)
 	}
 	page, err := runEpisodicIndexBackfillTick(context.Background(), memory)
@@ -263,7 +263,7 @@ func TestEpisodicBackfillTickStopsOnIndexWriteError(t *testing.T) {
 		t.Fatalf("expected fail-closed checkpoint: %+v %v", page, err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index`).Scan(&count); err != nil || count != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("unexpected index writes: %d %v", count, err)
 	}
 	if _, err := db.Exec(`DROP TRIGGER backfill_test_failure`); err != nil {

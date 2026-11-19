@@ -41,7 +41,7 @@ func TestGraphViewProjectsWordsPhrasesClustersAndCitations(t *testing.T) {
 	if err := vault.SaveLocalPlaintext("ep_free", 0, "", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_noetic(noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json)
+	if _, err := db.Exec(`INSERT INTO rm_noetic(noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json)
 		VALUES ('nt_alpha', 1700000600, 1700000600, 'active', 'What does the Alpha project use?', 'Graph memory units.', '["ep_a1","ep_a2"]')`); err != nil {
 		t.Fatal(err)
 	}

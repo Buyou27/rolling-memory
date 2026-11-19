@@ -140,7 +140,7 @@ func TestAuthorizeRMWSRoomAndToggleDeleteMemoryGuards(t *testing.T) {
 		 INSERT INTO thin_vault_meta(k, v) VALUES ('local_plain_scope', 'default');
 		 INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-guard-1', 'episodic', 1793270000, 'secret text', 'C6:L1:LOCAL#doc-guard-1');
-		 INSERT INTO thin_vault_noetic(noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json, status)
+		 INSERT INTO rm_noetic(noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json, status)
 		 VALUES ('nt-guard-1', 1793270010, 'q', 'a', '["doc-guard-1"]', 'active');`)
 
 	prevPerm := checkRMConsolePermission
@@ -169,11 +169,11 @@ func TestAuthorizeRMWSRoomAndToggleDeleteMemoryGuards(t *testing.T) {
 	if err := applySwitchToggle(home, "delete_memory", "unit:doc-guard-1"); err != nil {
 		t.Fatalf("applySwitchToggle delete_memory: %v", err)
 	}
-	rows, err := sqliteQueryJSON(dbPath, `SELECT unit_id, layer FROM thin_vault_deleted_units WHERE unit_id = 'doc-guard-1'`)
+	rows, err := sqliteQueryJSON(dbPath, `SELECT unit_id, layer FROM rm_deleted_units WHERE unit_id = 'doc-guard-1'`)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("expected tombstone for deleted unit, got rows=%v err=%v", rows, err)
 	}
-	nRows, err := sqliteQueryJSON(dbPath, `SELECT status FROM thin_vault_noetic WHERE noetic_id = 'nt-guard-1'`)
+	nRows, err := sqliteQueryJSON(dbPath, `SELECT status FROM rm_noetic WHERE noetic_id = 'nt-guard-1'`)
 	if err != nil || len(nRows) != 1 || asString(nRows[0]["status"]) != "stale" {
 		t.Fatalf("expected citing noetic unit to be marked stale, got %v err=%v", nRows, err)
 	}

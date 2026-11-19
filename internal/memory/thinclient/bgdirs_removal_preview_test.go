@@ -51,7 +51,7 @@ func TestPreviewBackgroundDirRemovalReportsRebindsAndPurgesWithoutWrites(t *test
 		t.Fatalf("encode cited units: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO thin_vault_noetic(
+		INSERT INTO rm_noetic(
 			noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json
 		) VALUES ('NOETIC-CITED', 1, 'active', 'q', 'a', ?, '[]')`, string(citedJSON)); err != nil {
 		t.Fatalf("insert cited Noetic: %v", err)
@@ -88,10 +88,10 @@ func TestPreviewBackgroundDirRemovalReportsRebindsAndPurgesWithoutWrites(t *test
 	if err != nil || len(mounts) != 2 {
 		t.Fatalf("preview changed mounts: mounts=%+v err=%v", mounts, err)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, pathA); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, pathA); got != 1 {
 		t.Fatalf("preview removed file metadata for %s: %d", pathA, got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, pathA); got == 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, pathA); got == 0 {
 		t.Fatalf("preview removed chunks for %s", pathA)
 	}
 	if got := loadNoeticStatus(t, db, "NOETIC-CITED"); got != "active" {
@@ -171,7 +171,7 @@ func TestPreviewIsAdvisoryAndExecutionReplansAgainstCurrentMounts(t *testing.T) 
 	if report.ReboundFiles != 1 || len(report.RemovedUnitIDs) != 0 {
 		t.Fatalf("execution did not re-plan against the current mounts: %+v", report)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 1 {
 		t.Fatalf("re-planned removal purged a covered file: %d", got)
 	}
 }
@@ -202,7 +202,7 @@ func TestPreviewForNeverMountedPathReportsZeros(t *testing.T) {
 	if mounts, err := client.Vault.ListBackgroundDirs(); err != nil || len(mounts) != 1 {
 		t.Fatalf("preview changed mounts: mounts=%+v err=%v", mounts, err)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files`); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files`); got != 1 {
 		t.Fatalf("preview changed tracked files: %d", got)
 	}
 }

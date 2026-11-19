@@ -456,13 +456,13 @@ leaderboard:
     card2Body: '1) Answer System SHA-1 0d591628…; 2) Judge System SHA-1 497f7892…; 3) Judge User Template SHA-1 38f9b6a1… (1,694 bytes). Protocol digests are verified before each evaluation run.'
     card3Title: '3. Historical Architecture: LLM + Vector Heavyweight Route (92.79%)'
     card3Tag: 'Historical · Early Heavyweight Architecture'
-    card3Body: 'Historical result: our early heavyweight architecture (LLM extraction + vector retrieval + graph/relational augmentation) on the full LoCoMo 1,540-question set: 92.79% overall (GPT-4.1 temp 0.1 judge; Single-hop 89.10%, Multi-hop 88.40%, Open-domain 81.30%, Temporal 94.40%, Evidence Hit 98.90%). This route is no longer provided; the current engine is the 0-Vector / 0-LLM on-device deterministic retriever (latest full 1,540 run: 85.26%, see our board row).'
+    card3Body: 'Historical result: our early heavyweight architecture (LLM extraction + vector retrieval + graph/relational augmentation) on the full LoCoMo 1,540-question set: 92.79% overall (GPT-4.1 temp 0.1 judge; Single-hop 89.10%, Multi-hop 88.40%, Open-domain 81.30%, Temporal 94.40%, Evidence Hit 98.90%). This route is no longer provided; the current retrieval kernel is the 0-Vector / 0-LLM on-device deterministic retriever, and the 85.26% end-to-end full-set reading uses an LLM answerer + judge over a Top-96 delivery (see our board row).'
     kpi1Label: 'Evaluation Protocol & Reference'
     kpi1Value: 'locomo-backboard'
     kpi1Sub: 'Frozen Stack locomo-frozen-2026-10-11 · 3 SHA1 Pins'
     kpi2Label: 'Latest Full 1,540 Reading (On-Device)'
     kpi2Value: '85.26% (1313/1540)'
-    kpi2Sub: '0-Vector · 0-LLM · deepseek-v4.1-flash judge · 2026-11-16'
+    kpi2Sub: '0-Vector/0-LLM retrieval kernel · LLM answerer + judge · Top-96 · 2026-11-16'
     kpi3Label: 'Single / Temporal / Multi-Hop'
     kpi3Value: '91.0% / 87.2% / 70.6%'
     kpi3Sub: 'Cat 4 Single 90.96% · Cat 2 Temporal 87.23% · Cat 1 Multi 70.57% · Cat 3 Open 71.88%'
@@ -543,6 +543,7 @@ recall:
 
 systemUpdate:
     openBtn: Version & Update
+    globalBadge: Update available — click to review and install
     dialogTitle: Version & Online Self-Update (SHA-256 Verified · Git-Free)
     safetyNotice: Opening this dialog only reads local SHA-256 digests (zero network requests); the release channel is contacted only when you click "Check for Updates" or "Update Now". Updating replaces binaries, web assets, and host wiring in place and never touches or overwrites your local SQLite vault (memory.db).
     currentVerLbl: Installed Version
@@ -550,8 +551,22 @@ systemUpdate:
     notCheckedYet: Not checked yet (click "Check for Updates" below)
     upToDateTag: Up to Date
     updateAvailTag: Update Available
+    updateSourceLbl: Update Source
+    sourceGithub: GitHub (official)
+    sourceGitee: Gitee (mainland mirror)
+    sourceCustom: Custom mirror
+    sourceHintGithub: Use the official GitHub Releases channel
+    sourceHintGitee: Use the Gitee mirror; fall back to a source rebuild when it has no prebuilt artifacts
+    sourceHintCustom: Use the mirror URL entered below
+    updateChannelLbl: Update Channel
+    channelStable: Stable (release tags only)
+    channelBeta: Beta (includes prereleases)
+    channelDev: Dev (latest main commit)
+    channelHintStable: Published release tags only
+    channelHintBeta: Includes prerelease tags; artifacts stay SHA-256 verified
+    channelHintDev: Tracks the latest main commit; release installs need one source baseline first, then a source rebuild; never replaces the binary automatically
     channelLbl: Release Channel / Mirror URL
-    channelPlaceholder: Default official GitHub Releases channel (or custom mirror URL)
+    channelPlaceholder: Uses the selected update source (enter a mirror URL for Custom)
     compCol: Component
     assetCol: Release Asset / Local Path
     localShaCol: Local SHA-256
@@ -571,6 +586,16 @@ systemUpdate:
     cliHintTitle: 'Equivalent CLI commands (run anytime in a terminal):'
     checkSuccessUpToDate: All components are up to date (SHA-256 digests match)
     checkSuccessAvail: Update available — click "Update Now" to install in place
+    checkSuccessSourceOnly: A new version exists, but this channel carries no prebuilt artifact for it; source installs should follow the dialog guidance
+    notifyTitle: New version {tag} available
+    notifyMessage: Click to review the {tag} update
+    notifySourceOnly: New version {tag} found (no prebuilt artifact on this channel; click for update options)
+    sourceOnlyTitle: This version has no directly installable prebuilt artifact
+    sourceOnlyHint: 'This install is source-based, or the channel has not attached binaries for {tag} yet. Re-run the installer for {tag}, or run git fetch --tags && git checkout {tag} in the source checkout and rebuild.'
+    baselineTag: Source baseline needed
+    baselineTitle: The dev channel needs one source install as a baseline
+    baselineHint: 'This is a release installation without a comparable source commit. Run ROLLING_MEMORY_SOURCE_REF=main bash install.sh once to establish the baseline; after that, main commits are reported normally.'
+    sourceOnlyHintDev: 'The dev channel tracks the latest main commit and never replaces the binary automatically. In a source checkout run git fetch origin main && git checkout main && bash install.sh, or use ROLLING_MEMORY_SOURCE_REF=main bash install.sh.'
     applySuccessUpdated: 'Update complete: replaced {components}'
     applySuccessNoop: All components are already up to date
     restartingNotice: Console assets updated; restarting console and reloading page...

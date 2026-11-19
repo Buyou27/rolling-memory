@@ -202,7 +202,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 	}
 
 	// Corrupting the sealed index must prevent hydration despite a readable source.
-	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id = 'ep_question'`); err != nil {
+	if _, err := memory.Store.DB().Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id = 'ep_question'`); err != nil {
 		t.Fatal(err)
 	}
 	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: turn + "#0"}}})

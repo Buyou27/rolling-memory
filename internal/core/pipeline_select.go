@@ -102,9 +102,9 @@ func (st *rmClusterState) rmProximityAndSynergy(c *rmCandidate, groups map[uint6
 			}
 			mb := groups[b.group]
 			if ma+mb > 0 {
-				prox += 2 * ma * mb / (ma + mb) * math.Exp(-(d-1)*invE)
+				prox += 2 * ma * mb / (ma + mb) * math.Exp(-(d-1)*transmissionPerHop)
 			}
-			syn += a.mass * (b.mass / total) * math.Exp(-d*invE2)
+			syn += a.mass * (b.mass / total) * math.Exp(-d*transmissionTwoHop)
 		}
 	}
 	return prox, syn
@@ -278,7 +278,7 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 		}
 	}
 	maximum := math.Max(queryCoverage, purity)
-	return queryMass * (math.Sqrt(queryCoverage*purity) + maximum*maximum/math.E)
+	return queryMass * (math.Sqrt(queryCoverage*purity) + maximum*maximum/eulerNumber)
 }
 
 type rmScoredCandidate struct {
@@ -340,12 +340,12 @@ func (c *rmCandidate) stage2Bounds(unitStructGate []float64, u int32, groups map
 		matched += groups[m.group]
 		qRem += m.mass
 	}
-	qRem /= math.E
+	qRem /= eulerNumber
 	compBound := 0.0
 	if c.lex > 0 {
-		compBound = invE * invE * c.lex * (1.0 - math.Exp(-c.lex/total))
+		compBound = transmissionPerHop * transmissionPerHop * c.lex * (1.0 - math.Exp(-c.lex/total))
 	}
-	structBound = gateAt(unitStructGate, u) * matched * (1.0 + invE)
+	structBound = gateAt(unitStructGate, u) * matched * (1.0 + transmissionPerHop)
 	if c.structureSet {
 		structBound = c.structure
 	}
@@ -517,7 +517,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		fStart := len(sc.focalPool)
 		var rawSum float64
 		for _, fc := range focalCands {
-			kern := math.Exp(-float64(fc.minDist-1) / math.E)
+			kern := math.Exp(-float64(fc.minDist-1) / eulerNumber)
 			mG, _ := idx.TermMass(fc.group)
 			tw := mG * kern
 			sc.focalPool = append(sc.focalPool, rmFocalTermWeight{group: fc.group, weight: tw, localW: kern})
@@ -535,7 +535,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		for _, m := range c.matches {
 			rem += m.mass * math.Exp(-float64(coverage[m.group]))
 		}
-		qRem := rem / math.E
+		qRem := rem / eulerNumber
 		if c.lex <= 0 {
 			return qRem
 		}
@@ -553,7 +553,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		}
 		pAnchor := 1.0 - math.Exp(-c.lex/total)
 		etaNovel := compNovel / (compTot + muQ)
-		return qRem + invE2*c.lex*pAnchor*etaNovel
+		return qRem + transmissionTwoHop*c.lex*pAnchor*etaNovel
 	}
 	queue := sc.heapQueue[:0]
 	for _, u := range sc.dirtyUnits {
@@ -603,7 +603,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 			best.remaining = rem
 			rawScore := c.lex + c.phrase + c.entity + c.structure + rem + c.stSpread + c.stCorrob
 			if c.clonePenalty > 0 {
-				rawScore *= (1.0 - invE*invE*c.clonePenalty)
+				rawScore *= (1.0 - cloneDampingKernel*c.clonePenalty)
 			}
 			best.score = rawScore
 			best.epoch = len(out)
@@ -614,7 +614,7 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		hop1 := c.stSpread
 		hop2 := c.stCorrob
 		if c.clonePenalty > 0 {
-			scale := 1.0 - invE*invE*c.clonePenalty
+			scale := 1.0 - cloneDampingKernel*c.clonePenalty
 			direct *= scale
 			hop1 *= scale
 			hop2 *= scale
@@ -674,9 +674,9 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 			// strictly weaker than best.unit while sitting in the same tight time window
 			// with orthogonal subject content (cos_subj < 1/e^2 and C_{nb->s} < 1/e^2),
 			// revoke its borrowed spacetime Hop inflation.
-			if nbC.coreLex < c.coreLex*(1.0-invE*invE) {
+			if nbC.coreLex < c.coreLex*(1.0-transmissionPerHop*transmissionPerHop) {
 				rawCos := st.docSubjectCos(idx, sc, best.unit, nb)
-				if rawCos < invE*invE {
+				if rawCos < transmissionPerHop*transmissionPerHop {
 					if !profBestSet {
 						profBest = getLightProf(best.unit)
 						profBestSet = true

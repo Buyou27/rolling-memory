@@ -196,10 +196,10 @@ func TestRememberEpisodicByRefInvalidSourcePreservesPlaintext(t *testing.T) {
 				t.Fatalf("document = %q, %q, %v", raw, distilled, err)
 			}
 			var indexes, lineage int
-			if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, tc.id).Scan(&indexes); err != nil {
+			if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?`, tc.id).Scan(&indexes); err != nil {
 				t.Fatal(err)
 			}
-			if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id = ?`, tc.id).Scan(&lineage); err != nil {
+			if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_lineage WHERE doc_id = ?`, tc.id).Scan(&lineage); err != nil {
 				t.Fatal(err)
 			}
 			if indexes != 0 || lineage != 0 {
@@ -265,7 +265,7 @@ func TestRememberEpisodicByRefPreservesIdenticalInline(t *testing.T) {
 	if err := db.QueryRow(`SELECT raw_text, occurred_at FROM thin_vault_docs WHERE doc_id = 'same'`).Scan(&stored, &occurred); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = 'same'`).Scan(&indexes); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = 'same'`).Scan(&indexes); err != nil {
 		t.Fatal(err)
 	}
 	if stored != text || occurred != 1 || indexes != 0 || errTr.calls != 1 {

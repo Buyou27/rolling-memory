@@ -57,7 +57,7 @@ func familyEffectiveWeight(df, multiDocCount, clusters int, total, entropy float
 			clusters = df
 		}
 		d := float64(df - 1)
-		indep := math.Pow(float64(clusters-1)/d, 1/math.E)
+		indep := math.Pow(float64(clusters-1)/d, 1/eulerNumber)
 		disp := 1.0
 		if total > 0 || multiDocCount > 0 {
 			disp = familyDispersion(df, entropy)

@@ -301,7 +301,7 @@ func TestHealSkipsTamperedIndexesWithoutTouchingRows(t *testing.T) {
 	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, ref, turnRef, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_episodic_index SET payload_mac = x'00' WHERE doc_id = ?`, docID); err != nil {
+	if _, err := memory.Store.DB().Exec(`UPDATE rm_episodic_index SET payload_mac = x'00' WHERE doc_id = ?`, docID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,7 +314,7 @@ func TestHealSkipsTamperedIndexesWithoutTouchingRows(t *testing.T) {
 		t.Fatalf("tampered row was modified: %q err=%v", keptPtr, err)
 	}
 	var indexRows int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, docID).Scan(&indexRows); err != nil || indexRows != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_episodic_index WHERE doc_id = ?`, docID).Scan(&indexRows); err != nil || indexRows != 1 {
 		t.Fatalf("tampered index row was removed: %d err=%v", indexRows, err)
 	}
 }

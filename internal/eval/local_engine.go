@@ -749,6 +749,15 @@ func CloudCorpusDigest(documents []CloudDocument) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// evalManifestIdentityError 为「manifest 身份与现役客户端不一致」提供稳定错误码：
+// 复用不可能，但语料仍可按现役装配原地重灌（调用方据此进入自愈重灌，而不是 fail-closed）。
+func evalManifestIdentityError(format string, args ...any) error {
+	return &EvalVerifyError{
+		Code: EvalVerifyCodeManifestIdentityMismatch,
+		Msg:  fmt.Sprintf(format, args...),
+	}
+}
+
 func (e *LocalEngine) validateManifestPulseMode(manifest CloudManifest) error {
 	if strings.TrimSpace(manifest.PulseMode) == "" || !IsValidPulseMode(manifest.PulseMode) || manifest.PulseMode != e.PulseMode {
 		return fmt.Errorf("evaluation manifest pulse mode %q does not match the active client %q (rebuild required)",
@@ -786,7 +795,7 @@ func (e *LocalEngine) VerifyPrepared(ctx context.Context, documents []CloudDocum
 		return manifest, err
 	}
 	if manifest.Endpoint != e.Endpoint || manifest.TenantID != e.TenantID || manifest.UserID != e.UserID {
-		return manifest, errors.New("evaluation manifest endpoint/tenant/user does not match the active engine")
+		return manifest, evalManifestIdentityError("evaluation manifest endpoint/tenant/user does not match the active engine")
 	}
 	// 切词臂必须与金库脉冲逐位同源：UnitID 相同但脉冲词项不同（product vs standard）
 	// 时复用会静默用错词表检索，必须 fail-closed 要求重建。历史卷 manifest 无该字段
@@ -796,7 +805,7 @@ func (e *LocalEngine) VerifyPrepared(ctx context.Context, documents []CloudDocum
 		manifestTokenizer = PulseTokenizerStandard
 	}
 	if normalizePulseTokenizer(manifestTokenizer) != normalizePulseTokenizer(e.PulseTokenizer) {
-		return manifest, fmt.Errorf("evaluation manifest pulse tokenizer %q does not match the active client %q (rebuild required)",
+		return manifest, evalManifestIdentityError("evaluation manifest pulse tokenizer %q does not match the active client %q (rebuild required)",
 			manifestTokenizer, normalizePulseTokenizer(e.PulseTokenizer))
 	}
 	// 世代在用：读者心跳续期（Admin 的 prepare 探针也走这里），保证并发回收不会清掉正在读的世代。
@@ -1015,14 +1024,18 @@ func (e *LocalEngine) guardLocalPlainRebuildPurge(documents []CloudDocument) err
 	return fmt.Errorf("refusing to purge local evaluation store %s: it holds %d document(s) outside this corpus and carries no evaluation provenance (no manifest, no resume state); point --eval-store at a new path or delete that file deliberately", e.StorePath, foreign)
 }
 
-// evalResumeState 是本地明文金库的身份封条：只有 endpoint、scope 与语料摘要都与当前
-// 准备完全一致时，才允许按本地已有文档跳过 ingest。缺少该封条或身份不一致时必须全量重灌，
-// 否则会写出一份「documents=N 但金库只有 N-k 条」的假回执。
+// evalResumeState 是本地明文金库的身份封条：只有 endpoint、金库钥指纹、切词臂、脉冲模式、
+// scope 与语料摘要都与当前准备完全一致时，才允许按本地已有文档跳过 ingest。缺少该封条或
+// 任一身份轴不一致时必须全量重灌——同一批 Unit ID 在换装配/换金库钥后脉冲词项不同，
+// 跳过重灌会写出「documents=N 但金库仍是旧词表」的假回执。
 type evalResumeState struct {
-	Endpoint     string `json:"endpoint"`
-	Scope        string `json:"scope"`
-	CorpusSHA256 string `json:"corpus_sha256"`
-	Documents    int    `json:"documents"`
+	Endpoint       string `json:"endpoint"`
+	CredentialFP   string `json:"credential_fingerprint"`
+	PulseTokenizer string `json:"pulse_tokenizer"`
+	PulseMode      string `json:"pulse_mode"`
+	Scope          string `json:"scope"`
+	CorpusSHA256   string `json:"corpus_sha256"`
+	Documents      int    `json:"documents"`
 }
 
 func evalResumeStatePath(storePath string) string {
@@ -1090,17 +1103,24 @@ func (e *LocalEngine) Ingest(ctx context.Context, documents []CloudDocument, reb
 	if workers < 1 {
 		workers = 1
 	}
-	// 断点续灌：仅当本地金库封条（endpoint + scope + 语料摘要）与当前准备一致时，
-	// 才把本地已有文档视为已成功写穿，只补缺失子集。中断因此可以低成本续跑；
-	// 语料变化则必须全量重灌。
+	// 断点续灌：仅当本地金库封条（endpoint + 金库钥指纹 + 切词臂 + 脉冲模式 + scope +
+	// 语料摘要）与当前准备一致时，才把本地已有文档视为已成功写穿，只补缺失子集。
+	// 中断因此可以低成本续跑；语料或装配/身份变化则必须全量重灌
+	// （同一 Unit ID 换词表或换金库钥后旧脉冲不可复用）。
 	resumeState := evalResumeState{
 		Endpoint: e.Endpoint, Scope: e.Scope,
-		CorpusSHA256: manifest.CorpusSHA256, Documents: len(documents),
+		CredentialFP:   evalKeyFingerprint(string(evalLocalVaultKey(e.UserID))),
+		PulseTokenizer: normalizePulseTokenizer(e.PulseTokenizer),
+		PulseMode:      NormalizePulseMode(e.PulseMode),
+		CorpusSHA256:   manifest.CorpusSHA256, Documents: len(documents),
 	}
 	resumable := false
 	if !rebuild {
 		previous := readEvalResumeState(e.StorePath)
 		resumable = previous.Endpoint == resumeState.Endpoint &&
+			previous.CredentialFP == resumeState.CredentialFP &&
+			previous.PulseTokenizer == resumeState.PulseTokenizer &&
+			previous.PulseMode == resumeState.PulseMode &&
 			previous.Scope == resumeState.Scope &&
 			previous.CorpusSHA256 == resumeState.CorpusSHA256
 	}

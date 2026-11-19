@@ -45,13 +45,13 @@ func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
 			coord64 INTEGER NOT NULL DEFAULT 0, waveform_bar TEXT NOT NULL DEFAULT '', doc_macro_wave TEXT NOT NULL DEFAULT '',
 			kept_indices_json TEXT NOT NULL DEFAULT '[]'
 		);
-		CREATE TABLE IF NOT EXISTS thin_vault_noetic (
+		CREATE TABLE IF NOT EXISTS rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active',
 			query_text TEXT NOT NULL, answer_text TEXT NOT NULL, cited_unit_ids_json TEXT NOT NULL DEFAULT '[]',
 			cited_sentences_json TEXT NOT NULL DEFAULT '[]'
 		);
 		INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text) VALUES ('bg_local_1', 'background', 1762380000, 'local background doc');
-		INSERT INTO thin_vault_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
+		INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
 		VALUES ('nt_local_1', 1762380100, 'active', 'what is RAME?', 'the memory engine', '["bg_local_1"]');
 	`)
 	if err != nil {

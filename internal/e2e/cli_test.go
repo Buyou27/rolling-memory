@@ -116,7 +116,7 @@ func TestCLISmoke(t *testing.T) {
 	defer connection.Close()
 	var vaultUnits int
 	if err := connection.QueryRow(
-		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active')`,
+		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM rm_noetic WHERE status = 'active')`,
 	).Scan(&vaultUnits); err != nil {
 		t.Fatalf("count vault units: %v", err)
 	}

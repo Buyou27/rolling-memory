@@ -195,7 +195,7 @@ const (
 )
 
 // maybeSyncBackgroundOnHook triggers a lightweight incremental L1 Background sync
-// during UserPromptSubmit when at least one directory is mounted in `thin_vault_bg_dirs`
+// during UserPromptSubmit when at least one directory is mounted in `rm_bg_dirs`
 // and the 60s cooldown window has elapsed. Unchanged files are skipped in O(1) via
 // `os.Stat(mtime_ns, size)` inside `SyncBackgroundDirs`.
 func maybeSyncBackgroundOnHook(memory *facade.Memory) {
@@ -204,7 +204,7 @@ func maybeSyncBackgroundOnHook(memory *facade.Memory) {
 	}
 	db := memory.Store.DB()
 	var dirCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&dirCount); err != nil || dirCount <= 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&dirCount); err != nil || dirCount <= 0 {
 		return
 	}
 	now := ids.UTCNow()

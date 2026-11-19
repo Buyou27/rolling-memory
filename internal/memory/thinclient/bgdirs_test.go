@@ -395,7 +395,7 @@ func countBackgroundRows(t *testing.T, db *sql.DB, query string, args ...any) in
 func loadBackgroundUnitIDs(t *testing.T, db *sql.DB, absPath string) []string {
 	t.Helper()
 	var unitIDsJSON string
-	if err := db.QueryRow(`SELECT unit_ids_json FROM thin_vault_bg_files WHERE abs_path = ?`, absPath).Scan(&unitIDsJSON); err != nil {
+	if err := db.QueryRow(`SELECT unit_ids_json FROM rm_bg_files WHERE abs_path = ?`, absPath).Scan(&unitIDsJSON); err != nil {
 		t.Fatalf("load background unit IDs: %v", err)
 	}
 	var unitIDs []string
@@ -433,10 +433,10 @@ func TestBackgroundSyncIngestFailureDoesNotWriteSyncedMetadata(t *testing.T) {
 	if report.IngestedFiles != 0 || report.IngestedChunks != 0 {
 		t.Fatalf("failed ingest must not be reported as synced: %+v", report)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 0 {
 		t.Fatalf("failed ingest wrote synced file metadata: %d", got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, path); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, path); got != 0 {
 		t.Fatalf("failed ingest wrote chunk metadata: %d", got)
 	}
 
@@ -447,7 +447,7 @@ func TestBackgroundSyncIngestFailureDoesNotWriteSyncedMetadata(t *testing.T) {
 	if report.IngestedFiles != 1 || ingestCalls.Load() != 2 {
 		t.Fatalf("expected one retry ingest, got report=%+v calls=%d", report, ingestCalls.Load())
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 1 {
 		t.Fatalf("successful retry did not write synced metadata: %d", got)
 	}
 
@@ -517,7 +517,7 @@ func TestClientRemoveBackgroundDirPurgeFailureKeepsMountAndRetries(t *testing.T)
 	if err != nil || len(mounts) != 0 {
 		t.Fatalf("mount still present after successful purge: mounts=%+v err=%v", mounts, err)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 0 {
 		t.Fatalf("local file metadata retained after successful remove: %d", got)
 	}
 }
@@ -628,7 +628,7 @@ func TestRemoveBackgroundDirSplitsMonsterFileIntoBoundedBatches(t *testing.T) {
 		t.Fatalf("AddBackgroundDir: %v", err)
 	}
 	var dirID string
-	if err := db.QueryRow(`SELECT dir_id FROM thin_vault_bg_dirs LIMIT 1`).Scan(&dirID); err != nil {
+	if err := db.QueryRow(`SELECT dir_id FROM rm_bg_dirs LIMIT 1`).Scan(&dirID); err != nil {
 		t.Fatalf("load dir_id: %v", err)
 	}
 	const units = 1200 // > 2 x the 512-unit batch cap
@@ -642,13 +642,13 @@ func TestRemoveBackgroundDirSplitsMonsterFileIntoBoundedBatches(t *testing.T) {
 		t.Fatalf("encode units: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO thin_vault_bg_files(
+		INSERT INTO rm_bg_files(
 			abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, chunk_count, unit_ids_json, chunk_hashes_json
 		) VALUES (?, ?, 'monster.jsonl', 1, 1, 'sha', ?, ?, '[]')`, absPath, dirID, units, string(unitJSON)); err != nil {
 		t.Fatalf("insert file row: %v", err)
 	}
 	for _, unitID := range unitIDs {
-		if _, err := db.Exec(`INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, chunk_index) VALUES (?, ?, 'monster.jsonl', 0)`, unitID, absPath); err != nil {
+		if _, err := db.Exec(`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, chunk_index) VALUES (?, ?, 'monster.jsonl', 0)`, unitID, absPath); err != nil {
 			t.Fatalf("insert chunk row %s: %v", unitID, err)
 		}
 	}
@@ -664,10 +664,10 @@ func TestRemoveBackgroundDirSplitsMonsterFileIntoBoundedBatches(t *testing.T) {
 	if committed := countingDriverBegins.Load() - before; committed < 3 {
 		t.Fatalf("monster file removal began %d transactions, want one bounded batch per 512 units", committed)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, absPath); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, absPath); got != 0 {
 		t.Fatalf("chunk rows retained: %d", got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, absPath); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, absPath); got != 0 {
 		t.Fatalf("file row retained: %d", got)
 	}
 }
@@ -764,13 +764,13 @@ func TestRemoveBackgroundDirCascadesFTSAndNoetic(t *testing.T) {
 		t.Fatalf("encode cited units: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO thin_vault_noetic(
+		INSERT INTO rm_noetic(
 			noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json
 		) VALUES ('NOETIC-CITED', 1, 'active', 'q', 'a', ?, '[]')`, string(citedJSON)); err != nil {
 		t.Fatalf("insert cited Noetic: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO thin_vault_noetic(
+		INSERT INTO rm_noetic(
 			noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json
 		) VALUES ('NOETIC-UNRELATED', 1, 'active', 'q', 'a', '["bg:elsewhere#0"]', '[]')`); err != nil {
 		t.Fatalf("insert unrelated Noetic: %v", err)
@@ -789,10 +789,10 @@ func TestRemoveBackgroundDirCascadesFTSAndNoetic(t *testing.T) {
 		t.Fatalf("mount still present after removal: mounts=%+v err=%v", mounts, err)
 	}
 	for _, path := range []string{pathA, pathB} {
-		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 0 {
+		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 0 {
 			t.Fatalf("file metadata retained for %s: %d", path, got)
 		}
-		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, path); got != 0 {
+		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, path); got != 0 {
 			t.Fatalf("chunk metadata retained for %s: %d", path, got)
 		}
 	}
@@ -807,7 +807,7 @@ func TestRemoveBackgroundDirCascadesFTSAndNoetic(t *testing.T) {
 func loadNoeticStatus(t *testing.T, db *sql.DB, noeticID string) string {
 	t.Helper()
 	var status string
-	if err := db.QueryRow(`SELECT status FROM thin_vault_noetic WHERE noetic_id = ?`, noeticID).Scan(&status); err != nil {
+	if err := db.QueryRow(`SELECT status FROM rm_noetic WHERE noetic_id = ?`, noeticID).Scan(&status); err != nil {
 		t.Fatalf("load noetic status for %s: %v", noeticID, err)
 	}
 	return status
@@ -829,7 +829,7 @@ func TestBackgroundSyncDeletedFilePurgesBeforeLocalDeleteAndRetries(t *testing.T
 		if len(unitIDs) != 1 {
 			t.Fatalf("expected one deleted unit, got %v", unitIDs)
 		}
-		metadataAtPurge = append(metadataAtPurge, countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path))
+		metadataAtPurge = append(metadataAtPurge, countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path))
 		if purgeCalls == 1 {
 			return errors.New("deleted file purge failed")
 		}
@@ -848,7 +848,7 @@ func TestBackgroundSyncDeletedFilePurgesBeforeLocalDeleteAndRetries(t *testing.T
 	if _, err := client.SyncBackgroundDirs(context.Background()); err == nil || !strings.Contains(err.Error(), "deleted file purge failed") {
 		t.Fatalf("expected deleted file purge error, got %v", err)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 1 {
 		t.Fatalf("failed deletion purge removed retry metadata: %d", got)
 	}
 	report, err := client.SyncBackgroundDirs(context.Background())
@@ -861,7 +861,7 @@ func TestBackgroundSyncDeletedFilePurgesBeforeLocalDeleteAndRetries(t *testing.T
 	if len(metadataAtPurge) != 2 || metadataAtPurge[0] != 1 || metadataAtPurge[1] != 1 {
 		t.Fatalf("local metadata was deleted before cloud purge: %v", metadataAtPurge)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 0 {
 		t.Fatalf("deleted file metadata remains after successful purge: %d", got)
 	}
 }
@@ -884,7 +884,7 @@ func TestBackgroundSyncShrinkPurgesTrailingChunkBeforeLocalDelete(t *testing.T) 
 	transport.deleteUnits = func(_ context.Context, unitIDs []string) error {
 		purgeCalls++
 		purgedUnitIDs = append(purgedUnitIDs, unitIDs...)
-		chunksAtPurge = append(chunksAtPurge, countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, path))
+		chunksAtPurge = append(chunksAtPurge, countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, path))
 		if purgeCalls == 1 {
 			return errors.New("shrink purge failed")
 		}
@@ -927,7 +927,7 @@ func TestBackgroundSyncShrinkPurgesTrailingChunkBeforeLocalDelete(t *testing.T) 
 	if len(newUnitIDs) != 1 || newUnitIDs[0] != oldUnitIDs[0] {
 		t.Fatalf("unexpected shrunk synced units: %v", newUnitIDs)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, path); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, path); got != 1 {
 		t.Fatalf("trailing chunk metadata remains after successful purge: %d", got)
 	}
 }
@@ -959,7 +959,7 @@ func TestBackgroundSyncMountStatFailureSkipsDeletion(t *testing.T) {
 	if purgeCalls != 0 {
 		t.Fatalf("scan failure entered deletion phase: purgeCalls=%d", purgeCalls)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 1 {
 		t.Fatalf("scan failure deleted synced metadata: %d", got)
 	}
 }
@@ -967,7 +967,7 @@ func TestBackgroundSyncMountStatFailureSkipsDeletion(t *testing.T) {
 func TestInvalidateLocalNoeticByCitedDocReturnsJSONError(t *testing.T) {
 	client, db := newBackgroundTestClient(t, &backgroundTransportStub{})
 	if _, err := db.Exec(`
-		INSERT INTO thin_vault_noetic(
+		INSERT INTO rm_noetic(
 			noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json
 		) VALUES ('BROKEN-NOETIC', 1, 'active', 'q', 'a', '{broken', '[]')`); err != nil {
 		t.Fatalf("insert malformed Noetic citation: %v", err)
@@ -1089,7 +1089,7 @@ func TestBackgroundSyncRechunksWhenChunkerGenerationChanges(t *testing.T) {
 	// Simulate an inventory written by an older chunking rule: the chunk count still lines up, but
 	// the file-level and per-chunk hashes describe other boundaries than the current rule's.
 	var chunkCount int
-	if err := db.QueryRow(`SELECT chunk_count FROM thin_vault_bg_files WHERE abs_path = ?`, path).Scan(&chunkCount); err != nil {
+	if err := db.QueryRow(`SELECT chunk_count FROM rm_bg_files WHERE abs_path = ?`, path).Scan(&chunkCount); err != nil {
 		t.Fatalf("read chunk count: %v", err)
 	}
 	staleHashes := make([]string, chunkCount)
@@ -1101,7 +1101,7 @@ func TestBackgroundSyncRechunksWhenChunkerGenerationChanges(t *testing.T) {
 		t.Fatalf("encode stale hashes: %v", err)
 	}
 	if _, err := db.Exec(
-		`UPDATE thin_vault_bg_files SET chunker_generation = 'carrier/16000', content_sha256 = 'stale-rule', chunk_hashes_json = ? WHERE abs_path = ?`,
+		`UPDATE rm_bg_files SET chunker_generation = 'carrier/16000', content_sha256 = 'stale-rule', chunk_hashes_json = ? WHERE abs_path = ?`,
 		string(staleJSON), path,
 	); err != nil {
 		t.Fatalf("age chunker generation: %v", err)
@@ -1114,7 +1114,7 @@ func TestBackgroundSyncRechunksWhenChunkerGenerationChanges(t *testing.T) {
 		t.Fatalf("stale generation must re-chunk the file, got %+v", third)
 	}
 	var stamped string
-	if err := db.QueryRow(`SELECT chunker_generation FROM thin_vault_bg_files WHERE abs_path = ?`, path).Scan(&stamped); err != nil {
+	if err := db.QueryRow(`SELECT chunker_generation FROM rm_bg_files WHERE abs_path = ?`, path).Scan(&stamped); err != nil {
 		t.Fatalf("read chunker generation: %v", err)
 	}
 	// The stored stamp is the migration gate: it must name the canonical chunk
@@ -1258,7 +1258,7 @@ func TestBackgroundSyncFirstFailureByWalkOrderCommitsEarlierFiles(t *testing.T) 
 		if i < failIndex {
 			want = 1
 		}
-		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, p); got != want {
+		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, p); got != want {
 			t.Fatalf("file %d synced rows = %d, want %d", i, got, want)
 		}
 	}
@@ -1284,7 +1284,7 @@ func TestBackgroundSyncFirstFailureByWalkOrderCommitsEarlierFiles(t *testing.T) 
 		t.Fatalf("retry after recovery: report=%+v err=%v", report, err)
 	}
 	for i, p := range paths {
-		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, p); got != 1 {
+		if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, p); got != 1 {
 			t.Fatalf("file %d did not converge after retry: rows=%d", i, got)
 		}
 	}
@@ -1333,10 +1333,10 @@ func TestBackgroundSyncSkipsOversizedFileAndKeepsMountSyncable(t *testing.T) {
 	if skip.AbsPath != huge || !strings.Contains(skip.Reason, "exceeds") {
 		t.Fatalf("unexpected skip record: %+v", skip)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, huge); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, huge); got != 0 {
 		t.Fatalf("oversized file entered the index: %d", got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, kept); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, kept); got != 1 {
 		t.Fatalf("kept file missing from the index: %d", got)
 	}
 	callsAfterFirst := ingestCalls.Load()
@@ -1378,7 +1378,7 @@ func TestBackgroundSyncSkipsEmptyFileAndKeepsMountSyncable(t *testing.T) {
 	if report.IngestedFiles != 1 || len(report.SkippedFiles) != 1 || report.SkippedFiles[0].Reason != "no extractable text" {
 		t.Fatalf("expected one ingest and one no-text skip, got %+v", report)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, empty); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, empty); got != 0 {
 		t.Fatalf("empty file entered the index: %d", got)
 	}
 }
@@ -1435,10 +1435,10 @@ func TestBackgroundSyncPurgesTrackedFileThatBecomesOversized(t *testing.T) {
 	if report.DeletedFiles != 0 || report.DeletedChunks != 0 {
 		t.Fatalf("skip purge must not be reported as a deletion: %+v", report)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, path); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 0 {
 		t.Fatalf("stale file row survived the skip purge: %d", got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, path); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, path); got != 0 {
 		t.Fatalf("stale chunks survived the skip purge: %d", got)
 	}
 	purgedMu.Lock()
@@ -1501,7 +1501,7 @@ func TestBackgroundSyncUnreadableDirKeepsTrackedRows(t *testing.T) {
 	if report.DeletedFiles != 0 || purgeCalls != 0 {
 		t.Fatalf("locked directory's absence was treated as deletion: report=%+v purgeCalls=%d", report, purgeCalls)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, deep); got != 1 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, deep); got != 1 {
 		t.Fatalf("tracked row under the locked dir was purged: %d", got)
 	}
 
@@ -1537,7 +1537,7 @@ func TestBackgroundSyncDanglingSymlinkDoesNotFailMount(t *testing.T) {
 	if report.IngestedFiles != 1 {
 		t.Fatalf("expected the real document to ingest, got %+v", report)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, ghost); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, ghost); got != 0 {
 		t.Fatalf("dangling symlink entered the index: %d", got)
 	}
 }
@@ -1565,7 +1565,7 @@ func seedActiveNoeticCitation(t *testing.T, db *sql.DB, noeticID string, unitIDs
 		t.Fatalf("encode citation payload: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO thin_vault_noetic(noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json)
+		INSERT INTO rm_noetic(noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json)
 		VALUES (?, strftime('%s','now'), strftime('%s','now'), 'active', 'covered file question', 'covered file answer', ?)`,
 		noeticID, string(payload)); err != nil {
 		t.Fatalf("insert noetic citation: %v", err)
@@ -1575,7 +1575,7 @@ func seedActiveNoeticCitation(t *testing.T, db *sql.DB, noeticID string, unitIDs
 func noeticStatusByID(t *testing.T, db *sql.DB, noeticID string) string {
 	t.Helper()
 	var status string
-	if err := db.QueryRow(`SELECT status FROM thin_vault_noetic WHERE noetic_id = ?`, noeticID).Scan(&status); err != nil {
+	if err := db.QueryRow(`SELECT status FROM rm_noetic WHERE noetic_id = ?`, noeticID).Scan(&status); err != nil {
 		t.Fatalf("load noetic status: %v", err)
 	}
 	return status
@@ -1624,7 +1624,7 @@ func TestBackgroundUnmountChildRekeepsFilesCoveredByParent(t *testing.T) {
 	parentMount := backgroundMountByRoot(t, client, parent)
 	childMount := backgroundMountByRoot(t, client, child)
 	var childOwner string
-	if err := db.QueryRow(`SELECT dir_id FROM thin_vault_bg_files WHERE abs_path = ?`, childDoc).Scan(&childOwner); err != nil {
+	if err := db.QueryRow(`SELECT dir_id FROM rm_bg_files WHERE abs_path = ?`, childDoc).Scan(&childOwner); err != nil {
 		t.Fatalf("load child owner: %v", err)
 	}
 	if childOwner != childMount.DirID {
@@ -1644,14 +1644,14 @@ func TestBackgroundUnmountChildRekeepsFilesCoveredByParent(t *testing.T) {
 		t.Fatalf("covered file reached the cloud purge: %d", purgedUnits.Load())
 	}
 	var owner, relPath string
-	if err := db.QueryRow(`SELECT dir_id, rel_path FROM thin_vault_bg_files WHERE abs_path = ?`, childDoc).Scan(&owner, &relPath); err != nil {
+	if err := db.QueryRow(`SELECT dir_id, rel_path FROM rm_bg_files WHERE abs_path = ?`, childDoc).Scan(&owner, &relPath); err != nil {
 		t.Fatalf("child file must survive the child unmount: %v", err)
 	}
 	if owner != parentMount.DirID || relPath != "child/child.md" {
 		t.Fatalf("child file not re-attributed to the parent mount: dir=%s rel=%s", owner, relPath)
 	}
 	var chunkRel string
-	if err := db.QueryRow(`SELECT rel_path FROM thin_vault_bg_chunks WHERE abs_path = ? LIMIT 1`, childDoc).Scan(&chunkRel); err != nil {
+	if err := db.QueryRow(`SELECT rel_path FROM rm_bg_chunks WHERE abs_path = ? LIMIT 1`, childDoc).Scan(&chunkRel); err != nil {
 		t.Fatalf("load chunk rel_path: %v", err)
 	}
 	if chunkRel != "child/child.md" {
@@ -1715,11 +1715,11 @@ func TestBackgroundUnmountParentPurgesOnlyUncoveredFiles(t *testing.T) {
 	if len(removedIDs) != 1 || removedIDs[0] != parentUnit {
 		t.Fatalf("expected only the parent-owned unit purged, got %v", removedIDs)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, parentDoc); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, parentDoc); got != 0 {
 		t.Fatalf("uncovered parent file survived: %d", got)
 	}
 	var owner string
-	if err := db.QueryRow(`SELECT dir_id FROM thin_vault_bg_files WHERE abs_path = ?`, childDoc).Scan(&owner); err != nil {
+	if err := db.QueryRow(`SELECT dir_id FROM rm_bg_files WHERE abs_path = ?`, childDoc).Scan(&owner); err != nil {
 		t.Fatalf("covered child file must survive: %v", err)
 	}
 	if owner != childMount.DirID {
@@ -1777,7 +1777,7 @@ func TestBackgroundUnmountLayersPurgeOnlyAfterLastCoverage(t *testing.T) {
 	if status := noeticStatusByID(t, db, "NOETIC-LAYERED"); status != "stale" {
 		t.Fatalf("citation must go stale once coverage is gone, got %s", status)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, childDoc); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, childDoc); got != 0 {
 		t.Fatalf("file metadata survived the last unmount: %d", got)
 	}
 	if mounts, err := client.Vault.ListBackgroundDirs(); err != nil || len(mounts) != 0 {
@@ -1914,10 +1914,10 @@ func TestSyncBackgroundDirsHonorsRollingMemoryIgnoreAndLockfiles(t *testing.T) {
 	if rep2.ScannedFiles != 1 || rep2.UnchangedFiles != 1 || rep2.DeletedFiles != 1 {
 		t.Fatalf("pass 2 expected 1 unchanged and 1 deleted via .rolling-memory-ignore, got %+v", rep2)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_files WHERE abs_path = ?`, dumpPath); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, dumpPath); got != 0 {
 		t.Fatalf("ignored file row retained: %d", got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, dumpPath); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, dumpPath); got != 0 {
 		t.Fatalf("ignored chunk rows retained: %d", got)
 	}
 }

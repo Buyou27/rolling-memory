@@ -79,7 +79,7 @@ func (m *Memory) LocalVaultScopePreflight() (string, bool, error) {
 			return "", false, fmt.Errorf("local_plain vault scope binding is invalid; preserve the database and inspect the binding")
 		}
 	}
-	for _, table := range []string{"thin_vault_docs", "thin_vault_noetic", "thin_vault_bg_dirs", "thin_vault_bg_files", "thin_vault_bg_chunks", "thin_vault_episodic_lineage", "thin_vault_episodic_index"} {
+	for _, table := range []string{"rm_docs", "rm_noetic", "rm_bg_dirs", "rm_bg_files", "rm_bg_chunks", "rm_episodic_lineage", "rm_episodic_index"} {
 		var exists int
 		if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).Scan(&exists); err != nil {
 			return "", false, err
@@ -126,7 +126,7 @@ func (m *Memory) bindLocalVaultScope() error {
 	var bound, storageType string
 	err = tx.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
 	if errors.Is(err, sql.ErrNoRows) {
-		for _, table := range []string{"thin_vault_docs", "thin_vault_noetic", "thin_vault_bg_dirs", "thin_vault_bg_files", "thin_vault_bg_chunks", "thin_vault_episodic_lineage", "thin_vault_episodic_index"} {
+		for _, table := range []string{"rm_docs", "rm_noetic", "rm_bg_dirs", "rm_bg_files", "rm_bg_chunks", "rm_episodic_lineage", "rm_episodic_index"} {
 			var exists int
 			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).Scan(&exists); err != nil {
 				return err
@@ -331,7 +331,7 @@ func (m *Memory) MirrorSessionTracesToVault(session string) error {
 }
 
 // rememberImportedTracesToVault mirrors freshly imported transcript traces into the
-// local plaintext vault so recall has a real lexical index over the local sources.
+// local plaintext vault so recall can retrieve the local sources.
 func (m *Memory) rememberImportedTracesToVault(scope string, session *string) error {
 	if m == nil || m.Store == nil || m.Config == nil || !strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") {
 		return nil
@@ -1707,7 +1707,7 @@ func roleTaggedBlocks(text string, maxBlocks int) []string {
 }
 
 // RememberNoetic persists an L3 Noetic memory record (Query + Retrieved Sentences + Answer)
-// directly in the downstream client's own local SQLite table (`thin_vault_noetic`).
+// directly in the downstream client's own local SQLite table (`rm_noetic`).
 //
 // 评测命名空间 fail-closed：评测 scope 内的任何 Noetic 记录都会让语料的一一
 // 相等校验失效，因此这里显式拒绝（与自动结晶的评测豁免同一条判据）。
@@ -1748,7 +1748,7 @@ const NoeticPulseBudget = 1500 * time.Millisecond
 
 // noeticPulseMaxInFlight bounds scheduled crystallization pulses: a recall is a read
 // and must never accumulate goroutines behind a slow writer. On saturation the pulse is
-// dropped on purpose — the local `thin_vault_noetic` handle already exists and the next
+// dropped on purpose — the local `rm_noetic` handle already exists and the next
 // reconcile pulses it, so a dropped pulse costs freshness, never data.
 const noeticPulseMaxInFlight = 4
 
@@ -1812,7 +1812,7 @@ func WaitForPendingNoeticPulses(budget time.Duration) bool {
 
 // pushNoeticPulse ingests the blind `layer="noetic"` pulse (query + answer + cited unit ids)
 // into the local vault while the retrieval is still hot, so the L3 node and its `cites` edges
-// materialise immediately; the `thin_vault_noetic` row stays the plaintext owner and records
+// materialise immediately; the `rm_noetic` row stays the plaintext owner and records
 // the assigned cell address (`address_uri`, `coord64`, `waveform_bar`).
 func pushNoeticPulse(tc *thinclient.Client, noeticID, query, answer string, citedUnitIDs []string, occurredAt int64) {
 	if tc == nil || tc.Transport == nil || tc.Vault == nil {
@@ -1848,7 +1848,7 @@ func episodicTurnSessionKey(ref string) string {
 }
 
 // isInternalWarmupProbeCue reports whether a recall query is an internal daemon
-// warmup probe that must never be crystallized into thin_vault_noetic.
+// warmup probe that must never be crystallized into rm_noetic.
 func isInternalWarmupProbeCue(query string) bool {
 	q := strings.ToLower(strings.TrimSpace(query))
 	return strings.HasPrefix(q, "daemon warmup") || strings.HasPrefix(q, "daemon-warmup")

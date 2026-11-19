@@ -82,7 +82,7 @@ consoleText: The local console lets you browse what's been saved and see how oft
 # 5. Preview
 previewQ: What's next?
 previewTag: Preview
-previewLead: Cloud memory service: a stronger cloud engine that never sees your text.
+previewLead: 'Cloud memory service: a stronger cloud engine that never sees your text.'
 previewBody: Ciphertext end to end — everything that leaves your computer is irreversibly encoded on-device first, so plaintext never leaves your local vault, not even to the engine. On top of that secure base, the cloud plane adds stronger retrieval operators and cross-device continuity, opened by application for advanced and enterprise users; the local plane remains complete and zero-locked-in. This capability is not part of this release.
 previewApply: To apply
 previewSupport: Questions and support

@@ -49,7 +49,7 @@ func TestThinBrainRememberStripsProtocolEnvelopes(t *testing.T) {
 }
 
 // TestThinBrainRecallCrystallizesNoeticInRealTime pins the L3 contract of the read path:
-// one agent recall that lands on real units stores the local `thin_vault_noetic` handle
+// one agent recall that lands on real units stores the local `rm_noetic` handle
 // (query + cited units + sentences) in real time.
 func TestThinBrainRecallCrystallizesNoeticInRealTime(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
@@ -86,7 +86,7 @@ func TestThinBrainRecallCrystallizesNoeticInRealTime(t *testing.T) {
 
 	var noetic int
 	if err := memory.Store.DB().QueryRow(
-		`SELECT count(*) FROM thin_vault_noetic WHERE status = 'active'`).Scan(&noetic); err != nil {
+		`SELECT count(*) FROM rm_noetic WHERE status = 'active'`).Scan(&noetic); err != nil {
 		t.Fatalf("local noetic table: %v", err)
 	}
 	if noetic != 1 {
@@ -122,7 +122,7 @@ func TestThinBrainRecallCrystallizesNoeticInRealTime(t *testing.T) {
 		t.Fatalf("passive NoCrystallize recall: %v", err)
 	}
 	if err := memory.Store.DB().QueryRow(
-		`SELECT count(*) FROM thin_vault_noetic WHERE status = 'active'`).Scan(&noetic); err != nil {
+		`SELECT count(*) FROM rm_noetic WHERE status = 'active'`).Scan(&noetic); err != nil {
 		t.Fatalf("local noetic table after NoCrystallize: %v", err)
 	}
 	if noetic != 1 {
@@ -140,7 +140,7 @@ func TestRememberNoeticPushesBlindPulseToEngine(t *testing.T) {
 		t.Fatalf("cross-scope noetic = %q, %v; want rejection", id, err)
 	}
 	var tables int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_noetic'`).Scan(&tables); err != nil || tables != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_noetic'`).Scan(&tables); err != nil || tables != 0 {
 		t.Fatalf("cross-scope noetic initialized vault: tables=%d err=%v", tables, err)
 	}
 
@@ -188,7 +188,7 @@ func TestThinClientSharesCacheWithoutSharingPersonaState(t *testing.T) {
 	for noeticID, want := range map[string]string{"nt_inc_a": "inc-a", "nt_inc_b": "inc-b"} {
 		var got string
 		if err := memory.Store.DB().QueryRow(
-			`SELECT incarnation_id FROM thin_vault_noetic WHERE noetic_id = ?`, noeticID,
+			`SELECT incarnation_id FROM rm_noetic WHERE noetic_id = ?`, noeticID,
 		).Scan(&got); err != nil {
 			t.Fatalf("read %s identity: %v", noeticID, err)
 		}

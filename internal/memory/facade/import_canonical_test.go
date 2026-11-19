@@ -83,7 +83,7 @@ func TestImportJSONLCanonicalReceiptShape(t *testing.T) {
 		t.Fatalf("repeat import = %#v", second)
 	}
 	var docs int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs`).Scan(&docs); err != nil || docs != 2 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docs); err != nil || docs != 2 {
 		t.Fatalf("docs = %d err=%v", docs, err)
 	}
 }
@@ -115,7 +115,7 @@ func TestDoctorReportsLegacyEpisodicIdentityReadOnly(t *testing.T) {
 		}
 	}
 	legacyID := "ep_" + strings.Repeat("0", 32)
-	if _, err := memory.Store.DB().Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json) VALUES (?, 'episodic', 1, 1, 'legacy inline witness', '[]')`, legacyID); err != nil {
+	if _, err := memory.Store.DB().Exec(`INSERT INTO rm_docs(unit_id, layer, occurred_at, ingested_at, raw_text) VALUES (?, 'episodic', 1, 1, 'legacy inline witness')`, legacyID); err != nil {
 		t.Fatal(err)
 	}
 	report, err := memory.Doctor()
@@ -133,14 +133,14 @@ func TestDoctorReportsLegacyEpisodicIdentityReadOnly(t *testing.T) {
 	}
 	var raw string
 	var occurred, inserted int64
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text, occurred_at, inserted_at FROM thin_vault_docs WHERE doc_id = ?`, legacyID).Scan(&raw, &occurred, &inserted); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text, occurred_at, ingested_at FROM rm_docs WHERE unit_id = ?`, legacyID).Scan(&raw, &occurred, &inserted); err != nil {
 		t.Fatal(err)
 	}
 	if raw != "legacy inline witness" || occurred != 1 || inserted != 1 {
 		t.Fatalf("doctor rewrote history: raw=%q occurred=%d inserted=%d", raw, occurred, inserted)
 	}
 	var docs int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs`).Scan(&docs); err != nil || docs != 3 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docs); err != nil || docs != 3 {
 		t.Fatalf("doctor deleted history: docs=%d err=%v", docs, err)
 	}
 }

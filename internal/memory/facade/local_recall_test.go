@@ -207,7 +207,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 			case "noetic":
 				err = client.SaveLocalNoetic(thinclient.LocalNoeticRecord{NoeticID: "unbound-noetic", QueryText: "unbound secret witness", AnswerText: "unbound secret answer"})
 			case "background":
-				_, err = memory.Store.DB().Exec(`CREATE TABLE thin_vault_bg_dirs (dir_id TEXT PRIMARY KEY); INSERT INTO thin_vault_bg_dirs VALUES ('unbound-background')`)
+				_, err = memory.Store.DB().Exec(`INSERT OR REPLACE INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('unbound-background', '/tmp/unbound-background', 1)`)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -230,7 +230,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bindingCount); err != nil || bindingCount != 0 {
 				t.Fatalf("unbound vault was claimed: count=%d err=%v", bindingCount, err)
 			}
-			table := map[string]string{"docs": "thin_vault_docs", "noetic": "thin_vault_noetic", "background": "thin_vault_bg_dirs"}[source]
+			table := map[string]string{"docs": "thin_vault_docs", "noetic": "rm_noetic", "background": "rm_bg_dirs"}[source]
 			var count int
 			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 1 {
 				t.Fatalf("unbound data changed: count=%d err=%v", count, err)
@@ -289,7 +289,7 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 		t.Fatalf("scope binding changed: %q, %v", binding, err)
 	}
 	var docs, noetic int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM thin_vault_docs), (SELECT COUNT(*) FROM thin_vault_noetic)`).Scan(&docs, &noetic); err != nil || docs != 1 || noetic != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM thin_vault_docs), (SELECT COUNT(*) FROM rm_noetic)`).Scan(&docs, &noetic); err != nil || docs != 1 || noetic != 1 {
 		t.Fatalf("vault rows changed: docs=%d noetic=%d err=%v", docs, noetic, err)
 	}
 }
@@ -359,7 +359,7 @@ func TestLocalVaultRememberNoeticRejectsDifferentScope(t *testing.T) {
 				t.Fatalf("cross-scope noetic = %q, %v; want rejection", id, err)
 			}
 			var tables int
-			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_noetic'`).Scan(&tables); err != nil {
+			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_noetic'`).Scan(&tables); err != nil {
 				t.Fatal(err)
 			}
 			if !initialized && tables != 0 {
@@ -367,7 +367,7 @@ func TestLocalVaultRememberNoeticRejectsDifferentScope(t *testing.T) {
 			}
 			if initialized {
 				var count int
-				if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_noetic`).Scan(&count); err != nil || count != 0 {
+				if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_noetic`).Scan(&count); err != nil || count != 0 {
 					t.Fatalf("cross-scope noetic wrote %d rows: %v", count, err)
 				}
 			}

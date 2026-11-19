@@ -169,7 +169,7 @@ func TestEpisodicSourceIdentityRepairAndIsolation(t *testing.T) {
 		t.Fatalf("known non-repository locus=%q err=%v", locus, err)
 	}
 	var lineage int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_lineage WHERE doc_id = ?`, id).Scan(&lineage); err != nil || lineage != 2 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_episodic_lineage WHERE doc_id = ?`, id).Scan(&lineage); err != nil || lineage != 2 {
 		t.Fatalf("lineage=%d err=%v", lineage, err)
 	}
 }
@@ -1044,7 +1044,7 @@ func TestEpisodicSourceScanTickRestartFailureAndFairness(t *testing.T) {
 	}
 	defer memory.Close()
 	failedID := episodicunit.DocID(cfg.Scope, fmt.Sprintf("[user] entry %d", reconcileDefaultLimit))
-	if _, err := memory.Store.DB().Exec(`CREATE TRIGGER scan_test_failure BEFORE INSERT ON thin_vault_episodic_index WHEN NEW.doc_id = '` + failedID + `' BEGIN SELECT RAISE(ABORT, 'write failed'); END`); err != nil {
+	if _, err := memory.Store.DB().Exec(`CREATE TRIGGER scan_test_failure BEFORE INSERT ON rm_episodic_index WHEN NEW.doc_id = '` + failedID + `' BEGIN SELECT RAISE(ABORT, 'write failed'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err == nil {
@@ -1153,7 +1153,7 @@ func TestEpisodicSourceScanRetainsDuplicateLineage(t *testing.T) {
 	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&documents); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage`).Scan(&lineage); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_episodic_lineage`).Scan(&lineage); err != nil {
 		t.Fatal(err)
 	}
 	if documents != 1 || lineage != 2 {

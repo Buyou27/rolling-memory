@@ -211,7 +211,7 @@ type Alias struct {
 func (s *Store) RecallRecentCitedUnitIDs(session string) ([]string, error) {
 	rows, err := s.DB().Query(`
 		SELECT cited_unit_ids_json 
-		FROM thin_vault_noetic 
+		FROM rm_noetic 
 		WHERE status = 'active' 
 		ORDER BY occurred_at DESC LIMIT 5
 	`)

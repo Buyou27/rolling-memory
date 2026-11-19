@@ -28,6 +28,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/updatechannel"
+	"github.com/rocareer/rolling-memory/internal/updatesource"
 )
 
 const (
@@ -80,6 +82,15 @@ log = "~/.local/state/rolling-memory/rolling-memory.log"
 # local = no non-loopback network request at all (the only supported mode)
 name = "local"
 allow_loopback_llm = true
+
+[update]
+# stable = published release tags only (default)
+# beta   = release tags including prereleases
+# dev    = latest main commit (source rebuild; no automatic binary replacement)
+channel = "dev"
+# github = official GitHub Releases (default)
+# gitee  = Gitee mirror, for networks that reach Gitee faster than GitHub
+source = "github"
 
 [daemon]
 # Background engine daemon memory cap (Go soft memory limit).
@@ -295,6 +306,12 @@ type StorageConfig struct {
 	Profile string
 }
 
+// UpdateConfig holds the release channel and source preferences ([update] section).
+type UpdateConfig struct {
+	Channel string
+	Source  string
+}
+
 // DaemonConfig holds background engine daemon settings ([daemon] section).
 type DaemonConfig struct {
 	// MemoryLimit is the canonical soft memory limit: "auto", "off" or a
@@ -318,6 +335,7 @@ type Config struct {
 	Daemon           DaemonConfig
 	Identity         IdentityConfig
 	Eval             EvalConfig
+	Update           UpdateConfig
 }
 
 // LoadOptions overrides configuration values. Pointer fields represent explicit
@@ -367,6 +385,7 @@ func Load(opts LoadOptions) (*Config, error) {
 	daemonTable := table(data, "daemon")
 	identityTable := table(data, "identity")
 	evalTable := table(data, "eval")
+	updateTable := table(data, "update")
 	// 跨版本兼容键：`[cloud.sync] scope_from_workspace` 仍是控制台判定的输入，
 	// 这里只保留其本地 scope 派生语义；其余云端同步配置已回收。
 	cloudRoot := table(data, "cloud")
@@ -446,6 +465,16 @@ func Load(opts LoadOptions) (*Config, error) {
 		Owner:       pyString(envOr(env, "ROLLING_MEMORY_IDENTITY_OWNER", getDefault(identityTable, "owner", ""))),
 		Assistant:   pyString(envOr(env, "ROLLING_MEMORY_IDENTITY_ASSISTANT", getDefault(identityTable, "assistant", ""))),
 	}
+	updateChannel, updateChannelErr := updatechannel.Normalize(pyString(firstTruthy(
+		envValue(env, "ROLLING_MEMORY_UPDATE_CHANNEL"), updateTable["channel"], updatechannel.Default)))
+	if updateChannelErr != nil {
+		return nil, newConfigError("%v", updateChannelErr)
+	}
+	updateSource, updateSourceErr := updatesource.Normalize(pyString(firstTruthy(
+		envValue(env, "ROLLING_MEMORY_UPDATE_SOURCE"), updateTable["source"], updatesource.Default)))
+	if updateSourceErr != nil {
+		return nil, newConfigError("%v", updateSourceErr)
+	}
 	evalConfig := EvalConfig{
 		Answerer:   pyString(envOr(env, "ROLLING_MEMORY_EVAL_ANSWERER", getDefault(evalTable, "answerer", "none"))),
 		Judge:      pyString(envOr(env, "ROLLING_MEMORY_EVAL_JUDGE", getDefault(evalTable, "judge", "off"))),
@@ -504,6 +533,7 @@ func Load(opts LoadOptions) (*Config, error) {
 		Daemon:           DaemonConfig{MemoryLimit: daemonMemoryLimit},
 		Identity:         identityConfig,
 		Eval:             evalConfig,
+		Update:           UpdateConfig{Channel: updateChannel, Source: updateSource},
 	}
 	if err := result.Validate(); err != nil {
 		return nil, err
@@ -527,6 +557,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LLM.Provider != "none" && c.LLM.Provider != "openai" {
 		return newConfigError("llm.provider must be 'none' or 'openai'")
+	}
+	if _, err := updatesource.Normalize(c.Update.Source); err != nil {
+		return newConfigError("%v", err)
 	}
 	if c.LLM.TimeoutSec <= 0 {
 		return newConfigError("timeouts must be positive")
@@ -743,6 +776,10 @@ func (c *Config) PublicDict() map[string]any {
 		"daemon": map[string]any{
 			"memory_limit": c.Daemon.MemoryLimit,
 		},
+		"update": map[string]any{
+			"channel": c.Update.Channel,
+			"source":  c.Update.Source,
+		},
 	}
 }
 
@@ -950,6 +987,20 @@ func SetConfigValue(path, dotted, rawValue string) (string, error) {
 		if !ok {
 			return "", newConfigError("daemon.memory_limit must be 'auto', 'off' or a size between %s and %s (e.g. '512MiB', '2GiB'), got %s",
 				formatMemorySize(ExplicitMemoryLimitFloor), formatMemorySize(ExplicitMemoryLimitCeiling), pyRepr(trimSpace(rawValue)))
+		}
+		rawValue = canonical
+	}
+	if section == "update" && key == "source" {
+		canonical, err := updatesource.Normalize(rawValue)
+		if err != nil {
+			return "", newConfigError("%v", err)
+		}
+		rawValue = canonical
+	}
+	if section == "update" && key == "channel" {
+		canonical, err := updatechannel.Normalize(rawValue)
+		if err != nil {
+			return "", newConfigError("%v", err)
 		}
 		rawValue = canonical
 	}

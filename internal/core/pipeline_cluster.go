@@ -160,7 +160,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			// Compound-partner head/tail shape: the head must be wider than the tail
 			// (b0 > b2) with a small width gap versus the corpus mean (meanBits >
 			// (b0-b2)*e). Admissions are expressed in inclusion direction.
-			if b0 > b2 && meanBits > float64(b0-b2)*math.E {
+			if b0 > b2 && meanBits > float64(b0-b2)*eulerNumber {
 				if compoundPartner == nil {
 					compoundPartner = make(map[uint64]uint64, 2)
 				}
@@ -272,8 +272,8 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			bits = idx.TermBitsOf(h)
 		}
 		dfH := idx.TermDF(h)
-		isTrueProper := qa.Flags&rmProperMask != 0 && float64(bits)*math.E >= meanBits && dfH <= highDFThresh
-		if isTrueProper && float64(dfH) > math.E*math.E && st.properRatioOf(h) < invE && !hasAdjacentProper(h, qa) {
+		isTrueProper := qa.Flags&rmProperMask != 0 && float64(bits)*eulerNumber >= meanBits && dfH <= highDFThresh
+		if isTrueProper && float64(dfH) > eulerNumber*eulerNumber && st.properRatioOf(h) < transmissionPerHop && !hasAdjacentProper(h, qa) {
 			isTrueProper = false
 		}
 		if qa.Flags&rmCaseFreeRigidMask != 0 || (qa.Flags&rmBitConn != 0 && qa.Flags&rmFlagCompanion == 0) || isTrueProper {
@@ -325,7 +325,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			gBits = idx.TermBitsOf(g)
 		}
 		isSlot2Comp := h != g && qa.IsSlot2Companion(qTerms[g])
-		isBroadComp := h != g && baseDF > 0 && (float64(dfH) > math.E*float64(baseDF) || (isSlot2Comp && dfH > dfG))
+		isBroadComp := h != g && baseDF > 0 && (float64(dfH) > eulerNumber*float64(baseDF) || (isSlot2Comp && dfH > dfG))
 		if isBroadComp {
 			hasBroadComp[g] = true
 		}
@@ -362,15 +362,11 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		n := float64(len(um))
 		dObs := float64(len(groupDays[g]))
 		if n > 1 && dObs >= 1 {
-			eNull := totalDaysM * (1.0 - math.Exp(-n/totalDaysM))
-			denom := math.Max(1.0, eNull-1.0)
-			kappaOcc[g] = ((n - 1.0) / (n + 2.0)) * math.Max(0, 1.0-(dObs-1.0)/denom)
+			kappaOcc[g] = calendarConcentration(dObs, n, totalDaysM)
 		}
 		na := float64(len(groupAnchorUnits[g]))
 		if na > 1 && dObs >= 1 {
-			eNullA := totalDaysM * (1.0 - math.Exp(-na/totalDaysM))
-			denomA := math.Max(1.0, eNullA-1.0)
-			anchorKappa[g] = ((na - 1.0) / (na + 2.0)) * math.Max(0, 1.0-(dObs-1.0)/denomA)
+			anchorKappa[g] = calendarConcentration(dObs, na, totalDaysM)
 		}
 	}
 
@@ -380,6 +376,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	// frequency of a proper noun that still qualifies as a specific entity anchor.
 	// 守卫 min 1：N<=20 时 int(N·fraction) 截断为 0 会把专名特异性判定与折叠截止
 	// （rareInflectedTermMaxDF 同源上界）整体关停。
+	// [calibrated] specificProperDFFraction — share of N (dimensionless) capping the
+	// document frequency of a proper noun that still qualifies as a specific anchor
+	// (≈4.98%, fitted on the reference corpus; the value coincides with e^-3 within one
+	// ulp but is empirical). Recalibrate with the corpus; keep the min-1 guard below.
 	const specificProperDFFraction = 0.049787068367863944
 	specificPropMax := int(float64(idx.N) * specificProperDFFraction)
 	if specificPropMax < 1 {
@@ -481,10 +481,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				isAnchorGroup[g] = true
 			}
 			if !hasBodyProper && minClockUnits > 0 && !openingBroadClock[g] &&
-				anchorKappa[g] >= invE && len(groupAnchorUnits[g]) < minClockUnits && float64(gBits)*2.0 >= meanBits {
+				anchorKappa[g] >= anchorConcentrationFloor && len(groupAnchorUnits[g]) < minClockUnits && float64(gBits)*2.0 >= meanBits {
 				isAnchorGroup[g] = true
 			}
-		} else if kappaOcc[g] >= invE && compoundPartner[g] == 0 {
+		} else if kappaOcc[g] >= anchorConcentrationFloor && compoundPartner[g] == 0 {
 			isAnchorGroup[g] = true
 		}
 		if isAnchorGroup[g] {
@@ -535,7 +535,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	inAnchorConeSupport := func(u int32) bool { return nearestAnchorDT(u) < dayPeriod }
 	tauMacro := math.Expm1(st.muLogGap + st.sigLogGap)
 	if tauMacro <= 0 {
-		tauMacro = st.meanGap * math.E
+		tauMacro = st.meanGap * eulerNumber
 	}
 	const (
 		maxOrdinalNeighborSpan  int32 = 8
@@ -569,7 +569,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 	if hasAnchor {
 		for g, um := range groupUnits {
-			if isAnchorGroup[g] || groupRigid[g] || kappaOcc[g] >= invE*invE || len(groupAnchorUnits[g]) <= maxAnchorProtectedUnits {
+			if isAnchorGroup[g] || groupRigid[g] || kappaOcc[g] >= shellScatterFloor || len(groupAnchorUnits[g]) <= maxAnchorProtectedUnits {
 				continue
 			}
 			coHits := 0
@@ -580,7 +580,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				}
 			}
 			if coHits == 0 {
-				shellScale[g] = invE
+				shellScale[g] = transmissionPerHop
 			}
 		}
 	}
@@ -601,7 +601,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			sc.dirtyUnits = append(sc.dirtyUnits, u)
 			gate := 1.0
 			if hasAnchor && uAnchorGen[u] != aGen && cAnchorGen[st.clusters[u]] != aGen && !inAnchorCone(u) {
-				gate = invE
+				gate = transmissionPerHop
 			}
 			unitStructGate[u] = gate
 		}
@@ -697,7 +697,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			baseline = math.Log1p((float64(idx.N) - dfDay + 0.5) / (dfDay + 0.5))
 			if len(dayUnits) > 1 && totalDaysM > 0 {
 				kOcc := (dfDay - 1.0) / (dfDay + 2.0)
-				baseline *= 1.0 + kOcc*invE
+				baseline *= 1.0 + kOcc*transmissionPerHop
 			}
 			weight := baseline
 			if meanBits > 0 && qTerm.Bits > 0 {
@@ -719,7 +719,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 					tu := st.refTimes[u]
 					for _, au := range anchorUnitList {
 						ta := st.refTimes[au]
-						if ta > 0 && tu-ta < dayPeriod && ta-tu < dayPeriod && st.docSubjectCos(idx, sc, u, au) >= invE*invE {
+						if ta > 0 && tu-ta < dayPeriod && ta-tu < dayPeriod && st.docSubjectCos(idx, sc, u, au) >= transmissionPerHop*transmissionPerHop {
 							coupled = true
 							break
 						}
@@ -734,7 +734,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				}
 				matchedMass := weight
 				if e.FlagsGain > 0 {
-					matchedMass *= 1.0 + e.FlagsGain/math.E
+					matchedMass *= 1.0 + e.FlagsGain/eulerNumber
 				}
 				unitEntries := st.docEntriesOf(u)
 				if len(unitEntries) > 0 {
@@ -749,8 +749,11 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		// The stem-fold cutoff is an independent engineering bound (host-word DF
 		// tier eligible for stem folding); specificPropMax bounds proper-anchor
 		// specificity. They serve different roles and keep separate thresholds.
+		// [calibrated] rareInflectedTermMaxDF — document-count tier (≈21 documents) up to
+		// which a stem may fold onto its host word. Fitted on the reference corpus;
+		// unified with other cutoffs it regressed (73.72→73.65), so keep it independent.
 		const rareInflectedTermMaxDF = 21
-		if h == group && !groupRigid[group] && !groupProper[group] && anchorKappa[group] < invE && (dfH <= rareInflectedTermMaxDF || dfH <= specificPropMax) {
+		if h == group && !groupRigid[group] && !groupProper[group] && anchorKappa[group] < anchorConcentrationFloor && (dfH <= rareInflectedTermMaxDF || dfH <= specificPropMax) {
 			for _, ch := range queryHashes {
 				if ch == h || qTerms[ch].Group != group {
 					continue
@@ -761,7 +764,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				// Stem-fold host dominance: fold stem mass only when the primary
 				// dominates the in-family companion (b >= b_companion) and the host is
 				// not over-narrow versus the corpus mean width (e*b >= 2*b_bar).
-				if qTerms[group].Bits >= qTerms[ch].Bits && float64(qTerms[group].Bits)*math.E >= meanBits*2.0 {
+				if qTerms[group].Bits >= qTerms[ch].Bits && float64(qTerms[group].Bits)*eulerNumber >= meanBits*2.0 {
 					dfStem := idx.TermDF(ch)
 					if dfH > rareInflectedTermMaxDF && dfStem <= highDFThresh {
 						if !hasAnchor || shellScale[group] > 0 {
@@ -778,12 +781,12 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 							continue
 						}
 					}
-					if float64(dfStem) > math.E*float64(dfH) {
+					if float64(dfStem) > eulerNumber*float64(dfH) {
 						if stemMass, okS := idx.TermMass(ch); okS && stemMass > 0 && stemMass < baseline {
 							if dfStem > highDFThresh {
 								baseline = math.Sqrt(baseline * stemMass)
 							} else {
-								baseline = (1.0-invE)*baseline + invE*stemMass
+								baseline = (1.0-transmissionPerHop)*baseline + transmissionPerHop*stemMass
 							}
 							break
 						}
@@ -795,7 +798,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			baseline *= sc
 		}
 		if !detachedFrag[group] && kappaOcc[group] > 0 {
-			baseline *= 1.0 + kappaOcc[group]*invE
+			baseline *= 1.0 + kappaOcc[group]*transmissionPerHop
 		}
 		bits := qTerm.Bits
 		if bits == 0 {
@@ -821,7 +824,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 						qRep = math.Min(1.0, float64(indepQTF-1))
 					}
 					specRatio := math.Max(0, 1.0-float64(dfH)/float64(specificPropMax+1))
-					qMod := math.Min(1.0, invE+(1.0-invE)*(kappaOcc[group]+specRatio))
+					qMod := math.Min(1.0, transmissionPerHop+(1.0-transmissionPerHop)*(kappaOcc[group]+specRatio))
 					baseline *= 1.0 + qMod*qRep
 				}
 			}
@@ -870,7 +873,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				repeats = 1.0
 			}
 			if detachedFrag[group] {
-				repeats *= invE
+				repeats *= transmissionPerHop
 			}
 			ordBystanderDamp := false
 			if isInferredOrdDay && hasSameDayAnchor {
@@ -879,7 +882,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 					tu := st.refTimes[p.unit]
 					for _, au := range anchorUnitList {
 						ta := st.refTimes[au]
-						if ta > 0 && tu-ta < dayPeriod && ta-tu < dayPeriod && st.docSubjectCos(idx, sc, p.unit, au) >= invE*invE {
+						if ta > 0 && tu-ta < dayPeriod && ta-tu < dayPeriod && st.docSubjectCos(idx, sc, p.unit, au) >= transmissionPerHop*transmissionPerHop {
 							coupled = true
 							break
 						}
@@ -896,14 +899,14 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 			matchedMass := weight * (1.0 + repeats)
 			if ordBystanderDamp {
-				matchedMass *= invE
+				matchedMass *= transmissionPerHop
 			}
 			if qTerm.Flags&rmFlagCompanion != 0 && docEntry.flags&rmFlagCompanion != 0 && qTerm.Group != 0 && docEntry.group != 0 && docEntry.group != qTerm.Group {
 				if origA, okA := qTerms[qTerm.Group]; okA && qTerm.IsSlot2Companion(origA) {
 					if isPrimH {
-						matchedMass *= invE
+						matchedMass *= transmissionPerHop
 					} else if !detachedFrag[group] {
-						matchedMass *= invE * invE
+						matchedMass *= transmissionPerHop * transmissionPerHop
 					}
 				}
 			}
@@ -915,11 +918,11 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				docGainMask |= rmBitBoundaryQuote
 			}
 			if e.FlagsGain > 0 && docEntry.flags&docGainMask != 0 {
-				matchedMass *= 1.0 + e.FlagsGain/math.E
+				matchedMass *= 1.0 + e.FlagsGain/eulerNumber
 			}
 			c.upsertMatch(sc, group, matchedMass, p.entry, docEntry.bits, unitEntries, true)
 			for _, altG := range extraGroups[h] {
-				c.upsertMatch(sc, altG, matchedMass*invE, p.entry, docEntry.bits, unitEntries, false)
+				c.upsertMatch(sc, altG, matchedMass*transmissionPerHop, p.entry, docEntry.bits, unitEntries, false)
 			}
 		}
 	}
@@ -946,11 +949,20 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 	sortUint64Asc(groupKeys)
 	sc.groupKeys = groupKeys
+	// Sum the query-group masses in value order: the group ids attached to each
+	// magnitude swap when two roles exchange hashes, and float addition is
+	// commutative but not associative, so key order would leak into the total.
 	var total, sumG2 float64
-	for _, g := range groupKeys {
-		m := groups[g]
-		total += m
-		sumG2 += m * m
+	{
+		masses := make([]float64, 0, len(groupKeys))
+		for _, g := range groupKeys {
+			masses = append(masses, groups[g])
+		}
+		sort.Float64s(masses)
+		for _, m := range masses {
+			total += m
+			sumG2 += m * m
+		}
 	}
 	if total <= 0 {
 		return nil
@@ -966,17 +978,17 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		for i := range c.matches {
 			m := &c.matches[i]
 			if m.primMass > 0 && m.compMass > 0 && hasBroadComp[m.group] && groupProper[m.group] {
-				if bp := m.primMass * (1.0 + invE*invE); bp > m.mass {
+				if bp := m.primMass * (1.0 + transmissionPerHop*transmissionPerHop); bp > m.mass {
 					m.mass = bp
 					m.entry = m.primEntry
 				}
 			}
 			if partnerG := compoundPartner[m.group]; partnerG != 0 && !c.hasGroup(partnerG) {
-				m.mass *= invE
+				m.mass *= transmissionPerHop
 			}
 			if hasSpecificProper && gate < 1.0 {
 				g := m.group
-				if !isAnchorGroup[g] && !groupRigid[g] && kappaOcc[g] < invE*invE && float64(len(groupAnchorUnits[g])) > math.E*math.E {
+				if !isAnchorGroup[g] && !groupRigid[g] && kappaOcc[g] < shellScatterFloor && float64(len(groupAnchorUnits[g])) > eulerNumber*eulerNumber {
 					if _, alreadyScaled := shellScale[g]; !alreadyScaled {
 						m.mass *= gate
 					}
@@ -1003,7 +1015,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				}
 			}
 			if detachedFrag[c.matches[0].group] {
-				repeats *= invE
+				repeats *= transmissionPerHop
 			}
 			covLex = c.matches[0].mass / (1.0 + repeats)
 		}
@@ -1029,7 +1041,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		dfG := idx.TermDF(g)
 		dfH := idx.TermDF(h)
 		return !detachedFrag[g] && !groupProper[g] && qa.Role == RoleMorphStem && st.isPrimaryOf(h) &&
-			!qa.IsSlot2Companion(qTerms[g]) && dfG > 0 && dfH > dfG && float64(dfH) <= math.E*float64(dfG)
+			!qa.IsSlot2Companion(qTerms[g]) && dfG > 0 && dfH > dfG && float64(dfH) <= eulerNumber*float64(dfG)
 	}
 	isCoreClosedBeacon := func(h uint64, qa Term) bool {
 		g := hashGroup[h]
@@ -1053,7 +1065,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			orthoCross := (isConservedInflectionLemma(pair.a, qaA) && isCoreClosedBeacon(pair.b, qaB)) ||
 				(isConservedInflectionLemma(pair.b, qaB) && isCoreClosedBeacon(pair.a, qaA))
 			if !orthoCross {
-				mass *= invE
+				mass *= transmissionPerHop
 			}
 		}
 		var sum float64
@@ -1116,13 +1128,13 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			aff := st.temporalAffinity(idx, seed, neighbor)
 			gain := seedE * aff * residual
 			if gain > 0 && coreLex[neighbor] >= seedE {
-				if rawCos := st.docSubjectCos(idx, sc, seed, neighbor); rawCos < invE*invE {
-					gain *= math.Max(invE, math.Sqrt(math.Max(0, rawCos))/invE)
+				if rawCos := st.docSubjectCos(idx, sc, seed, neighbor); rawCos < transmissionPerHop*transmissionPerHop {
+					gain *= math.Max(transmissionPerHop, math.Sqrt(math.Max(0, rawCos))/transmissionPerHop)
 				}
 			}
 			if seedE > coreLex[neighbor] && unitStructGate[seed] >= 1.0 && aff > 0 {
 				if rawCos := st.docSubjectCos(idx, sc, seed, neighbor); rawCos > 0 {
-					if sibGain := (seedE - coreLex[neighbor]) * aff * math.Sqrt(rawCos) * invE * invE; sibGain > gain {
+					if sibGain := (seedE - coreLex[neighbor]) * aff * math.Sqrt(rawCos) * transmissionPerHop * transmissionPerHop; sibGain > gain {
 						gain = sibGain
 					}
 				}
@@ -1187,6 +1199,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	// near-simultaneous burst. It is not exp(-1/e^3): that double is
 	// 0.9514319929004534 and differs by 8.3e-8; the literal keeps the
 	// historical calibration value bit-for-bit.
+	// [calibrated] tightBurstAffinityFloor — affinity floor (dimensionless) above which
+	// two records count as a near-simultaneous burst. Not exp(-1/e^3) (that double is
+	// 0.9514319929004534, 8.3e-8 away); the literal keeps the historical calibration
+	// bit-for-bit. Recalibrate only with a paired ATM arm.
 	const tightBurstAffinityFloor = 0.9514319102438668
 	burstAffFloor := tightBurstAffinityFloor
 	for _, ep := range activeEpisodes {
@@ -1266,21 +1282,21 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				} else {
 					cosMod = math.Sqrt(rawCos)
 				}
-				exScale := invE
+				exScale := transmissionPerHop
 				if st.muLogGap > 0 && st.ordPos[seed] >= 0 && st.ordPos[nb] >= 0 {
 					tauMicro := math.Max(1.0, math.Expm1(math.Max(1.0, st.muLogGap-st.sigLogGap)))
 					dt := math.Abs(float64(st.refTimes[seed] - st.refTimes[nb]))
 					dk := math.Abs(float64(st.ordPos[seed] - st.ordPos[nb]))
-					if dt <= tauMicro*math.E && dk <= 2 {
+					if dt <= tauMicro*eulerNumber && dk <= 2 {
 						rT := dt / tauMicro
 						burstExc := math.Exp(-rT*rT - math.Max(0, dk-1.0))
-						exScale = invE * (1.0 + invE*burstExc)
+						exScale = transmissionPerHop * (1.0 + transmissionPerHop*burstExc)
 					}
 				}
 				exGain := excess * aff * cosMod * exScale
-				allowOverlay := isSub && (rawCos >= invE || (sharedCoreCount >= 2 && aff >= 1.0-invE*invE && rawCos >= invE*invE))
+				allowOverlay := isSub && (rawCos >= transmissionPerHop || (sharedCoreCount >= 2 && aff >= 1.0-transmissionPerHop*transmissionPerHop && rawCos >= transmissionPerHop*transmissionPerHop))
 				if allowOverlay {
-					candSpread := candidates[nb].stSpread + exGain*math.Sqrt(rawCos)*invE
+					candSpread := candidates[nb].stSpread + exGain*math.Sqrt(rawCos)*transmissionPerHop
 					if exGain > candSpread {
 						candSpread = exGain
 					}
@@ -1308,7 +1324,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 		}
 		sortByEnergy(directSeeds, directMap, idx)
-		for u, gain := range e.spread(directSeeds, directMap, qTerms, invE, e.Hop1Budget, 0) {
+		for u, gain := range e.spread(directSeeds, directMap, qTerms, transmissionPerHop, e.Hop1Budget, 0) {
 			if gain > candidates[u].stSpread {
 				activateUnit(u)
 				candidates[u].stSpread = gain
@@ -1382,9 +1398,9 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 					}
 				}
 				if !hasCompNb {
-					if c.coreLex < peakCoreLex*invE {
+					if c.coreLex < peakCoreLex*transmissionPerHop {
 						rawCos := st.docSubjectCos(idx, sc, u, n)
-						w *= math.Max(invE, math.Sqrt(math.Max(0, rawCos)))
+						w *= math.Max(transmissionPerHop, math.Sqrt(math.Max(0, rawCos)))
 					}
 					if w > bestWitness {
 						bestWitness = w
@@ -1420,10 +1436,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 			if len(st.citePeers) > 0 {
 				for _, n := range st.citationPeersOf(u) {
-					evalPeerCorrob(n, invE)
+					evalPeerCorrob(n, transmissionPerHop)
 				}
 				for _, n := range st.coCitationPeersOf(u) {
-					evalPeerCorrob(n, invE)
+					evalPeerCorrob(n, transmissionPerHop)
 				}
 			}
 			sc.missingBest = missingBest
@@ -1468,7 +1484,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 							}
 							if res > 0 {
 								rShare := math.Min(1.0, res/total)
-								rScale = res * math.Max(rShare, invE) * lexShare
+								rScale = res * math.Max(rShare, transmissionPerHop) * lexShare
 							}
 						}
 						if !isCloseOrd && strength <= bestWitness && strength*rScale <= corefPuzzle {
@@ -1484,11 +1500,11 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 						}
 						cos := math.Sqrt(rawCos)
 						cosW := cos
-						if isCloseOrd && st.muLogGap > 0 && coreLex[n] >= peakCoreLex*(1.0-invE) {
+						if isCloseOrd && st.muLogGap > 0 && coreLex[n] >= peakCoreLex*(1.0-transmissionPerHop) {
 							tauMeso := math.Max(1.0, math.Expm1(st.muLogGap))
 							dt := math.Abs(float64(st.refTimes[u] - st.refTimes[n]))
 							dk := math.Abs(float64(st.ordPos[u] - st.ordPos[n]))
-							burstCoh := math.Exp(-dt/(tauMeso*math.E) - math.Max(0, dk-2.0)*invE)
+							burstCoh := math.Exp(-dt/(tauMeso*eulerNumber) - math.Max(0, dk-2.0)*transmissionPerHop)
 							cosW = cos + (1.0-cos)*burstCoh
 						}
 						w := aff * cosW * strength
@@ -1500,7 +1516,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 								corefPuzzle = p
 							}
 						}
-						if unitStructGate[u] >= 1.0 && peerS > ownS && aff >= invE && rawCos >= invE {
+						if unitStructGate[u] >= 1.0 && peerS > ownS && aff >= transmissionPerHop && rawCos >= transmissionPerHop {
 							for _, om := range candidates[n].matches {
 								if c.hasGroup(om.group) || detachedFrag[om.group] {
 									continue
@@ -1522,7 +1538,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				if peakCoreLex > 0 {
 					ratio = math.Min(1.0, coreLex[u]/peakCoreLex)
 				}
-				c.stCorrob = math.Log1p(bestWitness) * (coreLex[u] + (invE+(1.0-invE)*ratio)*c.phrase + c.entity)
+				c.stCorrob = math.Log1p(bestWitness) * (coreLex[u] + (transmissionPerHop+(1.0-transmissionPerHop)*ratio)*c.phrase + c.entity)
 			}
 			c.stCorrob += corefPuzzle
 			if len(missingBest) > 0 && coreLex[u] > 0 {
@@ -1537,7 +1553,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				}
 				cl := coreLex[u]
 				selfMod := (cl * cl) / (cl*cl + muQ*muQ)
-				c.stCorrob += invE * (1.0 + selfMod*(cl/total)) * compSum
+				c.stCorrob += transmissionPerHop * (1.0 + selfMod*(cl/total)) * compSum
 			}
 		}
 	}
@@ -1723,7 +1739,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 						}
 						if dfClust > 0 && dfClust < minDF {
 							delta := math.Log(float64(minDF+1)/float64(dfClust+1)) * (mSum / totW)
-							gain = invE2 * delta * math.Max(1.0, mSum)
+							gain = transmissionTwoHop * delta * math.Max(1.0, mSum)
 						}
 					}
 					deltaCache[key] = gain
@@ -1837,7 +1853,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 					}
 					if dfClust > 0 && dfClust < minDF {
 						delta := math.Log(float64(minDF+1)/float64(dfClust+1)) * (mSum / totW)
-						gain = invE2 * delta * math.Max(1.0, mSum)
+						gain = transmissionTwoHop * delta * math.Max(1.0, mSum)
 					}
 				}
 				deltaCache[mask] = gain
@@ -1878,7 +1894,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 			continue
 		}
 		dfG := idx.TermDF(g)
-		if h != g && dfG > 0 && (float64(dfH) > math.E*float64(dfG) || (qTerms[h].IsSlot2Companion(qTerms[g]) && dfH > dfG)) {
+		if h != g && dfG > 0 && (float64(dfH) > eulerNumber*float64(dfG) || (qTerms[h].IsSlot2Companion(qTerms[g]) && dfH > dfG)) {
 			continue
 		}
 		activeHashes = append(activeHashes, h)
@@ -1896,7 +1912,7 @@ func (st *rmClusterState) applyHigherOrderLatticeContraction(idx *Index, sc *rmQ
 	// calibrated threshold, not a value derived from the df distribution: terms above
 	// highDFThresh and at or below this ceiling may still enter the lattice when they
 	// carry rigid quantity markers. Changing the factor changes the mid-band population.
-	highDFMidCeil := int(float64(idx.N) / math.E)
+	highDFMidCeil := int(float64(idx.N) / eulerNumber)
 	const rmRigidDigitQtyMask uint8 = (1 << 2) | (1 << 7)
 	hasMidRigid := false
 	qGroupMid := sc.latticeQGroupMid

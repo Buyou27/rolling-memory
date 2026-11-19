@@ -20,7 +20,7 @@ func seedVaultFixture(t *testing.T, dbPath string, docURIs, chunkURIs []string) 
 	defer func() { _ = db.Close() }()
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS thin_vault_docs (address_uri TEXT);`,
-		`CREATE TABLE IF NOT EXISTS thin_vault_bg_chunks (address_uri TEXT);`,
+		`CREATE TABLE IF NOT EXISTS rm_bg_chunks (address_uri TEXT);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -33,7 +33,7 @@ func seedVaultFixture(t *testing.T, dbPath string, docURIs, chunkURIs []string) 
 		}
 	}
 	for _, uri := range chunkURIs {
-		if _, err := db.Exec(`INSERT INTO thin_vault_bg_chunks (address_uri) VALUES (` + sqlString(uri) + `);`); err != nil {
+		if _, err := db.Exec(`INSERT INTO rm_bg_chunks (address_uri) VALUES (` + sqlString(uri) + `);`); err != nil {
 			t.Fatalf("insert chunk %q: %v", uri, err)
 		}
 	}

@@ -107,8 +107,8 @@ To verify that $p$ (effective hit rate) is real rather than wishful thinking, Ro
 ### Proof 2: Offline One-Command Reproduction on Public Academic Benchmarks
 
 Simple substring matching or plain BM25 degrades sharply on multi-cue, long-horizon questions. On the University of Cambridge **ATM-Bench** (11,034 personal multimodal records) and **LoCoMo** (1,540 long-dialogue questions), this exact local vector-free, LLM-free retrieval kernel achieves:
-- **ATM-Bench Main (1,013 questions)**: Official `Recall@10` (per-question gold coverage mean) **`77.21%`** (auxiliary `Any-Hit@10`: `80.45%`);
-- **ATM-Bench Hard (31 multi-hop questions)**: Official `Recall@10` **`46.12%`** (auxiliary `Any-Hit@10`: `80.65%`);
+- **ATM-Bench Main (1,013 questions)**: Official `Recall@10` (per-question gold coverage mean) **`82.85%`** (auxiliary `Any-Hit@10`: `85.39%`; current product arm, re-verified 2026-11-19);
+- **ATM-Bench Hard (31 multi-hop questions)**: Official `Recall@10` **`52.43%`** (auxiliary `Any-Hit@10`: `80.65%`);
 - **LoCoMo Full Set (1,540 questions)**: End-to-end judge accuracy **`85.26%`**.
 
 Anyone can fetch the `SHA-256`-pinned upstream corpus with a single command, run the evaluation completely offline, and recompute every metric from the raw per-question JSONL output (see [`benchmarks.md`](benchmarks.md)):

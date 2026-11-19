@@ -143,7 +143,7 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 
 	// Simulate a pointer saved before the compact index existed, without changing
 	// the authoritative row or the harness transcript.
-	if _, err := db.Exec(`DELETE FROM thin_vault_episodic_index WHERE doc_id = ?`, userID); err != nil {
+	if _, err := db.Exec(`DELETE FROM rm_episodic_index WHERE doc_id = ?`, userID); err != nil {
 		t.Fatalf("remove test index: %v", err)
 	}
 	second := reconcile()
@@ -244,7 +244,7 @@ func TestEpisodicIndexReconcilePreservesUnverifiedSources(t *testing.T) {
 			t.Fatalf("source %s changed: %q, err=%v", row.id, got, err)
 		}
 		var count int
-		if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, row.id).Scan(&count); err != nil || count != 0 {
+		if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?`, row.id).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("unverified source %s indexed: %d, err=%v", row.id, count, err)
 		}
 	}

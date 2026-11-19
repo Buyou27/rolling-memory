@@ -86,6 +86,7 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tempHome, ".local", "share"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tempHome, ".config"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tempHome, ".local", "state"))
+	t.Setenv("ROLLING_MEMORY_UPDATE_CHANNEL", "stable")
 	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", filepath.Join(tempHome, "absent.sock"))
 	installDir := filepath.Join(tempHome, ".local", "share", "rolling-memory", "bin")
 	linkDir := filepath.Join(tempHome, ".local", "bin")
@@ -96,12 +97,12 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 
 	cliAsset := platformCLIAssetName()
 	adminAsset := platformAdminAssetName()
-	archiveName := fmt.Sprintf("rolling-memory-0.0.2-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archiveName := fmt.Sprintf("rolling-memory-9.9.9-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 
 	oldCLIBin := []byte("#!/bin/sh\necho old-cli\n")
-	newCLIBin := []byte("#!/bin/sh\necho new-cli-v0.0.2\n")
-	newAdminBin := []byte("#!/bin/sh\necho new-admin-v0.0.2\n")
-	newWebTar := buildTestWebDistTarGz(t, "<!doctype html><title>console v0.0.2</title>")
+	newCLIBin := []byte("#!/bin/sh\necho new-cli-v9.9.9\n")
+	newAdminBin := []byte("#!/bin/sh\necho new-admin-v9.9.9\n")
+	newWebTar := buildTestWebDistTarGz(t, "<!doctype html><title>console v9.9.9</title>")
 
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -157,7 +158,7 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("update --check exit=%d, res=%v", code, checkRes)
 	}
-	if checkRes["update_available"] != true || checkRes["latest_version"] != "0.0.2" {
+	if checkRes["update_available"] != true || checkRes["latest_tag"] != "9.9.9" {
 		t.Fatalf("unexpected check result: %v", checkRes)
 	}
 	if got, _ := os.ReadFile(targetBin); !bytes.Equal(got, oldCLIBin) {
@@ -188,10 +189,10 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 	if got, _ := os.ReadFile(targetBin); !bytes.Equal(got, newCLIBin) {
 		t.Fatalf("binary was not updated: %q", string(got))
 	}
-	if gotVer, _ := os.ReadFile(filepath.Join(mockPayload, "VERSION")); strings.TrimSpace(string(gotVer)) != "0.0.2" {
+	if gotVer, _ := os.ReadFile(filepath.Join(mockPayload, "VERSION")); strings.TrimSpace(string(gotVer)) != "9.9.9" {
 		t.Fatalf("desktop app payload VERSION not synced: got %q", string(gotVer))
 	}
-	if gotPlist, _ := os.ReadFile(mockPlist); !strings.Contains(string(gotPlist), "<string>0.0.2</string>") {
+	if gotPlist, _ := os.ReadFile(mockPlist); !strings.Contains(string(gotPlist), "<string>9.9.9</string>") {
 		t.Fatalf("desktop app Info.plist version not synced: got %q", string(gotPlist))
 	}
 	if synced, ok := updRes["desktop_bundles_synced"].([]any); !ok || len(synced) != 1 || synced[0] != mockApp {
@@ -222,6 +223,17 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 	}
 	if forceRes["updated"] != true || forceRes["release_base"] != server.URL {
 		t.Fatalf("expected updated=true with release_base=%s, got %v", server.URL, forceRes)
+	}
+}
+
+func TestSourceUpdateHintUsesGiteeRepository(t *testing.T) {
+	hint := sourceUpdateHint("release", "0.0.6", "stable", "https://gitee.com/rocareer/Rolling-Memory/releases/latest/download")
+	if !strings.Contains(hint, "gitee.com/rocareer/Rolling-Memory.git") || !strings.Contains(hint, "v0.0.6") {
+		t.Fatalf("gitee source hint = %q", hint)
+	}
+	github := sourceUpdateHint("release", "0.0.6", "stable", "https://github.com/rocareer/rolling-memory/releases/latest/download")
+	if strings.Contains(github, "gitee.com") {
+		t.Fatalf("github source hint mentions Gitee: %q", github)
 	}
 }
 

@@ -66,6 +66,7 @@ func newEnv(t *testing.T) *cliEnv {
 	t.Setenv("ROLLING_MEMORY_LOG", filepath.Join(base, "state", "rolling-memory.log"))
 	t.Setenv("ROLLING_MEMORY_READER", "")
 	t.Setenv("ROLLING_MEMORY_LLM_PROVIDER", "")
+	t.Setenv("ROLLING_MEMORY_UPDATE_SOURCE", "")
 	t.Setenv("ROLLING_MEMORY_LLM_API_KEY_ENV", "")
 	t.Setenv("ROLLING_MEMORY_EMBEDDING_PROVIDER", "")
 	t.Setenv("ROLLING_MEMORY_SYNC_BASE_URL", "")
@@ -240,7 +241,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("thin database must not create the assertion table")
 	}
 	if err := db.QueryRow(
-		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active')`,
+		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM rm_noetic WHERE status = 'active')`,
 	).Scan(&vaultUnits); err != nil {
 		t.Fatalf("count vault units: %v", err)
 	}
@@ -301,6 +302,10 @@ func TestConfigAndMode(t *testing.T) {
 	key, _ := llm["key"].(map[string]any)
 	if _, ok := key["configured"]; !ok {
 		t.Fatalf("llm.key = %#v", llm["key"])
+	}
+	update, _ := data["update"].(map[string]any)
+	if update["source"] != "github" {
+		t.Fatalf("update.source = %#v", update["source"])
 	}
 
 	// config show prints JSON even without --json.
@@ -461,7 +466,7 @@ func TestRecallNoCrystallizeIsReadOnly(t *testing.T) {
 		}
 		defer db.Close()
 		var count int
-		if err := db.QueryRow(`SELECT count(*) FROM thin_vault_noetic`).Scan(&count); err != nil {
+		if err := db.QueryRow(`SELECT count(*) FROM rm_noetic`).Scan(&count); err != nil {
 			t.Fatalf("count noetic: %v", err)
 		}
 		return count

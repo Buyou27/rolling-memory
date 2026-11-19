@@ -6,7 +6,6 @@
 package plain
 
 import (
-	"math"
 	"strings"
 	"time"
 
@@ -654,7 +653,7 @@ func (a *TermExtractor) mergeQueryOrdinalSpanBeaconsInto(idx QueryIndexView, sen
 	var anchorMass float64
 	// Anchor rarity tier: proper-name primary terms with document frequency
 	// within [2, N/e] of the corpus (at most ≈36.8% of documents).
-	dfCeil := float64(idx.CorpusSize()) / math.E
+	dfCeil := float64(idx.CorpusSize()) / eulerNumber
 	for h, tm := range qTerms {
 		if tm.Role != RolePrimary || tm.Flags&FlagHasUpper == 0 {
 			continue

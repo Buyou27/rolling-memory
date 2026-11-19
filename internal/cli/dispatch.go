@@ -250,12 +250,14 @@ func (a *application) runWithMemory(memory *facade.Memory) (int, error) {
 		if err != nil {
 			return 1, err
 		}
+		result = attachUpdateHint(result)
 		return 0, a.emit(result, func() { a.printStatus(result) })
 	case "doctor":
 		result, err := memory.Doctor()
 		if err != nil {
 			return 1, err
 		}
+		result = attachUpdateHint(result)
 		return 0, a.emit(result, func() { a.printDoctor(result) })
 	case "check":
 		result, err := memory.Check()

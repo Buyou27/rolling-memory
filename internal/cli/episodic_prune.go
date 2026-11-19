@@ -295,7 +295,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 		citedJSON string
 	}
 	var nRows []noeticRow
-	rows, err := db.QueryContext(ctx, `SELECT noetic_id, COALESCE(status, 'active'), COALESCE(query_text, ''), COALESCE(cited_unit_ids_json, '[]') FROM thin_vault_noetic`)
+	rows, err := db.QueryContext(ctx, `SELECT noetic_id, COALESCE(status, 'active'), COALESCE(query_text, ''), COALESCE(cited_unit_ids_json, '[]') FROM rm_noetic`)
 	if err == nil {
 		for rows.Next() {
 			var r noeticRow
@@ -306,7 +306,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 		rows.Close()
 	}
 	var hasBgChunks int
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_bg_chunks'`).Scan(&hasBgChunks)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_bg_chunks'`).Scan(&hasBgChunks)
 	var dropIDs []string
 	var staleIDs []string
 	for _, r := range nRows {
@@ -331,7 +331,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 			if qErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, cid).Scan(&exists); qErr != nil || exists != 0 {
 				unitAlive = true
 			} else if hasBgChunks > 0 {
-				if bgErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thin_vault_bg_chunks WHERE unit_id = ?)`, cid).Scan(&exists); bgErr != nil || exists != 0 {
+				if bgErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM rm_bg_chunks WHERE unit_id = ?)`, cid).Scan(&exists); bgErr != nil || exists != 0 {
 					unitAlive = true
 				}
 			}
@@ -353,7 +353,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 				if ctx != nil && ctx.Err() != nil {
 					break
 				}
-				if res, delErr := tx.ExecContext(ctx, `DELETE FROM thin_vault_noetic WHERE noetic_id = ?`, id); delErr == nil {
+				if res, delErr := tx.ExecContext(ctx, `DELETE FROM rm_noetic WHERE noetic_id = ?`, id); delErr == nil {
 					if n, _ := res.RowsAffected(); n > 0 {
 						noeticRemoved += int(n)
 					}
@@ -363,7 +363,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 				if ctx != nil && ctx.Err() != nil {
 					break
 				}
-				_, _ = tx.ExecContext(ctx, `UPDATE thin_vault_noetic SET status = 'stale' WHERE noetic_id = ?`, id)
+				_, _ = tx.ExecContext(ctx, `UPDATE rm_noetic SET status = 'stale' WHERE noetic_id = ?`, id)
 			}
 			_ = tx.Commit()
 		}
@@ -459,7 +459,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 		}
 	}
 	if noeticRemoved > 0 || locusHealed > 0 {
-		_, _ = db.ExecContext(ctx, `UPDATE thin_vault_episodic_revision SET revision = revision + 1 WHERE id = 1`)
+		_, _ = db.ExecContext(ctx, `UPDATE rm_revision SET episodic_rev = episodic_rev + 1 WHERE id = 1`)
 	}
 	return noeticRemoved, locusHealed
 }

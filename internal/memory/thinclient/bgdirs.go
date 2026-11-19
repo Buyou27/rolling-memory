@@ -35,7 +35,7 @@ import (
 //        a nested mount is never ingested twice!
 //   2. Source-in-Place Live On-Demand Reading (Zero Full-Text Duplication Bloat):
 //      - The client does NOT duplicate gigabytes of raw files into SQLite `thin_vault_docs`.
-//      - Instead, `thin_vault_bg_files` & `thin_vault_bg_chunks` store only lightweight file metadata
+//      - Instead, `rm_bg_files` & `rm_bg_chunks` store only lightweight file metadata
 //        (`abs_path`, `mtime_ns`, `file_size`, `content_sha256`, `chunk_index`, `kept_indices_json`).
 //      - When `LoadLocalDocument(unitID)` is called upon retrieval hit, the client reads the chunk
 //        LIVE on-demand from the original file on disk (`ReadChunkFromLocalFileLive`) and applies
@@ -47,7 +47,7 @@ import (
 //      - Deleted files automatically purge their obsolete chunk `UnitID`s.
 // ============================================================================
 
-// BackgroundDirMount represents a mounted local directory in `thin_vault_bg_dirs`.
+// BackgroundDirMount represents a mounted local directory in `rm_bg_dirs`.
 type BackgroundDirMount struct {
 	DirID       string   `json:"dir_id"`
 	RootPath    string   `json:"root_path"`
@@ -105,7 +105,7 @@ type BackgroundSyncReport struct {
 const backgroundSyncWorkers = 4
 
 // backgroundChunkerStampVersion is the chunking-rule version recorded in
-// thin_vault_bg_files.chunker_generation. Chunk boundaries follow the sizing rule,
+// rm_bg_files.chunker_generation. Chunk boundaries follow the sizing rule,
 // not the file alone, so the identity of that rule is stored per file and compared
 // on the stat fast path: rows written by an older rule are re-chunked instead of
 // trusted. Bump this in the same commit as any chunking rule change (budget unit,
@@ -118,7 +118,7 @@ const backgroundChunkerStampVersion = 1
 // backgroundChunkerStampVersion, so the stamp cannot drift from the rule it names.
 var backgroundChunkerGeneration = fmt.Sprintf("tokenz-r/%d/rmbp-v%d", TargetChunkTokens, backgroundChunkerStampVersion)
 
-// backgroundTrackedFile is one `thin_vault_bg_files` row loaded as the previous sync's baseline for
+// backgroundTrackedFile is one `rm_bg_files` row loaded as the previous sync's baseline for
 // the stat fast path, the content-SHA comparison and per-chunk delta detection.
 type backgroundTrackedFile struct {
 	absPath           string
@@ -165,32 +165,32 @@ func (v *Vault) ensureBackgroundTables() error {
 	var readyCnt int
 	if err := v.db.QueryRow(`
 		SELECT
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_bg_dirs' AND sql LIKE '%include_exts_json%' THEN 1 ELSE 0 END), 0) +
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_bg_files' AND sql LIKE '%chunk_hashes_json%' AND sql LIKE '%chunker_generation%' THEN 1 ELSE 0 END), 0) +
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_bg_chunks' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0) +
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_dirs' AND sql LIKE '%include_exts_json%' THEN 1 ELSE 0 END), 0) +
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_files' AND sql LIKE '%chunk_hashes_json%' AND sql LIKE '%chunker_generation%' THEN 1 ELSE 0 END), 0) +
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_chunks' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0) +
 			COALESCE(SUM(CASE WHEN type = 'index' AND name IN (
-				'idx_thin_vault_bg_chunks_path',
-				'idx_thin_vault_bg_chunks_occurred_at',
-				'idx_thin_vault_bg_chunks_inserted_at',
-				'idx_thin_vault_bg_chunks_meta'
+				'idx_rm_bg_chunks_path',
+				'idx_rm_bg_chunks_occurred_at',
+				'idx_rm_bg_chunks_inserted_at',
+				'idx_rm_bg_chunks_meta'
 			) THEN 1 ELSE 0 END), 0)
 		FROM sqlite_master
 		WHERE name IN (
-			'thin_vault_bg_dirs', 'thin_vault_bg_files', 'thin_vault_bg_chunks',
-			'idx_thin_vault_bg_chunks_path', 'idx_thin_vault_bg_chunks_occurred_at',
-			'idx_thin_vault_bg_chunks_inserted_at', 'idx_thin_vault_bg_chunks_meta'
+			'rm_bg_dirs', 'rm_bg_files', 'rm_bg_chunks',
+			'idx_rm_bg_chunks_path', 'idx_rm_bg_chunks_occurred_at',
+			'idx_rm_bg_chunks_inserted_at', 'idx_rm_bg_chunks_meta'
 		)
 	`).Scan(&readyCnt); err == nil && readyCnt == 7 {
 		return nil
 	}
 	ddl := `
-	CREATE TABLE IF NOT EXISTS thin_vault_bg_dirs (
+	CREATE TABLE IF NOT EXISTS rm_bg_dirs (
 		dir_id TEXT PRIMARY KEY,
 		root_path TEXT NOT NULL UNIQUE,
 		added_at INTEGER NOT NULL DEFAULT 0,
 		include_exts_json TEXT NOT NULL DEFAULT '[]'
 	);
-	CREATE TABLE IF NOT EXISTS thin_vault_bg_files (
+	CREATE TABLE IF NOT EXISTS rm_bg_files (
 		abs_path TEXT PRIMARY KEY,
 		dir_id TEXT NOT NULL,
 		rel_path TEXT NOT NULL,
@@ -202,7 +202,7 @@ func (v *Vault) ensureBackgroundTables() error {
 		chunk_hashes_json TEXT NOT NULL DEFAULT '[]',
 		chunker_generation TEXT NOT NULL DEFAULT ''
 	);
-	CREATE TABLE IF NOT EXISTS thin_vault_bg_chunks (
+	CREATE TABLE IF NOT EXISTS rm_bg_chunks (
 		unit_id TEXT PRIMARY KEY,
 		abs_path TEXT NOT NULL,
 		rel_path TEXT NOT NULL,
@@ -216,40 +216,40 @@ func (v *Vault) ensureBackgroundTables() error {
 		kept_indices_json TEXT NOT NULL DEFAULT '[]',
 		slots_json TEXT NOT NULL DEFAULT '[]'
 	);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_path ON thin_vault_bg_chunks(abs_path);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_occurred_at ON thin_vault_bg_chunks(occurred_at DESC, unit_id ASC);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_inserted_at ON thin_vault_bg_chunks(inserted_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_meta ON thin_vault_bg_chunks(occurred_at DESC, unit_id ASC, rel_path, anchor, abs_path, address_uri);`
+		CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_path ON rm_bg_chunks(abs_path);
+		CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_occurred_at ON rm_bg_chunks(occurred_at DESC, unit_id ASC);
+		CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_inserted_at ON rm_bg_chunks(inserted_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_meta ON rm_bg_chunks(occurred_at DESC, unit_id ASC, rel_path, anchor, abs_path, address_uri);`
 	if _, err := v.db.Exec(ddl); err != nil {
 		return err
 	}
-	if !v.hasBackgroundColumn("thin_vault_bg_dirs", "include_exts_json") {
-		if _, err := v.db.Exec(`ALTER TABLE thin_vault_bg_dirs ADD COLUMN include_exts_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+	if !v.hasBackgroundColumn("rm_bg_dirs", "include_exts_json") {
+		if _, err := v.db.Exec(`ALTER TABLE rm_bg_dirs ADD COLUMN include_exts_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return err
 		}
 	}
 	// Existing vaults predate per-chunk hashes: add the column once, then the next
 	// sync backfills it (old rows read as [] → every chunk re-ingests one final time).
-	if !v.hasBackgroundColumn("thin_vault_bg_files", "chunk_hashes_json") {
-		if _, err := v.db.Exec(`ALTER TABLE thin_vault_bg_files ADD COLUMN chunk_hashes_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+	if !v.hasBackgroundColumn("rm_bg_files", "chunk_hashes_json") {
+		if _, err := v.db.Exec(`ALTER TABLE rm_bg_files ADD COLUMN chunk_hashes_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return err
 		}
 	}
 	// Rows from an older (or pre-generation) chunking rule carry '' here, so the next sync
 	// re-chunks them under the current rule instead of trusting a stale boundary set.
-	if !v.hasBackgroundColumn("thin_vault_bg_files", "chunker_generation") {
-		if _, err := v.db.Exec(`ALTER TABLE thin_vault_bg_files ADD COLUMN chunker_generation TEXT NOT NULL DEFAULT ''`); err != nil {
+	if !v.hasBackgroundColumn("rm_bg_files", "chunker_generation") {
+		if _, err := v.db.Exec(`ALTER TABLE rm_bg_files ADD COLUMN chunker_generation TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
-	if !v.hasBackgroundColumn("thin_vault_bg_chunks", "inserted_at") {
-		if _, err := v.db.Exec(`ALTER TABLE thin_vault_bg_chunks ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+	if !v.hasBackgroundColumn("rm_bg_chunks", "inserted_at") {
+		if _, err := v.db.Exec(`ALTER TABLE rm_bg_chunks ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 		_, _ = v.db.Exec(`
-			UPDATE thin_vault_bg_chunks
+			UPDATE rm_bg_chunks
 			SET inserted_at = COALESCE(
-				(SELECT MIN(c2.occurred_at) FROM thin_vault_bg_chunks c2 WHERE c2.abs_path = thin_vault_bg_chunks.abs_path AND c2.occurred_at > 0),
+				(SELECT MIN(c2.occurred_at) FROM rm_bg_chunks c2 WHERE c2.abs_path = rm_bg_chunks.abs_path AND c2.occurred_at > 0),
 				occurred_at
 			)
 			WHERE inserted_at = 0 AND occurred_at > 0
@@ -369,7 +369,8 @@ func (v *Vault) AddBackgroundDirWithExts(dirPath string, includeExts []string) (
 			}
 			if os.SameFile(existingInfo, newInfo) {
 				if updateExts {
-					_, _ = v.db.Exec(`UPDATE thin_vault_bg_dirs SET include_exts_json = ? WHERE dir_id = ?`, extsJSON, m.DirID)
+					_, _ = v.db.Exec(`UPDATE rm_bg_dirs SET include_exts_json = ? WHERE dir_id = ?`, extsJSON, m.DirID)
+					_, _ = v.db.Exec(`UPDATE rm_bg_dirs SET include_exts_json = ? WHERE dir_id = ?`, extsJSON, m.DirID)
 					m.IncludeExts = normExts
 				}
 				m.Notice = fmt.Sprintf("directory is already mounted as %s (same physical directory)", m.RootPath)
@@ -383,7 +384,14 @@ func (v *Vault) AddBackgroundDirWithExts(dirPath string, includeExts []string) (
 	}
 	now := time.Now().Unix()
 	if _, err = v.db.Exec(`
-		INSERT OR IGNORE INTO thin_vault_bg_dirs(dir_id, root_path, added_at, include_exts_json)
+		INSERT OR IGNORE INTO rm_bg_dirs(dir_id, root_path, added_at, include_exts_json)
+		VALUES (?, ?, ?, ?)`,
+		dirID, cleanRoot, now, extsJSON,
+	); err != nil {
+		return BackgroundDirMount{}, err
+	}
+	if _, err = v.db.Exec(`
+		INSERT OR IGNORE INTO rm_bg_dirs(dir_id, root_path, added_at, include_exts_json)
 		VALUES (?, ?, ?, ?)`,
 		dirID, cleanRoot, now, extsJSON,
 	); err != nil {
@@ -403,7 +411,8 @@ func (v *Vault) AddBackgroundDirWithExts(dirPath string, includeExts []string) (
 		// updating its extension filter if the caller explicitly supplied one.
 		mount.AddedAt = m.AddedAt
 		if updateExts {
-			_, _ = v.db.Exec(`UPDATE thin_vault_bg_dirs SET include_exts_json = ? WHERE dir_id = ?`, extsJSON, m.DirID)
+			_, _ = v.db.Exec(`UPDATE rm_bg_dirs SET include_exts_json = ? WHERE dir_id = ?`, extsJSON, m.DirID)
+			_, _ = v.db.Exec(`UPDATE rm_bg_dirs SET include_exts_json = ? WHERE dir_id = ?`, extsJSON, m.DirID)
 			mount.IncludeExts = normExts
 		} else {
 			mount.IncludeExts = m.IncludeExts
@@ -445,14 +454,14 @@ func backgroundPathCovered(root, absPath string) bool {
 // distinct root_path ever collides on the 32-bit default prefix.
 func (v *Vault) resolveOrAllocateDirID(cleanRoot string) (string, error) {
 	var existingID string
-	if err := v.db.QueryRow(`SELECT dir_id FROM thin_vault_bg_dirs WHERE root_path = ?`, cleanRoot).Scan(&existingID); err == nil && existingID != "" {
+	if err := v.db.QueryRow(`SELECT dir_id FROM rm_bg_dirs WHERE root_path = ?`, cleanRoot).Scan(&existingID); err == nil && existingID != "" {
 		return existingID, nil
 	}
 	sum := sha256.Sum256([]byte(cleanRoot))
 	for bytesLen := 4; bytesLen <= 16; bytesLen += 2 {
 		cand := "d_" + hex.EncodeToString(sum[:bytesLen])
 		var otherRoot string
-		err := v.db.QueryRow(`SELECT root_path FROM thin_vault_bg_dirs WHERE dir_id = ?`, cand).Scan(&otherRoot)
+		err := v.db.QueryRow(`SELECT root_path FROM rm_bg_dirs WHERE dir_id = ?`, cand).Scan(&otherRoot)
 		if errors.Is(err, sql.ErrNoRows) || otherRoot == cleanRoot {
 			return cand, nil
 		}
@@ -489,11 +498,11 @@ func (v *Vault) loadBackgroundDirRemoval(dirPath string) (backgroundDirRemoval, 
 	}
 	dirID := computeDirID(cleanRoot)
 	var storedDirID string
-	if err := v.db.QueryRow(`SELECT dir_id FROM thin_vault_bg_dirs WHERE root_path = ?`, cleanRoot).Scan(&storedDirID); err == nil && storedDirID != "" {
+	if err := v.db.QueryRow(`SELECT dir_id FROM rm_bg_dirs WHERE root_path = ?`, cleanRoot).Scan(&storedDirID); err == nil && storedDirID != "" {
 		dirID = storedDirID
 	} else {
 		var ownerRoot string
-		if err := v.db.QueryRow(`SELECT root_path FROM thin_vault_bg_dirs WHERE dir_id = ?`, dirID).Scan(&ownerRoot); err == nil && ownerRoot != "" && ownerRoot != cleanRoot {
+		if err := v.db.QueryRow(`SELECT root_path FROM rm_bg_dirs WHERE dir_id = ?`, dirID).Scan(&ownerRoot); err == nil && ownerRoot != "" && ownerRoot != cleanRoot {
 			// The 32-bit default ID belongs to a different mounted directory; never purge its files.
 			return backgroundDirRemoval{dirID: "", rootPath: cleanRoot}, nil
 		}
@@ -503,7 +512,7 @@ func (v *Vault) loadBackgroundDirRemoval(dirPath string) (backgroundDirRemoval, 
 		rootPath: cleanRoot,
 	}
 
-	rows, err := v.db.Query(`SELECT abs_path, unit_ids_json FROM thin_vault_bg_files WHERE dir_id = ? ORDER BY abs_path`, removal.dirID)
+	rows, err := v.db.Query(`SELECT abs_path, unit_ids_json FROM rm_bg_files WHERE dir_id = ? ORDER BY abs_path`, removal.dirID)
 	if err != nil {
 		return backgroundDirRemoval{}, err
 	}
@@ -603,7 +612,7 @@ func (v *Vault) planBackgroundDirRemoval(dirPath string) (backgroundDirRemovalPl
 		return backgroundDirRemovalPlan{}, err
 	}
 	plan := backgroundDirRemovalPlan{removal: removal}
-	rows, err := v.db.Query(`SELECT dir_id, root_path FROM thin_vault_bg_dirs WHERE root_path != ? ORDER BY dir_id ASC`, removal.rootPath)
+	rows, err := v.db.Query(`SELECT dir_id, root_path FROM rm_bg_dirs WHERE root_path != ? ORDER BY dir_id ASC`, removal.rootPath)
 	if err != nil {
 		return backgroundDirRemovalPlan{}, err
 	}
@@ -639,10 +648,10 @@ func (v *Vault) planBackgroundDirRemoval(dirPath string) (backgroundDirRemovalPl
 // rebindBackgroundFileRowsTx moves one tracked file's attribution to a remaining covering mount
 // inside the caller's transaction; chunks, units and citations stay untouched.
 func rebindBackgroundFileRowsTx(tx *sql.Tx, rebind backgroundDirRebind) error {
-	if _, err := tx.Exec(`UPDATE thin_vault_bg_files SET dir_id = ?, rel_path = ? WHERE abs_path = ?`, rebind.dirID, rebind.relPath, rebind.absPath); err != nil {
+	if _, err := tx.Exec(`UPDATE rm_bg_files SET dir_id = ?, rel_path = ? WHERE abs_path = ?`, rebind.dirID, rebind.relPath, rebind.absPath); err != nil {
 		return fmt.Errorf("thinclient: rebind background file %s: %w", rebind.absPath, err)
 	}
-	if _, err := tx.Exec(`UPDATE thin_vault_bg_chunks SET rel_path = ? WHERE abs_path = ?`, rebind.relPath, rebind.absPath); err != nil {
+	if _, err := tx.Exec(`UPDATE rm_bg_chunks SET rel_path = ? WHERE abs_path = ?`, rebind.relPath, rebind.absPath); err != nil {
 		return fmt.Errorf("thinclient: rebind background chunks for %s: %w", rebind.absPath, err)
 	}
 	return nil
@@ -750,9 +759,13 @@ func (v *Vault) applyBackgroundDirRemoval(plan backgroundDirRemovalPlan) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("thinclient: begin background dir removal transaction %s: %w", plan.removal.rootPath, err)
 	}
-	if _, err := tx.Exec(`DELETE FROM thin_vault_bg_dirs WHERE dir_id = ? OR root_path = ?`, plan.removal.dirID, plan.removal.rootPath); err != nil {
+	if _, err := tx.Exec(`DELETE FROM rm_bg_dirs WHERE dir_id = ? OR root_path = ?`, plan.removal.dirID, plan.removal.rootPath); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("thinclient: delete background mount %s: %w", plan.removal.rootPath, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM rm_bg_dirs WHERE dir_id = ? OR root_path = ?`, plan.removal.dirID, plan.removal.rootPath); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("thinclient: delete canonical background mount %s: %w", plan.removal.rootPath, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("thinclient: commit background dir removal %s: %w", plan.removal.rootPath, err)
@@ -816,7 +829,7 @@ func (v *Vault) purgeBackgroundFileBatch(ctx context.Context, absPath string, un
 		}
 		placeholders := strings.Repeat("?,", len(batch))
 		placeholders = placeholders[:len(placeholders)-1]
-		if _, err := tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
+		if _, err := tx.Exec(`DELETE FROM rm_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
 			return rollback(fmt.Errorf("thinclient: delete background chunks for %s: %w", absPath, err))
 		}
 		if citations != nil {
@@ -829,10 +842,10 @@ func (v *Vault) purgeBackgroundFileBatch(ctx context.Context, absPath string, un
 	}
 	lastBatch := end >= len(unitIDs)
 	if lastBatch {
-		if _, err := tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE abs_path = ?`, absPath); err != nil {
+		if _, err := tx.Exec(`DELETE FROM rm_bg_chunks WHERE abs_path = ?`, absPath); err != nil {
 			return rollback(fmt.Errorf("thinclient: delete background chunks for %s: %w", absPath, err))
 		}
-		if _, err := tx.Exec(`DELETE FROM thin_vault_bg_files WHERE abs_path = ?`, absPath); err != nil {
+		if _, err := tx.Exec(`DELETE FROM rm_bg_files WHERE abs_path = ?`, absPath); err != nil {
 			return rollback(fmt.Errorf("thinclient: delete background file metadata %s: %w", absPath, err))
 		}
 	}
@@ -856,7 +869,7 @@ func (v *Vault) purgeBackgroundFileBatch(ctx context.Context, absPath string, un
 // did not purge (a concurrent walk re-committed it), or found == false when none remain.
 func (v *Vault) nextResidualBackgroundFile(dirID string) (absPath string, unitIDs []string, found bool, err error) {
 	var unitIDsJSON string
-	queryErr := v.db.QueryRow(`SELECT abs_path, unit_ids_json FROM thin_vault_bg_files WHERE dir_id = ? ORDER BY abs_path LIMIT 1`, dirID).Scan(&absPath, &unitIDsJSON)
+	queryErr := v.db.QueryRow(`SELECT abs_path, unit_ids_json FROM rm_bg_files WHERE dir_id = ? ORDER BY abs_path LIMIT 1`, dirID).Scan(&absPath, &unitIDsJSON)
 	if errors.Is(queryErr, sql.ErrNoRows) {
 		return "", nil, false, nil
 	}
@@ -874,7 +887,7 @@ func (v *Vault) ListBackgroundDirs() ([]BackgroundDirMount, error) {
 	if err := v.ensureBackgroundTables(); err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT dir_id, root_path, added_at, COALESCE(include_exts_json, '[]') FROM thin_vault_bg_dirs ORDER BY added_at ASC, dir_id ASC`)
+	rows, err := v.db.Query(`SELECT dir_id, root_path, added_at, COALESCE(include_exts_json, '[]') FROM rm_bg_dirs ORDER BY added_at ASC, dir_id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -902,7 +915,7 @@ func (v *Vault) ListBackgroundDirs() ([]BackgroundDirMount, error) {
 		return nil, err
 	}
 	for i := range mounts {
-		if err := v.db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_files WHERE dir_id = ?`, mounts[i].DirID).Scan(&mounts[i].FileCount); err != nil {
+		if err := v.db.QueryRow(`SELECT COUNT(*) FROM rm_bg_files WHERE dir_id = ?`, mounts[i].DirID).Scan(&mounts[i].FileCount); err != nil {
 			return nil, err
 		}
 	}
@@ -956,7 +969,7 @@ func (v *Vault) lookupBackgroundChunkMeta(unitID string) (bgChunkMetaEntry, erro
 	var chunkIdx int
 	err := v.db.QueryRow(`
 		SELECT abs_path, rel_path, anchor, chunk_index, kept_indices_json
-		FROM thin_vault_bg_chunks WHERE unit_id = ?`, unitID).
+		FROM rm_bg_chunks WHERE unit_id = ?`, unitID).
 		Scan(&absPath, &relPath, &anchor, &chunkIdx, &keptJSON)
 	if err != nil {
 		return bgChunkMetaEntry{}, err
@@ -1316,12 +1329,12 @@ func (c *Client) uploadBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 // touch, then write the chunk/file rows in bounded transactions while cascading `stale` to every
 // Noetic record citing a changed chunk. Normal files (<= backgroundPurgeBatchUnits chunks within
 // backgroundPurgeBatchBudget) commit in one transaction; giant multi-thousand-chunk files split
-// across bounded batches and write the `thin_vault_bg_files` row in the final batch so the SQLite
+// across bounded batches and write the `rm_bg_files` row in the final batch so the SQLite
 // write lock is never held for a whole monster file and interrupted passes remain idempotent.
 func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpload, getCitations func() (*localNoeticCitationIndex, error)) (map[string]bool, int, error) {
 	affectedNoetic := make(map[string]bool)
 	if up.contentsUnchanged {
-		if _, err := c.Vault.db.Exec(`UPDATE thin_vault_bg_files SET mtime_ns = ?, file_size = ?, dir_id = ?, rel_path = ?, chunker_generation = ? WHERE abs_path = ?`,
+		if _, err := c.Vault.db.Exec(`UPDATE rm_bg_files SET mtime_ns = ?, file_size = ?, dir_id = ?, rel_path = ?, chunker_generation = ? WHERE abs_path = ?`,
 			up.mtimeNS, up.fileSize, up.dirID, up.relPath, backgroundChunkerGeneration, up.absPath); err != nil {
 			return nil, 0, fmt.Errorf("thinclient: update unchanged background content %s: %w", up.absPath, err)
 		}
@@ -1338,7 +1351,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 	fileInsertedAt := up.occurredAt
 	if up.hadPrev {
 		var existingMin int64
-		_ = c.Vault.db.QueryRow(`SELECT COALESCE(MIN(CASE WHEN inserted_at > 0 THEN inserted_at WHEN occurred_at > 0 THEN occurred_at END), 0) FROM thin_vault_bg_chunks WHERE abs_path = ?`, up.absPath).Scan(&existingMin)
+		_ = c.Vault.db.QueryRow(`SELECT COALESCE(MIN(CASE WHEN inserted_at > 0 THEN inserted_at WHEN occurred_at > 0 THEN occurred_at END), 0) FROM rm_bg_chunks WHERE abs_path = ?`, up.absPath).Scan(&existingMin)
 		if existingMin > 0 && existingMin < fileInsertedAt {
 			fileInsertedAt = existingMin
 		}
@@ -1397,7 +1410,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 				// Reused chunk: keep its ingestion receipt and slots; only refresh the
 				// display path if the file moved between mounts.
 				if up.hadPrev && up.prev.relPath != up.relPath {
-					if _, err := tx.Exec(`UPDATE thin_vault_bg_chunks SET rel_path = ? WHERE unit_id = ?`, up.relPath, unitID); err != nil {
+					if _, err := tx.Exec(`UPDATE rm_bg_chunks SET rel_path = ? WHERE unit_id = ?`, up.relPath, unitID); err != nil {
 						return rollback(fmt.Errorf("thinclient: update reused chunk path %s: %w", unitID, err))
 					}
 					ops++
@@ -1414,7 +1427,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 				return rollback(fmt.Errorf("thinclient: encode kept indices for %s: %w", unitID, err))
 			}
 			if _, err := tx.Exec(`
-					INSERT INTO thin_vault_bg_chunks(
+					INSERT INTO rm_bg_chunks(
 						unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, inserted_at, address_uri, coord64, waveform_bar, kept_indices_json
 					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT(unit_id) DO UPDATE SET
@@ -1423,7 +1436,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 						chunk_index = excluded.chunk_index,
 						anchor = excluded.anchor,
 						occurred_at = excluded.occurred_at,
-						inserted_at = CASE WHEN thin_vault_bg_chunks.inserted_at > 0 THEN thin_vault_bg_chunks.inserted_at ELSE excluded.inserted_at END,
+						inserted_at = CASE WHEN rm_bg_chunks.inserted_at > 0 THEN rm_bg_chunks.inserted_at ELSE excluded.inserted_at END,
 						address_uri = excluded.address_uri,
 						coord64 = excluded.coord64,
 						waveform_bar = excluded.waveform_bar,
@@ -1456,7 +1469,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 			}
 			placeholders := strings.Repeat("?,", len(trailSlice))
 			placeholders = placeholders[:len(placeholders)-1]
-			if _, err := tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
+			if _, err := tx.Exec(`DELETE FROM rm_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...); err != nil {
 				return rollback(fmt.Errorf("thinclient: delete trailing background chunks for %s: %w", up.absPath, err))
 			}
 			batchDeleted = append(batchDeleted, trailSlice...)
@@ -1466,7 +1479,7 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 		lastBatch := chunkIdx >= len(up.chunks) && trailIdx >= len(trailingUnits)
 		if lastBatch {
 			if _, err := tx.Exec(`
-				INSERT OR REPLACE INTO thin_vault_bg_files(
+				INSERT OR REPLACE INTO rm_bg_files(
 					abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, chunk_count, unit_ids_json, chunk_hashes_json, chunker_generation
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				up.absPath, up.dirID, up.relPath, up.mtimeNS, up.fileSize, up.contentSHA256, len(up.newUnitIDs), string(uidsJSON), string(hashesJSON), backgroundChunkerGeneration,
@@ -1731,9 +1744,9 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 		return sortedMounts[i].DirID < sortedMounts[j].DirID
 	})
 
-	// Load existing tracked files from `thin_vault_bg_files`.
+	// Load existing tracked files from `rm_bg_files`.
 	existingFiles := make(map[string]backgroundTrackedFile)
-	rows, err := c.Vault.db.Query(`SELECT abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, unit_ids_json, chunk_hashes_json, chunker_generation FROM thin_vault_bg_files`)
+	rows, err := c.Vault.db.Query(`SELECT abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, unit_ids_json, chunk_hashes_json, chunker_generation FROM rm_bg_files`)
 	if err != nil {
 		return report, err
 	}
@@ -1884,7 +1897,7 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 				(len(prev.unitIDs) > 0 || deletedBGUnits[computeChunkUnitID(absFile, 0)]) &&
 				prev.chunkerGeneration == backgroundChunkerGeneration {
 				if prev.dirID != m.DirID || prev.relPath != relPath {
-					if _, err := c.Vault.db.Exec(`UPDATE thin_vault_bg_files SET dir_id = ?, rel_path = ? WHERE abs_path = ?`, m.DirID, relPath, absFile); err != nil {
+					if _, err := c.Vault.db.Exec(`UPDATE rm_bg_files SET dir_id = ?, rel_path = ? WHERE abs_path = ?`, m.DirID, relPath, absFile); err != nil {
 						return fmt.Errorf("thinclient: update unchanged background file %s: %w", absFile, err)
 					}
 				}

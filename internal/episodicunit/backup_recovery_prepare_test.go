@@ -22,7 +22,8 @@ func TestPrepareZCodeBackupRecoveryReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
-		`CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, layer TEXT, raw_text TEXT)`,
+		`CREATE TABLE rm_docs (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', raw_text TEXT NOT NULL DEFAULT '', occurred_at INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE rm_unit_meta (unit_id TEXT PRIMARY KEY, ref_pointer TEXT NOT NULL DEFAULT '')`,
 		`PRAGMA journal_mode=WAL`,
 	} {
 		if _, err := vault.Exec(statement); err != nil {
@@ -36,7 +37,10 @@ func TestPrepareZCodeBackupRecoveryReadOnly(t *testing.T) {
 		{"ep_missing", "@ref:zcode:s1:missing#0"},
 		{"ep_legacy", "@ref:zcode:s1:m1"},
 	} {
-		if _, err := vault.Exec(`INSERT INTO thin_vault_docs VALUES (?, 'episodic', ?)`, row[0], row[1]); err != nil {
+		if _, err := vault.Exec(`INSERT INTO rm_docs(unit_id, layer, raw_text) VALUES (?, 'episodic', '')`, row[0]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := vault.Exec(`INSERT INTO rm_unit_meta(unit_id, ref_pointer) VALUES (?, ?)`, row[0], row[1]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +97,7 @@ func TestPrepareZCodeBackupRecoveryReadOnly(t *testing.T) {
 		t.Fatal("backup changed")
 	}
 	var count int
-	if err := vault.QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 4 {
+	if err := vault.QueryRow(`SELECT count(*) FROM rm_docs`).Scan(&count); err != nil || count != 4 {
 		t.Fatal("vault changed")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -33,7 +33,11 @@
       "relative_tag": false,
       "token_correct": false
     },
-    "scope": "mem:env"
+    "scope": "mem:env",
+    "update": {
+      "channel": "dev",
+      "source": "github"
+    }
   },
   "ok": true
 }

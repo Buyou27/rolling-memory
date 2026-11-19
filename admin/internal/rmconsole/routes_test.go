@@ -152,9 +152,9 @@ func TestCollectDashboardData(t *testing.T) {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
 	nowUnix := time.Now().Unix()
-	_, _ = db.Exec(`INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, anchor, occurred_at) VALUES ('bg-1', '/a/b.md', 'b.md', 'h1', ?), ('bg-2', '/a/c.md', 'c.md', 'h2', ?);`, nowUnix-60, nowUnix-30)
+	_, _ = db.Exec(`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, anchor, occurred_at) VALUES ('bg-1', '/a/b.md', 'b.md', 'h1', ?), ('bg-2', '/a/c.md', 'c.md', 'h2', ?);`, nowUnix-60, nowUnix-30)
 	_, _ = db.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('ep-1', 'episodic', ?, 'episodic turn 1', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00');`, nowUnix-40)
-	_, _ = db.Exec(`INSERT INTO thin_vault_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json) VALUES ('nt-1', ?, 'active', 'cue', 'ans', '["ep-1"]');`, nowUnix-20)
+	_, _ = db.Exec(`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json) VALUES ('nt-1', ?, 'active', 'cue', 'ans', '["ep-1"]');`, nowUnix-20)
 	_ = db.Close()
 
 	logPath := filepath.Join(logDir, "rolling-memory.log")
@@ -384,7 +384,7 @@ raw_when_sparse = false
 }
 
 // TestStatusStreamPushesOnVaultChange 锁定「记忆图谱 / 控制台」共同依赖的零轮询 SSE 实时推送契约：
-// 连接建立即推首帧；本地明文金库（thin_vault_docs / thin_vault_noetic）发生写入后，同一连接必须在
+// 连接建立即推首帧；本地明文金库（thin_vault_docs / rm_noetic）发生写入后，同一连接必须在
 // 下一个 250ms 签名巡检周期内推送携带新计数的新帧——前端据此指纹对比自动刷新图谱，无需手动刷新。
 func TestStatusStreamPushesOnVaultChange(t *testing.T) {
 	tmp := t.TempDir()
@@ -400,18 +400,18 @@ func TestStatusStreamPushesOnVaultChange(t *testing.T) {
 		VALUES ('doc-1', 'episodic', 100, 'hello vault', '[]', 'C6:L1:B001#00', '[]')`); err != nil {
 		t.Fatalf("seed thin_vault_docs: %v", err)
 	}
-	if _, err := db.Exec(`INSERT OR REPLACE INTO thin_vault_noetic(noetic_id, occurred_at, status, query_text, answer_text)
+	if _, err := db.Exec(`INSERT OR REPLACE INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text)
 		VALUES ('nt-1', 100, 'active', 'q1', 'a1')`); err != nil {
-		t.Fatalf("seed thin_vault_noetic: %v", err)
+		t.Fatalf("seed rm_noetic: %v", err)
 	}
 
 	client := startRoomTestClient(t, "rm/status")
 	time.Sleep(400 * time.Millisecond)
 
 	// 写入变更：新增一条 L3 知性印迹（本地金库计数变化），并追加 hook 日志（签名双通道变化）
-	if _, err := db.Exec(`INSERT OR REPLACE INTO thin_vault_noetic(noetic_id, occurred_at, status, query_text, answer_text)
+	if _, err := db.Exec(`INSERT OR REPLACE INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text)
 		VALUES ('nt-2', 200, 'active', 'q2', 'a2')`); err != nil {
-		t.Fatalf("write thin_vault_noetic: %v", err)
+		t.Fatalf("write rm_noetic: %v", err)
 	}
 	logDir := filepath.Join(tmp, ".local", "state", "rolling-memory")
 	_ = os.MkdirAll(logDir, 0o755)
@@ -431,7 +431,7 @@ func TestStatusStreamPushesOnVaultChange(t *testing.T) {
 		var payload struct {
 			Artifacts struct {
 				ThinVaultDocs   int `json:"thin_vault_docs"`
-				ThinVaultNoetic int `json:"thin_vault_noetic"`
+				ThinVaultNoetic int `json:"rm_noetic"`
 			} `json:"artifacts"`
 		}
 		if err := json.Unmarshal([]byte(strings.TrimSpace(frame[idx+len("data: "):])), &payload); err != nil {
@@ -529,14 +529,14 @@ func TestThreeLayersStatsAndBackgroundCLIContract(t *testing.T) {
 		t.Fatalf("insert episodic: %v", err)
 	}
 	_, err = db.Exec(`
-		INSERT INTO thin_vault_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
+		INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
 		VALUES ('NOE-1', 1762380100, 'active', 'What architecture was discussed?', 'the memory engine architecture.', '["EPI-1"]')
 	`)
 	if err != nil {
 		t.Fatalf("insert noetic: %v", err)
 	}
 
-	// Create a nested local directory with .md and .json files and mount it into thin_vault_bg_dirs
+	// Create a nested local directory with .md and .json files and mount it into rm_bg_dirs
 	bgRoot := filepath.Join(tmpDir, "mounted_kb")
 	nestedSub := filepath.Join(bgRoot, "sub1", "sub2")
 	if err := os.MkdirAll(nestedSub, 0o755); err != nil {
@@ -549,7 +549,7 @@ func TestThreeLayersStatsAndBackgroundCLIContract(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	_, err = db.Exec(`INSERT INTO thin_vault_bg_dirs(dir_id, root_path, added_at) VALUES ('d_test01', ?, 1762380000)`, bgRoot)
+	_, err = db.Exec(`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('d_test01', ?, 1762380000)`, bgRoot)
 	if err != nil {
 		t.Fatalf("insert bg_dir: %v", err)
 	}
@@ -688,7 +688,7 @@ func TestBackgroundAddHandlerDelegatesToCanonicalCLI(t *testing.T) {
 // 1) 256 截断时不得产生「断边孤儿节点」（任何入选 Cell 必有可见成员，任何入选 Unit 必有归属父 Cell）；
 // 2) EventTotal 必须等于域内真实总节点数（不受 limit 截断影响），NodeShown 才随 limit 变化；
 // 3) 全部（limit=-1）与 256 截断的孤立节点数均必须为 0；
-// 4) collectArtifactStats 必须合并统计 thin_vault_docs 与 thin_vault_bg_chunks。
+// 4) collectArtifactStats 必须合并统计 thin_vault_docs 与 rm_bg_chunks。
 func TestGraphProductManagerAudit(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	dbPath := resolveMemoryDBPath(home)
@@ -784,31 +784,34 @@ func TestNativeRoutesMountWithoutPluginRegistry(t *testing.T) {
 	mountPublic(engine.Group(""))
 
 	want := map[string]bool{
-		"/admin/plugin/rolling-memory/status":              false,
-		"/admin/plugin/rolling-memory/widget":              false,
-		"/admin/plugin/rolling-memory/dashboard":           false,
-		"/admin/plugin/rolling-memory/efficacy":            false,
-		"/admin/plugin/rolling-memory/roi/facts":           false,
-		"/admin/plugin/rolling-memory/graph":               false,
-		"/admin/plugin/rolling-memory/graph/expand":        false,
-		"/admin/plugin/rolling-memory/terminal":            false,
-		"/admin/plugin/rolling-memory/memories/query":      false,
-		"/admin/plugin/rolling-memory/recall/query":        false,
-		"/admin/plugin/rolling-memory/layers/stats":        false,
-		"/admin/plugin/rolling-memory/layers/list":         false,
-		"/admin/plugin/rolling-memory/layers/get/:pk":      false,
-		"/admin/plugin/rolling-memory/layers/get":          false,
-		"/admin/plugin/rolling-memory/layers/delete":       false,
-		"/admin/plugin/rolling-memory/env/health":          false,
-		"/admin/plugin/rolling-memory/sync/reconcile":      false,
-		"/admin/plugin/rolling-memory/background/sync":     false,
-		"/admin/plugin/rolling-memory/system/version":      false,
-		"/admin/plugin/rolling-memory/system/update/check": false,
-		"/admin/plugin/rolling-memory/system/update/apply": false,
-		"/admin/plugin/rolling-memory/eval/leaderboard":    false,
-		"/plugin/rolling-memory/locomo/graph":              false,
-		"/plugin/rolling-memory/locomo/recall":             false,
-		"/ws":                                              false,
+		"/admin/plugin/rolling-memory/status":                false,
+		"/admin/plugin/rolling-memory/widget":                false,
+		"/admin/plugin/rolling-memory/dashboard":             false,
+		"/admin/plugin/rolling-memory/efficacy":              false,
+		"/admin/plugin/rolling-memory/roi/facts":             false,
+		"/admin/plugin/rolling-memory/graph":                 false,
+		"/admin/plugin/rolling-memory/graph/expand":          false,
+		"/admin/plugin/rolling-memory/terminal":              false,
+		"/admin/plugin/rolling-memory/memories/query":        false,
+		"/admin/plugin/rolling-memory/recall/query":          false,
+		"/admin/plugin/rolling-memory/layers/stats":          false,
+		"/admin/plugin/rolling-memory/layers/list":           false,
+		"/admin/plugin/rolling-memory/layers/get/:pk":        false,
+		"/admin/plugin/rolling-memory/layers/get":            false,
+		"/admin/plugin/rolling-memory/layers/delete":         false,
+		"/admin/plugin/rolling-memory/env/health":            false,
+		"/admin/plugin/rolling-memory/sync/reconcile":        false,
+		"/admin/plugin/rolling-memory/background/sync":       false,
+		"/admin/plugin/rolling-memory/system/version":        false,
+		"/admin/plugin/rolling-memory/system/update/status":  false,
+		"/admin/plugin/rolling-memory/system/update/channel": false,
+		"/admin/plugin/rolling-memory/system/update/source":  false,
+		"/admin/plugin/rolling-memory/system/update/check":   false,
+		"/admin/plugin/rolling-memory/system/update/apply":   false,
+		"/admin/plugin/rolling-memory/eval/leaderboard":      false,
+		"/plugin/rolling-memory/locomo/graph":                false,
+		"/plugin/rolling-memory/locomo/recall":               false,
+		"/ws":                                                false,
 	}
 	for _, r := range engine.Routes() {
 		if strings.HasSuffix(r.Path, "/stream") {
@@ -850,7 +853,7 @@ func TestMemoryDetailBackgroundChunkAndRadarATMValues(t *testing.T) {
 	defer db.Close()
 
 	_, err = db.Exec(`
-		INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
+		INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
 		VALUES ('bg:test_chunk_01', '/workspace/docs/arch.md', 'docs/arch.md', 0, 'L1-L20', 1762380000, 'C6:L1:BG#00')
 	`)
 	if err != nil {
@@ -892,8 +895,9 @@ func TestMemoryDetailBackgroundChunkAndRadarATMValues(t *testing.T) {
 // TestUserPerspectiveCommandAndDocLinkContract 从用户视角锁死后台与帮助中心暴露的所有可复制命令与链接：
 //  1. 任何复现命令（buildReproCLICommand / buildATMReproCLICommand / referenceBaselines / atmReferenceBaselines / buildATMBenchLeaderboard）
 //     严禁包含仓库相对二进制前缀（`./bin/` 或 `bin/`），也严禁把服务端本机的 `/Users/<user>/` 或 `/home/<user>/` 绝对路径直接暴露进命令；
-//  2. 帮助中心 `help/index.vue` 的快捷命令（quickCommands）严禁包含已移除子命令（如 `govern`），置顶文档 ID（pinnedDocIds）必须在 `docsData.ts` 中全部存在；
-//  3. `docsData.ts` 中的 GitHub 链接严禁指向不存在的 `/blob/main/` 或 `/tree/main/` 分支。
+//  2. 帮助中心 `help/index.vue` 的快捷命令（quickCommands）严禁包含已移除子命令（如 `govern`）；
+//  3. 帮助中心只提供官方 GitHub / Gitee 文档入口：不得重新引入本地文档镜像（`content/` 目录、`?raw` 导入或 `docsData.ts`），
+//     两个站点入口必须同时存在。
 func TestUserPerspectiveCommandAndDocLinkContract(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	sampleStore := filepath.Join(home, ".local", "state", "rolling-memory", "eval", "eval-locomo-local-plain.json")
@@ -938,14 +942,19 @@ func TestUserPerspectiveCommandAndDocLinkContract(t *testing.T) {
 			t.Fatalf("help/index.vue contains dead command or doc reference %q", forbidden)
 		}
 	}
-
-	docsDataPath := filepath.Join("..", "..", "web", "src", "views", "admin", "help", "docsData.ts")
-	docsDataRaw, err := os.ReadFile(docsDataPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", docsDataPath, err)
+	for _, required := range []string{
+		"https://github.com/rocareer/rolling-memory",
+		"https://gitee.com/rocareer/Rolling-Memory",
+	} {
+		if !strings.Contains(helpText, required) {
+			t.Fatalf("help/index.vue must link to the official docs site %q", required)
+		}
 	}
-	docsDataText := string(docsDataRaw)
-	if strings.Contains(docsDataText, "/blob/local/") || strings.Contains(docsDataText, "/tree/local/") {
-		t.Fatal("docsData.ts must point to default branch `main`, not `/blob/local/` or `/tree/local/`")
+	if strings.Contains(helpText, "?raw") || strings.Contains(helpText, "./content") || strings.Contains(helpText, "docsData") {
+		t.Fatal("help/index.vue must not embed a local documentation mirror")
+	}
+	helpMirror := filepath.Join("..", "..", "web", "src", "views", "admin", "help", "content")
+	if _, err := os.Stat(helpMirror); !os.IsNotExist(err) {
+		t.Fatalf("help centre must not keep a local docs mirror: %s", helpMirror)
 	}
 }

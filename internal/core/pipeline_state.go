@@ -1497,6 +1497,8 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	st.episodeOf, st.episodeCount = buildEpisodeComponents(st.bucketTimes, st.ordPos, idx.N, st.meanGap, st.muLogGap, st.sigLogGap)
 	// neighborSpan 是桶时间线上的局部近邻窗口（±2 桶）：工程局部性边界（相邻桶的
 	// 同情节证据），无分布假设推导；机制由全池配对回归保持（见 docs/CHANGELOG.md）。
+	// [calibrated] neighborSpan — local neighbourhood half-width in bucket steps
+	// (buckets). Engineering locality bound for adjacent-bucket evidence.
 	const neighborSpan = 2
 	bucketNeighbors := make([][]int32, len(buckets))
 	var totalNeighborLinks int
@@ -1706,8 +1708,8 @@ func (st *rmClusterState) rebuildOrthogonalTransparentNeighbors(idx *Index) {
 	}
 	// neighborSpan 是桶时间线上的局部近邻窗口（±2 桶）：工程局部性边界，无分布假设推导。
 	const neighborSpan = 2
-	const orthoFloor = invE * invE
-	subFloor := 1.0 - invE
+	const orthoFloor = transmissionPerHop * transmissionPerHop
+	subFloor := 1.0 - transmissionPerHop
 	bUnits := make([][]int32, len(st.bucketTimes))
 	for u := 0; u < n; u++ {
 		if b := st.ordPos[u]; b >= 0 && int(b) < len(bUnits) {
@@ -1929,7 +1931,7 @@ func (st *rmClusterState) computeDocSubjectCos(idx *Index, a, b int32) float64 {
 				} else if ma.LineStart > mb.LineEnd {
 					gap = float64(ma.LineStart - mb.LineEnd - 1)
 				}
-				g += (1.0 - g) * math.Exp(-gap/(math.E*st.meanLineSpan))
+				g += (1.0 - g) * math.Exp(-gap/(eulerNumber*st.meanLineSpan))
 			}
 			if g > gain {
 				gain = g
@@ -1943,7 +1945,7 @@ func (st *rmClusterState) computeDocSubjectCos(idx *Index, a, b int32) float64 {
 		if st.hasCitationEdge(a, b) || st.hasCoCitationEdge(a, b) {
 			gain = 1
 		}
-		floor = invE * gain
+		floor = transmissionPerHop * gain
 	}
 	return st.subjRowView(a).CosineWithFloor(st.subjRowView(b), floor)
 }
@@ -1974,6 +1976,9 @@ func (s rmPackedOccurrenceSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 // maxPhraseSlotSpan 定义同句二元短语（dyad）索引的最大词槽跨度：
 // 相邻词槽距离为 1，中间最多允许隔 3 个修饰/功能词槽（总跨度 4），控制短语倒排体积 O(L*W)。
+// [calibrated] maxPhraseSlotSpan — slot-distance span (slots) of the intra-sentence
+// dyad window. A full sweep selected 4 as the only global resonance peak; widening or
+// narrowing it regresses. Recalibrate with the ATM paired arm.
 const maxPhraseSlotSpan = 4
 
 // hasWidePos 报告语料是否存在超出 16 位打包范围的宽 (句, 槽) 坐标：存在时
@@ -2352,7 +2357,7 @@ func buildEpisodeComponents(bucketTimes []int64, ordPos []int32, n int, meanGap,
 	}
 	tauEpisode := math.Expm1(muLogGap + sigLogGap)
 	if tauEpisode <= 0 {
-		tauEpisode = meanGap * math.E
+		tauEpisode = meanGap * eulerNumber
 	}
 	bucketEp := make([]int32, len(bucketTimes))
 	epID := int32(0)
@@ -2435,10 +2440,10 @@ func (st *rmClusterState) temporalAffinity(idx *Index, a, b int32) float64 {
 		oa, ob := st.ordPos[a], st.ordPos[b]
 		if oa >= 0 && ob >= 0 {
 			dk := math.Abs(float64(oa - ob))
-			kappaOrd := math.E * math.Sqrt(math.Max(1.0, float64(st.clusterN)/st.totalDaysM))
+			kappaOrd := eulerNumber * math.Sqrt(math.Max(1.0, float64(st.clusterN)/st.totalDaysM))
 			if dk > kappaOrd {
 				excessOrd := (dk - kappaOrd) / kappaOrd
-				worldAff *= math.Pow(1.0+excessOrd*excessOrd, -invE)
+				worldAff *= math.Pow(1.0+excessOrd*excessOrd, -transmissionPerHop)
 			}
 		}
 	}

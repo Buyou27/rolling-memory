@@ -57,6 +57,9 @@ const (
 	// verify-prepare 判定 manifest 与当前语料确定性失配（语料正文口径已更新等），
 	// prepare 据此进入 repair + 断点续灌自愈，而不是 fail-closed 把用户的准备动作卡死。
 	evalVerifyCodeManifestMismatch = "manifest_corpus_mismatch"
+	// evalVerifyCodeManifestIdentityMismatch 与引擎同源：manifest 由旧版本写入
+	// （endpoint / 身份 / 切词臂与现役客户端不同），复用不可能但可原地重灌自愈。
+	evalVerifyCodeManifestIdentityMismatch = "manifest_identity_mismatch"
 
 	// 官方 local-qa-judge (locomo-frozen-2026-10-11) 冻结协议原文与三枚 SHA1 钉
 	FrozenProtocolID   = "locomo-frozen-2026-10-11"
@@ -2239,6 +2242,22 @@ func validateEvalPrepareVerification(payload map[string]any, expectedScope strin
 	return nil
 }
 
+// evalVerifyFailureHealsByReingest 判定 verify 失效是否属于「本 store 的既有 manifest
+// 已不能支持复用，但按现役装配原地重灌即可自愈」的确定性失效：
+//   - manifest_corpus_mismatch：manifest 摘要/scope/条数与当前语料不符；
+//   - manifest_identity_mismatch：manifest 的端点/身份/切词臂与现役客户端不符
+//     （旧版本写下的库）。
+//
+// 其余失效（脉冲模式契约变更、健康检查失败、金库不可读、进程被杀）保持 fail-closed，
+// 绝不盲目重灌。
+func evalVerifyFailureHealsByReingest(code string) bool {
+	switch code {
+	case evalVerifyCodeManifestMismatch, evalVerifyCodeManifestIdentityMismatch:
+		return true
+	}
+	return false
+}
+
 func prepareLocalEvalStore(ctx context.Context, bin, home, suite, tier, storePath, dataDir, probeQuery string, atmUnits map[string]atmEvalUnit, rebuild bool) (EvalReadiness, error) {
 	mu := evalPreparationMutex(suite, storePath)
 	mu.Lock()
@@ -2250,11 +2269,10 @@ func prepareLocalEvalStore(ctx context.Context, bin, home, suite, tier, storePat
 			return readiness, nil
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			// 确定性语料失配（manifest 摘要/scope/条数与当前语料不符）：复用已不可能，
+			// 确定性失配（语料口径或 manifest 身份已过期）：复用已不可能，
 			// CLI 的 Prepare 走 repair + 断点续灌自愈重灌，继续本动作而非卡死。
-			// 其余失效（进程被杀/需 --rebuild 的契约变更）保持 fail-closed 不重灌。
 			var verifyErr *evalVerifyFailure
-			if !errors.As(err, &verifyErr) || verifyErr.code != evalVerifyCodeManifestMismatch {
+			if !errors.As(err, &verifyErr) || !evalVerifyFailureHealsByReingest(verifyErr.code) {
 				return readiness, fmt.Errorf("本地评测 prepare 失败，未触发重灌: %w", err)
 			}
 		}

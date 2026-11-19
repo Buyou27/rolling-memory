@@ -44,10 +44,10 @@ func TestBackgroundSyncSkipsSymlinkTargetOutsideMount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncBackgroundDirs: %v", err)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, secret); got != 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, secret); got != 0 {
 		t.Fatalf("external symlink target entered the index: %d", got)
 	}
-	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE abs_path = ?`, inside); got == 0 {
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_chunks WHERE abs_path = ?`, inside); got == 0 {
 		t.Fatalf("inside symlink target was not indexed")
 	}
 	sawOutsideSkip := false

@@ -47,7 +47,7 @@ Web 管理控制台左侧导航栏按职能划分为七个一级频道，日常�
 | 1 | **控制台** (`dashboard`) | `实时控制台` · `记忆控制台` (`/#/admin/dashboard/artifacts`) · `ROI 监控屏` · `记忆图谱` | 基于零轮询 WebSocket 实时流的引擎遥测与 5 组 ECharts 图表、独立记忆控制台（100% 向量无关与 LLM 无关的本地记忆引擎连接状态、本地明文金库遥测与运行开关）、记忆 ROI 与认知效能监控台（1 小时 / 24 小时 / 7 天 / 30 天 / 全量五档监控窗，实测 L3 认知结晶与跨层引证转化、跨会话记忆复用倍数、`tokenz-r` 分形干句提纯预算、零拷贝指针占比、多工作区冷热覆盖矩阵与金牌高复用记忆榜），以及基于 Web Worker 力导向与碰撞检测、从真实本地金库生成的交互式记忆图谱（零轮询 WebSocket 实时流自动刷新；词 / 短语 / 簇 / 游离单元——见 §2.6） |
 | 2 | **记忆管理** (`plugin/rolling-memory`) | `检索调试` · `记忆总览` · `L1 文档与代码` · `L2 会话记录` · `L3 检索沉淀` | **检索调试**与 Agent 走同一条 `recall` 链路：可选工作区锚（同项目证据排前、其他结果不删）、「最近 Agent 检索」一键重放，默认只读（不写入 L3）；三层页面分别浏览挂载目录分块、Harness 会话记录与 Agent 检索沉淀，支持多维筛选、原文切片溯源与删除，L3 行可「在调试台重放」 |
 | 3 | **评测** (`plugin/rolling-memory/eval-dir`) | `评测实验室` · `剑桥 ATM-Bench 榜单` · `LoCoMo-Backboard 榜单` | 剑桥 ATM-Bench（`--suite atm`，`hard / 1013` 第一主基准）与 LoCoMo（`200 / 1540` 对照参照）本地复现与在线评测；两张独立榜单页分别展示剑桥大学 ATM-Bench 多模态个人记忆主榜单（官方 `Recall@10` 口径、Main-1013 / Hard-31 双 Tab）与密码学锁定的 `locomo-backboard` 对照榜单 |
-| 4 | **帮助中心** (`help`) | `帮助与文档` · `仓库与声明` | 独立文档模块，直接对接 `docs/zh-CN/` 与 `docs/` 全套双语技术文档、根级 `DECLARATION.md` 诚实免责声明与 `LICENSE` 许可协议 |
+| 4 | **帮助中心** (`help`) | `帮助与文档` | 官方文档入口：在新标签页打开 GitHub 或 Gitee 仓库文档；控制台不再内置本地副本 |
 | 5 | **权限管理** (`auth`) | `角色组管理` · `管理员管理` · `菜单规则管理` · `管理员日志管理` | RBAC 权限树、菜单规则与操作日志审计 |
 | 6 | **常规管理** (`routine`) | `系统配置` · `个人资料` | 站点基础参数与管理员个人资料配置 |
 | 7 | **插件** (`plugin-center`) | `插件管理` · `仓库来源` · `插件清单` | 宿主插件生命周期管理（安装/启用/停用/卸载）、`local`/`http`/`git` 仓库来源配置与清单同步预演 |
@@ -114,6 +114,7 @@ Web 管理控制台左侧导航栏按职能划分为七个一级频道，日常�
 在 **`记忆管理 -> 记忆总览`**（`/#/admin/plugin/rolling-memory/index`）与 **`控制台 -> 记忆控制台`**（`/#/admin/dashboard/artifacts`）顶部操作栏均内置了 **「版本与在线更新 (Version & Update)」** 入口：
 
 - **打开窗口零外呼**：打开弹窗仅读取本机三项核心组件（`rolling-memory` CLI 引擎核、`rolling-admin` 控制台后端、`web-dist.tar.gz` 前端静态资源）的本地 SHA-256 指纹，不发起任何外部网络请求。
+- **更新源选择**：弹窗提供 **GitHub（官方）**、**Gitee（大陆镜像）** 与 **自定义镜像**。选择 GitHub 或 Gitee 会保存 `update.source`，CLI 与后台检查复用同一选择；自定义镜像用于本次填写的 URL。Gitee 上只有标签、没有附带二进制时，会如实显示“仅源码更新”，而不是给出无法成功的下载按钮。
 - **按需比对远端 `SHA256SUMS` 清单**：仅当用户主动点击 **「检查更新」** 时，才从官方发布渠道（或弹窗内填写的自定义镜像源 URL）获取 `SHA256SUMS`，以表格逐项展示本地与远端 SHA-256 指纹对比及待更新状态。
 - **一键安全升级与平滑热重启**：点击 **「立即安全升级」** 即通过 SHA-256 强校验原位替换有更新的组件、自动刷新本机 AI 宿主接线，并在后台平滑重启控制台服务后自动刷新浏览器界面；全过程绝不修改或覆盖本地 SQLite 明文金库（`memory.db`）。
 
@@ -147,9 +148,11 @@ Web 管理控制台左侧导航栏按职能划分为七个一级频道，日常�
 
 ---
 
-## 4. 帮助中心与 `docs/` 多语种文档映射
+## 4. 帮助中心：官方文档入口
 
-后台「帮助中心」频道直接加载仓库（[`https://github.com/rocareer/rolling-memory`](https://github.com/rocareer/rolling-memory)）根目录与 `docs/zh-CN/`、`docs/` 下的真实全文，切换后台语言时自动切换对应语种文档：
+后台「帮助中心」频道是一个轻量入口：点开「帮助与文档」会弹出 GitHub / Gitee 站点选择，选择后在新标签页打开官方仓库的 `docs/` 目录。控制台不再内置 Markdown 副本，因此读到的内容始终与已发布源码一致：[`https://github.com/rocareer/rolling-memory`](https://github.com/rocareer/rolling-memory) · [`https://gitee.com/rocareer/Rolling-Memory`](https://gitee.com/rocareer/Rolling-Memory)。
+
+完整文档随仓库提供：
 
 - **根级总览与合规声明**：[`README.zh-CN.md`](README.zh-CN.md) · [`README.md`](../../README.md) · [`DECLARATION.md`](DECLARATION.md) · [`LICENSE`](../../LICENSE) · [`NOTICE`](../../NOTICE) · [`CHANGELOG.md`](../../CHANGELOG.md)
 - **核心架构与接口文档（简体中文 `docs/zh-CN/` · 英文 `docs/`）**：[`token-economics.md`](token-economics.md) · [`background-vs-grep.md`](background-vs-grep.md) · [`faq.md`](faq.md) · [`mcp.md`](mcp.md) · [`harness.md`](harness.md) · [`usb-portable.md`](usb-portable.md) · [`benchmarks.md`](benchmarks.md) · [`privacy.md`](privacy.md) · [`plugin-console.md`](plugin-console.md)

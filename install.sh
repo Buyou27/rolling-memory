@@ -5,7 +5,7 @@
 # install.sh — One-line installer for Rolling-Memory (macOS / Linux).
 #
 # Usage:
-#   bash install.sh [--with-hooks] [--with-instructions]
+#   bash install.sh [--with-hooks] [--with-instructions] [--ref <tag>]
 #   curl -fsSL https://github.com/rocareer/rolling-memory/raw/main/install.sh | bash
 set -euo pipefail
 
@@ -29,6 +29,37 @@ case "${release_base}" in off|none|0) release_base="" ;; esac
 case "${release_mirror}" in off|none|0) release_mirror="" ;; esac
 INSTALL_DIR="${ROLLING_MEMORY_INSTALL_DIR:-${HOME}/.local/share/rolling-memory/bin}"
 LINK_DIR="${ROLLING_MEMORY_LINK_DIR:-${HOME}/.local/bin}"
+source_ref="${ROLLING_MEMORY_SOURCE_REF:-}"
+install_args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --ref)
+      if [ "$#" -lt 2 ]; then
+        echo "install.sh: --ref requires a tag" >&2
+        exit 2
+      fi
+      source_ref="$2"
+      shift 2
+      ;;
+    --ref=*)
+      source_ref="${1#*=}"
+      shift
+      ;;
+    *)
+      install_args+=("$1")
+      shift
+      ;;
+  esac
+done
+case "${source_ref}" in
+  -* )
+    echo "install.sh: invalid --ref value: ${source_ref}" >&2
+    exit 2
+    ;;
+esac
+if [ -n "${source_ref}" ]; then
+  release_base=""
+fi
 
 rm_download() {
   local url="$1" dest="$2"
@@ -67,14 +98,23 @@ TARGET_BIN="${INSTALL_DIR}/rolling-memory"
 
 built=0
 prebuilt_err=""
+install_method=""
+install_ref=""
+install_commit=""
+install_asset=""
+prebuilt_version=""
+DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/rolling-memory"
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
-if [ -n "${SCRIPT_ROOT}" ] && [ -f "${SCRIPT_ROOT}/cmd/rolling-memory/main.go" ] && command -v go >/dev/null 2>&1; then
+if [ -z "${source_ref}" ] && [ -n "${SCRIPT_ROOT}" ] && [ -f "${SCRIPT_ROOT}/cmd/rolling-memory/main.go" ] && command -v go >/dev/null 2>&1; then
   echo "[rolling-memory] Building from local checkout (${SCRIPT_ROOT})..."
   tmp="${TARGET_BIN}.tmp.$$"
   (cd "${SCRIPT_ROOT}" && CGO_ENABLED=0 go build -trimpath -o "${tmp}" ./cmd/rolling-memory)
   chmod 0755 "${tmp}"
   mv -f "${tmp}" "${TARGET_BIN}"
   built=1
+  install_method="local"
+  install_ref="$(git -C "${SCRIPT_ROOT}" describe --tags --always 2>/dev/null || true)"
+  install_commit="$(git -C "${SCRIPT_ROOT}" rev-parse HEAD 2>/dev/null || true)"
 fi
 
 # try_download_prebuilt fetches SHA256SUMS and the platform binary from a given
@@ -116,6 +156,11 @@ try_download_prebuilt() {
   fi
   chmod 0755 "${tmp}"
   mv -f "${tmp}" "${TARGET_BIN}"
+  prebuilt_version=""
+  if rm_download "${base_url%/}/VERSION" "${tmp}.ver" 2>/dev/null; then
+    prebuilt_version="$(tr -d '\r\n' < "${tmp}.ver")"
+    rm -f "${tmp}.ver"
+  fi
   return 0
 }
 
@@ -139,6 +184,9 @@ if [ "${built}" -eq 0 ] && [ -n "${release_base}" ]; then
     try_download_prebuilt "${release_base}" "${asset}" || rc=$?
     if [ "${rc}" -eq 0 ]; then
       built=1
+      install_method="release"
+      install_asset="${asset}"
+      install_ref="${prebuilt_version:-unknown}"
     elif [ "${rc}" -eq 3 ]; then
       echo "install.sh: ${prebuilt_err}; refusing the prebuilt channel (retry later, or build from a checkout of ${REPO_URL})" >&2
       exit 1
@@ -160,6 +208,9 @@ if [ "${built}" -eq 0 ] && [ -n "${release_base}" ]; then
         try_download_prebuilt "${release_mirror}" "${asset}" || rc_mirror=$?
         if [ "${rc_mirror}" -eq 0 ]; then
           built=1
+          install_method="release"
+          install_asset="${asset}"
+          install_ref="${prebuilt_version:-unknown}"
         elif [ "${rc_mirror}" -eq 3 ]; then
           echo "install.sh: ${prebuilt_err}; refusing the mirror channel" >&2
           exit 1
@@ -179,13 +230,18 @@ fi
 if [ "${built}" -eq 0 ] && command -v go >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
   tmp_repo="$(mktemp -d "${TMPDIR:-/tmp}/rm-src.XXXXXX")"
   trap 'rm -rf "${tmp_repo}"' EXIT
-  echo "[rolling-memory] Cloning ${REPO_URL} and building..."
-  if ! git clone --depth 1 "${REPO_URL}" "${tmp_repo}"; then
+  echo "[rolling-memory] Cloning ${REPO_URL}${source_ref:+ at ${source_ref}} and building..."
+  if [ -n "${source_ref}" ]; then
+    clone_args=(--depth 1 --branch "${source_ref}")
+  else
+    clone_args=(--depth 1)
+  fi
+  if ! git clone "${clone_args[@]}" "${REPO_URL}" "${tmp_repo}"; then
     if [ -n "${REPO_MIRROR_URL}" ] && [ "${REPO_URL}" = "${DEFAULT_REPO_URL}" ]; then
       echo "[rolling-memory] Primary source unavailable; retrying mirror ${REPO_MIRROR_URL}..." >&2
       rm -rf "${tmp_repo}"
       mkdir -p "${tmp_repo}"
-      git clone --depth 1 "${REPO_MIRROR_URL}" "${tmp_repo}"
+      git clone "${clone_args[@]}" "${REPO_MIRROR_URL}" "${tmp_repo}"
     else
       echo "install.sh: failed to clone ${REPO_URL}" >&2
       exit 1
@@ -195,6 +251,9 @@ if [ "${built}" -eq 0 ] && command -v go >/dev/null 2>&1 && command -v git >/dev
   (cd "${tmp_repo}" && CGO_ENABLED=0 go build -trimpath -o "${tmp}" ./cmd/rolling-memory)
   chmod 0755 "${tmp}"
   mv -f "${tmp}" "${TARGET_BIN}"
+  install_method="source"
+  install_ref="${source_ref:-$(git -C "${tmp_repo}" describe --tags --always 2>/dev/null || true)}"
+  install_commit="$(git -C "${tmp_repo}" rev-parse HEAD 2>/dev/null || true)"
   if [ -f "${tmp_repo}/evaldata/MANIFEST.json" ] && [ ! -e "${HOME}/.local/share/rolling-memory/evaldata/MANIFEST.json" ]; then
     mkdir -p "${HOME}/.local/share/rolling-memory"
     cp -R "${tmp_repo}/evaldata" "${HOME}/.local/share/rolling-memory/evaldata" 2>/dev/null || true
@@ -218,64 +277,124 @@ fi
 
 ln -sf "${TARGET_BIN}" "${LINK_DIR}/rolling-memory"
 ln -sf "${TARGET_BIN}" "${LINK_DIR}/rmem"
+mkdir -p "${DATA_DIR}"
+printf '{"method":"%s","repo":"%s","ref":"%s","commit":"%s","asset":"%s","installed_at":"%s"}\n' \
+  "${install_method:-unknown}" "${REPO_URL}" "${install_ref:-unknown}" "${install_commit:-}" "${install_asset:-}" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${DATA_DIR}/install.json"
 echo "[rolling-memory] Installed binary to ${TARGET_BIN} (linked in ${LINK_DIR})"
+
+path_block_posix() {
+  printf '\n# >>> rolling-memory PATH >>>\n'
+  printf 'export PATH="%s:$PATH"\n' "${LINK_DIR}"
+  printf '# <<< rolling-memory PATH <<<\n'
+}
+
+path_block_fish() {
+  printf '\n# >>> rolling-memory PATH >>>\n'
+  printf 'if not contains "%s" $PATH\n' "${LINK_DIR}"
+  printf '    set -gx PATH "%s" $PATH\n' "${LINK_DIR}"
+  printf 'end\n'
+  printf '# <<< rolling-memory PATH <<<\n'
+}
+
+# A bash login shell reads the first of .bash_profile / .bash_login / .profile
+# and only then runs an interactive shell; creating .bash_profile beside an
+# existing .profile would silently shadow it.
+bash_login_profile() {
+  local candidate
+  for candidate in "${HOME}/.bash_profile" "${HOME}/.bash_login" "${HOME}/.profile"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s\n' "${HOME}/.bash_profile"
+}
 
 ensure_path_in_profile() {
   [ "${ROLLING_MEMORY_NO_MODIFY_PATH:-0}" = "1" ] && return 0
-  local profile="" shell_name
+  local fish_config shell_name syntax="posix" target touched=0 written=0
+  fish_config="${XDG_CONFIG_HOME:-${HOME}/.config}/fish/config.fish"
   shell_name="$(basename "${SHELL:-}")"
   case "${shell_name}" in
-    zsh)  profile="${HOME}/.zshrc" ;;
+    zsh)
+      set -- "${HOME}/.zshrc"
+      ;;
     bash)
-      if [ -f "${HOME}/.bashrc" ]; then
-        profile="${HOME}/.bashrc"
-      else
-        profile="${HOME}/.bash_profile"
-      fi
+      set -- "$(bash_login_profile)" "${HOME}/.bashrc"
+      ;;
+    fish)
+      set -- "${fish_config}"
+      syntax="fish"
       ;;
     *)
       if [ -f "${HOME}/.zshrc" ]; then
-        profile="${HOME}/.zshrc"
-      elif [ -f "${HOME}/.bashrc" ]; then
-        profile="${HOME}/.bashrc"
+        set -- "${HOME}/.zshrc"
+      elif [ -f "${HOME}/.bashrc" ] || [ -f "${HOME}/.bash_profile" ] || [ -f "${HOME}/.bash_login" ] || [ -f "${HOME}/.profile" ]; then
+        set -- "$(bash_login_profile)" "${HOME}/.bashrc"
+      elif [ -f "${fish_config}" ]; then
+        set -- "${fish_config}"
+        syntax="fish"
       else
-        profile="${HOME}/.profile"
+        set -- "${HOME}/.profile"
       fi
       ;;
   esac
-  [ -z "${profile}" ] && return 0
-  if [ -f "${profile}" ] && grep -Fq "${LINK_DIR}" "${profile}" 2>/dev/null; then
+  for target in "$@"; do
+    if [ -f "${target}" ] && grep -Fq "${LINK_DIR}" "${target}" 2>/dev/null; then
+      touched=1
+      continue
+    fi
+    mkdir -p "$(dirname "${target}")" 2>/dev/null || continue
+    if [ "${syntax}" = "fish" ]; then
+      ( path_block_fish >> "${target}" ) 2>/dev/null || continue
+    else
+      ( path_block_posix >> "${target}" ) 2>/dev/null || continue
+    fi
+    touched=1
+    written=$((written + 1))
+    echo "[rolling-memory] Added ${LINK_DIR} to ${target}"
+  done
+  if [ "${touched}" -eq 0 ]; then
+    echo "[rolling-memory] Could not update the shell profile automatically; add this line to it:" >&2
+    if [ "${syntax}" = "fish" ]; then
+      echo "    fish_add_path \"${LINK_DIR}\"" >&2
+    else
+      echo "    export PATH=\"${LINK_DIR}:\$PATH\"" >&2
+    fi
     return 0
   fi
-  {
-    printf '\n# >>> rolling-memory PATH >>>\n'
-    printf 'export PATH="%s:$PATH"\n' "${LINK_DIR}"
-    printf '# <<< rolling-memory PATH <<<\n'
-  } >> "${profile}" 2>/dev/null || return 0
-  echo "[rolling-memory] Added ${LINK_DIR} to ${profile} (open a new terminal or run: export PATH=\"${LINK_DIR}:\$PATH\")"
+  if [ "${written}" -gt 0 ]; then
+    if [ "${syntax}" = "fish" ]; then
+      echo "[rolling-memory] Open a new terminal, or run now: fish_add_path \"${LINK_DIR}\""
+    else
+      echo "[rolling-memory] Open a new terminal, or run now: export PATH=\"${LINK_DIR}:\$PATH\""
+    fi
+    echo "[rolling-memory] Then confirm with: rolling-memory --version"
+  fi
 }
 
+# Idempotent by design: run it even when the directory is already on PATH, so a
+# transient export from an earlier attempt still ends up in the shell profile.
 case ":${PATH}:" in
   *":${LINK_DIR}:"*) ;;
-  *)
-    export PATH="${LINK_DIR}:${PATH}"
-    ensure_path_in_profile
-    ;;
+  *) export PATH="${LINK_DIR}:${PATH}" ;;
 esac
+ensure_path_in_profile
 
 "${TARGET_BIN}" init --write-config >/dev/null 2>&1 || true
 
 install_err="$(mktemp "${TMPDIR:-/tmp}/rm-install-err.XXXXXX")"
 # Default wiring is skill + MCP (+ instructions); hooks are an explicit
 # --with-hooks opt-in and are never wired by the default install path.
-if [ "$#" -eq 0 ]; then
+if [ "${#install_args[@]}" -eq 0 ]; then
   set +e
   "${TARGET_BIN}" install 2>"${install_err}"
   install_rc=$?
   set -e
 else
   set +e
-  "${TARGET_BIN}" install "$@" 2>"${install_err}"
+  "${TARGET_BIN}" install "${install_args[@]}" 2>"${install_err}"
   install_rc=$?
   set -e
 fi

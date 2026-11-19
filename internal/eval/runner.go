@@ -214,7 +214,9 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 		defer engine.CloseGeneration(context.Background(), logf)
 		// Prepare 可能已把引擎绑定到本次评测自己的世代 scope：provenance 一律以绑定后的真值为准。
 		opts.Scope = engine.Scope
-		inserted := len(documents)
+		// inserted = 真实写入数（全量重灌 = 语料规模；断点续灌/正文自愈重灌 = 实际补灌数；
+		// 复用 = 0），不得用语料规模冒充。
+		inserted := prepared.InsertedUnits
 		if prepared.Reused {
 			inserted = 0
 		}

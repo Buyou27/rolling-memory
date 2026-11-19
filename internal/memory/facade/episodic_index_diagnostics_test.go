@@ -62,10 +62,10 @@ func TestLocalRecallEpisodicIndexDiagnostics(t *testing.T) {
 		hit      bool
 	}{
 		{name: "compatible", want: map[string]int{"compatible": 1, "missing": 0, "incompatible": 0, "corrupt": 0, "needs_rebuild": 0}, hit: true},
-		{name: "missing", mutation: `DELETE FROM thin_vault_episodic_index`, want: map[string]int{"compatible": 0, "missing": 1, "incompatible": 0, "corrupt": 0, "needs_rebuild": 0}, gap: 1},
-		{name: "incompatible", mutation: `UPDATE thin_vault_episodic_index SET codec_key = x'01'`, want: map[string]int{"compatible": 0, "missing": 0, "incompatible": 1, "corrupt": 0, "needs_rebuild": 0}, gap: 1},
-		{name: "corrupt", mutation: `UPDATE thin_vault_episodic_index SET payload = x'00'`, want: map[string]int{"compatible": 0, "missing": 0, "incompatible": 0, "corrupt": 1, "needs_rebuild": 0}, gap: 1},
-		{name: "needs_rebuild", mutation: `UPDATE thin_vault_episodic_index SET content_digest = NULL`, want: map[string]int{"compatible": 0, "missing": 0, "incompatible": 0, "corrupt": 0, "needs_rebuild": 1}, gap: 1},
+		{name: "missing", mutation: `DELETE FROM rm_episodic_index`, want: map[string]int{"compatible": 0, "missing": 1, "incompatible": 0, "corrupt": 0, "needs_rebuild": 0}, gap: 1},
+		{name: "incompatible", mutation: `UPDATE rm_episodic_index SET codec_key = x'01'`, want: map[string]int{"compatible": 0, "missing": 0, "incompatible": 1, "corrupt": 0, "needs_rebuild": 0}, gap: 1},
+		{name: "corrupt", mutation: `UPDATE rm_episodic_index SET payload = x'00'`, want: map[string]int{"compatible": 0, "missing": 0, "incompatible": 0, "corrupt": 1, "needs_rebuild": 0}, gap: 1},
+		{name: "needs_rebuild", mutation: `UPDATE rm_episodic_index SET content_digest = NULL`, want: map[string]int{"compatible": 0, "missing": 0, "incompatible": 0, "corrupt": 0, "needs_rebuild": 1}, gap: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,7 +103,7 @@ func TestLocalRecallEpisodicIndexDiagnostics(t *testing.T) {
 				t.Fatalf("delivered hit = %v, want %v: %+v", got, tt.hit, result)
 			}
 			var noetic int
-			if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_noetic`).Scan(&noetic); err != nil || noetic != 0 {
+			if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_noetic`).Scan(&noetic); err != nil || noetic != 0 {
 				t.Fatalf("recall wrote L3: count=%d err=%v", noetic, err)
 			}
 		})
@@ -130,7 +130,7 @@ func TestLocalRecallIndexSchemaFailurePrecedesDiagnostics(t *testing.T) {
 	if _, err := memory.ThinClient(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.Store.DB().Exec(`ALTER TABLE thin_vault_episodic_index RENAME COLUMN content_digest TO hidden_digest`); err != nil {
+	if _, err := memory.Store.DB().Exec(`ALTER TABLE rm_episodic_index RENAME COLUMN content_digest TO hidden_digest`); err != nil {
 		t.Fatal(err)
 	}
 	result, err := memory.Recall(facade.RecallRequest{Cue: "quartz nebula", NoCrystallize: true})

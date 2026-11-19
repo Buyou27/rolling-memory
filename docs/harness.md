@@ -188,6 +188,8 @@ exec "<absolute>/bin/rolling-memory" "$@"
 
 ## 9. Online Self-Update & Vault Safety (`rolling-memory update`)
 
+> For the full installation, channel policy, breaking-change and rollback guide, see [install-upgrade.md](install-upgrade.md).
+
 End users can keep the CLI binary, the local web console, and all wired harness integrations up to date without `git` or a Go toolchain via `rolling-memory update` (aliased as `rolling-memory upgrade`):
 
 ```bash
@@ -205,14 +207,66 @@ rolling-memory update --release-base https://mirror.example.com/rolling-memory/r
 
 # 5. Machine-readable JSON output for scripts or admin tooling
 rolling-memory update --check --json
+
+# 6. Resolve only the newest tag (no artifact download or digest comparison)
+rolling-memory update --check --tags-only
+
+# 7. Optional user-level periodic check: cache refresh + desktop notification only
+rolling-memory update --schedule install
+rolling-memory update --schedule status
+rolling-memory update --schedule remove
 ```
 
+- **Version Check vs Installability**: `update --check` reports `update_available` from the newest tag and `installable` from the release channel's `SHA256SUMS`. A tag without attached binaries is a valid new version with `installable=false`; the console then explains the source-update path instead of offering a broken download.
+- **Update Source**: `update.source` selects `github` (official GitHub Releases, default) or `gitee` (the Gitee mirror for networks that reach Gitee faster). Choose it in the console's Version & Update dialog, save it with `rmem config set update.source gitee`, or override one run with `rmem update --source gitee`. An explicit `--release-base` URL or `ROLLING_MEMORY_RELEASE_BASE` still wins. Gitee tags without attached binaries are reported as source-only updates, with a source rebuild hint that points at the Gitee repository.
+- **Background Version Awareness**: the console receives the cached version snapshot over its local real-time channel as soon as it connects; the backend refreshes a stale snapshot once and pushes the result back over the same connection. There is no frontend polling. CLI `status` and `doctor` read the same cache without a network request. An MCP session refreshes a stale cache in the background, so users who only work through an agent see the new version on the next console visit or status call.
+- **Long Absence**: the cache keeps the last result (six hours fresh, thirty minutes after a failure). When the console, an MCP session, or a CLI command runs again after a longer gap, the cache is refreshed automatically; the console's first frame already carries the last known result and updates in place when the refresh completes. If no Rolling Memory process runs at all, no client can discover an update; install a periodic `rolling-memory update --check --tags-only` job with your OS scheduler to keep the cache fresh, and pair it with your scheduler's notification action if you need an alert while the product is idle.
+- **Source Installations**: if the installation is source-based or a local build, the console marks the release as source-only when the channel has no matching binary and shows the tag-based update command instead of enabling the one-click updater. Prebuilt installations keep the existing SHA-256 verified in-place update.
+- **Update Channels**: `dev` (default) tracks the latest commit on `main`; `stable` accepts published non-prerelease tags only; `beta` also accepts prerelease tags. Set the preference with `rolling-memory config set update.channel beta` (or `ROLLING_MEMORY_UPDATE_CHANNEL=beta`), switch it in the console's Version & Update dialog, or override one check with `rolling-memory update --check --channel dev`. The scheduled check follows the saved preference. `dev` never replaces a binary automatically: it reports `main@<commit>` and requires a source rebuild (`ROLLING_MEMORY_SOURCE_REF=main bash install.sh`).
+- **OS-Level Periodic Check**: `rolling-memory update --schedule install` registers a user-level launchd agent (macOS), systemd user timer (Linux), or Windows Task Scheduler entry that runs the check every six hours. It only refreshes the shared cache and sends a desktop notification for a new tag; it never installs an update. `--schedule status` reports the registration and `--schedule remove` removes it.
+- **Source Tag Rebuild**: source installs can rebuild from a specific tag with `ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh` (or `bash install.sh --ref v0.0.6`). On Windows use `powershell -ExecutionPolicy Bypass -File install.ps1 --ref v0.0.6`. The installer clones that tag, builds the CLI, and records the source provenance; it does not overwrite the vault.
+- **Automatic-Check Controls**: set `ROLLING_MEMORY_UPDATE_CHECK=off` to disable background checks, or `ROLLING_MEMORY_UPDATE_API_BASE` to use an enterprise mirror for tag discovery. `update --check` remains available explicitly.
 - **Fail-Closed SHA-256 Verification**: Downloaded artifacts are checked against the release channel's `SHA256SUMS` before replacing local files; a digest mismatch aborts the update.
 - **Local Daemon Safety**: A shared local daemon can be controlled only after its user, identity, and configuration are verified. An old or unverifiable daemon is not stopped automatically; requests that cannot verify it return an error. If a request fails after being sent, it is not automatically retried. The shared daemon assumes a trusted local user and does not protect against arbitrary code running as that same user.
 - **Vault Safety Guarantee**: Updating never modifies, truncates, or overwrites your local SQLite memory vault (`~/.local/share/rolling-memory/memory.db`); schema migrations are applied idempotently in place when the database is opened.
 - **Zero-Environment Design (No Git / Go / Node.js / Python Required)**:
   - Both `install.sh` and `install.ps1` fetch prebuilt static binaries verified against `SHA256SUMS` (supporting `curl` or `wget` on POSIX, native x64 and ARM64 on Windows, and automatic release-mirror fallback when the primary channel is unreachable).
-  - The installer automatically and idempotently adds `~/.local/bin` (or `%LOCALAPPDATA%\rolling-memory\bin` on Windows) to your user shell profile / `PATH` (set `ROLLING_MEMORY_NO_MODIFY_PATH=1` to opt out).
+  - The installer adds `~/.local/bin` (or `%LOCALAPPDATA%\rolling-memory\bin` on Windows) to your user `PATH`, idempotently and inside a marked block: zsh edits `~/.zshrc`, bash covers both its login profile and `~/.bashrc`, fish edits `~/.config/fish/config.fish`, and Windows writes the user-level `PATH` registry value. Set `ROLLING_MEMORY_NO_MODIFY_PATH=1` to opt out; if a profile cannot be written, the installer prints the exact `export PATH=...` line to add by hand.
   - The local Web Console (`rolling-memory panel`) serves its static frontend directly from the Go binary (`--serve-web`), requiring neither Node.js nor Python on the user's machine. Pass `--desktop-shortcut` to `rolling-memory install` to create a double-clickable desktop launcher.
+
+**If `rolling-memory` is missing in a terminal that is already open**: the `PATH` entry only applies to shells started after installation, and the installer prints the same reminder whenever it writes a profile. Copy the line for your shell, then confirm with `rolling-memory --version`:
+
+```bash
+# bash / zsh
+export PATH="$HOME/.local/bin:$PATH"
+rolling-memory --version
+```
+
+```fish
+# fish
+fish_add_path ~/.local/bin
+rolling-memory --version
+```
+
+```powershell
+# Windows — reopen the window, or update the current session only
+$env:Path = "$env:LOCALAPPDATA\rolling-memory\bin;$env:Path"
+rolling-memory --version
+```
+
+## 10. Upgrading from an Older Version
+
+Replacing an older build does not require uninstalling it or re-importing memories:
+
+1. **Stop the consumers.** Quit the desktop app and any agent session that is using the memory tool. The updater stops the shared local daemon itself.
+2. **Replace the program.** Run `rolling-memory update`, re-run `install.sh` / `install.ps1`, or replace the application bundle. The binary is swapped in place and the host wiring is refreshed; installed harness configuration files are backed up first.
+3. **Reopen the host application.** Sessions that were already running keep the old process; new sessions launch the new build.
+4. **Verify.** `rolling-memory doctor --json` reports paths and integrity, and `rolling-memory status` reports the vault and mode.
+
+Schema and index updates run the first time the upgraded build opens the vault, not while the files are being replaced. The build applies them idempotently in place, so existing memories stay attached to the same vault file. A large vault can take several minutes; do not interrupt it.
+
+For a vault that matters, keep a copy before upgrading: stop the daemon, run SQLite `.backup`, and preserve the referenced transcripts and mounted directories. A snapshot contains the same private content as the vault and needs the same protection.
+
+If an upgrade cannot finish, do not delete the database; retry with the current build, or restore the pre-upgrade copy. Do not open the vault with an older build: a build refuses a vault written by a newer schema.
 
 

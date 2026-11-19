@@ -456,13 +456,13 @@ leaderboard:
     card2Body: ① 答题 System 摘要 0d591628…；② 判官 System 摘要 497f7892…；③ 判官 User 模板摘要 38f9b6a1…（1,694 字节）。每次运行前自动执行协议摘要核验，防止提示词漂移。
     card3Title: 3. 历史架构对照：LLM + 向量重型路线（92.79%）
     card3Tag: 历史成绩 · 早期重型架构
-    card3Body: 历史成绩：我方早期重型架构（LLM 抽取 + 向量检索 + 图/关系增强）在 LoCoMo 1,540 题全量上的存档读数：总分 92.79%（GPT-4.1 temp 0.1 判官；单跳 89.10%、多跳 88.40%、开放域 81.30%、时序 94.40%、证据命中 98.90%）。该路线不再提供；现行引擎为 0-Vector / 0-LLM 本机确定性检索（最新 1,540 全量 85.26%，见榜单我方行）。
+    card3Body: 历史成绩：我方早期重型架构（LLM 抽取 + 向量检索 + 图/关系增强）在 LoCoMo 1,540 题全量上的存档读数：总分 92.79%（GPT-4.1 temp 0.1 判官；单跳 89.10%、多跳 88.40%、开放域 81.30%、时序 94.40%、证据命中 98.90%）。该路线不再提供；现行检索核为 0-Vector / 0-LLM 本机确定性检索；端到端 1,540 全量 85.26% 由 LLM 答器+判官在 Top-96 交付上评出（见榜单我方行）。
     kpi1Label: '评测协议 & 参照榜单'
     kpi1Value: 'locomo-backboard'
     kpi1Sub: '冻结协议栈 locomo-frozen-2026-10-11 · 三钉校验'
     kpi2Label: '最新 1,540 全量成绩（本机实测）'
     kpi2Value: '85.26%（1313/1540）'
-    kpi2Sub: '0-Vector · 0-LLM · deepseek-v4.1-flash 判官 · 2026-11-16'
+    kpi2Sub: '0-Vector/0-LLM 检索核 · LLM 答器+判官 · Top-96 · 2026-11-16'
     kpi3Label: '单跳 / 时序 / 多跳分项'
     kpi3Value: '91.0% / 87.2% / 70.6%'
     kpi3Sub: 'Cat 4 单跳 90.96% · Cat 2 时序 87.23% · Cat 1 多跳 70.57% · Cat 3 开放域 71.88%'
@@ -543,6 +543,7 @@ recall:
 
 systemUpdate:
     openBtn: 版本与在线更新
+    globalBadge: 发现新版本，点击查看并更新
     dialogTitle: 版本与在线安全更新（SHA-256 强校验 · 免 Git）
     safetyNotice: 打开本窗口仅读取本地文件 SHA-256 指纹（零网络请求）；仅在点击「检查更新」或「立即升级」时按需请求发布渠道。升级只替换二进制、前端静态资源与宿主接线，绝不修改或覆盖您的本地 SQLite 明文金库（memory.db）。
     currentVerLbl: 当前版本
@@ -550,8 +551,22 @@ systemUpdate:
     notCheckedYet: 未检查（点击下方「检查更新」）
     upToDateTag: 已是最新
     updateAvailTag: 发现可用更新
+    updateSourceLbl: 更新源
+    sourceGithub: GitHub（官方）
+    sourceGitee: Gitee（大陆镜像）
+    sourceCustom: 自定义镜像
+    sourceHintGithub: 使用 GitHub Releases 官方渠道
+    sourceHintGitee: 使用 Gitee 镜像渠道；未附带预编译包时按源码方式更新
+    sourceHintCustom: 使用下方填写的镜像 URL
+    updateChannelLbl: 更新通道
+    channelStable: 稳定版（仅正式发布）
+    channelBeta: 测试版（含预发布标签）
+    channelDev: 开发版（main 最新提交）
+    channelHintStable: 只接受正式发布标签
+    channelHintBeta: 接受预发布标签；仍走发布资产校验
+    channelHintDev: 跟踪 main 最新提交；发布版安装需先做一次源码基线，之后需源码重建，不会自动替换二进制
     channelLbl: 发布渠道 / 镜像源 URL
-    channelPlaceholder: 默认官方 GitHub Releases 渠道（可填自定义镜像 URL）
+    channelPlaceholder: 默认使用所选更新源（自定义时填写镜像 URL）
     compCol: 组件名称
     assetCol: 发布资产 / 本地路径
     localShaCol: 本地 SHA-256 指纹
@@ -571,6 +586,16 @@ systemUpdate:
     cliHintTitle: 命令行等价操作（终端随时可用）：
     checkSuccessUpToDate: 当前所有组件均已是最新版本（SHA-256 指纹完全一致）
     checkSuccessAvail: 检测到可用更新，点击「立即安全升级」即可原位替换
+    checkSuccessSourceOnly: 发现新版本，但当前发布渠道没有该版本的预编译包；源码安装请按弹窗提示更新
+    notifyTitle: 发现新版本 {tag}
+    notifyMessage: 点击查看新版本 {tag} 的更新详情
+    notifySourceOnly: 发现新版本 {tag}（当前渠道暂无预编译包，点击查看更新方式）
+    sourceOnlyTitle: 该版本暂无可直接安装的预编译包
+    sourceOnlyHint: '当前为源码安装或发布渠道尚未附带该版本的二进制。请更新到 {tag} 后重新执行安装脚本，或在源码目录执行 git fetch --tags && git checkout {tag} 后重新构建。'
+    baselineTag: 待建立源码基线
+    baselineTitle: 开发通道需要一次源码安装作为基线
+    baselineHint: '当前是发布版安装，没有可比较的源码 commit。请先执行 ROLLING_MEMORY_SOURCE_REF=main bash install.sh 建立基线；之后即可按 main 最新提交提示更新。'
+    sourceOnlyHintDev: '开发版跟踪 main 最新提交，不会自动替换二进制。请在源码目录执行 git fetch origin main && git checkout main && bash install.sh，或使用 ROLLING_MEMORY_SOURCE_REF=main bash install.sh。'
     applySuccessUpdated: '升级完成：已更新 {components}'
     applySuccessNoop: 所有组件均已是最新，无需替换
     restartingNotice: 控制台组件已更新，正在后台平滑重启并刷新页面...

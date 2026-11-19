@@ -174,7 +174,7 @@ func checkVaultScope(tx *sql.Tx, scope string) error {
 		if cErr := tx.QueryRow(`SELECT count(*) FROM thin_vault_meta`).Scan(&metaCount); cErr == nil && metaCount == 1 {
 			if kErr := tx.QueryRow(`SELECT length(v), typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&keyLen, &keyType); kErr == nil && keyType == "blob" && keyLen == 32 {
 				var docsCnt, mapCnt int
-				_ = tx.QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&docsCnt)
+				_ = tx.QueryRow(`SELECT count(*) FROM rm_docs`).Scan(&docsCnt)
 				_ = tx.QueryRow(`SELECT count(*) FROM thin_vault_fts_map`).Scan(&mapCnt)
 				if docsCnt == 0 && mapCnt == 0 {
 					hasSecretKeyOnlyMeta = true

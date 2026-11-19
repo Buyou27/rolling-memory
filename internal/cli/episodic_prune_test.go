@@ -104,19 +104,19 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 	if applied.Mode != "apply" || applied.Removed != 1 || applied.Kept != 0 || applied.NoeticRemoved != 2 {
 		t.Fatalf("apply = %+v", applied)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_noetic WHERE noetic_id='nt_alive'`).Scan(&count); err != nil || count != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_noetic WHERE noetic_id='nt_alive'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("alive noetic row must be kept: count=%d err=%v", count, err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_noetic WHERE noetic_id IN ('nt_orphan','nt_probe')`).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_noetic WHERE noetic_id IN ('nt_orphan','nt_probe')`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("orphan/probe noetic rows survived: count=%d err=%v", count, err)
 	}
 	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("dropped row survived: count=%d err=%v", count, err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("dropped index survived: count=%d err=%v", count, err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_episodic_lineage WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("dropped lineage survived: count=%d err=%v", count, err)
 	}
 	for _, id := range []string{"kept", "missing"} {

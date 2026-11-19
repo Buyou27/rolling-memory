@@ -586,7 +586,7 @@ func EvaluateConditionedReadout(v SparseVector, qGroups map[uint64]float64, tota
 	}
 	if out.QueryOverlapNats > 0 {
 		maximum := math.Max(out.QueryCoverage, out.FocusPurity)
-		out.StructuredIncrement = out.QueryOverlapNats * (math.Sqrt(out.QueryCoverage*out.FocusPurity) + maximum*maximum*invE)
+		out.StructuredIncrement = out.QueryOverlapNats * (math.Sqrt(out.QueryCoverage*out.FocusPurity) + maximum*maximum*transmissionPerHop)
 	}
 	return out
 }
@@ -910,7 +910,7 @@ func (e *Engine) PhraseEnergyVector(termA, termB uint64) (PhraseEnergyProfile, b
 				dist = closestPackedSlot(st.entryPositionsOf(entries[idxA]), st.entryPositionsOf(entries[idxB]))
 			}
 			if dist > 1 {
-				kern = math.Exp(-float64(dist-1) * invE)
+				kern = math.Exp(-float64(dist-1) * transmissionPerHop)
 			}
 		}
 		unitEntries = append(unitEntries, SparseEntry{

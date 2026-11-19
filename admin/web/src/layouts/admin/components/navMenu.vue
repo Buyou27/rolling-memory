@@ -81,6 +81,24 @@
             <Icon :color="configStore.getColorValue('headerBarTabColor')" class="nav-menu-icon" v-else name="lucide-maximize" :size="18" />
         </div>
 
+        <!-- 全局版本更新入口：仅在有新版本时出现 -->
+        <div
+            v-if="updateState?.update_available"
+            class="nav-menu-item nav-update-item"
+            role="button"
+            tabindex="0"
+            :title="t('plugin.rolling-memory.systemUpdate.globalBadge')"
+            :aria-label="t('plugin.rolling-memory.systemUpdate.globalBadge')"
+            data-testid="btn-global-update"
+            @click="showSystemUpdateDialog = true"
+            @keydown.enter.prevent="showSystemUpdateDialog = true"
+            @keydown.space.prevent="showSystemUpdateDialog = true"
+        >
+            <el-badge is-dot type="warning">
+                <Icon :color="configStore.getColorValue('headerBarTabColor')" class="nav-menu-icon" name="lucide-arrow-up-circle" :size="18" />
+            </el-badge>
+        </div>
+
         <!-- 实时命令行终端（BuildAdmin Terminal） -->
         <div @click="terminal.toggle()" class="nav-menu-item pt2" title="Rolling Memory CLI Terminal">
             <el-badge :is-dot="terminal.state.showDot">
@@ -158,6 +176,7 @@
 
         <Config />
         <Terminal />
+        <SystemUpdateDialog v-model="showSystemUpdateDialog" @updated="onSystemUpdateApplied" />
     </div>
 </template>
 
@@ -174,12 +193,15 @@ import { useTerminal } from '@/stores/terminal'
 import { auth, fullURL } from '@/utils/common'
 import { Local, Session } from '@/utils/storage'
 import { hotUpdateState, reloadServer } from '@/utils/vite'
+import { useUpdateStatus } from '@/views/admin/plugin/rolling-memory/useUpdateStatus'
 import { ElMessage } from 'element-plus'
 import { upperFirst } from 'lodash-es'
 import screenfull from 'screenfull'
-import { reactive, useTemplateRef } from 'vue'
+import { defineAsyncComponent, reactive, ref, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Config from './config.vue'
+
+const SystemUpdateDialog = defineAsyncComponent(() => import('@/views/admin/plugin/rolling-memory/systemUpdateDialog.vue'))
 
 const { t } = useI18n()
 const { toggleDark } = useDark()
@@ -188,6 +210,15 @@ const adminInfo = useAdminInfo()
 const configStore = useConfig()
 const terminal = useTerminal()
 const reloadHotServerPopover = useTemplateRef('reloadHotServerPopover')
+const showSystemUpdateDialog = ref(false)
+const { state: updateState, refresh: refreshUpdateState } = useUpdateStatus({
+    onOpen: () => {
+        showSystemUpdateDialog.value = true
+    },
+})
+const onSystemUpdateApplied = () => {
+    void refreshUpdateState()
+}
 
 const state = reactive({
     isFullScreen: false,
@@ -303,6 +334,11 @@ const onClearCache = (type: string) => {
     .nav-menu-item.hover,
     .admin-info.hover {
         background: v-bind('configStore.getColorValue("headerBarHoverBackground")');
+    }
+    .nav-update-item:focus-visible {
+        outline: 2px solid var(--el-color-primary);
+        outline-offset: -3px;
+        border-radius: 4px;
     }
 }
 .dropdown-menu-box :deep(.el-dropdown-menu__item) {

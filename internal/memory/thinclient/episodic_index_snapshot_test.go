@@ -92,9 +92,9 @@ func scalarStrings(t *testing.T, db *sql.DB, query string) []string {
 func vaultRowDump(t *testing.T, db *sql.DB) string {
 	t.Helper()
 	docs := scalarStrings(t, db, `SELECT doc_id || '|' || layer || '|' || occurred_at || '|' || raw_text || '|' || sentences_json || '|' || address_uri || '|' || coord64 || '|' || waveform_bar || '|' || doc_macro_wave || '|' || COALESCE(kept_indices_json, '') || '|' || assistant_id || '|' || incarnation_id || '|' || COALESCE(locus, '') FROM thin_vault_docs ORDER BY doc_id`)
-	indexes := scalarStrings(t, db, `SELECT doc_id || '|' || ref_pointer || '|' || hex(codec_key) || '|' || hex(payload) || '|' || hex(content_digest) || '|' || hex(payload_mac) FROM thin_vault_episodic_index ORDER BY doc_id`)
-	sources := scalarStrings(t, db, `SELECT turn_ref || '|' || doc_id || '|' || ref_pointer || '|' || hex(content_digest) || '|' || hex(source_mac) FROM thin_vault_episodic_sources ORDER BY turn_ref, doc_id, ref_pointer`)
-	lineage := scalarStrings(t, db, `SELECT turn_ref || '|' || doc_id FROM thin_vault_episodic_lineage ORDER BY turn_ref, doc_id`)
+	indexes := scalarStrings(t, db, `SELECT doc_id || '|' || ref_pointer || '|' || hex(codec_key) || '|' || hex(payload) || '|' || hex(content_digest) || '|' || hex(payload_mac) FROM rm_episodic_index ORDER BY doc_id`)
+	sources := scalarStrings(t, db, `SELECT turn_ref || '|' || doc_id || '|' || ref_pointer || '|' || hex(content_digest) || '|' || hex(source_mac) FROM rm_episodic_sources ORDER BY turn_ref, doc_id, ref_pointer`)
+	lineage := scalarStrings(t, db, `SELECT turn_ref || '|' || doc_id FROM rm_episodic_lineage ORDER BY turn_ref, doc_id`)
 	return strings.Join(append(append(append(docs, indexes...), sources...), lineage...), "\n")
 }
 
@@ -254,7 +254,7 @@ func TestEpisodicVerifiedSaveHonorsTombstones(t *testing.T) {
 	if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, docID, 1, ref, "@ref:jsonl:"+path+":0", text, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, docID); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, docID); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, docID, 1, ref, "@ref:jsonl:"+path+":0", text, IngestResponse{}); !errors.Is(err, ErrEpisodicUnitDeleted) {
@@ -262,7 +262,7 @@ func TestEpisodicVerifiedSaveHonorsTombstones(t *testing.T) {
 	}
 	// The ensure verification runs only when the index row is (re)built: with the
 	// row present the read-only fast path answers without a source check.
-	if _, err := db.Exec(`DELETE FROM thin_vault_episodic_index WHERE doc_id = ?`, docID); err != nil {
+	if _, err := db.Exec(`DELETE FROM rm_episodic_index WHERE doc_id = ?`, docID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, docID, ref, text); !errors.Is(err, ErrEpisodicUnitDeleted) {

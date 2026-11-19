@@ -176,12 +176,12 @@ func TestBackgroundFilesKeywordBeatsLimit(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "bg_files.db")
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	seedVault(t, dbPath,
-		`INSERT INTO thin_vault_bg_dirs(dir_id, root_path, added_at) VALUES ('d_a', '/tmp/dir-a', 1762380000)`,
-		`INSERT INTO thin_vault_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json)
+		`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('d_a', '/tmp/dir-a', 1762380000)`,
+		`INSERT INTO rm_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json)
 		 VALUES ('/tmp/dir-a/a1.md', 'd_a', 'a1.md', 1762380000000000000, 10, 1, '["bg:a1#0"]')`,
-		`INSERT INTO thin_vault_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json)
+		`INSERT INTO rm_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json)
 		 VALUES ('/tmp/dir-a/a2.md', 'd_a', 'a2.md', 1762380000000000000, 10, 1, '["bg:a2#0"]')`,
-		`INSERT INTO thin_vault_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json)
+		`INSERT INTO rm_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json)
 		 VALUES ('/tmp/dir-a/z-target.md', 'd_a', 'z-target.md', 1762380000000000000, 10, 1, '["bg:zt#0"]')`)
 
 	var envelope struct {
@@ -205,12 +205,12 @@ func TestLayersDeleteResyncsBackgroundFileBookkeeping(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "bg_delete.db")
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	seedVault(t, dbPath,
-		`INSERT INTO thin_vault_bg_dirs(dir_id, root_path, added_at) VALUES ('d_a', '/tmp/dir-a', 1762380000)`,
-		`INSERT INTO thin_vault_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json, chunk_hashes_json)
+		`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('d_a', '/tmp/dir-a', 1762380000)`,
+		`INSERT INTO rm_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json, chunk_hashes_json)
 		 VALUES ('/tmp/dir-a/a1.md', 'd_a', 'a1.md', 1762380000000000000, 2048, 2, '["bg:a1#0","bg:a1#1"]', '["h0","h1"]')`,
-		`INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
+		`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
 		 VALUES ('bg:a1#0', '/tmp/dir-a/a1.md', 'a1.md', 0, 'L1-9', 1762380000, 'C6:L1:B001#00')`,
-		`INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
+		`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
 		 VALUES ('bg:a1#1', '/tmp/dir-a/a1.md', 'a1.md', 1, 'L10-20', 1762380001, 'C6:L1:B002#00')`)
 
 	var delEnvelope struct {
@@ -233,7 +233,7 @@ func TestLayersDeleteResyncsBackgroundFileBookkeeping(t *testing.T) {
 	}
 	var chunkCount int
 	var unitIDsJSON, hashesJSON string
-	if err := db.QueryRow(`SELECT chunk_count, unit_ids_json, chunk_hashes_json FROM thin_vault_bg_files WHERE abs_path = ?`, "/tmp/dir-a/a1.md").
+	if err := db.QueryRow(`SELECT chunk_count, unit_ids_json, chunk_hashes_json FROM rm_bg_files WHERE abs_path = ?`, "/tmp/dir-a/a1.md").
 		Scan(&chunkCount, &unitIDsJSON, &hashesJSON); err != nil {
 		t.Fatalf("read file bookkeeping: %v", err)
 	}

@@ -204,15 +204,15 @@ func TestROIFactsRecallWindowsAndVault(t *testing.T) {
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
 		CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, occurred_at INTEGER, raw_text TEXT);
-		CREATE TABLE thin_vault_noetic (noetic_id TEXT PRIMARY KEY, status TEXT, cited_unit_ids_json TEXT);
+		CREATE TABLE rm_noetic (noetic_id TEXT PRIMARY KEY, status TEXT, cited_unit_ids_json TEXT);
 		CREATE TABLE injection_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER);
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
 		INSERT INTO thin_vault_docs VALUES ('doc_root_1', 1793350001, 'real text');
 		INSERT INTO thin_vault_docs VALUES ('doc_ref_1', 1793350002, '@ref:zcode:sess:msg');
 		INSERT INTO thin_vault_docs VALUES ('doc_ref_2', 1793350003, '@ref:zcode:sess:msg2');
-		INSERT INTO thin_vault_noetic VALUES ('no_1', 'active', '["unit:1"]');
-		INSERT INTO thin_vault_noetic VALUES ('no_2', 'active', '[]');
-		INSERT INTO thin_vault_noetic VALUES ('no_3', 'retracted', '["unit:2"]');
+		INSERT INTO rm_noetic VALUES ('no_1', 'active', '["unit:1"]');
+		INSERT INTO rm_noetic VALUES ('no_2', 'active', '[]');
+		INSERT INTO rm_noetic VALUES ('no_3', 'retracted', '["unit:2"]');
 		INSERT INTO injection_ledger (created_at) VALUES (1793350004);
 	`); err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestROIEngineeringMetricsReuseAndLocusMatrix(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
@@ -285,8 +285,8 @@ func TestROIEngineeringMetricsReuseAndLocusMatrix(t *testing.T) {
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
 		INSERT INTO thin_vault_docs VALUES ('ep_hot_1', 'episodic', ?, '@ref:zcode:s1:m1', '[]', 'C6:L3:B001#01', '', '[]', 'Rolling-Memory');
 		INSERT INTO thin_vault_docs VALUES ('ep_hot_2', 'episodic', ?, 'inline sentence one. inline sentence two.', '["inline sentence one.","inline sentence two."]', 'C6:L3:B002#01', '', '[0]', 'workspace-b');
-		INSERT INTO thin_vault_noetic VALUES ('nt_1', ?, 'active', 'query alpha', 'ans alpha', '["ep_hot_1","ep_hot_2"]', '["distilled alpha"]', 'C6:L3:B001#05', '', 'zcode', 'inc1');
-		INSERT INTO thin_vault_noetic VALUES ('nt_2', ?, 'active', 'query beta', 'ans beta', '["ep_hot_1"]', '["distilled beta"]', 'C6:L3:B001#06', '', 'zcode', 'inc1');
+		INSERT INTO rm_noetic VALUES ('nt_1', ?, 'active', 'query alpha', 'ans alpha', '["ep_hot_1","ep_hot_2"]', '["distilled alpha"]', 'C6:L3:B001#05', '', 'zcode', 'inc1');
+		INSERT INTO rm_noetic VALUES ('nt_2', ?, 'active', 'query beta', 'ans beta', '["ep_hot_1"]', '["distilled beta"]', 'C6:L3:B001#06', '', 'zcode', 'inc1');
 	`, nowUnix-60, nowUnix-120, nowUnix-30, nowUnix-10); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestROIAdoptionIntersectionAudit(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
@@ -344,7 +344,7 @@ func TestROIAdoptionIntersectionAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`
-		INSERT INTO thin_vault_noetic VALUES
+		INSERT INTO rm_noetic VALUES
 			('nt_tool_1', ?, 'active', 'ComputeDBFingerprint bug', 'Check admin/internal/rmconsole/roi_facts.go and ComputeDBFingerprint', '["ep_src_1"]', '["admin/internal/rmconsole/roi_facts.go"]', 'C6:L3:B001#05', '', 'zcode', 'inc1'),
 			('nt_ctx_2', ?, 'active', 'laya CPU performance', 'Base zero-shot score is 0.362 on ModernBERT-large', '["ep_src_2"]', '["ModernBERT-large 0.362"]', 'C6:L3:B002#05', '', 'zcode', 'inc1'),
 			('nt_unadopted_3', ?, 'active', 'unrelated query token_xyz', 'Check internal/store/unused_file.go', '[]', '["internal/store/unused_file.go"]', 'C6:L3:B003#01', '', 'zcode', 'inc1'),
@@ -461,7 +461,7 @@ func TestROIAdoptionMultiHarnessJSONL(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
@@ -480,7 +480,7 @@ func TestROIAdoptionMultiHarnessJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`
-		INSERT INTO thin_vault_noetic VALUES
+		INSERT INTO rm_noetic VALUES
 			('nt_claude', 1794445211, 'active', 'claude config bug', 'summary', '["ep_cc_1"]', '[]', 'C6:L1:LOCAL#10', '', 'default', 'inc1'),
 			('nt_codex', 1794445271, 'active', 'codex rollout schema', 'summary', '["ep_cx_1"]', '[]', 'C6:L1:LOCAL#11', '', 'default', 'inc1'),
 			('nt_workbuddy', 1794445331, 'active', 'workbuddy mcp contract', 'summary', '["ep_wb_1"]', '[]', 'C6:L1:LOCAL#12', '', 'default', 'inc1');
@@ -530,7 +530,7 @@ func TestROIFactsDeduplicatesTwinRecallLedgerRows(t *testing.T) {
 	if _, err := memDB.Exec(`
 			CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
 			CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, occurred_at INTEGER, raw_text TEXT);
-			CREATE TABLE thin_vault_noetic (noetic_id TEXT PRIMARY KEY, status TEXT, cited_unit_ids_json TEXT);
+			CREATE TABLE rm_noetic (noetic_id TEXT PRIMARY KEY, status TEXT, cited_unit_ids_json TEXT);
 			INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
 		`); err != nil {
 		t.Fatal(err)
@@ -584,7 +584,7 @@ func TestROIFactsWindowsUseIngestTime(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, inserted_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
@@ -595,7 +595,7 @@ func TestROIFactsWindowsUseIngestTime(t *testing.T) {
 			('ep_old_content_fresh_ingest', 'episodic', ?, ?, 'older corpus text', '[]', 'C6:L1:LOCAL#01', '', '[]', 'Rolling-Memory'),
 			('ep_fresh_content_old_ingest', 'episodic', ?, ?, 'fresh corpus text', '[]', 'C6:L1:LOCAL#02', '', '[]', 'Rolling-Memory'),
 			('ep_old_content_fresh_ingest_2', 'episodic', ?, ?, 'older corpus text two', '[]', 'C6:L1:LOCAL#03', '', '[]', 'Rolling-Memory');
-		INSERT INTO thin_vault_noetic VALUES
+		INSERT INTO rm_noetic VALUES
 			('nt_old_content_fresh_ingest', ?, ?, 'active', 'older query', 'answer', '["ep_old_content_fresh_ingest"]', '[]', 'C6:L1:LOCAL#04', '', 'zcode', 'inc1'),
 			('nt_fresh_content_old_ingest', ?, ?, 'active', 'fresh query', 'answer', '["ep_fresh_content_old_ingest"]', '[]', 'C6:L1:LOCAL#05', '', 'zcode', 'inc1'),
 			('nt_old_content_fresh_ingest_2', ?, ?, 'active', 'older query two', 'answer', '["ep_old_content_fresh_ingest"]', '[]', 'C6:L1:LOCAL#06', '', 'zcode', 'inc1');
@@ -670,13 +670,13 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, inserted_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
 			assistant_id TEXT, incarnation_id TEXT
 		);
-		CREATE TABLE thin_vault_bg_chunks (
+		CREATE TABLE rm_bg_chunks (
 			unit_id TEXT PRIMARY KEY, abs_path TEXT, rel_path TEXT, chunk_index INTEGER DEFAULT 0,
 			anchor TEXT DEFAULT '', occurred_at INTEGER DEFAULT 0, inserted_at INTEGER DEFAULT 0,
 			address_uri TEXT DEFAULT '', coord64 INTEGER DEFAULT 0, kept_indices_json TEXT DEFAULT '[]', slots_json TEXT DEFAULT '[]'
@@ -685,9 +685,9 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 		INSERT INTO thin_vault_docs VALUES ('ep_1', 'episodic', ?, ?, '@ref:zcode:sess:msg', '[]', 'C6:L1:LOCAL#01', '', '[]', 'Rolling-Memory');
 		INSERT INTO thin_vault_docs VALUES ('ep_2', 'episodic', ?, ?, 'inline text', '[]', 'C6:L1:LOCAL#02', '', '[]', 'Rolling-Memory');
 		INSERT INTO thin_vault_docs VALUES ('U10-JSON-DOC-1', 'background', ?, ?, 'demo background doc', '[]', 'C7:L1:LOCAL#01', '', '[]', 'Rolling-Memory');
-		INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, occurred_at, inserted_at) VALUES
+		INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, occurred_at, inserted_at) VALUES
 			('bg:aa#1', '/repo/a.md', 'a.md', ?, ?), ('bg:aa#2', '/repo/a.md', 'a.md', ?, ?);
-		INSERT INTO thin_vault_noetic VALUES ('nt_1', ?, ?, 'active', 'q', 'a', '["ep_1"]', '[]', 'C6:L1:LOCAL#04', '', 'zcode', 'inc1');
+		INSERT INTO rm_noetic VALUES ('nt_1', ?, ?, 'active', 'q', 'a', '["ep_1"]', '[]', 'C6:L1:LOCAL#04', '', 'zcode', 'inc1');
 	`,
 		nowUnix-3*86400, nowUnix-120,
 		nowUnix-3*86400, nowUnix-180,
@@ -745,7 +745,7 @@ func TestROIFactsTopCitedUnitsIncludesReusedNoeticL3(t *testing.T) {
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
-		CREATE TABLE thin_vault_noetic (
+		CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER, inserted_at INTEGER, status TEXT,
 			query_text TEXT, answer_text TEXT, cited_unit_ids_json TEXT,
 			cited_sentences_json TEXT, address_uri TEXT, waveform_bar TEXT,
@@ -758,10 +758,10 @@ func TestROIFactsTopCitedUnitsIncludesReusedNoeticL3(t *testing.T) {
 	if _, err := memDB.Exec(`INSERT INTO thin_vault_docs VALUES ('ep_leaf_1', 'episodic', ?, ?, 'leaf evidence text', '["leaf evidence text"]', 'C6:L1:LOCAL#01', '', '[0]', 'Rolling-Memory')`, nowUnix-300, nowUnix-300); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memDB.Exec(`INSERT INTO thin_vault_noetic VALUES ('nt_gold_1', ?, ?, 'active', 'first recall cue', 'crystallized answer one', '["ep_leaf_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt1', '', 'zcode', 'inc1')`, nowUnix-60, nowUnix-180); err != nil {
+	if _, err := memDB.Exec(`INSERT INTO rm_noetic VALUES ('nt_gold_1', ?, ?, 'active', 'first recall cue', 'crystallized answer one', '["ep_leaf_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt1', '', 'zcode', 'inc1')`, nowUnix-60, nowUnix-180); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memDB.Exec(`INSERT INTO thin_vault_noetic VALUES ('nt_followup_2', ?, ?, 'active', 'second recall cue', 'crystallized answer two', '["ep_leaf_1","nt_gold_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt2', '', 'zcode', 'inc2')`, nowUnix-10, nowUnix-10); err != nil {
+	if _, err := memDB.Exec(`INSERT INTO rm_noetic VALUES ('nt_followup_2', ?, ?, 'active', 'second recall cue', 'crystallized answer two', '["ep_leaf_1","nt_gold_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt2', '', 'zcode', 'inc2')`, nowUnix-10, nowUnix-10); err != nil {
 		t.Fatal(err)
 	}
 	_ = memDB.Close()

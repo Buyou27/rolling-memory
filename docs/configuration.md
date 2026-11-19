@@ -76,6 +76,17 @@ Accepted values:
 |---|---|---|
 | `storage.profile` | `local` | `local` for normal installs; `usb` is selected automatically for portable payloads |
 
+### 2.5 Update channel — `[update]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `update.channel` | `dev` | `dev` tracks the latest `main` commit (default); `stable` accepts published release tags; `beta` also accepts prerelease tags |
+| `update.source` | `github` | `github` uses the official GitHub Releases channel; `gitee` uses the Gitee mirror for networks that reach Gitee faster |
+
+`dev` reports `main@<commit>` and requires a source rebuild; it never replaces a binary automatically. Save the preference with `rmem config set update.channel beta`, switch it in the console's Version & Update dialog, or override one check with `rmem update --check --channel dev`.
+
+The source is saved with `rmem config set update.source gitee` and can be selected in the console's Version & Update dialog. An explicit `--release-base` URL or `ROLLING_MEMORY_RELEASE_BASE` still wins for one run. When the Gitee mirror has no prebuilt artifacts for a tag, the check reports a source-only update instead of offering a download that cannot succeed.
+
 ---
 
 ## 3. Environment variables (common subset)
@@ -90,6 +101,8 @@ Every `config.toml` key has an environment counterpart that wins over the file; 
 | `ROLLING_MEMORY_SCOPE` | `core.scope` |
 | `ROLLING_MEMORY_READER` | `core.reader` |
 | `ROLLING_MEMORY_DELIVERY_WINDOW` | `recall.delivery_window` |
+| `ROLLING_MEMORY_UPDATE_CHANNEL` | `update.channel` |
+| `ROLLING_MEMORY_UPDATE_SOURCE` | `update.source` |
 | `ROLLING_MEMORY_DAEMON_MEMORY_LIMIT` | `daemon.memory_limit` |
 | `ROLLING_MEMORY_DAEMON_SOCKET` | Engine socket path |
 | `ROLLING_MEMORY_PORTABLE` | Force portable mode with an explicit payload root |

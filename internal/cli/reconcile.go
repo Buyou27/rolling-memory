@@ -480,7 +480,7 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 			}
 			rows.Close()
 		}
-		if rows, err := db.Query(`SELECT unit_id FROM thin_vault_deleted_units WHERE layer = 'episodic' OR layer = ''`); err == nil {
+		if rows, err := db.Query(`SELECT unit_id FROM rm_deleted_units WHERE layer = 'episodic' OR layer = ''`); err == nil {
 			for rows.Next() {
 				var uid string
 				if rows.Scan(&uid) == nil && strings.TrimSpace(uid) != "" {
@@ -489,7 +489,7 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 			}
 			rows.Close()
 		}
-		if rows, err := db.Query(`SELECT unit_id FROM thin_vault_bg_chunks`); err == nil {
+		if rows, err := db.Query(`SELECT unit_id FROM rm_bg_chunks`); err == nil {
 			for rows.Next() {
 				var uid string
 				if rows.Scan(&uid) == nil && strings.TrimSpace(uid) != "" {
@@ -498,7 +498,7 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 			}
 			rows.Close()
 		}
-		if rows, err := db.Query(`SELECT noetic_id, status FROM thin_vault_noetic`); err == nil {
+		if rows, err := db.Query(`SELECT noetic_id, status FROM rm_noetic`); err == nil {
 			for rows.Next() {
 				var nid, st string
 				if rows.Scan(&nid, &st) == nil && strings.TrimSpace(nid) != "" {
@@ -511,8 +511,8 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 			}
 			rows.Close()
 		}
-		_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&mountedDirsCount)
-		_ = db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_files`).Scan(&trackedFilesCount)
+		_ = db.QueryRow(`SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&mountedDirsCount)
+		_ = db.QueryRow(`SELECT COUNT(*) FROM rm_bg_files`).Scan(&trackedFilesCount)
 		dirtyFilesCount = countDirtyBackgroundFiles(db)
 	}
 	endVaultStage(map[string]any{
@@ -1191,7 +1191,7 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 									if created {
 										rep.EpisodicIndexesBackfilled++
 									}
-									if _, err := db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+									if _, err := db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM rm_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
 										return rep, err
 									}
 								}
@@ -1537,9 +1537,9 @@ func scanHarnessTurnsWithCoverageContext(ctx context.Context, home, harnessID, s
 }
 
 // countDirtyBackgroundFiles checks whether any mounted background file on disk has changed mtime/size
-// compared to `thin_vault_bg_files`.
+// compared to `rm_bg_files`.
 func countDirtyBackgroundFiles(db *sql.DB) int {
-	rows, err := db.Query(`SELECT abs_path, mtime_ns, file_size FROM thin_vault_bg_files`)
+	rows, err := db.Query(`SELECT abs_path, mtime_ns, file_size FROM rm_bg_files`)
 	if err != nil {
 		return 0
 	}

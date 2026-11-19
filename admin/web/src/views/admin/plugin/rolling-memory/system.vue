@@ -32,6 +32,7 @@
                     {{ t('plugin.rolling-memory.system.refreshBtn') }}
                 </el-button>
                 <el-button size="small" plain data-testid="btn-system-update" @click="showSystemUpdateDialog = true">
+                    <span v-if="updateState?.update_available" class="rm-update-dot" data-testid="dot-system-update" />
                     {{ t('plugin.rolling-memory.systemUpdate.openBtn') }}
                 </el-button>
             </div>
@@ -594,6 +595,7 @@ import { MonitorSocket } from '@/utils/monitorSocket'
 import { copy } from '@/utils/common'
 import request from '@/utils/request'
 import systemUpdateDialog from './systemUpdateDialog.vue'
+import { useUpdateStatus } from './useUpdateStatus'
 
 defineOptions({
     name: 'plugin/rolling-memory/system',
@@ -628,6 +630,11 @@ const lastApply = ref<any>(null)
 const keepBackups = ref(0)
 
 const showSystemUpdateDialog = ref(false)
+const { state: updateState } = useUpdateStatus({
+    onOpen: () => {
+        showSystemUpdateDialog.value = true
+    },
+})
 
 let systemSocket: MonitorSocket | null = null
 let tickTimer: ReturnType<typeof setInterval> | null = null
@@ -1095,6 +1102,17 @@ onBeforeUnmount(() => {
     display: flex;
     flex-direction: column;
     gap: 14px;
+}
+
+.rm-update-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    vertical-align: middle;
+    border-radius: 50%;
+    background: var(--el-color-danger);
+    box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.18);
 }
 
 /* ---------------- Hero ---------------- */

@@ -172,7 +172,7 @@ func TestLayersGetBackgroundChunkReturnsDaemonBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
+	if _, err := db.Exec(`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
 		VALUES ('bg:detail#0', '/ws/docs/plan.md', 'docs/plan.md', 0, 'L1-9', 1762380000, 'C6:L1:BG#00')`); err != nil {
 		_ = db.Close()
 		t.Fatalf("insert bg_chunk: %v", err)
@@ -245,7 +245,7 @@ func TestMemoryDetailBackgroundChunkReturnsDaemonBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
+	if _, err := db.Exec(`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri)
 		VALUES ('bg:mem#0', '/ws/docs/notes.md', 'docs/notes.md', 0, 'L1-5', 1762380000, 'C6:L1:BG#01')`); err != nil {
 		_ = db.Close()
 		t.Fatalf("insert bg_chunk: %v", err)

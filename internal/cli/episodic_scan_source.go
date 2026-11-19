@@ -612,7 +612,7 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinc
 				}
 			}
 			var sourceRecorded int
-			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thin_vault_episodic_sources s JOIN thin_vault_episodic_lineage l ON l.turn_ref = s.turn_ref AND l.doc_id = s.doc_id WHERE s.turn_ref = ? AND s.doc_id = ? AND s.ref_pointer = ?)`, turn.TurnRef, turn.DocID, turn.RefPointer).Scan(&sourceRecorded); err != nil {
+			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM rm_episodic_sources s JOIN rm_episodic_lineage l ON l.turn_ref = s.turn_ref AND l.doc_id = s.doc_id WHERE s.turn_ref = ? AND s.doc_id = ? AND s.ref_pointer = ?)`, turn.TurnRef, turn.DocID, turn.RefPointer).Scan(&sourceRecorded); err != nil {
 				return err
 			}
 			if sourceRecorded == 0 {
@@ -626,7 +626,7 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinc
 					return err
 				}
 			}
-			if _, err = db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+			if _, err = db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM rm_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
 				return err
 			}
 		}

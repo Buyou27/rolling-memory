@@ -46,7 +46,7 @@ func TestLocalPointerStarvationCorruptIndex(t *testing.T) {
 			}
 		}
 	}
-	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id IN ('a030', 'a031')`); err != nil {
+	if _, err := memory.Store.DB().Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id IN ('a030', 'a031')`); err != nil {
 		t.Fatal(err)
 	}
 	thinclient.PurgeLegacyTables(memory.Store.DB())

@@ -406,11 +406,13 @@ func bootstrapSQLite(db *gorm.DB) error {
 				(209, 207, 'node', '同步清单', 'plugin/catalog/sync', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 				(210, 207, 'node', '安装', 'plugin/catalog/install', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 				(211, 207, 'node', '预演', 'plugin/catalog/preflight', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-					(220, NULL, 'dir', '帮助中心', 'help', 'help', 'lucide-book-open', '', '', '', 1, '', '独立通用开源文档频道（位于插件频道下方）', 980, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-					(221, 220, 'menu', '帮助与文档', 'help/docs', 'help/docs', 'lucide-book-open-check', 'tab', '', '/src/views/admin/help/index.vue', 1, '', '开源文档模块（docs/，随代码同步；指向 GitHub rocareer/rolling-memory）', 99, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-					(222, 221, 'node', '查看帮助与文档', 'help/docs/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-					(223, 220, 'menu', '开源仓库与声明', 'help/repos', 'help/repos', 'lucide-git-branch', 'tab', '', '/src/views/admin/help/repos.vue', 1, '', '开源仓库 rocareer/rolling-memory 立场声明、许可与文档索引台', 98, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-					(224, 223, 'node', '查看开源仓库与声明', 'help/repos/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
+					(220, NULL, 'dir', '帮助中心', 'help', 'help', 'lucide-book-open', '', '', '', 1, '', '官方文档入口频道（GitHub / Gitee）', 980, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+					(221, 220, 'menu', '帮助与文档', 'help/docs', 'help/docs', 'lucide-book-open-check', 'tab', '', '/src/views/admin/help/index.vue', 1, '', '官方文档托管于 GitHub 与 Gitee，控制台不再内置文档镜像', 99, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+					(222, 221, 'node', '查看帮助与文档', 'help/docs/read', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
+	// 帮助中心不再维护本地文档镜像：清理既存库中的旧「开源仓库与声明」页面与其权限节点，并同步菜单说明（幂等）。
+	_ = db.Exec(`DELETE FROM "admin_rules" WHERE "name" = 'help/repos' OR "name" LIKE 'help/repos/%'`).Error
+	_ = db.Exec(`UPDATE "admin_rules" SET "remark" = '官方文档托管于 GitHub 与 Gitee，控制台不再内置文档镜像' WHERE "name" = 'help/docs'`).Error
+	_ = db.Exec(`UPDATE "admin_rules" SET "remark" = '官方文档入口频道（GitHub / Gitee）' WHERE "name" = 'help' AND "type" = 'dir'`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "pid" = 200, "weigh" = 100 WHERE "id" = 40 AND "name" = 'plugin' AND "type" = 'menu' AND "pid" IS NULL AND "weigh" = 989`).Error
 	_ = db.Exec(`INSERT OR IGNORE INTO "admin_rules" ("id", "pid", "type", "title", "name", "path", "icon", "open_type", "url", "component", "keepalive", "extend", "remark", "weigh", "status", "plugin", "updated_at", "created_at") VALUES
 		(11, 1, 'menu', 'ROI 监控屏', 'dashboard/roi', 'dashboard/roi', 'lucide-trending-up', 'tab', '', '/src/views/admin/dashboard/roi.vue', 0, '', '记忆 ROI 与认知效能监控台：L3 认知结晶、跨层引证复用倍数、tokenz-r 干句提纯与多工作区冷热诊断', 98, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
@@ -424,7 +426,9 @@ func bootstrapSQLite(db *gorm.DB) error {
 			(163, 116, 'node', '读取最近 Agent 检索线索', 'plugin/rolling-memory/recall/recent', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(164, 101, 'node', '读取系统版本与本地组件指纹', 'plugin/rolling-memory/system/version', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 			(165, 101, 'node', '在线检查新版本与 SHA-256 清单', 'plugin/rolling-memory/system/update/check', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-			(166, 101, 'node', '执行在线安全升级（SHA-256 校验）', 'plugin/rolling-memory/system/update/apply', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
+			(166, 101, 'node', '执行在线安全升级（SHA-256 校验）', 'plugin/rolling-memory/system/update/apply', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(167, 101, 'node', '读取在线更新状态缓存', 'plugin/rolling-memory/system/update/status', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			(168, 101, 'node', '切换更新通道（稳定版 / 测试版 / 开发版）', 'plugin/rolling-memory/system/update/channel', '', '', '', '', '', 1, '', '', 0, 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "weigh" = 970 WHERE "name" = 'auth' AND "type" = 'dir' AND "weigh" = 998`).Error
 	_ = db.Exec(`UPDATE "admin_rules" SET "weigh" = 969 WHERE "name" = 'routine' AND "type" = 'dir' AND "weigh" = 997`).Error
 	// 「常规管理」频道改名为「系统管理」：只迁移仍是出厂标题的行，用户自定义标题保持不动。

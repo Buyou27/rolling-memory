@@ -137,6 +137,7 @@ func (s *HTTPServer) debugWriter() io.Writer {
 // ServeHTTP runs the streamable-HTTP and legacy SSE transports until the
 // listener fails; memory may be nil to open one lazily on first tool call.
 func ServeHTTP(addr, path string, memory *facade.Memory) error {
+	startUpdateRefresh()
 	server := &HTTPServer{Addr: addr, Path: path, Memory: memory}
 	return server.ListenAndServe()
 }

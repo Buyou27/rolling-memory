@@ -380,21 +380,21 @@ func TableCounts(connection *sql.DB, scope string) (map[string]int, error) {
 	_ = connection.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'assertion'`).Scan(&hasLegacy)
 	if hasLegacy == 0 {
 		var docsCnt, noeticCnt int
-		_ = connection.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs`).Scan(&docsCnt)
-		_ = connection.QueryRow(`SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active'`).Scan(&noeticCnt)
+		_ = connection.QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docsCnt)
+		_ = connection.QueryRow(`SELECT COUNT(*) FROM rm_noetic WHERE status = 'active'`).Scan(&noeticCnt)
 		schemaVersion, _ := userVersion(connection)
 		return map[string]int{
-			"trace":             docsCnt,
-			"node":              docsCnt + noeticCnt,
-			"node_alias":        0,
-			"assertion":         docsCnt + noeticCnt,
-			"mention":           0,
-			"meta_edge":         0,
-			"event":             0,
-			"vector":            0,
-			"thin_vault_docs":   docsCnt,
-			"thin_vault_noetic": noeticCnt,
-			"schema_version":    schemaVersion,
+			"trace":          docsCnt,
+			"node":           docsCnt + noeticCnt,
+			"node_alias":     0,
+			"assertion":      docsCnt + noeticCnt,
+			"mention":        0,
+			"meta_edge":      0,
+			"event":          0,
+			"vector":         0,
+			"rm_docs":        docsCnt,
+			"rm_noetic":      noeticCnt,
+			"schema_version": schemaVersion,
 		}, nil
 	}
 	tables := []string{
@@ -554,7 +554,7 @@ func IntegrityCheck(connection *sql.DB) ([]string, error) {
 		// On multi-hundred-MB production vaults (>32MB), full-database PRAGMA integrity_check
 		// scans every FTS5 trigram posting block and 200MB+ of packed binary slot blobs (~4s).
 		// Check each core relational metadata/document table's B-tree and indexes directly.
-		for _, tbl := range []string{"db_meta", "thin_vault_meta", "thin_vault_docs", "thin_vault_noetic"} {
+		for _, tbl := range []string{"db_meta", "thin_vault_meta", "rm_docs", "rm_noetic"} {
 			var exists int
 			if connection.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", tbl).Scan(&exists) != nil || exists == 0 {
 				continue

@@ -19,7 +19,7 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 		remove   bool
 		want     string
 	}{
-		{name: "missing index", mutation: `DELETE FROM thin_vault_episodic_index`, want: "情景索引不完整 1"},
+		{name: "missing index", mutation: `DELETE FROM rm_episodic_index`, want: "情景索引不完整 1"},
 		{name: "missing source", remove: true, want: "来源不可回源 1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

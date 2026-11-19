@@ -31,6 +31,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
+	"github.com/rocareer/rolling-memory/internal/updatecheck"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -264,14 +266,28 @@ func readLineBounded(reader *bufio.Reader, limit int) (string, error) {
 	}
 }
 
+// startUpdateRefresh refreshes the update-state cache in the background when
+// the cached snapshot is stale, so a user who only works through an agent still
+// sees the new version on the next console visit or `status` call. Test
+// binaries are skipped inside MaybeRefresh.
+func startUpdateRefresh() {
+	go updatecheck.MaybeRefresh(context.Background(), updatecheck.Options{
+		ReleaseBase:    updatecheck.ReleaseBaseFromEnv(),
+		CurrentVersion: version.Version,
+		Timeout:        10 * time.Second,
+	})
+}
+
 // ServeWithDaemonProxy runs the stdio loop over in/out and routes `tools/call`
 // requests through the shared local Unix domain socket daemon when available.
 func ServeWithDaemonProxy(in io.Reader, out io.Writer) error {
+	startUpdateRefresh()
 	return (&Server{In: in, Out: out, ProxyToDaemon: true}).Run()
 }
 
 // Serve runs the loop over in/out; memory may be nil to open one lazily.
 func Serve(in io.Reader, out io.Writer, memory *facade.Memory) error {
+	startUpdateRefresh()
 	return (&Server{In: in, Out: out, Memory: memory}).Run()
 }
 

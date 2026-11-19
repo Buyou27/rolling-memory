@@ -142,7 +142,7 @@ func (v *Vault) BackfillEpisodicIndexes(ctx context.Context, scope, cursor strin
 		// verify its pointer binding and HMAC payload integrity before touching disk.
 		var roRef string
 		var roPayload, digest, mac []byte
-		err = v.db.QueryRowContext(ctx, `SELECT ref_pointer, payload, content_digest, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key = ?`, ref.id, key).Scan(&roRef, &roPayload, &digest, &mac)
+		err = v.db.QueryRowContext(ctx, `SELECT ref_pointer, payload, content_digest, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND codec_key = ?`, ref.id, key).Scan(&roRef, &roPayload, &digest, &mac)
 		if err == nil && len(digest) == 32 && len(mac) == 32 {
 			if roRef == ref.pointer && v.validEpisodicPayloadMAC(ref.id, roRef, key, roPayload, digest, mac) {
 				if _, _, dErr := plain.DecodeWireBytes(roPayload); dErr == nil {

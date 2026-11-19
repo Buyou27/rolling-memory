@@ -235,9 +235,9 @@ func scanVaultRowDump(t *testing.T, db *sql.DB) string {
 		return builder.String()
 	}
 	return dump(`SELECT doc_id || '|' || layer || '|' || occurred_at || '|' || raw_text || '|' || assistant_id || '|' || incarnation_id || '|' || COALESCE(locus, '') FROM thin_vault_docs ORDER BY doc_id`) +
-		dump(`SELECT doc_id || '|' || ref_pointer || '|' || hex(codec_key) || '|' || hex(payload) || '|' || hex(content_digest) || '|' || hex(payload_mac) FROM thin_vault_episodic_index ORDER BY doc_id`) +
-		dump(`SELECT turn_ref || '|' || doc_id || '|' || ref_pointer || '|' || hex(content_digest) || '|' || hex(source_mac) FROM thin_vault_episodic_sources ORDER BY turn_ref, doc_id, ref_pointer`) +
-		dump(`SELECT turn_ref || '|' || doc_id FROM thin_vault_episodic_lineage ORDER BY turn_ref, doc_id`)
+		dump(`SELECT doc_id || '|' || ref_pointer || '|' || hex(codec_key) || '|' || hex(payload) || '|' || hex(content_digest) || '|' || hex(payload_mac) FROM rm_episodic_index ORDER BY doc_id`) +
+		dump(`SELECT turn_ref || '|' || doc_id || '|' || ref_pointer || '|' || hex(content_digest) || '|' || hex(source_mac) FROM rm_episodic_sources ORDER BY turn_ref, doc_id, ref_pointer`) +
+		dump(`SELECT turn_ref || '|' || doc_id FROM rm_episodic_lineage ORDER BY turn_ref, doc_id`)
 }
 
 // TestEpisodicSourceScanSnapshotAndStreamingSaveIdenticalRows pins the end-to-end

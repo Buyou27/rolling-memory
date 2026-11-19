@@ -639,7 +639,7 @@
                                     认知结晶鲜活率（20%）加权合成。≥85% 为健康（绿），60~85% 为索引构建中（黄）。
                                 </p>
                                 <p v-if="config.lang.active === 'en'">
-                                    Index Ready: Percentage of L2 session pointers with a built full-text retrieval index.
+                                    Index Ready: Percentage of L2 session pointers with a built retrieval index.
                                 </p>
                                 <p v-else>L2 索引就绪：已完成检索加速索引构建的 L2 会话记录占比。</p>
                                 <p v-if="config.lang.active === 'en'">

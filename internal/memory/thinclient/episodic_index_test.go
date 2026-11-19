@@ -44,7 +44,7 @@ func TestEpisodicSaveHonorsTombstones(t *testing.T) {
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			if tc.layer != "none" {
-				if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, 1)`, tc.id, tc.layer); err != nil {
+				if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, 1)`, tc.id, tc.layer); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -76,7 +76,7 @@ func TestEpisodicSaveFailsClosedWhenTombstoneUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+	if _, err := db.Exec(`DROP TABLE rm_deleted_units`); err != nil {
 		t.Fatal(err)
 	}
 	ref, text := "@ref:jsonl:"+path+":0#0", "[user] read failure"
@@ -96,14 +96,14 @@ func TestEpisodicLegacyPointerHonorsTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalEpisodicPointer("doc", 1, "@ref:jsonl:/synthetic:0#0", "@ref:jsonl:/synthetic:0", IngestResponse{}); !errors.Is(err, ErrEpisodicUnitDeleted) {
 		t.Fatalf("legacy pointer error = %v", err)
 	}
 	var docs, lineage int
-	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_docs WHERE doc_id='doc'), (SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id='doc')`).Scan(&docs, &lineage); err != nil || docs != 0 || lineage != 0 {
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_docs WHERE doc_id='doc'), (SELECT count(*) FROM rm_episodic_lineage WHERE doc_id='doc')`).Scan(&docs, &lineage); err != nil || docs != 0 || lineage != 0 {
 		t.Fatalf("legacy partial write docs=%d lineage=%d err=%v", docs, lineage, err)
 	}
 }
@@ -117,7 +117,7 @@ func TestEpisodicClientFallbackHonorsTombstones(t *testing.T) {
 	client := NewClient(v, nil)
 	missing := "@ref:jsonl:" + filepath.Join(t.TempDir(), "missing.jsonl") + ":0#0"
 	for _, tc := range []struct{ id, ref string }{{"inline", ""}, {"missing", missing}} {
-		if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, tc.id); err != nil {
+		if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, tc.id); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := client.RememberEpisodicByRef(context.Background(), tc.id, tc.ref, "", "[user] fallback", 1); !errors.Is(err, ErrEpisodicUnitDeleted) {
@@ -141,7 +141,7 @@ func TestEpisodicClientVerifiedPointerHonorsTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	client := NewClient(v, nil)
@@ -166,7 +166,7 @@ func TestEpisodicClientSourceFailureDoesNotMaskDatabaseError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+	if _, err := db.Exec(`DROP TABLE rm_deleted_units`); err != nil {
 		t.Fatal(err)
 	}
 	client := NewClient(v, nil)
@@ -182,7 +182,7 @@ func TestEpisodicClientFallbackFailsClosedOnTombstoneError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+	if _, err := db.Exec(`DROP TABLE rm_deleted_units`); err != nil {
 		t.Fatal(err)
 	}
 	client := NewClient(v, nil)
@@ -216,7 +216,7 @@ func TestEpisodicBackfillAndLineageHonorTombstone(t *testing.T) {
 	if err := v.SaveLocalEpisodicPointer(id, 1, ref, "", IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := v.EnsureLocalEpisodicIndex("mem:backfill-tombstone", id, ref, text); !errors.Is(err, ErrEpisodicUnitDeleted) {
@@ -226,10 +226,10 @@ func TestEpisodicBackfillAndLineageHonorTombstone(t *testing.T) {
 		t.Fatalf("lineage error = %v", err)
 	}
 	var indexes, lineage int
-	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?), (SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id = ?)`, id, id).Scan(&indexes, &lineage); err != nil || indexes != 0 || lineage != 0 {
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?), (SELECT count(*) FROM rm_episodic_lineage WHERE doc_id = ?)`, id, id).Scan(&indexes, &lineage); err != nil || indexes != 0 || lineage != 0 {
 		t.Fatalf("tombstoned backfill wrote index=%d lineage=%d err=%v", indexes, lineage, err)
 	}
-	if _, err := db.Exec(`DELETE FROM thin_vault_deleted_units WHERE unit_id = ?`, id); err != nil {
+	if _, err := db.Exec(`DELETE FROM rm_deleted_units WHERE unit_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.RecordEpisodicLineage(turn, id, 1); err != nil {
@@ -238,7 +238,7 @@ func TestEpisodicBackfillAndLineageHonorTombstone(t *testing.T) {
 	if err := v.RecordEpisodicLineage(turn, "missing", 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id = 'missing'`).Scan(&lineage); err != nil || lineage != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_lineage WHERE doc_id = 'missing'`).Scan(&lineage); err != nil || lineage != 0 {
 		t.Fatalf("orphan lineage = %d %v", lineage, err)
 	}
 }
@@ -258,8 +258,8 @@ func TestEpisodicLineageAndDeleteSerialize(t *testing.T) {
 	}
 	for _, stmt := range []string{
 		`DELETE FROM thin_vault_docs WHERE doc_id='doc'`,
-		`DELETE FROM thin_vault_episodic_lineage WHERE doc_id='doc'`,
-		`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`,
+		`DELETE FROM rm_episodic_lineage WHERE doc_id='doc'`,
+		`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -279,10 +279,10 @@ func TestEpisodicLineageAndDeleteSerialize(t *testing.T) {
 		t.Fatalf("lineage after delete: %v", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id='doc'`).Scan(&count); err != nil || count != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_lineage WHERE doc_id='doc'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("orphan lineage count=%d err=%v", count, err)
 	}
-	if _, err := db.Exec(`DELETE FROM thin_vault_deleted_units WHERE unit_id='doc'`); err != nil {
+	if _, err := db.Exec(`DELETE FROM rm_deleted_units WHERE unit_id='doc'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalPlaintext("doc", 1, "fixture", []string{"fixture"}, IngestResponse{Layer: LayerEpisodic}); err != nil {
@@ -291,7 +291,7 @@ func TestEpisodicLineageAndDeleteSerialize(t *testing.T) {
 	if err := v.RecordEpisodicLineage("@ref:jsonl:/fixture:0", "doc", 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id='doc'`).Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_lineage WHERE doc_id='doc'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("restored lineage count=%d err=%v", count, err)
 	}
 }
@@ -309,7 +309,7 @@ func TestEpisodicTombstoneSeparatesScopes(t *testing.T) {
 	}
 	text := "[user] scoped"
 	deletedID, otherID := episodicunit.DocID("mem:one", text), episodicunit.DocID("mem:two", text)
-	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, deletedID); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, deletedID); err != nil {
 		t.Fatal(err)
 	}
 	ref := "@ref:jsonl:" + path + ":0#0"
@@ -331,7 +331,7 @@ func TestEpisodicPlaintextTombstoneLayerIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES ('doc', 'episodic', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalPlaintext("doc", 1, "background", []string{"background"}, IngestResponse{Layer: LayerBackground}); err != nil {
@@ -370,7 +370,7 @@ func TestEpisodicDeleteAndSaveSerialize(t *testing.T) {
 	if _, err := deleteTx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := deleteTx.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id); err != nil {
+	if _, err := deleteTx.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id); err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
@@ -387,10 +387,10 @@ func TestEpisodicDeleteAndSaveSerialize(t *testing.T) {
 		t.Fatalf("save after deletion = %v", err)
 	}
 	var docs, indexes int
-	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?), (SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?)`, id, id).Scan(&docs, &indexes); err != nil || docs != 0 || indexes != 0 {
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?), (SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?)`, id, id).Scan(&docs, &indexes); err != nil || docs != 0 || indexes != 0 {
 		t.Fatalf("deleted unit revived: docs=%d indexes=%d err=%v", docs, indexes, err)
 	}
-	if _, err := db.Exec(`DELETE FROM thin_vault_deleted_units WHERE unit_id = ?`, id); err != nil {
+	if _, err := db.Exec(`DELETE FROM rm_deleted_units WHERE unit_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
@@ -403,13 +403,13 @@ func TestEpisodicDeleteAndSaveSerialize(t *testing.T) {
 	if _, err := deleteTx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := deleteTx.Exec(`INSERT INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 2)`, id); err != nil {
+	if _, err := deleteTx.Exec(`INSERT INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 2)`, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := deleteTx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?), (SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?)`, id, id).Scan(&docs, &indexes); err != nil || docs != 0 || indexes != 0 {
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?), (SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?)`, id, id).Scan(&docs, &indexes); err != nil || docs != 0 || indexes != 0 {
 		t.Fatalf("delete after save: docs=%d indexes=%d err=%v", docs, indexes, err)
 	}
 }
@@ -580,7 +580,7 @@ func TestEpisodicPointerIndexJSONL(t *testing.T) {
 	assertHits("quartz nebula", true)
 	assertHits("unrelatedviolet", false)
 	var payload []byte
-	if err := db.QueryRow(`SELECT payload FROM thin_vault_episodic_index WHERE doc_id='doc'`).Scan(&payload); err != nil {
+	if err := db.QueryRow(`SELECT payload FROM rm_episodic_index WHERE doc_id='doc'`).Scan(&payload); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(payload, []byte("quartz")) {
@@ -735,7 +735,7 @@ func TestEpisodicIndexContentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var digest, payload []byte
-	if err := db.QueryRow(`SELECT content_digest, payload FROM thin_vault_episodic_index WHERE doc_id='doc'`).Scan(&digest, &payload); err != nil {
+	if err := db.QueryRow(`SELECT content_digest, payload FROM rm_episodic_index WHERE doc_id='doc'`).Scan(&digest, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(digest) == 0 || bytes.Contains(digest, []byte(original)) {
@@ -773,7 +773,7 @@ func TestEpisodicIndexContentIdentity(t *testing.T) {
 		t.Fatal("unresolved pointer encoded as source")
 	}
 	var afterDigest, afterPayload []byte
-	if err := db.QueryRow(`SELECT content_digest, payload FROM thin_vault_episodic_index WHERE doc_id='doc'`).Scan(&afterDigest, &afterPayload); err != nil {
+	if err := db.QueryRow(`SELECT content_digest, payload FROM rm_episodic_index WHERE doc_id='doc'`).Scan(&afterDigest, &afterPayload); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(digest, afterDigest) || !bytes.Equal(payload, afterPayload) {
@@ -840,7 +840,7 @@ func TestEpisodicEnsureAndRecentIdentity(t *testing.T) {
 		t.Fatal("changed source indexed under old ID")
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, id).Scan(&count); err != nil || count != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = ?`, id).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed ensure wrote index: %d %v", count, err)
 	}
 	checkRecent(gap)
@@ -888,7 +888,7 @@ func TestEpisodicIndexAtomicMismatch(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("partial write: %d %v", count, err)
 	}
-	if _, err := db.Exec(`CREATE TRIGGER fail_index BEFORE INSERT ON thin_vault_episodic_index BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
+	if _, err := db.Exec(`CREATE TRIGGER fail_index BEFORE INSERT ON rm_episodic_index BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	pkt, _ = v.PackBlindPacket("doc", text, 1)
@@ -943,7 +943,7 @@ func TestEpisodicPointerRepointSameContent(t *testing.T) {
 	if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id='doc'`).Scan(&storedRaw); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT ref_pointer FROM thin_vault_episodic_index WHERE doc_id='doc'`).Scan(&storedRef); err != nil {
+	if err := db.QueryRow(`SELECT ref_pointer FROM rm_episodic_index WHERE doc_id='doc'`).Scan(&storedRef); err != nil {
 		t.Fatal(err)
 	}
 	if storedRaw != ref1 || storedRef != ref1 {
@@ -1224,13 +1224,13 @@ func TestEpisodicCrossSourceRecoveryAndLineage(t *testing.T) {
 	if status := v.ClassifyAndHealEpisodicUnit("mem:cross-source", id, ref1, 1, true); status != EpisodicContentRelocatable {
 		t.Fatalf("live alternate source must prevent pruning: %v", status)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_sources SET ref_pointer = ? WHERE doc_id = ? AND ref_pointer = ?`, turn2+"#1", id, ref2); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_sources SET ref_pointer = ? WHERE doc_id = ? AND ref_pointer = ?`, turn2+"#1", id, ref2); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, err := v.LoadVerifiedEpisodicPointerSource(id, ref1); err == nil || got != "" {
 		t.Fatalf("tampered source permitted recovery: %q %v", got, err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_sources SET ref_pointer = ? WHERE doc_id = ? AND ref_pointer = ?`, ref2, id, turn2+"#1"); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_sources SET ref_pointer = ? WHERE doc_id = ? AND ref_pointer = ?`, ref2, id, turn2+"#1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(paths[0], []byte(`{"type":"user","message":{"role":"user","content":"changed"}}`+"\n"), 0o600); err != nil {
@@ -1251,7 +1251,7 @@ func TestEpisodicCrossSourceRecoveryAndLineage(t *testing.T) {
 	if got, source, err := v.LoadVerifiedEpisodicPointerSource(id, ref1); err != nil || got != text || source != ref2 {
 		t.Fatalf("restored alternate remained unavailable: %q %q %v", got, source, err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id = ?`, id); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, err := v.LoadVerifiedEpisodicPointerSource(id, ref1); err == nil || got != "" {
@@ -1288,7 +1288,7 @@ func TestEpisodicSaveItemErrorsAndInfrastructureFailures(t *testing.T) {
 	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = x'00' WHERE doc_id = 'doc'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload_mac = x'00' WHERE doc_id = 'doc'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalEpisodicPointerIndexed("doc", 1, ref, "", text, pkt, IngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
@@ -1376,7 +1376,7 @@ func TestEpisodicRepointKeepsCodecGenerations(t *testing.T) {
 		t.Fatalf("repoint: %v", err)
 	}
 	var mismatched int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer <> ?`, id, newRef).Scan(&mismatched); err != nil || mismatched != 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_episodic_index WHERE doc_id = ? AND ref_pointer <> ?`, id, newRef).Scan(&mismatched); err != nil || mismatched != 0 {
 		t.Fatalf("codec generation retained stale pointer: %d %v", mismatched, err)
 	}
 	pktOther, _ := other.PackBlindPacket(id, text, 1)
@@ -1422,7 +1422,7 @@ func TestEpisodicRepointRejectsCorruptHistoricalCodec(t *testing.T) {
 		t.Fatalf("second codec: %t %v", created, err)
 	}
 	otherKey, _ := other.episodicCodecKey()
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = x'00' WHERE doc_id = ? AND codec_key = ?`, id, otherKey); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload_mac = x'00' WHERE doc_id = ? AND codec_key = ?`, id, otherKey); err != nil {
 		t.Fatal(err)
 	}
 	write(false)
@@ -1434,7 +1434,7 @@ func TestEpisodicRepointRejectsCorruptHistoricalCodec(t *testing.T) {
 		t.Fatalf("failed repoint changed primary: %q %v", raw, err)
 	}
 	var changed int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = ? AND ref_pointer <> ?`, id, oldRef).Scan(&changed); err != nil || changed != 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_episodic_index WHERE doc_id = ? AND ref_pointer <> ?`, id, oldRef).Scan(&changed); err != nil || changed != 0 {
 		t.Fatalf("failed repoint changed generations: %d %v", changed, err)
 	}
 }
@@ -1472,7 +1472,7 @@ func TestEpisodicAlternateSourceIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT total_changes()`).Scan(&after); err != nil || after != before {
 		t.Fatalf("unchanged source wrote rows: %d -> %d, %v", before, after, err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_sources SET source_mac = x'00' WHERE doc_id = ? AND ref_pointer = ?`, id, refs[1]); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_sources SET source_mac = x'00' WHERE doc_id = ? AND ref_pointer = ?`, id, refs[1]); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalEpisodicPointerIndexed(id, 1, refs[1], "", text, pkt, IngestResponse{}); !errors.Is(err, ErrEpisodicIndexItem) {
@@ -1502,6 +1502,9 @@ func TestEpisodicDeletedSourceCannotAuthorizeReusedID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM rm_docs WHERE unit_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.SaveLocalEpisodicPointerIndexed(id, 2, newRef, "", text, pkt, IngestResponse{}); err != nil {

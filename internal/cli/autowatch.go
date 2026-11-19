@@ -302,11 +302,11 @@ func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, shar
 // (and settled past settleWindow) or if a mounted directory has a different file count.
 func hasSettledDirtyBackgroundState(db *sql.DB, settleWindow time.Duration) bool {
 	var dirCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&dirCount); err != nil || dirCount == 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&dirCount); err != nil || dirCount == 0 {
 		return false
 	}
 	now := time.Now()
-	rows, err := db.Query(`SELECT abs_path, mtime_ns, file_size FROM thin_vault_bg_files`)
+	rows, err := db.Query(`SELECT abs_path, mtime_ns, file_size FROM rm_bg_files`)
 	if err != nil {
 		return false
 	}
@@ -337,7 +337,7 @@ func hasSettledDirtyBackgroundState(db *sql.DB, settleWindow time.Duration) bool
 	}
 
 	// Also check if any new supported file was added under mounted directories.
-	dirRows, err := db.Query(`SELECT root_path FROM thin_vault_bg_dirs`)
+	dirRows, err := db.Query(`SELECT root_path FROM rm_bg_dirs`)
 	if err != nil {
 		return false
 	}

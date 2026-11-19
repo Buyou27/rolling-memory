@@ -888,7 +888,7 @@ func (m *Memory) importCanonicalJSONL(target, scope string, session *string, rep
 			}
 			for _, unit := range episodicunit.SegmentUnits(scope, prefix, segment, occurredAt, true) {
 				var exists int
-				if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, unit.DocID).Scan(&exists); err != nil {
+				if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_docs WHERE unit_id = ?)`, unit.DocID).Scan(&exists); err != nil {
 					return err
 				}
 				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, unit.DocID, occurredAt, unit.RefPointer, unit.TurnRef, unit.Text, thinclient.IngestResponse{}); err != nil {
@@ -1063,10 +1063,10 @@ func legacyEpisodicIdentityCount(database *sql.DB, scope string) int {
 		return 0
 	}
 	var present int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_docs'`).Scan(&present); err != nil || present == 0 {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_docs'`).Scan(&present); err != nil || present == 0 {
 		return 0
 	}
-	rows, err := database.Query(`SELECT doc_id, raw_text FROM thin_vault_docs WHERE (layer = 'episodic' OR layer = '') AND raw_text NOT LIKE '@ref:%'`)
+	rows, err := database.Query(`SELECT d.unit_id, d.raw_text FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE (d.layer = 'episodic' OR d.layer = '') AND COALESCE(m.ref_pointer, '') = '' AND d.raw_text NOT LIKE '@ref:%'`)
 	if err != nil {
 		return 0
 	}

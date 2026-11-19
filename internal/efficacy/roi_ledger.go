@@ -60,11 +60,11 @@ func ComputeDBFingerprint(db *sql.DB, scope string) string {
 	_ = db.QueryRow(`SELECT coalesce(value, '') FROM db_meta WHERE key = 'created_at'`).Scan(&createdAt)
 	_ = db.QueryRow(`SELECT coalesce(value, '') FROM db_meta WHERE key = 'engine'`).Scan(&engine)
 	var firstDocID string
-	_ = db.QueryRow(`SELECT coalesce(doc_id, '') FROM thin_vault_docs ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
+	_ = db.QueryRow(`SELECT coalesce(unit_id, '') FROM rm_docs ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	if strings.TrimSpace(firstDocID) == "" {
 		// A vault that has recalled nothing yet still needs a stable identity, so
 		// the oldest crystallized unit anchors the fingerprint instead.
-		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM thin_vault_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
+		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM rm_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	}
 	if strings.TrimSpace(firstDocID) == "" {
 		// Vaults written before the thin-vault era anchor on their oldest trace or

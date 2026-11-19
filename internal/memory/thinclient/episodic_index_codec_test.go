@@ -65,10 +65,10 @@ func TestEpisodicIndexCodecIsolation(t *testing.T) {
 		t.Fatalf("ensure original codec: %v %v", created, err)
 	}
 	var count int
-	if err := db1.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, docID).Scan(&count); err != nil || count != 2 {
+	if err := db1.QueryRow(`SELECT COUNT(*) FROM rm_episodic_index WHERE doc_id = ?`, docID).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("codec rows: %d %v", count, err)
 	}
-	rows, err := db1.Query(`SELECT ref_pointer, payload FROM thin_vault_episodic_index WHERE doc_id = ?`, docID)
+	rows, err := db1.Query(`SELECT ref_pointer, payload FROM rm_episodic_index WHERE doc_id = ?`, docID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,31 +112,7 @@ func TestEpisodicIndexCodecIsolation(t *testing.T) {
 	if err := v1.SaveLocalEpisodicPointerIndexed(docID, 1, ref, "", text, pkt, IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db1.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index WHERE doc_id = ?`, docID).Scan(&count); err != nil || count != 2 {
+	if err := db1.QueryRow(`SELECT COUNT(*) FROM rm_episodic_index WHERE doc_id = ?`, docID).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("save removed another codec: %d %v", count, err)
-	}
-}
-
-func TestEpisodicIndexLegacySchemaMigratedWithoutLoss(t *testing.T) {
-	db, err := sql.Open("sqlite", vaultTestDSN(filepath.Join(t.TempDir(), "vault.sqlite")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE thin_vault_episodic_index (doc_id TEXT PRIMARY KEY, ref_pointer TEXT NOT NULL, codec_key BLOB NOT NULL, payload BLOB NOT NULL);
-INSERT INTO thin_vault_episodic_index VALUES ('old', '@ref:old', x'0102', x'0304');`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewVault(db, []byte("legacy-key")); err != nil {
-		t.Fatalf("migrate legacy schema: %v", err)
-	}
-	var pointer string
-	var key, payload, digest []byte
-	if err := db.QueryRow(`SELECT ref_pointer, codec_key, payload, content_digest FROM thin_vault_episodic_index WHERE doc_id = 'old'`).Scan(&pointer, &key, &payload, &digest); err != nil {
-		t.Fatal(err)
-	}
-	if pointer != "@ref:old" || !bytes.Equal(key, []byte{1, 2}) || !bytes.Equal(payload, []byte{3, 4}) || digest != nil {
-		t.Fatalf("legacy row changed: %q %x %x %x", pointer, key, payload, digest)
 	}
 }

@@ -76,6 +76,17 @@ rmem config set <section.key> <value>
 |---|---|---|
 | `storage.profile` | `local` | 常规安装为 `local`；便携形态自动选择 `usb` |
 
+### 2.5 更新通道 —— `[update]`
+
+| 配置项 | 默认值 | 含义 |
+|---|---|---|
+| `update.channel` | `dev` | `dev` 跟踪 `main` 最新提交（默认）；`stable` 只接受正式发布标签；`beta` 同时接受预发布标签 |
+| `update.source` | `github` | `github` 使用 GitHub Releases 官方渠道；`gitee` 使用 Gitee 镜像，适合访问 GitHub 较慢的网络 |
+
+`dev` 只报告 `main@<commit>`，更新需要源码重建，不会自动替换二进制。可用 `rmem config set update.channel beta` 保存偏好，也可在控制台「版本与更新」弹窗切换，或用 `rmem update --check --channel dev` 单次覆盖。
+
+更新源可用 `rmem config set update.source gitee` 保存，也可在控制台「版本与更新」弹窗选择。显式的 `--release-base` URL 或 `ROLLING_MEMORY_RELEASE_BASE` 仍只对本次运行生效并优先。Gitee 镜像尚未附带某个版本的预编译包时，检查结果会标记为“仅源码更新”，不会给出必然失败的下载按钮。
+
 ---
 
 ## 3. 环境变量（常用子集）
@@ -90,6 +101,8 @@ rmem config set <section.key> <value>
 | `ROLLING_MEMORY_SCOPE` | `core.scope` |
 | `ROLLING_MEMORY_READER` | `core.reader` |
 | `ROLLING_MEMORY_DELIVERY_WINDOW` | `recall.delivery_window` |
+| `ROLLING_MEMORY_UPDATE_CHANNEL` | `update.channel` |
+| `ROLLING_MEMORY_UPDATE_SOURCE` | `update.source` |
 | `ROLLING_MEMORY_DAEMON_MEMORY_LIMIT` | `daemon.memory_limit` |
 | `ROLLING_MEMORY_DAEMON_SOCKET` | 引擎 socket 路径 |
 | `ROLLING_MEMORY_PORTABLE` | 强制便携模式并指定载荷根目录 |

@@ -277,7 +277,7 @@ func TestEpisodicWarmDomainCrossMidnightCosine(t *testing.T) {
 	citeIdx := BuildIndex(citeDocs)
 	citeSt := NewEngine(citeIdx).ensureClusterState()
 	ca, cb := citeIdx.UnitOf["cite-a"], citeIdx.UnitOf["cite-b"]
-	if got, want := citeSt.docSubjectCos(citeIdx, nil, ca, cb), 1/math.E; math.Abs(got-want) > 1e-12 {
+	if got, want := citeSt.docSubjectCos(citeIdx, nil, ca, cb), 1/eulerNumber; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("untimed cited pair cosine = %v, want citation floor %v", got, want)
 	}
 }

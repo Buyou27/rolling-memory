@@ -65,7 +65,7 @@ func snapshotBgTask() BgTaskStatus {
 	return bgTaskState
 }
 
-// collectArtifactStats 汇总本地明文金库（thin_vault_docs / thin_vault_noetic）与引擎统计读数。
+// collectArtifactStats 汇总本地明文金库（thin_vault_docs / rm_noetic）与引擎统计读数。
 // 控制台是纯本地面：恒报本地金库坐标（local://vault），绝不呈现任何云端地址 / 用户 ID。
 func collectArtifactStats(dbPath, scope string) ArtifactStats {
 	if scope == "" || scope == LegacyUserScope {
@@ -98,6 +98,9 @@ func collectArtifactStats(dbPath, scope string) ArtifactStats {
 // bumps are reflected immediately on /dashboard, /status, /widget, and /terminal even before
 // the rolling-admin binary is recompiled.
 func liveSoftwareVersion() string {
+	if v := strings.TrimSpace(Version); v != "" && !strings.ContainsAny(v, " \t\r\n") {
+		return v
+	}
 	if raw, err := os.ReadFile("../VERSION"); err == nil {
 		if v := strings.TrimSpace(string(raw)); v != "" && !strings.ContainsAny(v, " \t\r\n") {
 			return v
@@ -178,6 +181,9 @@ func mount(g *gin.RouterGroup) {
 	g.POST("/background/remove", middleware.AdminAuth(), middleware.AdminPermission(), backgroundRemoveHandler)
 	g.POST("/background/sync", middleware.AdminAuth(), middleware.AdminPermission(), backgroundSyncHandler)
 	g.POST("/system/version", middleware.AdminAuth(), middleware.AdminPermission(), systemVersionHandler)
+	g.POST("/system/update/status", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateStatusHandler)
+	g.POST("/system/update/channel", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateChannelHandler)
+	g.POST("/system/update/source", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateSourceHandler)
 	g.POST("/system/update/check", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateCheckHandler)
 	g.POST("/system/update/apply", middleware.AdminAuth(), middleware.AdminPermission(), systemUpdateApplyHandler)
 
@@ -252,7 +258,7 @@ type RecentAssertion struct {
 	Status     string  `json:"status"`
 }
 
-// ArtifactStats 薄客户端明文金库（thin_vault_docs / thin_vault_noetic）与 RAME 引擎实时统计控制台数据。
+// ArtifactStats 薄客户端明文金库（thin_vault_docs / rm_noetic）与 RAME 引擎实时统计控制台数据。
 type ArtifactStats struct {
 	TotalTraces       int     `json:"total_traces"`
 	ProcessedTraces   int     `json:"processed_traces"`
@@ -263,7 +269,7 @@ type ArtifactStats struct {
 	EligibleNodes     int     `json:"eligible_nodes"`
 	ThinVaultDocs     int     `json:"thin_vault_docs"`
 	ThinVaultCells    int     `json:"thin_vault_cells"`
-	ThinVaultNoetic   int     `json:"thin_vault_noetic"`
+	ThinVaultNoetic   int     `json:"rm_noetic"`
 	UpstreamEngine    string  `json:"upstream_engine"`
 	UpstreamUserID    string  `json:"upstream_user_id"`
 	UpstreamEndpoint  string  `json:"upstream_endpoint"`

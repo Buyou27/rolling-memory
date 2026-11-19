@@ -2,7 +2,7 @@
 <!--
   MarkdownPreview —— 记忆正文的统一阅读面（三层浏览器 / 检索调试台 / 评测实验室 / ROI 证据抽屉共用）。
 
-  渲染内核 = md-editor-v3 的 MdPreview（与帮助中心同一套组件、同一份样式，不再自维护渲染器）：
+  渲染内核 = md-editor-v3 的 MdPreview（与后台其它 Markdown 阅读面同一套组件、同一份样式，不再自维护渲染器）：
   · 正文先经 memoryMarkdown 自动格式化（结构化内容包代码围栏）再交给 MdPreview 渲染；
   · 分块坐标首行提升为围栏外的行首标题，代码行号随之校准到源文件真实行号（`#L<start>-<end>`）；
   · 正文里的原始 HTML 由 md-editor-v3 自带的 XSSPlugin 过滤：非白名单标签一律以字面文本呈现；

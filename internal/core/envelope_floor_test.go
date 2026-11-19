@@ -50,7 +50,7 @@ func TestEnvelopeFloorCollisionSurprisal(t *testing.T) {
 	eng := NewEngine(idx)
 	st := eng.ensureClusterState()
 
-	invE := 1.0 / math.E
+	transmissionPerHop := 1.0 / eulerNumber
 	majPos := unitPosByAuthor(idx, 0xAAAA)
 	rarePos := unitPosByAuthor(idx, 0xBBBB)
 	if len(majPos) != n-2 || len(rarePos) != 2 {
@@ -59,7 +59,7 @@ func TestEnvelopeFloorCollisionSurprisal(t *testing.T) {
 
 	// 1) 泛滥作者（df=98/100）：增益 -ln(0.98)/ln(100) ≈ 0.00439，地板趋零。
 	gotMaj := st.computeDocSubjectCos(idx, majPos[0], majPos[1])
-	wantMaj := invE * (-math.Log(98.0/100.0) / math.Log(100.0))
+	wantMaj := transmissionPerHop * (-math.Log(98.0/100.0) / math.Log(100.0))
 	if math.Abs(gotMaj-wantMaj) > 1e-12 {
 		t.Fatalf("泛滥作者地板失准: got=%.12f want=%.12f", gotMaj, wantMaj)
 	}
@@ -69,7 +69,7 @@ func TestEnvelopeFloorCollisionSurprisal(t *testing.T) {
 
 	// 2) 稀有作者（df=2/100）：增益 -ln(0.02)/ln(100) ≈ 0.8495，接近满额。
 	gotRare := st.computeDocSubjectCos(idx, rarePos[0], rarePos[1])
-	wantRare := invE * (-math.Log(2.0/100.0) / math.Log(100.0))
+	wantRare := transmissionPerHop * (-math.Log(2.0/100.0) / math.Log(100.0))
 	if math.Abs(gotRare-wantRare) > 1e-12 {
 		t.Fatalf("稀有作者地板失准: got=%.12f want=%.12f", gotRare, wantRare)
 	}
@@ -83,7 +83,7 @@ func TestEnvelopeFloorCollisionSurprisal(t *testing.T) {
 	}
 
 	// 4) 上界：任何地板不得超过 1/e。
-	if gotRare > invE || gotMaj > invE {
+	if gotRare > transmissionPerHop || gotMaj > transmissionPerHop {
 		t.Fatalf("地板越过 1/e 上界: rare=%.6f majority=%.6f", gotRare, gotMaj)
 	}
 }

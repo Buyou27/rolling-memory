@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/updatesource"
 )
 
 // The panel command is the one-command entry to the local web console. The
@@ -62,14 +63,17 @@ func consoleLayout() (root, binPath, webDist, apiPID, webPID, apiLog, webLog str
 // off/none/0) disables fetching, mirroring the shell launchers.
 func consoleReleaseBase() string {
 	base, configured := os.LookupEnv("ROLLING_MEMORY_RELEASE_BASE")
-	if !configured {
-		base = "https://github.com/rocareer/rolling-memory/releases/latest/download"
+	if configured {
+		switch strings.ToLower(strings.TrimSpace(base)) {
+		case "", "off", "none", "0":
+			return ""
+		}
+		return strings.TrimSpace(base)
 	}
-	switch strings.ToLower(strings.TrimSpace(base)) {
-	case "", "off", "none", "0":
-		return ""
+	if cfg, err := config.Load(config.LoadOptions{}); err == nil {
+		return updatesource.ReleaseBase(cfg.Update.Source)
 	}
-	return strings.TrimSpace(base)
+	return updatesource.GitHubReleaseBase
 }
 
 // consoleReleaseMirror returns the fallback release mirror when the caller did

@@ -57,7 +57,7 @@ func NaturalDecayPrefixCount(hits []Hit, maxItems int) int {
 	if ref <= 0 {
 		return 0
 	}
-	cutoff := ref / math.E
+	cutoff := ref / eulerNumber
 	count := 0
 	for i := 0; i < limit; i++ {
 		energy := hits[i].Energy

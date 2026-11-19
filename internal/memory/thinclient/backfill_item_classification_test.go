@@ -85,11 +85,11 @@ func TestEpisodicBackfillCorruptItemDoesNotBlock(t *testing.T) {
 	if created, err := v.EnsureLocalEpisodicIndex(scope, badID, badRef, badText); err != nil || !created {
 		t.Fatalf("prepare index: %v %v", created, err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id = ?`, badID); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id = ?`, badID); err != nil {
 		t.Fatal(err)
 	}
 	var before []byte
-	if err := db.QueryRow(`SELECT payload FROM thin_vault_episodic_index WHERE doc_id = ?`, badID).Scan(&before); err != nil {
+	if err := db.QueryRow(`SELECT payload FROM rm_episodic_index WHERE doc_id = ?`, badID).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	page, err := v.BackfillEpisodicIndexes(context.Background(), scope, "", 10)
@@ -97,7 +97,7 @@ func TestEpisodicBackfillCorruptItemDoesNotBlock(t *testing.T) {
 		t.Fatalf("item isolation: %+v %v", page, err)
 	}
 	var after []byte
-	if err := db.QueryRow(`SELECT payload FROM thin_vault_episodic_index WHERE doc_id = ?`, badID).Scan(&after); err != nil || !bytes.Equal(before, after) {
+	if err := db.QueryRow(`SELECT payload FROM rm_episodic_index WHERE doc_id = ?`, badID).Scan(&after); err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("evidence changed: %x %v", after, err)
 	}
 	page, err = v.BackfillEpisodicIndexes(context.Background(), scope, "", 10)

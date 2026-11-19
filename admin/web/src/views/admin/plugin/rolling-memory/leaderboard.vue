@@ -3,7 +3,7 @@
     Rolling-Memory 记忆系统 · 「LoCoMo-Backboard 对照榜单」工作台（views/admin/plugin/rolling-memory/leaderboard.vue）。
     设计原则（第一性原理 · 与剑桥 ATM-Bench 主榜单页 100% 视觉与交互同构）：
       1) 首屏直接交代对照基准身份：内置 locomo-backboard（locomo-frozen-2026-10-11）三枚 SHA-1 协议钉只读锁死，对标 ACL 2024 LoCoMo 1,540 题商业记忆榜单；
-      2) 4 维核心指标卡（左边框指示卡）：本机 0-Vector/0-LLM 1,540 全量最新读数（85.26% · 1313/1540）、四维题型分项（单跳 90.96% 超越外部榜首 Backboard 89.36%）、历史重型架构存档对照（92.79%）、冻结协议状态；
+      2) 4 维核心指标卡（左边框指示卡）：本机 0-Vector/0-LLM 检索核 + LLM 答器/判官（Top-96）1,540 全量最新读数（85.26% · 1313/1540）、四维题型分项（单跳 90.96% 超越外部榜首 Backboard 89.36%）、历史重型架构存档对照（92.79%）、冻结协议状态；
       3) 连贯分析流：分类过滤与排序控制栏 + 一键 CLI 复现条 + 左总分天梯图（含 90.00% 外部榜首线）/ 右四维题型剖析双栏联动 + 完整榜单明细表（显式展示判官模型列）；
       4) 底部审计抽屉：将协议说明、三枚 SHA-1 密码学钉与官方 Answer/Judge 冻结提示词原文收纳为清爽的审计选项卡。
 -->
@@ -125,12 +125,13 @@
                             </template>
                             <div class="rm-help-body">
                                 <p v-if="isEn">
-                                    Latest on-device reading: the local_plain (0-Vector / 0-LLM) engine scores 85.26% (1313/1540) end-to-end on the
-                                    official Cat 1–4 full set under the frozen prompt protocol, judged by deepseek-v4.1-flash (compare row by row
-                                    against the judge column).
+                                    Latest on-device reading: the local_plain retrieval kernel (0-Vector / 0-LLM) delivers a Top-96 context to an
+                                    LLM answerer and judge, scoring 85.26% (1313/1540) end-to-end on the official Cat 1–4 full set under the frozen
+                                    prompt protocol. The 0-LLM label applies to the retrieval kernel only; the answerer and judge are
+                                    deepseek-v4.1-flash (compare row by row against the judge column).
                                 </p>
                                 <p v-else>
-                                    本机最新读数：local_plain（0-Vector / 0-LLM）引擎在官方 cat1-4 全集（1,540 题）上的端到端判对率 85.26%（1313/1540），冻结提示词协议，deepseek-v4.1-flash 判官（请按行内判官列逐行对照）。
+                                    本机最新读数：local_plain 检索核（0-Vector / 0-LLM）以 Top-96 交付将证据交给 LLM 答器与判官，在官方 cat1-4 全集（1,540 题）上取得端到端判对率 85.26%（1313/1540），冻结提示词协议。“0-LLM” 仅指检索核；答器与判官均为 deepseek-v4.1-flash（请按行内判官列逐行对照）。
                                 </p>
                             </div>
                         </el-popover>

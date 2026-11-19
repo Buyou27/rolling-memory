@@ -30,7 +30,7 @@ import (
 
 // MemoriesQueryRequest 全量记忆列表筛选、排序与分页请求。
 //
-// 契约只声明薄客户端本地金库（thin_vault_docs / thin_vault_noetic）真实具备的维度：
+// 契约只声明薄客户端本地金库（thin_vault_docs / rm_noetic）真实具备的维度：
 // 层（background / episodic / noetic）、状态（L3 active / stale）、关键词、排序与分页。
 // 上一代曾经声明却从未实现、也无法从薄金库求值的字段（warrant / audience / temporal_class /
 // carrier / incarnation / workspace / locus / origin / form_kind / confidence / S-X-O）已全部移除 ——
@@ -574,7 +574,7 @@ func queryFacets(dbPath, scope string) MemoriesSummary {
 		TopPredicates: []FacetCount{},
 	}
 	var bgChunksCnt, bgDocsCnt, epDocsCnt, noeticActiveCnt, noeticStaleCnt int
-	if rows, err := sqliteQueryJSON(dbPath, `SELECT COUNT(*) AS cnt FROM thin_vault_bg_chunks;`); err == nil && len(rows) > 0 {
+	if rows, err := sqliteQueryJSON(dbPath, `SELECT COUNT(*) AS cnt FROM rm_bg_chunks;`); err == nil && len(rows) > 0 {
 		bgChunksCnt = asInt(rows[0]["cnt"])
 	}
 	if rows, err := sqliteQueryJSON(dbPath, `SELECT COALESCE(layer, 'episodic') AS l, COUNT(*) AS cnt FROM thin_vault_docs GROUP BY 1;`); err == nil {
@@ -586,7 +586,7 @@ func queryFacets(dbPath, scope string) MemoriesSummary {
 			}
 		}
 	}
-	if rows, err := sqliteQueryJSON(dbPath, `SELECT COALESCE(status, 'active') AS st, COUNT(*) AS cnt FROM thin_vault_noetic GROUP BY 1;`); err == nil {
+	if rows, err := sqliteQueryJSON(dbPath, `SELECT COALESCE(status, 'active') AS st, COUNT(*) AS cnt FROM rm_noetic GROUP BY 1;`); err == nil {
 		for _, r := range rows {
 			if strings.EqualFold(asString(r["st"]), "active") {
 				noeticActiveCnt += asInt(r["cnt"])
@@ -637,10 +637,10 @@ func queryFacets(dbPath, scope string) MemoriesSummary {
 				CASE WHEN COALESCE(d.root_path, '') = '' THEN '(background)' ELSE d.root_path END AS locus,
 				CASE
 					WHEN COALESCE(SUM(f.chunk_count), 0) > 0 THEN SUM(f.chunk_count)
-					ELSE (SELECT COUNT(c.unit_id) FROM thin_vault_bg_files f2 JOIN thin_vault_bg_chunks c ON c.abs_path = f2.abs_path WHERE f2.dir_id = d.dir_id)
+					ELSE (SELECT COUNT(c.unit_id) FROM rm_bg_files f2 JOIN rm_bg_chunks c ON c.abs_path = f2.abs_path WHERE f2.dir_id = d.dir_id)
 				END AS cnt
-			FROM thin_vault_bg_dirs d
-			JOIN thin_vault_bg_files f ON f.dir_id = d.dir_id
+			FROM rm_bg_dirs d
+			JOIN rm_bg_files f ON f.dir_id = d.dir_id
 			GROUP BY d.dir_id, 1
 		) GROUP BY 1;
 	`); err == nil {
@@ -719,7 +719,7 @@ func queryMemoriesFromDB(dbPath string, req MemoriesQueryRequest) (MemoriesQuery
 	offset := (req.Page - 1) * req.PageSize
 
 	// 无关键词筛选时的快速索引通道：直接利用单表 ORDER BY ... LIMIT (offset+pageSize) 截断，
-	// 省去对数万行 thin_vault_docs + thin_vault_noetic 的全表 UNION ALL 扫描与全表排序。
+	// 省去对数万行 thin_vault_docs + rm_noetic 的全表 UNION ALL 扫描与全表排序。
 	if kwNorm == "" && (sortField == "" || sortField == "occurred_at" || sortField == "id") && offset >= 0 && offset+req.PageSize <= 1000 {
 		dir := "DESC"
 		if strings.EqualFold(strings.TrimSpace(req.SortOrder), "asc") {
@@ -759,7 +759,7 @@ func queryMemoriesFromDB(dbPath string, req MemoriesQueryRequest) (MemoriesQuery
 				FROM thin_vault_docs WHERE %s ORDER BY %s LIMIT %d
 			)`, docWhere, docOrder, branchCap))
 		}
-		if (layerNorm == "" || layerNorm == noeticLayer) && vaultTablePresent(dbPath, "thin_vault_noetic") {
+		if (layerNorm == "" || layerNorm == noeticLayer) && vaultTablePresent(dbPath, "rm_noetic") {
 			nWhere := "1=1"
 			if statusNorm == "active" {
 				nWhere = "COALESCE(NULLIF(status, ''), 'active') = 'active'"
@@ -775,7 +775,7 @@ func queryMemoriesFromDB(dbPath string, req MemoriesQueryRequest) (MemoriesQuery
 				       COALESCE(NULLIF(status, ''), 'active') AS status, occurred_at AS occurred_at,
 				       query_text AS text, COALESCE(address_uri, '') AS address_uri,
 				       answer_text AS answer_text, COALESCE(cited_unit_ids_json, '[]') AS cited_json
-				FROM thin_vault_noetic WHERE %s ORDER BY %s LIMIT %d
+				FROM rm_noetic WHERE %s ORDER BY %s LIMIT %d
 			)`, nWhere, noeticOrder, branchCap))
 		}
 		if len(branches) > 0 {
@@ -875,7 +875,7 @@ func queryMemoriesFromDB(dbPath string, req MemoriesQueryRequest) (MemoriesQuery
 	return empty, nil
 }
 
-// memoriesUnionSQL 把三层记忆投影成统一可查询视图（L1/L2 来自 thin_vault_docs，L3 来自 thin_vault_noetic）。
+// memoriesUnionSQL 把三层记忆投影成统一可查询视图（L1/L2 来自 thin_vault_docs，L3 来自 rm_noetic）。
 func memoriesUnionSQL(dbPath string, req MemoriesQueryRequest) (string, []any) {
 	layer := strings.ToLower(strings.TrimSpace(req.Layer))
 	if layer != backgroundLayer && layer != episodicLayer && layer != noeticLayer {
@@ -952,7 +952,7 @@ func memoriesUnionSQL(dbPath string, req MemoriesQueryRequest) (string, []any) {
 
 	// L3：Agent 提问 + 检索证据固化（状态是 L3 独有维度）。
 	if layer == "" || layer == noeticLayer {
-		if vaultTablePresent(dbPath, "thin_vault_noetic") {
+		if vaultTablePresent(dbPath, "rm_noetic") {
 			sel := `
 				SELECT
 					'noetic' AS src,
@@ -964,7 +964,7 @@ func memoriesUnionSQL(dbPath string, req MemoriesQueryRequest) (string, []any) {
 					COALESCE(address_uri, '') AS address_uri,
 					answer_text AS answer_text,
 					COALESCE(cited_unit_ids_json, '[]') AS cited_json
-				FROM thin_vault_noetic`
+				FROM rm_noetic`
 			conds := []string{}
 			if status != "" {
 				conds = append(conds, `COALESCE(NULLIF(status, ''), 'active') = ?`)
@@ -1206,7 +1206,7 @@ func queryMemoryDetailFromDB(dbPath, id string) (MemoryDetailResponse, error) {
 	}
 	if tnRows, err := sqliteQueryJSON(dbPath, `
 		SELECT noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json
-		FROM thin_vault_noetic
+		FROM rm_noetic
 		WHERE noetic_id = `+sqlQuote(cleanID)+` LIMIT 1;
 	`); err == nil && len(tnRows) > 0 {
 		r := tnRows[0]
@@ -1253,7 +1253,7 @@ func queryMemoryDetailFromDB(dbPath, id string) (MemoryDetailResponse, error) {
 	}
 	if bgRows, err := sqliteQueryJSON(dbPath, `
 		SELECT unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri
-		FROM thin_vault_bg_chunks
+		FROM rm_bg_chunks
 		WHERE unit_id = `+sqlQuote(cleanID)+` LIMIT 1;
 	`); err == nil && len(bgRows) > 0 {
 		r := bgRows[0]
@@ -1647,7 +1647,7 @@ func recentRecallCues(dbPath string, limit int) []RecentCueItem {
 	items := []RecentCueItem{}
 	rows, err := sqliteQueryJSON(dbPath, `
 		SELECT noetic_id, occurred_at, status, query_text, cited_unit_ids_json
-		FROM thin_vault_noetic
+		FROM rm_noetic
 		ORDER BY occurred_at DESC, noetic_id ASC
 		LIMIT 200;
 	`)
@@ -2539,14 +2539,14 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 		}
 
 		if cntRows, err := sqliteQueryJSON(dbPath, `SELECT
-					(SELECT COUNT(*) FROM thin_vault_bg_chunks) AS bg_cnt,
+					(SELECT COUNT(*) FROM rm_bg_chunks) AS bg_cnt,
 					COALESCE(SUM(CASE WHEN COALESCE(layer, 'episodic') = 'background' THEN 1 ELSE 0 END), 0) AS bg_doc_cnt,
 					COALESCE(SUM(CASE WHEN COALESCE(layer, 'episodic') != 'background' THEN 1 ELSE 0 END), 0) AS ep_cnt,
 					COALESCE(SUM(CASE WHEN COALESCE(layer, 'episodic') != 'background' AND substr(ltrim(raw_text), 1, 5) = '@ref:' THEN 1 ELSE 0 END), 0) AS ptr_cnt,
 					COALESCE(SUM(CASE WHEN COALESCE(address_uri, '') != '' OR substr(ltrim(raw_text), 1, 5) = '@ref:' THEN 1 ELSE 0 END), 0) AS doc_addr_cnt,
-					(SELECT COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) FROM thin_vault_noetic) AS noetic_cnt,
-					(SELECT COALESCE(SUM(CASE WHEN status != 'active' THEN 1 ELSE 0 END), 0) FROM thin_vault_noetic) AS noetic_stale_cnt,
-					(SELECT COALESCE(SUM(CASE WHEN status = 'active' AND (COALESCE(cited_unit_ids_json, '[]') != '[]' OR COALESCE(address_uri, '') != '') THEN 1 ELSE 0 END), 0) FROM thin_vault_noetic) AS noetic_addr_cnt
+					(SELECT COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) FROM rm_noetic) AS noetic_cnt,
+					(SELECT COALESCE(SUM(CASE WHEN status != 'active' THEN 1 ELSE 0 END), 0) FROM rm_noetic) AS noetic_stale_cnt,
+					(SELECT COALESCE(SUM(CASE WHEN status = 'active' AND (COALESCE(cited_unit_ids_json, '[]') != '[]' OR COALESCE(address_uri, '') != '') THEN 1 ELSE 0 END), 0) FROM rm_noetic) AS noetic_addr_cnt
 				FROM thin_vault_docs;`); err == nil && len(cntRows) > 0 {
 			bgRawCnt := asInt(cntRows[0]["bg_cnt"])
 			bgCnt := bgRawCnt + asInt(cntRows[0]["bg_doc_cnt"])
@@ -2570,7 +2570,7 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 					}
 				}
 				if !usedCachedIdx {
-					if idxRows, iErr := sqliteQueryJSON(dbPath, `SELECT COUNT(DISTINCT d.doc_id) AS idx_ptr_cnt FROM thin_vault_docs d JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id WHERE COALESCE(d.layer, 'episodic') != 'background' AND substr(ltrim(d.raw_text), 1, 5) = '@ref:';`); iErr == nil && len(idxRows) > 0 {
+					if idxRows, iErr := sqliteQueryJSON(dbPath, `SELECT COUNT(DISTINCT d.doc_id) AS idx_ptr_cnt FROM thin_vault_docs d JOIN rm_episodic_index i ON i.doc_id = d.doc_id WHERE COALESCE(d.layer, 'episodic') != 'background' AND substr(ltrim(d.raw_text), 1, 5) = '@ref:';`); iErr == nil && len(idxRows) > 0 {
 						idxPtrCnt = asInt(idxRows[0]["idx_ptr_cnt"])
 					}
 				}
@@ -2615,17 +2615,17 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 		// 日桶只覆盖 30 天窗口（下方 dayKeys30 同口径）：加时间下界后不再对全库历史做 GROUP BY，
 		// 否则实时控制台每一帧（活跃期 ≤250ms 一帧）都会重扫整份三层记忆。
 		// 时间列优先取首次入库时间 inserted_at（老表或 0 值平滑回退 occurred_at），消除修改旧文件把存量分块刷进近1小时的虚增。
-		bgTsExpr := vaultIngestTimeExpr(dbPath, "thin_vault_bg_chunks")
+		bgTsExpr := vaultIngestTimeExpr(dbPath, "rm_bg_chunks")
 		docTsExpr := vaultIngestTimeExpr(dbPath, "thin_vault_docs")
-		ntTsExpr := vaultIngestTimeExpr(dbPath, "thin_vault_noetic")
+		ntTsExpr := vaultIngestTimeExpr(dbPath, "rm_noetic")
 		qVaultDaily := fmt.Sprintf(`SELECT date(ts, 'unixepoch', 'localtime') AS d,
 				SUM(CASE WHEN layer='background' THEN 1 ELSE 0 END) AS bg_cnt,
 				SUM(CASE WHEN layer='episodic' THEN 1 ELSE 0 END) AS ep_cnt,
 				SUM(CASE WHEN layer='noetic' THEN 1 ELSE 0 END) AS nt_cnt
 				FROM (
-					SELECT 'background' AS layer, %s AS ts FROM thin_vault_bg_chunks
+					SELECT 'background' AS layer, %s AS ts FROM rm_bg_chunks
 					UNION ALL SELECT CASE WHEN COALESCE(layer, 'episodic')='background' THEN 'background' ELSE 'episodic' END AS layer, %s AS ts FROM thin_vault_docs
-					UNION ALL SELECT 'noetic' AS layer, %s AS ts FROM thin_vault_noetic WHERE status = 'active'
+					UNION ALL SELECT 'noetic' AS layer, %s AS ts FROM rm_noetic WHERE status = 'active'
 				) WHERE ts >= %d
 				GROUP BY d ORDER BY d DESC LIMIT 60;`, bgTsExpr, docTsExpr, ntTsExpr, start30DUnix)
 		if rows, err := sqliteQueryJSON(dbPath, qVaultDaily); err == nil {
@@ -2640,9 +2640,9 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 		}
 
 		qVaultRecent24H := fmt.Sprintf(`SELECT layer, ts FROM (
-				SELECT 'background' AS layer, %s AS ts FROM thin_vault_bg_chunks WHERE %s >= %d
+				SELECT 'background' AS layer, %s AS ts FROM rm_bg_chunks WHERE %s >= %d
 				UNION ALL SELECT CASE WHEN COALESCE(layer, 'episodic')='background' THEN 'background' ELSE 'episodic' END AS layer, %s AS ts FROM thin_vault_docs WHERE %s >= %d
-				UNION ALL SELECT 'noetic' AS layer, %s AS ts FROM thin_vault_noetic WHERE %s >= %d AND status = 'active'
+				UNION ALL SELECT 'noetic' AS layer, %s AS ts FROM rm_noetic WHERE %s >= %d AND status = 'active'
 			);`, bgTsExpr, bgTsExpr, start1DUnix, docTsExpr, docTsExpr, start1DUnix, ntTsExpr, ntTsExpr, start1DUnix)
 		if rows, err := sqliteQueryJSON(dbPath, qVaultRecent24H); err == nil {
 			for _, r := range rows {
@@ -2675,7 +2675,7 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 		qRecent := `SELECT id, txt, addr FROM (
 			SELECT * FROM (SELECT doc_id AS id, raw_text AS txt, address_uri AS addr, occurred_at FROM thin_vault_docs ORDER BY occurred_at DESC LIMIT 8)
 			UNION ALL
-			SELECT * FROM (SELECT noetic_id AS id, 'Q: ' || query_text || ' | A: ' || answer_text AS txt, COALESCE(NULLIF(address_uri, ''), noetic_id) AS addr, occurred_at FROM thin_vault_noetic WHERE status = 'active' ORDER BY occurred_at DESC LIMIT 8)
+			SELECT * FROM (SELECT noetic_id AS id, 'Q: ' || query_text || ' | A: ' || answer_text AS txt, COALESCE(NULLIF(address_uri, ''), noetic_id) AS addr, occurred_at FROM rm_noetic WHERE status = 'active' ORDER BY occurred_at DESC LIMIT 8)
 		) ORDER BY occurred_at DESC LIMIT 8;`
 		if rows, err := sqliteQueryJSON(dbPath, qRecent); err == nil {
 			for _, r := range rows {
@@ -3156,12 +3156,12 @@ func tryLoadPersistedROILedger(home, dbPath, scope, harnessFilter string, limit 
 		tvDocs = asInt(tvRows[0]["docs_cnt"])
 		tvCells = asInt(tvRows[0]["cells_cnt"])
 	}
-	if tnRows, err := sqliteQueryJSON(dbPath, `SELECT COUNT(*) AS noetic_cnt FROM thin_vault_noetic WHERE status = 'active';`); err == nil && len(tnRows) > 0 {
+	if tnRows, err := sqliteQueryJSON(dbPath, `SELECT COUNT(*) AS noetic_cnt FROM rm_noetic WHERE status = 'active';`); err == nil && len(tnRows) > 0 {
 		tvNoetic = asInt(tnRows[0]["noetic_cnt"])
 	}
 	out["thin_vault_docs"] = tvDocs
 	out["thin_vault_cells"] = tvCells
-	out["thin_vault_noetic"] = tvNoetic
+	out["rm_noetic"] = tvNoetic
 	out["upstream_engine"] = "Rolling Autonoetic Memory Engine (the memory engine)"
 	// 读数如实标注来源：控制台恒报本地明文金库坐标（local://vault），
 	// 绝不把云端地址 / 用户 ID 当成本地读数呈现。
@@ -3827,14 +3827,14 @@ func graphVaultFingerprint(dbPath string) string {
 			(SELECT IFNULL(MAX(occurred_at), 0) FROM thin_vault_docs) || ':' ||
 			(SELECT IFNULL(SUM(LENGTH(COALESCE(raw_text, ''))), 0) FROM thin_vault_docs) || ':' ||
 			(SELECT IFNULL(SUM(LENGTH(COALESCE(sentences_json, ''))), 0) FROM thin_vault_docs) || '|' ||
-			(SELECT COUNT(*) FROM thin_vault_bg_chunks) || ':' ||
-			(SELECT IFNULL(MAX(rowid), 0) FROM thin_vault_bg_chunks) || ':' ||
-			(SELECT IFNULL(MAX(occurred_at), 0) FROM thin_vault_bg_chunks) || ':' ||
-			(SELECT IFNULL(SUM(LENGTH(COALESCE(rel_path, '') || COALESCE(abs_path, '') || COALESCE(anchor, ''))), 0) FROM thin_vault_bg_chunks) || '|' ||
-			(SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active') || ':' ||
-			(SELECT IFNULL(MAX(rowid), 0) FROM thin_vault_noetic WHERE status = 'active') || ':' ||
-			(SELECT IFNULL(MAX(occurred_at), 0) FROM thin_vault_noetic WHERE status = 'active') || ':' ||
-			(SELECT IFNULL(SUM(LENGTH(COALESCE(query_text, '') || COALESCE(answer_text, '') || COALESCE(cited_unit_ids_json, ''))), 0) FROM thin_vault_noetic WHERE status = 'active')
+			(SELECT COUNT(*) FROM rm_bg_chunks) || ':' ||
+			(SELECT IFNULL(MAX(rowid), 0) FROM rm_bg_chunks) || ':' ||
+			(SELECT IFNULL(MAX(occurred_at), 0) FROM rm_bg_chunks) || ':' ||
+			(SELECT IFNULL(SUM(LENGTH(COALESCE(rel_path, '') || COALESCE(abs_path, '') || COALESCE(anchor, ''))), 0) FROM rm_bg_chunks) || '|' ||
+			(SELECT COUNT(*) FROM rm_noetic WHERE status = 'active') || ':' ||
+			(SELECT IFNULL(MAX(rowid), 0) FROM rm_noetic WHERE status = 'active') || ':' ||
+			(SELECT IFNULL(MAX(occurred_at), 0) FROM rm_noetic WHERE status = 'active') || ':' ||
+			(SELECT IFNULL(SUM(LENGTH(COALESCE(query_text, '') || COALESCE(answer_text, '') || COALESCE(cited_unit_ids_json, ''))), 0) FROM rm_noetic WHERE status = 'active')
 			AS fp;
 	`)
 	if err != nil || len(rows) == 0 {
@@ -3946,7 +3946,7 @@ func buildMemoryGraphWithLayers(dbPath, reqScope string, limit int, keyword stri
 
 // assembleGraphDomain 装配与请求形状无关的三层图谱领域（SQL → 合并 → 地址容器裁剪 → 粒子富化 → 全域总数）。
 func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weightsKey string, graphFingerprint string) *graphDomain {
-	// 图谱恒由本地明文金库（thin_vault_docs / thin_vault_noetic）合并构建，零云端拓扑拉取：
+	// 图谱恒由本地明文金库（thin_vault_docs / rm_noetic）合并构建，零云端拓扑拉取：
 	// EventTotal/LinkTotal 只随本地金库变化，与显示限额无关。
 	effWeights := map[string]float64{
 		"background": 1.0,
@@ -3963,7 +3963,7 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 		effWeights[normK] = w
 	}
 
-	// 1. 读取本地 thin_vault_docs 与 thin_vault_noetic 明文金库（用于还原上游盲态单元的明文摘要与原文切片）
+	// 1. 读取本地 thin_vault_docs 与 rm_noetic 明文金库（用于还原上游盲态单元的明文摘要与原文切片）
 	type localDocMeta struct {
 		docID      string
 		layer      string
@@ -4008,7 +4008,7 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 			localDocOrder = append(localDocOrder, did)
 		}
 	}
-	if bgRows, err := sqliteQueryJSON(dbPath, `SELECT unit_id, abs_path, rel_path, anchor, occurred_at, address_uri FROM thin_vault_bg_chunks ORDER BY occurred_at DESC LIMIT 10000;`); err == nil {
+	if bgRows, err := sqliteQueryJSON(dbPath, `SELECT unit_id, abs_path, rel_path, anchor, occurred_at, address_uri FROM rm_bg_chunks ORDER BY occurred_at DESC LIMIT 10000;`); err == nil {
 		for _, br := range bgRows {
 			uid := strings.TrimSpace(asString(br["unit_id"]))
 			if uid == "" {
@@ -4072,7 +4072,7 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 	}
 	localNoetics := make(map[string]localNoeticMeta)
 	var localNoeticOrder []string
-	if noeticRows, err := sqliteQueryJSON(dbPath, `SELECT noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json, address_uri FROM thin_vault_noetic WHERE status = 'active' ORDER BY occurred_at DESC LIMIT 10000;`); err == nil {
+	if noeticRows, err := sqliteQueryJSON(dbPath, `SELECT noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json, address_uri FROM rm_noetic WHERE status = 'active' ORDER BY occurred_at DESC LIMIT 10000;`); err == nil {
 		for _, nr := range noeticRows {
 			nid := strings.TrimSpace(asString(nr["noetic_id"]))
 			if nid == "" {
@@ -4147,7 +4147,7 @@ func assembleGraphDomain(dbPath, scope string, weights map[string]float64, weigh
 	// 2. 图谱恒由本地明文金库合并构建：控制台账面零云端外呼，不拉取任何远端拓扑。
 	sourceName := "local-vault"
 
-	// 3. 合并本地 thin_vault_docs 与 thin_vault_noetic 的单元与记忆地址容器
+	// 3. 合并本地 thin_vault_docs 与 rm_noetic 的单元与记忆地址容器
 	for _, did := range localDocOrder {
 		dm := localDocs[did]
 		uNodeKey := "unit:" + dm.docID
@@ -4871,7 +4871,7 @@ func expandMemoryGraph(dbPath, reqScope string, seedKeys []string, depth, limit 
 	return full
 }
 
-// graphScopeItems 返回当前记忆作用域统计项（优先统计 thin_vault_docs / thin_vault_noetic 与上游单元）。
+// graphScopeItems 返回当前记忆作用域统计项（优先统计 thin_vault_docs / rm_noetic 与上游单元）。
 func graphScopeItems(dbPath string, fallbackUnits, fallbackEdges int) []GraphScopeItem {
 	var docsCnt, cellsCnt, noeticCnt int
 	if rows, err := sqliteQueryJSON(dbPath, `
@@ -4883,7 +4883,7 @@ func graphScopeItems(dbPath string, fallbackUnits, fallbackEdges int) []GraphSco
 		docsCnt = asInt(rows[0]["docs_cnt"])
 		cellsCnt = asInt(rows[0]["cells_cnt"])
 	}
-	if rows, err := sqliteQueryJSON(dbPath, `SELECT COUNT(*) AS cnt FROM thin_vault_noetic WHERE status = 'active';`); err == nil && len(rows) > 0 {
+	if rows, err := sqliteQueryJSON(dbPath, `SELECT COUNT(*) AS cnt FROM rm_noetic WHERE status = 'active';`); err == nil && len(rows) > 0 {
 		noeticCnt = asInt(rows[0]["cnt"])
 	}
 	events := docsCnt + noeticCnt

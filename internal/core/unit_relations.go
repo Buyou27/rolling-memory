@@ -160,7 +160,7 @@ func (s scoredEventUnitSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 // localSlotZ is the closed-form single-sided geometric series sum of the
 // intra-sentence slot kernel exp(-(d-1)/e) over d >= 1:
 // Z_local = 1 / (1 - exp(-1/e)) ≈ 3.24886952.
-var localSlotZ = 1.0 / (1.0 - math.Exp(-invE))
+var localSlotZ = 1.0 / (1.0 - math.Exp(-transmissionPerHop))
 
 // harmonicCoverage 是双向覆盖的调和平均 2·C_self·C_peer/(C_self+C_peer)；
 // 自和大于 0 才计算（NaN 比较恒假落回 0，与各现场原守卫方向一致），
@@ -456,13 +456,16 @@ func intersectGroupProfiles(profU, profV unitGroupProfile, recordMasks bool) pai
 func evalBurstCloneRedundancyFromProfiles(profS, profNb unitGroupProfile, aff float64) float64 {
 	// Single-term overlap is coincidence and 2-term overlap is a phrase; at least
 	// 3 distinct feature groups must co-occur to treat two records as scene clones.
+	// [calibrated] minCloneGroups — distinct shared feature groups (count) required
+	// before two records can be treated as scene clones; one term is coincidence and
+	// two are a phrase.
 	const minCloneGroups = 3
 	if aff < subFloor || len(profS.items) < minCloneGroups || len(profNb.items) < minCloneGroups || profS.totalMass <= 0 || profNb.totalMass <= 0 {
 		return 0
 	}
 	ix := intersectGroupProfiles(profS, profNb, false)
-	sceneFloor := math.E * math.Min(profS.muMass, profNb.muMass)
-	if ix.SharedGroups < minCloneGroups || ix.SharedMinNats < sceneFloor || ix.SelfCoverage < invE || ix.PeerCoverage < subFloor {
+	sceneFloor := eulerNumber * math.Min(profS.muMass, profNb.muMass)
+	if ix.SharedGroups < minCloneGroups || ix.SharedMinNats < sceneFloor || ix.SelfCoverage < transmissionPerHop || ix.PeerCoverage < subFloor {
 		return 0
 	}
 	novelRatio := math.Min(1.0, ix.PeerSalientExcessNats/profNb.totalMass)
@@ -481,18 +484,18 @@ func evalUnrelatedBystanderBorrowFromProfiles(profS, profNb unitGroupProfile, af
 	if rawCos < 0 {
 		rawCos = 0
 	}
-	if aff < subFloor || rawCos >= invE2 || sStrength <= 0 || nbDirect <= 0 || nbHop <= nbDirect*invE || nbStrength >= sStrength*(1.0-invE2) {
+	if aff < subFloor || rawCos >= transmissionTwoHop || sStrength <= 0 || nbDirect <= 0 || nbHop <= nbDirect*transmissionPerHop || nbStrength >= sStrength*(1.0-transmissionTwoHop) {
 		return 0
 	}
 	ix := intersectGroupProfiles(profS, profNb, false)
-	if ix.PeerCoverage >= invE2 {
+	if ix.PeerCoverage >= transmissionTwoHop {
 		return 0
 	}
 	nbTot := nbDirect + nbHop
 	if nbTot <= 0 {
 		return 0
 	}
-	return math.E * aff * (1.0 - rawCos/invE2) * (nbHop / nbTot)
+	return eulerNumber * aff * (1.0 - rawCos/transmissionTwoHop) * (nbHop / nbTot)
 }
 
 // computeDirectedLocalExplainWork calculates how much unknown new information
@@ -551,7 +554,7 @@ func computeDirectedLocalExplainWork(sc *rmQueryScratch, st *rmClusterState, exp
 	var rawCompSum float64
 	for i, isShared := range sharedMask {
 		it := explainer.items[i]
-		if isShared || !it.isCore || it.weight <= explaineeMu*invE {
+		if isShared || !it.isCore || it.weight <= explaineeMu*transmissionPerHop {
 			continue
 		}
 		// If the feature itself is in the query, its explanatory gain is zero.
@@ -569,9 +572,9 @@ func computeDirectedLocalExplainWork(sc *rmQueryScratch, st *rmClusterState, exp
 				if dist < 1 {
 					dist = 1
 				}
-				kern = math.Exp(-float64(dist-1) * invE)
+				kern = math.Exp(-float64(dist-1) * transmissionPerHop)
 			} else if !hasAnyPos {
-				kern = invE * invE
+				kern = transmissionPerHop * transmissionPerHop
 			} else {
 				continue
 			}
@@ -583,9 +586,9 @@ func computeDirectedLocalExplainWork(sc *rmQueryScratch, st *rmClusterState, exp
 			if dist < 1 {
 				dist = 1
 			}
-			kern = math.Exp(-float64(dist-1) * invE)
+			kern = math.Exp(-float64(dist-1) * transmissionPerHop)
 		} else if !hasAnyPos {
-			kern = invE * invE
+			kern = transmissionPerHop * transmissionPerHop
 		} else {
 			continue
 		}
@@ -643,13 +646,13 @@ func (e *Engine) evalPairFromProfilesQ(st *rmClusterState, u int32, profU unitGr
 	subjCos := st.docSubjectCos(idx, e.queryScratch, u, v)
 	tempAff := st.temporalAffinity(idx, u, v)
 	if st.hasCitationEdge(u, v) || st.hasCoCitationEdge(u, v) {
-		tempAff = math.Max(tempAff, invE)
+		tempAff = math.Max(tempAff, transmissionPerHop)
 	} else if st.refTimes[u] <= 0 || st.refTimes[v] <= 0 {
 		if int(u) < len(idx.UnitMeta) && int(v) < len(idx.UnitMeta) {
 			mu, mv := idx.UnitMeta[u], idx.UnitMeta[v]
 			if (mu.DocHash != 0 && mu.DocHash == mv.DocHash) ||
 				(mu.BlockHash != 0 && mu.BlockHash == mv.BlockHash) {
-				tempAff = math.Max(tempAff, invE)
+				tempAff = math.Max(tempAff, transmissionPerHop)
 			}
 		}
 	}
@@ -753,7 +756,7 @@ func (e *Engine) InspectUnitRelations(unitID string, topK int) (UnitRelationProf
 
 		// 2. 谁跟我相似 (Similar / Symmetric Peer Resonance)
 		maxDirCov := math.Max(cU, cV)
-		if peer.SharedNats >= profU.muMass*invE && peer.SubjectCosine > 0 && harmCov < identityFloor && maxDirCov < identityFloor {
+		if peer.SharedNats >= profU.muMass*transmissionPerHop && peer.SubjectCosine > 0 && harmCov < identityFloor && maxDirCov < identityFloor {
 			cp := peer
 			cp.ScoreNats = peer.SharedNats * math.Sqrt(peer.SubjectCosine) * (1.0 - math.Abs(cU-cV))
 			out.Similar = append(out.Similar, cp)
@@ -774,7 +777,7 @@ func (e *Engine) InspectUnitRelations(unitID string, topK int) (UnitRelationProf
 				sharedEff = muScale
 			}
 			anchorBridge := 1.0 - math.Exp(-sharedEff/muScale)
-			coupling := anchorBridge * peer.TemporalAffinity * math.Max(invE, math.Sqrt(peer.SubjectCosine))
+			coupling := anchorBridge * peer.TemporalAffinity * math.Max(transmissionPerHop, math.Sqrt(peer.SubjectCosine))
 			if coupling > 0 {
 				harmExcess := 2.0 * peer.SelfExcessNats * peer.PeerExcessNats / (peer.SelfExcessNats + peer.PeerExcessNats)
 				cp := peer
@@ -970,13 +973,13 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 				if peer.PeerExplainWorkNats > peer.SelfExplainWorkNats {
 					stepWork = peer.PeerExplainWorkNats - peer.SelfExplainWorkNats
 				} else if citeBond && peer.PeerSalientExcess > profCur.muMass {
-					stepWork = peer.PeerSalientExcess * invE
+					stepWork = peer.PeerSalientExcess * transmissionPerHop
 				}
 			} else {
 				if peer.SelfExplainWorkNats > peer.PeerExplainWorkNats {
 					stepWork = peer.SelfExplainWorkNats - peer.PeerExplainWorkNats
 				} else if citeBond && peer.SelfSalientExcess > profV.muMass {
-					stepWork = peer.SelfSalientExcess * invE
+					stepWork = peer.SelfSalientExcess * transmissionPerHop
 				}
 			}
 			if stepWork <= 0 {
@@ -1006,7 +1009,7 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 				continue
 			}
 			anchorBridge := 1.0 - math.Exp(-sharedEff/muScale)
-			affEff := math.Max(invE, peer.TemporalAffinity)
+			affEff := math.Max(transmissionPerHop, peer.TemporalAffinity)
 			cosEff := math.Sqrt(math.Max(0, peer.SubjectCosine))
 			stepTrans := anchorBridge * affEff * cosEff
 			nextCumTrans := cumTrans * stepTrans
@@ -1014,7 +1017,7 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 				continue
 			}
 
-			score := nextCumTrans * (stepWork + invE*chainNovelty)
+			score := nextCumTrans * (stepWork + transmissionPerHop*chainNovelty)
 			if !found || score > bestStep.ChainScoreNats || (score == bestStep.ChainScoreNats && idx.UnitIDs[v] < bestStep.UnitID) {
 				found = true
 				bestProf = profV
@@ -1052,19 +1055,19 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 // endorsement from a leading co-event seed s to a candidate u within the primary
 // event cluster, shared by both Phase-2.5 cluster endorsement and marginal filtering.
 func intraEventEndorseGain(rel UnitRelationPeer, aff, harmCov, eventRatio, satDecay, gap, microOcc, seedBurstOcc float64) float64 {
-	if gap <= 0 || aff < subFloor || harmCov < invE || harmCov >= identityFloor ||
-		rel.SelfCoverage < invE || rel.PeerCoverage < invE || rel.SubjectCosine < invE2 ||
-		rel.PeerExplainWorkNats <= math.Sqrt(math.E)*rel.SelfExplainWorkNats || rel.PeerExplainWorkNats <= invE {
+	if gap <= 0 || aff < subFloor || harmCov < transmissionPerHop || harmCov >= identityFloor ||
+		rel.SelfCoverage < transmissionPerHop || rel.PeerCoverage < transmissionPerHop || rel.SubjectCosine < transmissionTwoHop ||
+		rel.PeerExplainWorkNats <= math.Sqrt(eulerNumber)*rel.SelfExplainWorkNats || rel.PeerExplainWorkNats <= transmissionPerHop {
 		return 0
 	}
 	if aff >= identityFloor && (microOcc >= 1.0 || seedBurstOcc >= 1.0) {
-		if rel.PeerExplainWorkNats <= math.E || rel.PeerExplainWorkNats <= math.E*rel.SelfExplainWorkNats {
+		if rel.PeerExplainWorkNats <= eulerNumber || rel.PeerExplainWorkNats <= eulerNumber*rel.SelfExplainWorkNats {
 			return 0
 		}
 	}
 	netExp := rel.PeerExplainWorkNats - rel.SelfExplainWorkNats
 	expAdv := netExp / (rel.PeerExplainWorkNats + rel.SelfExplainWorkNats + 1.0)
-	trans := satDecay * eventRatio * aff * harmCov * math.Sqrt(rel.SubjectCosine) * (invE + (1.0-invE)*expAdv)
+	trans := satDecay * eventRatio * aff * harmCov * math.Sqrt(rel.SubjectCosine) * (transmissionPerHop + (1.0-transmissionPerHop)*expAdv)
 	if trans > subFloor {
 		trans = subFloor
 	}
@@ -1165,7 +1168,7 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 	activeSet[peakUnit] = true
 	for _, units := range corefByEpisode {
 		for _, u := range units {
-			if u == peakUnit || st.temporalAffinity(idx, peakUnit, u) >= invE {
+			if u == peakUnit || st.temporalAffinity(idx, peakUnit, u) >= transmissionPerHop {
 				activeSet[u] = true
 			}
 		}
@@ -1237,7 +1240,7 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 			continue
 		}
 		microOcc := eventUnits[i].microOcc
-		satDecay := math.Exp(-math.Max(0, microOcc-burstFreeQuota) * math.E)
+		satDecay := math.Exp(-math.Max(0, microOcc-burstFreeQuota) * eulerNumber)
 		var best float64
 		for k := 0; k < i; k++ {
 			if eventUnits[k].energy <= eventUnits[i].energy || len(eventUnits[k].prof.items) == 0 {
@@ -1245,7 +1248,7 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 			}
 			s := eventUnits[k].unit
 			effSeedE := eventUnits[k].energy
-			if candidates[s].coreLex >= candidates[peakUnit].coreLex*invE {
+			if candidates[s].coreLex >= candidates[peakUnit].coreLex*transmissionPerHop {
 				if coupledE := st.temporalAffinity(idx, peakUnit, s) * maxE; coupledE > effSeedE {
 					effSeedE = coupledE
 				}
@@ -1357,7 +1360,7 @@ func (e *Engine) ApplyUnitRelationMarginalFilter(hits []Hit, qTerms map[uint64]T
 		u := units[i]
 		profU := profiles[i]
 		const burstFreeQuota = 3.0
-		satDecay := math.Exp(-math.Max(0, microOcc[i]-burstFreeQuota) * math.E)
+		satDecay := math.Exp(-math.Max(0, microOcc[i]-burstFreeQuota) * eulerNumber)
 		var maxClone, bestExplainGain float64
 		for j := range hits {
 			if i == j || !valid[j] || hits[j].Energy <= out[i].Energy {
@@ -1378,14 +1381,14 @@ func (e *Engine) ApplyUnitRelationMarginalFilter(hits []Hit, qTerms map[uint64]T
 			if bd := evalUnrelatedBystanderBorrowFromProfiles(profiles[j], profU, aff, rel.SubjectCosine, hits[j].Direct, hits[i].Direct, hits[i].Direct, hits[i].Hop1+hits[i].Hop2); bd > maxClone {
 				maxClone = bd
 			}
-			if (j == peakIdx || (valid[peakIdx] && st.temporalAffinity(idx, units[peakIdx], s) >= invE)) && hits[j].Energy >= seedFloor {
+			if (j == peakIdx || (valid[peakIdx] && st.temporalAffinity(idx, units[peakIdx], s) >= transmissionPerHop)) && hits[j].Energy >= seedFloor {
 				if gain := intraEventEndorseGain(rel, aff, harmCov, hits[j].Energy/maxE, satDecay, hits[j].Energy-out[i].Energy, microOcc[i], microOcc[j]); gain > bestExplainGain {
 					bestExplainGain = gain
 				}
 			}
 		}
 		if maxClone > 0 {
-			scale := 1.0 - invE*invE*maxClone
+			scale := 1.0 - transmissionPerHop*transmissionPerHop*maxClone
 			out[i].Energy *= scale
 			out[i].Direct *= scale
 			out[i].Hop1 *= scale

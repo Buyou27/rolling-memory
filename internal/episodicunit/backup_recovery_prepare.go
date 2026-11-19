@@ -86,7 +86,7 @@ func PrepareZCodeBackupRecovery(ctx context.Context, backupPath, vaultPath, live
 		return result, errors.New("cannot start vault read transaction")
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT doc_id, raw_text FROM thin_vault_docs WHERE (layer = 'episodic' OR layer = '') AND substr(raw_text, 1, 11) = '@ref:zcode:' ORDER BY doc_id`)
+	rows, err := tx.QueryContext(ctx, `SELECT d.unit_id, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE (d.layer = 'episodic' OR d.layer = '') AND substr(COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text), 1, 11) = '@ref:zcode:' ORDER BY d.unit_id`)
 	if err != nil {
 		return result, errors.New("cannot read vault references")
 	}

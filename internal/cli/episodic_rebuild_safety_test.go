@@ -49,7 +49,7 @@ func TestEpisodicRebuildRefusesUnverifiedSourcesWithoutDeletion(t *testing.T) {
 		if _, err := db.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, sentences_json) VALUES (?, 'episodic', 123, ?, '["original"]')`, row.id, row.text); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec(`INSERT INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES ('original-turn', ?, 123)`, row.id); err != nil {
+		if _, err := db.Exec(`INSERT INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES ('original-turn', ?, 123)`, row.id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -65,7 +65,7 @@ func TestEpisodicRebuildRefusesUnverifiedSourcesWithoutDeletion(t *testing.T) {
 				t.Fatalf("document %s changed: text=%q sentences=%q occurred=%d err=%v", row.id, text, sentences, occurred, err)
 			}
 			var count int
-			if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage WHERE doc_id = ? AND turn_ref = 'original-turn' AND occurred_at = 123`, row.id).Scan(&count); err != nil || count != 1 {
+			if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_lineage WHERE doc_id = ? AND turn_ref = 'original-turn' AND occurred_at = 123`, row.id).Scan(&count); err != nil || count != 1 {
 				t.Fatalf("lineage %s changed: count=%d err=%v", row.id, count, err)
 			}
 		}

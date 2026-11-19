@@ -2204,7 +2204,7 @@ func TestUnixDaemonDocumentsResolveBackgroundChunkBody(t *testing.T) {
 		t.Fatalf("open vault: %v", err)
 	}
 	var unitID string
-	if err := db.QueryRow(`SELECT unit_id FROM thin_vault_bg_chunks LIMIT 1`).Scan(&unitID); err != nil {
+	if err := db.QueryRow(`SELECT unit_id FROM rm_bg_chunks LIMIT 1`).Scan(&unitID); err != nil {
 		_ = db.Close()
 		t.Fatalf("background chunk was not ingested: %v", err)
 	}

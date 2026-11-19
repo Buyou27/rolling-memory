@@ -207,7 +207,7 @@ func TestDirIDCollisionResolution(t *testing.T) {
 	}
 	collidingID := computeDirID(cleanA)
 	// Seed a synthetic different root_path occupying the same 32-bit default dir_id.
-	if _, err := db.Exec(`INSERT INTO thin_vault_bg_dirs(dir_id, root_path, added_at) VALUES (?, ?, 1)`, collidingID, "/synthetic/other/mount"); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES (?, ?, 1)`, collidingID, "/synthetic/other/mount"); err != nil {
 		t.Fatal(err)
 	}
 	mount, err := vault.AddBackgroundDir(dirA)

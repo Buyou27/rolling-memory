@@ -72,7 +72,7 @@ func TestBuildMemoryGraphWaveCellAndLayers(t *testing.T) {
 			coord64 INTEGER NOT NULL DEFAULT 0,
 			kept_indices_json TEXT NOT NULL DEFAULT '[]'
 		);`,
-		`CREATE TABLE thin_vault_noetic (
+		`CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY,
 			occurred_at INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'active',
@@ -84,7 +84,7 @@ func TestBuildMemoryGraphWaveCellAndLayers(t *testing.T) {
 		);`,
 		`INSERT INTO thin_vault_docs VALUES ('doc-1', 'episodic', 1730800100, 'the memory engine episodic unit 1', '["the memory engine episodic unit 1"]', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00', 1001, '[0]');`,
 		`INSERT INTO thin_vault_docs VALUES ('doc-2', 'background', 1730800200, 'Background architecture spec', '["Background architecture spec"]', 'C6:L3:B001/C6:L2:B002/C6:L1:B002#00', 1002, '[0]');`,
-		`INSERT INTO thin_vault_noetic VALUES ('noetic-1', 1730800300, 'active', 'How does the memory engine work?', 'Via blind pulses and dynamic cells.', '["doc-1"]', '["the memory engine episodic unit 1"]', '');`,
+		`INSERT INTO rm_noetic VALUES ('noetic-1', 1730800300, 'active', 'How does the memory engine work?', 'Via blind pulses and dynamic cells.', '["doc-1"]', '["the memory engine episodic unit 1"]', '');`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -148,7 +148,7 @@ func TestQueryMemoriesFromDBFormKindAndCategories(t *testing.T) {
 			coord64 INTEGER NOT NULL DEFAULT 0,
 			kept_indices_json TEXT NOT NULL DEFAULT '[]'
 		);`,
-		`CREATE TABLE thin_vault_noetic (
+		`CREATE TABLE rm_noetic (
 			noetic_id TEXT PRIMARY KEY,
 			occurred_at INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'active',
@@ -161,7 +161,7 @@ func TestQueryMemoriesFromDBFormKindAndCategories(t *testing.T) {
 		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES
 			('doc-bg-1', 'background', 1003, 'Albert leads Rolling-Memory architecture.', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00'),
 			('doc-ep-1', 'episodic',   1002, 'We discussed the three-layer memory model.', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#01');`,
-		`INSERT INTO thin_vault_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json) VALUES
+		`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json) VALUES
 			('noetic-1', 1004, 'active', 'Who leads Rolling-Memory?', 'Albert leads Rolling-Memory.', '["doc-bg-1"]');`,
 	}
 	for _, stmt := range stmts {

@@ -54,6 +54,7 @@
                     <template v-if="checkingHealth"> ({{ progressPercent }}%)</template>
                 </el-button>
                 <el-button size="small" plain data-testid="btn-system-update" @click="showSystemUpdateDialog = true">
+                    <span v-if="updateState?.update_available" class="rm-update-dot" data-testid="dot-system-update" />
                     {{ t('plugin.rolling-memory.systemUpdate.openBtn') }}
                 </el-button>
                 <el-button
@@ -512,6 +513,7 @@ import { MonitorSocket } from '@/utils/monitorSocket'
 import request from '@/utils/request'
 import layerBrowser from './layerBrowser.vue'
 import systemUpdateDialog from './systemUpdateDialog.vue'
+import { useUpdateStatus } from './useUpdateStatus'
 
 defineOptions({
     name: 'plugin/rolling-memory/index',
@@ -528,6 +530,11 @@ const adminInfo = useAdminInfo()
 const syncing = ref(false)
 const checkingHealth = ref(false)
 const showSystemUpdateDialog = ref(false)
+const { state: updateState } = useUpdateStatus({
+    onOpen: () => {
+        showSystemUpdateDialog.value = true
+    },
+})
 const reconcilingLayer = ref('')
 const togglingEpisodicPause = ref(false)
 const { percent: reconcilePct } = useLoadingProgressText(() => Boolean(reconcilingLayer.value), undefined, 1200)
@@ -1187,6 +1194,16 @@ onBeforeUnmount(() => {
 <style scoped>
 .mt-16 {
     margin-top: 16px;
+}
+.rm-update-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    vertical-align: middle;
+    border-radius: 50%;
+    background: var(--el-color-danger);
+    box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.18);
 }
 .rm-hero {
     display: flex;

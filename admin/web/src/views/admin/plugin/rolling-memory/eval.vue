@@ -4236,7 +4236,7 @@ const currentSplitBenchmarkRef = computed(() => {
             ? (isEn.value ? 'Reference baseline: Official R@10 82.85% / R@50 90.11% / Hybrid QS 70.13% (vs MemPalace R@10 76.40% / QS 56.80%).' : '主榜参考基线：官方 R@10 82.85% / R@50 90.11% / 混合 QS 70.13%（外部最高 MemPalace R@10 76.40% / QS 56.80%）。')
             : (isEn.value ? 'Reference baseline: Official R@10 52.43% / R@50 70.62% / Hybrid QS 25.06% (vs MemoryOS R@10 32.70% / QS 13.70%).' : 'Hard 参考基线：官方 R@10 52.43% / R@50 70.62% / 混合 QS 25.06%（外部最高 MemoryOS R@10 32.70% / QS 13.70%）。')
     }
-    return isEn.value ? 'Current baseline: 1313/1540 = 85.26% on the full 1,540 set (deepseek-v4.1-flash judge).' : '现行基线：1,540 全量判对 1313/1540 = 85.26%（deepseek-v4.1-flash 判官）。'
+    return isEn.value ? 'Current baseline: 1313/1540 = 85.26% on the full 1,540 set (Top-96 delivery; deepseek-v4.1-flash answerer + judge).' : '现行基线：1,540 全量判对 1313/1540 = 85.26%（Top-96 交付；deepseek-v4.1-flash 答器+判官）。'
 })
 
 const viewCompletedRunResults = () => {

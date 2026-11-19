@@ -42,12 +42,12 @@ func TestLineSpanContinuityFloor(t *testing.T) {
 
 	// 基础增益：DocHash df=3/N=4。
 	baseGain := -math.Log(3.0/4.0) / math.Log(4.0)
-	base := invE * baseGain
+	base := transmissionPerHop * baseGain
 
 	// 1) 紧邻切片 (1..40)|(41..80)：gap=0 ⟹ 插值到满额 g=1，地板=1/e。
 	adj := st.computeDocSubjectCos(idx, pos["s1"], pos["s2"])
-	if math.Abs(adj-invE) > 1e-12 {
-		t.Fatalf("邻接切片地板应达满额 1/e: got=%.12f want=%.12f", adj, invE)
+	if math.Abs(adj-transmissionPerHop) > 1e-12 {
+		t.Fatalf("邻接切片地板应达满额 1/e: got=%.12f want=%.12f", adj, transmissionPerHop)
 	}
 
 	// 2) 远端切片 (41..80)|(2001..2040)：gap=1920 ≫ e·meanSpan(=40) ⟹ 指数项趋零，
@@ -56,7 +56,7 @@ func TestLineSpanContinuityFloor(t *testing.T) {
 	if far <= base-1e-12 || far >= adj/2 {
 		t.Fatalf("远端切片地板失准: got=%.12f base=%.12f adj=%.12f", far, base, adj)
 	}
-	wantFar := invE * (baseGain + (1.0-baseGain)*math.Exp(-1920.0/(math.E*40.0)))
+	wantFar := transmissionPerHop * (baseGain + (1.0-baseGain)*math.Exp(-1920.0/(eulerNumber*40.0)))
 	if math.Abs(far-wantFar) > 1e-12 {
 		t.Fatalf("远端插值解析值失准: got=%.12f want=%.12f", far, wantFar)
 	}
@@ -87,7 +87,7 @@ func TestLineSpanDegenerateNoCoordinates(t *testing.T) {
 			b = int32(u)
 		}
 	}
-	want := invE * (-math.Log(2.0/3.0) / math.Log(3.0))
+	want := transmissionPerHop * (-math.Log(2.0/3.0) / math.Log(3.0))
 	if got := st.computeDocSubjectCos(idx, a, b); math.Abs(got-want) > 1e-12 {
 		t.Fatalf("零行坐标必须保持既有信封地板: got=%.12f want=%.12f", got, want)
 	}
@@ -116,7 +116,7 @@ func TestCoCitationDeclarativeFloor(t *testing.T) {
 	if st.hasCoCitationEdge(pos["ev1"], pos["ev3"]) {
 		t.Fatal("未同列单元不得获得共引边")
 	}
-	if got := st.computeDocSubjectCos(idx, pos["ev1"], pos["ev2"]); math.Abs(got-invE) > 1e-12 {
+	if got := st.computeDocSubjectCos(idx, pos["ev1"], pos["ev2"]); math.Abs(got-transmissionPerHop) > 1e-12 {
 		t.Fatalf("共引对地板应为满额 1/e: got=%.12f", got)
 	}
 	if got := st.computeDocSubjectCos(idx, pos["ev1"], pos["ev3"]); got != 0 {

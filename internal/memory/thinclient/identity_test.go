@@ -65,7 +65,7 @@ func TestNoeticRecordKeepsIncarnation(t *testing.T) {
 	}
 	var storedAssistant, storedIncarnation string
 	if err := db.QueryRow(
-		`SELECT assistant_id, incarnation_id FROM thin_vault_noetic WHERE noetic_id = 'nt_idtest'`,
+		`SELECT assistant_id, incarnation_id FROM rm_noetic WHERE noetic_id = 'nt_idtest'`,
 	).Scan(&storedAssistant, &storedIncarnation); err != nil {
 		t.Fatalf("noetic persona: %v", err)
 	}

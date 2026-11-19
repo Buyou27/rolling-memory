@@ -31,7 +31,7 @@
                     <span class="su-ver-lbl">{{ t('plugin.rolling-memory.systemUpdate.latestVerLbl') }}</span>
                     <div class="su-ver-val">
                         <template v-if="checkResult">
-                            <strong>v{{ checkResult.latest_version || localInfo.current_version || '0.0.1' }}</strong>
+                            <strong>{{ latestDisplay }}</strong>
                             <el-tag
                                 v-if="checkResult.update_available"
                                 size="small"
@@ -40,6 +40,15 @@
                                 data-testid="tag-update-available"
                             >
                                 {{ t('plugin.rolling-memory.systemUpdate.updateAvailTag') }}
+                            </el-tag>
+                            <el-tag
+                                v-else-if="checkResult.needs_source_baseline"
+                                size="small"
+                                type="info"
+                                effect="dark"
+                                data-testid="tag-dev-baseline"
+                            >
+                                {{ t('plugin.rolling-memory.systemUpdate.baselineTag') }}
                             </el-tag>
                             <el-tag v-else size="small" type="success" effect="dark" data-testid="tag-up-to-date">
                                 {{ t('plugin.rolling-memory.systemUpdate.upToDateTag') }}
@@ -50,6 +59,62 @@
                 </div>
             </div>
 
+            <el-alert
+                v-if="checkResult && checkResult.update_available && checkResult.assets_checked === true && checkResult.installable === false"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="su-alert"
+                data-testid="alert-source-only-update"
+                :title="t('plugin.rolling-memory.systemUpdate.sourceOnlyTitle')"
+                :description="checkResult.source_update || (checkResult.channel === 'dev' ? t('plugin.rolling-memory.systemUpdate.sourceOnlyHintDev') : t('plugin.rolling-memory.systemUpdate.sourceOnlyHint', { tag: latestDisplay }))"
+            />
+
+            <el-alert
+                v-if="checkResult?.channel === 'dev' && checkResult?.needs_source_baseline"
+                type="info"
+                :closable="false"
+                show-icon
+                class="su-alert"
+                data-testid="alert-dev-baseline"
+                :title="t('plugin.rolling-memory.systemUpdate.baselineTitle')"
+                :description="checkResult.source_update || t('plugin.rolling-memory.systemUpdate.baselineHint')"
+            />
+
+            <!-- 更新源 -->
+            <div class="su-channel-bar">
+                <span class="su-channel-lbl">{{ t('plugin.rolling-memory.systemUpdate.updateSourceLbl') }}</span>
+                <el-select
+                    v-model="form.source"
+                    size="small"
+                    style="width: 220px"
+                    data-testid="select-update-source"
+                    @change="handleSourceChange"
+                >
+                    <el-option :label="t('plugin.rolling-memory.systemUpdate.sourceGithub')" value="github" />
+                    <el-option :label="t('plugin.rolling-memory.systemUpdate.sourceGitee')" value="gitee" />
+                    <el-option :label="t('plugin.rolling-memory.systemUpdate.sourceCustom')" value="custom" />
+                </el-select>
+                <span class="su-ver-muted">{{ sourceHint }}</span>
+            </div>
+
+            <!-- 更新通道 -->
+            <div class="su-channel-bar">
+                <span class="su-channel-lbl">{{ t('plugin.rolling-memory.systemUpdate.updateChannelLbl') }}</span>
+                <el-select
+                    v-model="form.channel"
+                    size="small"
+                    style="width: 220px"
+                    data-testid="select-update-channel"
+                    @change="handleChannelChange"
+                >
+                    <el-option :label="t('plugin.rolling-memory.systemUpdate.channelStable')" value="stable" />
+                    <el-option :label="t('plugin.rolling-memory.systemUpdate.channelBeta')" value="beta" />
+                    <el-option :label="t('plugin.rolling-memory.systemUpdate.channelDev')" value="dev" />
+                </el-select>
+                <span class="su-ver-muted">{{ channelHint }}</span>
+            </div>
+
             <!-- 发布渠道 / 镜像源 URL -->
             <div class="su-channel-bar">
                 <span class="su-channel-lbl">{{ t('plugin.rolling-memory.systemUpdate.channelLbl') }}</span>
@@ -57,8 +122,10 @@
                     v-model="form.release_base"
                     size="small"
                     clearable
+                    :disabled="form.source !== 'custom'"
                     :placeholder="t('plugin.rolling-memory.systemUpdate.channelPlaceholder')"
                     data-testid="input-release-base"
+                    @input="handleReleaseBaseInput"
                     @keyup.enter="handleCheckUpdate"
                 />
             </div>
@@ -125,7 +192,7 @@
                 <el-button
                     type="primary"
                     :loading="applying"
-                    :disabled="checking"
+                    :disabled="checking || form.channel === 'dev' || Boolean(checkResult?.update_available && checkResult?.assets_checked === true && checkResult?.installable === false)"
                     data-testid="btn-update-apply"
                     @click="handleApplyUpdate"
                 >
@@ -185,11 +252,57 @@ const localInfo = ref<any>({
 
 const checkResult = ref<any>(null)
 
+const GITHUB_RELEASE_BASE = 'https://github.com/rocareer/rolling-memory/releases/latest/download'
+const GITEE_RELEASE_BASE = 'https://gitee.com/rocareer/Rolling-Memory/releases/latest/download'
+
+const sourceForBase = (base?: string) => {
+    const value = (base || '').trim().toLowerCase()
+    if (!value) return 'github'
+    if (value === GITHUB_RELEASE_BASE.toLowerCase()) return 'github'
+    if (value === GITEE_RELEASE_BASE.toLowerCase()) return 'gitee'
+    return 'custom'
+}
+
 const form = ref({
     release_base: '',
+    channel: 'dev',
+    source: 'github',
     with_console: true,
     refresh_harness: true,
     force: false,
+})
+
+const latestDisplay = computed(() => {
+    const result = checkResult.value
+    if (result?.channel === 'dev') {
+        return result.latest_commit_short ? `main@${result.latest_commit_short}` : 'main'
+    }
+    if (result?.latest_tag) {
+        return `v${result.latest_tag}`
+    }
+    return `v${localInfo.value.current_version || '0.0.1'}`
+})
+
+const channelHint = computed(() => {
+    switch (form.value.channel) {
+        case 'beta':
+            return t('plugin.rolling-memory.systemUpdate.channelHintBeta')
+        case 'dev':
+            return t('plugin.rolling-memory.systemUpdate.channelHintDev')
+        default:
+            return t('plugin.rolling-memory.systemUpdate.channelHintStable')
+    }
+})
+
+const sourceHint = computed(() => {
+    switch (form.value.source) {
+        case 'gitee':
+            return t('plugin.rolling-memory.systemUpdate.sourceHintGitee')
+        case 'custom':
+            return t('plugin.rolling-memory.systemUpdate.sourceHintCustom')
+        default:
+            return t('plugin.rolling-memory.systemUpdate.sourceHintGithub')
+    }
 })
 
 const shortSha = (sha?: string) => {
@@ -243,14 +356,67 @@ const loadLocalVersion = async () => {
         const payload = res?.data?.data ?? (res?.data as any)
         if (payload) {
             localInfo.value = payload
+            const baseSource = sourceForBase(payload.release_base)
+            form.value.source = baseSource === 'custom' ? 'custom' : payload.update_source || baseSource
             if (!form.value.release_base && payload.release_base) {
                 form.value.release_base = payload.release_base
+            }
+            const channel = payload.update_channel || payload.update_state?.channel
+            if (channel) {
+                form.value.channel = channel
+            }
+            // 首帧直接展示后台缓存，避免打开弹窗先显示“未检查”。
+            if (!checkResult.value && payload.update_state?.latest_tag && payload.update_state?.ok !== false) {
+                checkResult.value = payload.update_state
             }
         }
     } catch {
         // Keep defaults on error
     } finally {
         loadingVersion.value = false
+    }
+}
+
+const handleSourceChange = async () => {
+    if (form.value.source === 'custom') {
+        checkResult.value = null
+        return
+    }
+    const releaseBase = form.value.source === 'gitee' ? GITEE_RELEASE_BASE : GITHUB_RELEASE_BASE
+    form.value.release_base = releaseBase
+    try {
+        const res = await request<any>({
+            url: '/admin/plugin/rolling-memory/system/update/source',
+            method: 'POST',
+            data: { source: form.value.source },
+        })
+        const payload = res?.data?.data ?? (res?.data as any)
+        if (payload?.release_base) {
+            form.value.release_base = payload.release_base
+        }
+        checkResult.value = null
+        await handleCheckUpdate()
+    } catch {
+        // Error message already displayed by request interceptor.
+    }
+}
+
+const handleReleaseBaseInput = () => {
+    form.value.source = 'custom'
+    checkResult.value = null
+}
+
+const handleChannelChange = async () => {
+    try {
+        await request({
+            url: '/admin/plugin/rolling-memory/system/update/channel',
+            method: 'POST',
+            data: { channel: form.value.channel },
+        })
+        checkResult.value = null
+        await handleCheckUpdate()
+    } catch {
+        // Error message already displayed by request interceptor.
     }
 }
 
@@ -263,13 +429,24 @@ const handleCheckUpdate = async () => {
             timeout: 30000,
             data: {
                 release_base: form.value.release_base.trim(),
+                channel: form.value.channel,
+                source: form.value.source === 'custom' ? '' : form.value.source,
             },
         })
         const payload = res?.data?.data ?? (res?.data as any)
         if (payload) {
             checkResult.value = payload
-            if (payload.update_available) {
-                ElMessage.warning(t('plugin.rolling-memory.systemUpdate.checkSuccessAvail'))
+            if (payload.channel) {
+                form.value.channel = payload.channel
+            }
+            if (payload.needs_source_baseline) {
+                ElMessage.info(t('plugin.rolling-memory.systemUpdate.baselineTitle'))
+            } else if (payload.update_available) {
+                if (payload.assets_checked === true && payload.installable === false) {
+                    ElMessage.warning(t('plugin.rolling-memory.systemUpdate.checkSuccessSourceOnly'))
+                } else {
+                    ElMessage.warning(t('plugin.rolling-memory.systemUpdate.checkSuccessAvail'))
+                }
             } else {
                 ElMessage.success(t('plugin.rolling-memory.systemUpdate.checkSuccessUpToDate'))
             }
@@ -282,6 +459,14 @@ const handleCheckUpdate = async () => {
 }
 
 const handleApplyUpdate = async () => {
+    if (form.value.channel === 'dev') {
+        ElMessage.warning(checkResult.value?.source_update || t('plugin.rolling-memory.systemUpdate.channelHintDev'))
+        return
+    }
+    if (checkResult.value?.update_available && checkResult.value?.assets_checked === true && checkResult.value?.installable === false) {
+        ElMessage.warning(checkResult.value.source_update || (checkResult.value.channel === 'dev' ? t('plugin.rolling-memory.systemUpdate.sourceOnlyHintDev') : t('plugin.rolling-memory.systemUpdate.sourceOnlyHint', { tag: latestDisplay.value })))
+        return
+    }
     applying.value = true
     try {
         const res = await request<any>({
@@ -290,6 +475,8 @@ const handleApplyUpdate = async () => {
             timeout: 185000,
             data: {
                 release_base: form.value.release_base.trim(),
+                channel: form.value.channel,
+                source: form.value.source === 'custom' ? '' : form.value.source,
                 with_console: form.value.with_console,
                 no_install: !form.value.refresh_harness,
                 force: form.value.force,

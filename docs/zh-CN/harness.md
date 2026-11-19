@@ -188,6 +188,8 @@ exec "<absolute>/bin/rolling-memory" "$@"
 
 ## 9. 在线自更新与金库安全契约（`rolling-memory update`）
 
+> 完整安装、通道策略、破坏性变更与回滚说明见 [install-upgrade.md](install-upgrade.md)。
+
 无需安装 `git` 或 Go 编译环境，即可通过 `rolling-memory update`（别名 `rolling-memory upgrade`）一站式升级 CLI 二进制、本地 Web 控制台与全机宿主接线：
 
 ```bash
@@ -205,14 +207,66 @@ rolling-memory update --release-base https://mirror.example.com/rolling-memory/r
 
 # 5. 输出结构化 JSON 结果供脚本或后台调用
 rolling-memory update --check --json
+
+# 6. 只解析最新版本标签（不下载产物、不比对指纹）
+rolling-memory update --check --tags-only
+
+# 7. 可选的本机定时检查：只刷新缓存并发送桌面通知
+rolling-memory update --schedule install
+rolling-memory update --schedule status
+rolling-memory update --schedule remove
 ```
 
+- **版本发现与可安装性分离**：`update --check` 的 `update_available` 由最新标签决定，`installable` 由发布渠道的 `SHA256SUMS` 与实际产物决定。只有标签、没有附件的版本会如实标记为“有新版本但暂不可一键安装”，控制台改为展示源码更新方式，而不是给出一个必然失败的升级按钮。
+- **更新源**：`update.source` 可选 `github`（GitHub Releases 官方渠道，默认）或 `gitee`（Gitee 镜像，适合访问 GitHub 较慢的网络）。可在控制台「版本与更新」弹窗选择，用 `rmem config set update.source gitee` 保存，或用 `rmem update --source gitee` 单次覆盖。显式的 `--release-base` URL 或 `ROLLING_MEMORY_RELEASE_BASE` 仍然优先。Gitee 上只有标签、没有附带二进制时，会如实报告为“仅源码更新”，并给出指向 Gitee 仓库的源码重建提示。
+- **后台版本感知（零前端轮询）**：控制台连上本地实时通道后立即收到缓存的版本快照；缓存过期时后端只刷新一次，并把结果沿同一条连接推回。CLI 的 `status` 与 `doctor` 读取同一份缓存，不发起网络请求。MCP 会话在后台刷新过期缓存，因此只用 Agent、不常开控制台的用户，也会在下一次查看状态时看到新版本。
+- **长时间不使用控制台**：缓存保留最近一次结果（成功六小时内视为新鲜，失败后三十分钟重试）。无论隔多久，只要控制台、MCP 会话或 CLI 再次运行，都会自动补一次检查；控制台首帧先显示上一次结果，刷新完成后原位更新。若产品完全没有任何进程在运行，客户端无法凭空发现更新；可用操作系统计划任务定期执行 `rolling-memory update --check --tags-only` 保持缓存新鲜，并在计划任务里接上系统通知动作，才能在空闲期主动提醒。
+- **源码安装**：源码或本地构建安装会在发布渠道没有对应二进制时标记为“仅源码更新”，并展示按标签更新的命令，不启用一键升级；预编译安装继续走原有的 SHA-256 校验原位更新。
+- **更新通道**：`dev`（默认）跟踪 `main` 最新提交；`stable` 只接受正式发布标签；`beta` 同时接受预发布标签。可用 `rolling-memory config set update.channel beta` 保存偏好（或设置 `ROLLING_MEMORY_UPDATE_CHANNEL=beta`），也可在控制台「版本与更新」弹窗切换，或用 `rolling-memory update --check --channel dev` 单次覆盖。定时检查会沿用已保存的通道。`dev` 不会自动替换二进制：只报告 `main@<commit>`，并要求源码重建（`ROLLING_MEMORY_SOURCE_REF=main bash install.sh`）。
+- **本机定时检查**：`rolling-memory update --schedule install` 会注册当前用户级的定时任务（macOS launchd、Linux systemd user timer、Windows 任务计划程序），每六小时执行一次检查。它只刷新共享缓存并在发现新版本时发送桌面通知，不会自动安装更新；`--schedule status` 查看状态，`--schedule remove` 移除。
+- **源码标签重建**：源码安装可用 `ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh`（或 `bash install.sh --ref v0.0.6`）从指定标签重新克隆并编译；Windows 可用 `powershell -ExecutionPolicy Bypass -File install.ps1 --ref v0.0.6`。安装元数据会记录来源；不会改动本地金库。
+- **自动检查开关**：设置 `ROLLING_MEMORY_UPDATE_CHECK=off` 可关闭后台检查；设置 `ROLLING_MEMORY_UPDATE_API_BASE` 可改用企业镜像做版本发现。显式执行 `update --check` 始终可用。
 - **SHA-256 强校验（Fail-Closed）**：每个下载产物（`rolling-memory-<os>-<arch>`、`rolling-admin-<os>-<arch>`、`web-dist.tar.gz`）在替换本地文件前均强制比对发布渠道的 `SHA256SUMS`；若校验缺失或不匹配则立即中止，绝不污染既有二进制。
 - **本地守护进程安全边界**：共享的本地守护进程只有在用户、身份和配置核验通过后才能被控制。旧版或无法核验的守护进程不会被自动停止；无法完成核验的请求会报错。请求发送后若发生失败，不会自动重试。共享守护进程以可信的本机用户为边界，不能保证抵御同一用户运行的任意代码。
 - **本地金库零触碰安全承诺**：升级全过程仅替换可执行文件、前端静态资源与宿主配置项，**永不修改、清空或覆盖用户的本地 SQLite 明文金库（`~/.local/share/rolling-memory/memory.db`）**；数据库表结构演进均在打开时原位幂等迁移。
 - **零开发环境依赖（免装 Git / Go / Node.js / Python）**：
   - `install.sh` 与 `install.ps1` 默认直接拉取经 `SHA256SUMS` 强校验的预编译静态二进制（POSIX 下自适应 `curl` 或 `wget`，Windows 下原生支持 x64 与 ARM64，并在主发布源不可达时自动回退备用镜像源）。
-  - 安装脚本会自动、幂等地将 `~/.local/bin`（Windows 为 `%LOCALAPPDATA%\rolling-memory\bin`）写入当前用户的终端配置文件或系统用户级 `PATH`（如需跳过可设 `ROLLING_MEMORY_NO_MODIFY_PATH=1`）。
+  - 安装脚本会把 `~/.local/bin`（Windows 为 `%LOCALAPPDATA%\rolling-memory\bin`）加入当前用户的 `PATH`，改动幂等并带标记块：zsh 写入 `~/.zshrc`，bash 同时写入登录配置文件与 `~/.bashrc`，fish 写入 `~/.config/fish/config.fish`，Windows 写入用户级 `PATH` 注册表项。设置 `ROLLING_MEMORY_NO_MODIFY_PATH=1` 可跳过；配置文件写不进去时，安装脚本会打印需要手工添加的 `export PATH=...` 行。
   - 本地 Web 控制台（`rolling-memory panel`）由 Go 单二进制内置静态服务（`--serve-web`）直接托管前端页面，无需在电脑上安装 Node.js 或 Python；在 `rolling-memory install` 时加上 `--desktop-shortcut` 即可在桌面生成双击启动图标。
+
+**已经打开的终端里找不到 `rolling-memory` 命令？** `PATH` 条目只对安装之后新启动的 shell 生效；安装脚本每次写入配置文件时也会打印同样的提醒。复制下面属于你的那一行，再用 `rolling-memory --version` 确认：
+
+```bash
+# bash / zsh
+export PATH="$HOME/.local/bin:$PATH"
+rolling-memory --version
+```
+
+```fish
+# fish
+fish_add_path ~/.local/bin
+rolling-memory --version
+```
+
+```powershell
+# Windows —— 重开窗口，或只更新当前会话
+$env:Path = "$env:LOCALAPPDATA\rolling-memory\bin;$env:Path"
+rolling-memory --version
+```
+
+## 10. 从旧版本升级
+
+替换旧版本不需要先卸载，也不需要导出再重导记忆：
+
+1. **先停掉使用方。** 退出桌面应用和正在使用记忆工具的 Agent 会话；更新器会自行停止共享的本地守护进程。
+2. **替换程序。** 运行 `rolling-memory update`、重新运行 `install.sh` / `install.ps1`，或直接覆盖应用包。二进制会原地替换，宿主接线会刷新；已安装的宿主配置文件会先备份。
+3. **重新打开宿主应用。** 已经打开的会话仍使用旧进程，新会话才会加载新版本。
+4. **确认状态。** `rolling-memory doctor --json` 查看路径与完整性，`rolling-memory status` 查看金库与运行模式。
+
+表结构与索引更新发生在升级后的版本第一次打开金库时，而不是替换文件时。升级版本会就地幂等应用更新，已有记忆仍留在同一个金库文件中。金库较大时可能需要几分钟，请不要中断。
+
+重要金库升级前建议另存一份：停止守护进程，用 SQLite `.backup` 生成副本，并保留被引用的会话记录与挂载目录。快照与金库含同样的私密内容，需要同等保护。
+
+升级未能完成时，不要删除数据库；请用当前版本重试，或恢复升级前的副本。不要用旧版本继续打开这个金库：旧版本会拒绝打开由新版结构写入的金库。
 
 

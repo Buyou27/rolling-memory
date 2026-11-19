@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS rm_episodic_sources (
 	source_mac BLOB,
 	PRIMARY KEY (turn_ref, doc_id, ref_pointer)
 );
+CREATE TABLE IF NOT EXISTS rm_episodic_lineage (
+	turn_ref TEXT NOT NULL,
+	doc_id TEXT NOT NULL,
+	occurred_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (turn_ref, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_episodic_lineage_doc ON rm_episodic_lineage(doc_id);
+CREATE TRIGGER IF NOT EXISTS rm_episodic_sources_delete AFTER DELETE ON rm_docs BEGIN
+	DELETE FROM rm_episodic_sources WHERE doc_id = OLD.unit_id;
+	DELETE FROM rm_episodic_lineage WHERE doc_id = OLD.unit_id;
+END;
 
 CREATE TABLE IF NOT EXISTS rm_noetic (
 	noetic_id TEXT PRIMARY KEY,
@@ -120,7 +131,9 @@ CREATE TABLE IF NOT EXISTS rm_revision (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
 	docs_rev INTEGER NOT NULL DEFAULT 0,
 	terms_rev INTEGER NOT NULL DEFAULT 0,
-	meta_rev INTEGER NOT NULL DEFAULT 0
+	meta_rev INTEGER NOT NULL DEFAULT 0,
+	bg_rev INTEGER NOT NULL DEFAULT 0,
+	episodic_rev INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO rm_revision(id) VALUES (1);
 
@@ -155,6 +168,24 @@ CREATE TRIGGER IF NOT EXISTS rm_rev_meta_au AFTER UPDATE ON rm_unit_meta BEGIN
 END;
 CREATE TRIGGER IF NOT EXISTS rm_rev_meta_ad AFTER DELETE ON rm_unit_meta BEGIN
 	UPDATE rm_revision SET meta_rev = meta_rev + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS rm_rev_bg_ai AFTER INSERT ON rm_bg_chunks BEGIN
+	UPDATE rm_revision SET bg_rev = bg_rev + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS rm_rev_bg_au AFTER UPDATE ON rm_bg_chunks BEGIN
+	UPDATE rm_revision SET bg_rev = bg_rev + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS rm_rev_bg_ad AFTER DELETE ON rm_bg_chunks BEGIN
+	UPDATE rm_revision SET bg_rev = bg_rev + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS rm_rev_epi_ai AFTER INSERT ON rm_episodic_index BEGIN
+	UPDATE rm_revision SET episodic_rev = episodic_rev + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS rm_rev_epi_au AFTER UPDATE ON rm_episodic_index BEGIN
+	UPDATE rm_revision SET episodic_rev = episodic_rev + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS rm_rev_epi_ad AFTER DELETE ON rm_episodic_index BEGIN
+	UPDATE rm_revision SET episodic_rev = episodic_rev + 1 WHERE id = 1;
 END;
 `
 
@@ -197,6 +228,18 @@ func ensureCanonicalBusinessSchema(db *sql.DB) error {
 		SkipSchema: false,
 	}); err != nil {
 		return err
+	}
+	// Vaults created before the background revision counter existed keep a
+	// three-column rm_revision; the bg triggers in the DDL below would fail on
+	// every chunk write without this additive migration. A fresh database has no
+	// rm_revision yet, so both "duplicate column" and "no such table" are benign.
+	for _, col := range []string{"bg_rev", "episodic_rev"} {
+		if _, err := db.Exec(`ALTER TABLE rm_revision ADD COLUMN ` + col + ` INTEGER NOT NULL DEFAULT 0`); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "no such table") {
+				return err
+			}
+		}
 	}
 	_, err := db.Exec(canonicalBusinessDDL)
 	return err

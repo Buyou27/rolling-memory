@@ -1094,7 +1094,7 @@ func computeAdminDBFingerprint(memoryPath, scope string) string {
 	_ = db.QueryRow(`SELECT coalesce(value, '') FROM db_meta WHERE key = 'engine'`).Scan(&engine)
 	_ = db.QueryRow(`SELECT coalesce(doc_id, '') FROM thin_vault_docs ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	if strings.TrimSpace(firstDocID) == "" {
-		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM thin_vault_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
+		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM rm_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	}
 	if strings.TrimSpace(firstDocID) == "" {
 		_ = db.QueryRow(`SELECT coalesce(hash, '') FROM trace ORDER BY recorded_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
@@ -1347,8 +1347,8 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	// 未迁移的只读旧夹具缺列时平滑回退内容时间 occurred_at）聚合，避免编辑
 	// 旧文件把存量分块刷进近期新增的账实不一致。
 	docTsExpr := vaultIngestTimeExpr(memoryPath, "thin_vault_docs")
-	bgTsExpr := vaultIngestTimeExpr(memoryPath, "thin_vault_bg_chunks")
-	ntTsExpr := vaultIngestTimeExpr(memoryPath, "thin_vault_noetic")
+	bgTsExpr := vaultIngestTimeExpr(memoryPath, "rm_bg_chunks")
+	ntTsExpr := vaultIngestTimeExpr(memoryPath, "rm_noetic")
 
 	// 层归属与控制台统一口径（三层浏览 / facets / 趋势图）一致：docs 表中
 	// layer=='background' 的行属 L1 背景层（计入背景计数），其余属 L2 情景层；
@@ -1390,8 +1390,8 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	if vault.EpisodicDocs > 0 {
 		vault.EpisodicPointerRatioPct = roundFloat(float64(vault.EpisodicPointers)*100.0/float64(vault.EpisodicDocs), 1)
 	}
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&vault.BackgroundDirs)
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(file_size), 0) FROM thin_vault_bg_files`).Scan(&vault.BackgroundFiles, &vault.BackgroundBytes)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&vault.BackgroundDirs)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(file_size), 0) FROM rm_bg_files`).Scan(&vault.BackgroundFiles, &vault.BackgroundBytes)
 
 	var bg1h, bg24h, bg7d, bg30d, bgAll int64
 	_ = db.QueryRowContext(ctx, fmt.Sprintf(`
@@ -1402,7 +1402,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			       COALESCE(SUM(CASE WHEN %s >= ? THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN %s >= ? THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN %s >= 0 THEN 1 ELSE 0 END), 0)
-			FROM thin_vault_bg_chunks`, bgTsExpr, bgTsExpr, bgTsExpr, bgTsExpr, bgTsExpr, bgTsExpr),
+			FROM rm_bg_chunks`, bgTsExpr, bgTsExpr, bgTsExpr, bgTsExpr, bgTsExpr, bgTsExpr),
 		todayStart, floor1h, floor24h, floor7d, floor30d,
 	).Scan(&vault.BackgroundChunks, &vault.TodayBackground, &bg1h, &bg24h, &bg7d, &bg30d, &bgAll)
 	// 层归属统一：L1 = 背景分块 + docs 表背景层文档；L2 已按层过滤（上方便只剩情景文档）。
@@ -1418,9 +1418,9 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			SELECT COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN status != 'active' THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN status = 'active' AND cited_unit_ids_json NOT IN ('', '[]') THEN 1 ELSE 0 END), 0)
-			FROM thin_vault_noetic`,
+			FROM rm_noetic`,
 	).Scan(&vault.NoeticUnits, &vault.NoeticStale, &vault.NoeticWithCitations)
-	_ = db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM thin_vault_noetic WHERE status = 'active' AND %s >= ?`, ntTsExpr), todayStart).Scan(&vault.TodayNoetic)
+	_ = db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM rm_noetic WHERE status = 'active' AND %s >= ?`, ntTsExpr), todayStart).Scan(&vault.TodayNoetic)
 	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM injection_ledger`).Scan(&vault.InjectionLedgerRows)
 
 	vault.TotalUnits = vault.BackgroundChunks + vault.EpisodicDocs + vault.NoeticUnits
@@ -1538,7 +1538,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		       cited_unit_ids_json, cited_sentences_json,
 		       coalesce(address_uri, ''), coalesce(waveform_bar, ''),
 		       coalesce(assistant_id, ''), coalesce(incarnation_id, '')
-		FROM thin_vault_noetic
+		FROM rm_noetic
 		ORDER BY occurred_at DESC, rowid DESC
 	`, ntTsExpr))
 	var allNoetics []roiNoeticEvent
@@ -1824,7 +1824,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	}
 	bgDayRows, err := db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT date(%s, 'unixepoch', 'localtime') AS d, COUNT(*)
-		FROM thin_vault_bg_chunks
+		FROM rm_bg_chunks
 		WHERE %s >= ?
 		GROUP BY d
 	`, bgTsExpr, bgTsExpr), floor14d)
@@ -1899,7 +1899,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			if bRows, bErr := db.QueryContext(ctx, `
 					SELECT unit_id, coalesce(abs_path, ''), coalesce(rel_path, ''), coalesce(anchor, ''), coalesce(address_uri, ''),
 					       coalesce(waveform_bar, ''), occurred_at
-					FROM thin_vault_bg_chunks WHERE unit_id IN (`+bgPH+`)
+					FROM rm_bg_chunks WHERE unit_id IN (`+bgPH+`)
 				`, missingBG...); bErr == nil {
 				for bRows.Next() {
 					var id, absPath, relPath, anchor string
@@ -2251,22 +2251,22 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		locRows.Close()
 	}
 	if vault.BackgroundChunks > 0 {
-		// 优先按 thin_vault_bg_files 的 chunk_count 与 mtime_ns 聚合，避免每帧对 5.6 万分块做
+		// 优先按 rm_bg_files 的 chunk_count 与 mtime_ns 聚合，避免每帧对 5.6 万分块做
 		// c.abs_path = f.abs_path 文本键三表 JOIN；仅当单测夹具未填 chunk_count/mtime_ns 时回退子查询。
 		bgDirRows, bgErr := db.QueryContext(ctx, `
 			SELECT
 				d.root_path,
 				CASE
 					WHEN COALESCE(SUM(f.chunk_count), 0) > 0 THEN SUM(f.chunk_count)
-					ELSE (SELECT COUNT(c.unit_id) FROM thin_vault_bg_files f2 JOIN thin_vault_bg_chunks c ON c.abs_path = f2.abs_path WHERE f2.dir_id = d.dir_id)
+					ELSE (SELECT COUNT(c.unit_id) FROM rm_bg_files f2 JOIN rm_bg_chunks c ON c.abs_path = f2.abs_path WHERE f2.dir_id = d.dir_id)
 				END AS chunk_cnt,
 				COALESCE(
 					NULLIF(MAX(f.mtime_ns / 1000000000), 0),
-					(SELECT MAX(c.occurred_at) FROM thin_vault_bg_files f2 JOIN thin_vault_bg_chunks c ON c.abs_path = f2.abs_path WHERE f2.dir_id = d.dir_id),
+					(SELECT MAX(c.occurred_at) FROM rm_bg_files f2 JOIN rm_bg_chunks c ON c.abs_path = f2.abs_path WHERE f2.dir_id = d.dir_id),
 					0
 				) AS max_at
-			FROM thin_vault_bg_dirs d
-			LEFT JOIN thin_vault_bg_files f ON f.dir_id = d.dir_id
+			FROM rm_bg_dirs d
+			LEFT JOIN rm_bg_files f ON f.dir_id = d.dir_id
 			GROUP BY d.dir_id, d.root_path
 		`)
 		if bgErr == nil {

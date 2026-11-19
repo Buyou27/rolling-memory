@@ -23,14 +23,17 @@ func TestSystemVersionAndUpdateHandlers(t *testing.T) {
 	}
 	fakeCLI := filepath.Join(binDir, "rolling-memory")
 	script := `#!/bin/sh
+if [ "$1" = "config" ]; then
+  exit 0
+fi
 if [ "$1" = "update" ]; then
   for arg in "$@"; do
     if [ "$arg" = "--check" ]; then
-      echo '{"ok":true,"action":"check","current_version":"0.0.1","latest_version":"0.0.2","update_available":true,"cli":{"asset":"rolling-memory-darwin-arm64","update_available":true}}'
+      echo '{"ok":true,"action":"check","current_version":"0.0.1","latest_tag":"0.0.2","update_available":true,"cli":{"asset":"rolling-memory-darwin-arm64","update_available":true}}'
       exit 0
     fi
   done
-  echo '{"ok":true,"action":"update","updated":true,"components":["rolling-memory-darwin-arm64","web-dist.tar.gz"],"previous_version":"0.0.1","latest_version":"0.0.2","console_restart_deferred":false}'
+  echo '{"ok":true,"action":"update","updated":true,"components":["rolling-memory-darwin-arm64","web-dist.tar.gz"],"previous_version":"0.0.1","latest_tag":"0.0.2","console_restart_deferred":false}'
   exit 0
 fi
 exit 1
@@ -65,7 +68,50 @@ exit 1
 		}
 	}
 
-	// 3. /system/update/check returns parsed check payload.
+	// 3. /system/update/status returns the cached snapshot shape without blocking.
+	statusRaw := callPluginHandler(t, systemUpdateStatusHandler, "/admin/plugin/rolling-memory/system/update/status", `{}`)
+	var statusResp struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(statusRaw), &statusResp); err != nil {
+		t.Fatalf("unmarshal status response: %v (%s)", err, statusRaw)
+	}
+	if statusResp.Code != 0 || statusResp.Data["ok"] != true {
+		t.Fatalf("unexpected status response: %+v", statusResp)
+	}
+
+	// 3b. /system/update/channel persists the channel through the CLI.
+	channelRaw := callPluginHandler(t, systemUpdateChannelHandler, "/admin/plugin/rolling-memory/system/update/channel", `{"channel":"beta"}`)
+	var channelResp struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(channelRaw), &channelResp); err != nil {
+		t.Fatalf("unmarshal channel response: %v (%s)", err, channelRaw)
+	}
+	if channelResp.Code != 0 || channelResp.Data["channel"] != "beta" {
+		t.Fatalf("unexpected channel response: %+v", channelResp)
+	}
+
+	// 3c. /system/update/source persists the source and rejects unknown values.
+	sourceRaw := callPluginHandler(t, systemUpdateSourceHandler, "/admin/plugin/rolling-memory/system/update/source", `{"source":"gitee"}`)
+	var sourceResp struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(sourceRaw), &sourceResp); err != nil {
+		t.Fatalf("unmarshal source response: %v (%s)", err, sourceRaw)
+	}
+	if sourceResp.Code != 0 || sourceResp.Data["source"] != "gitee" {
+		t.Fatalf("unexpected source response: %+v", sourceResp)
+	}
+	badSourceRaw := callPluginHandler(t, systemUpdateSourceHandler, "/admin/plugin/rolling-memory/system/update/source", `{"source":"gitlab"}`)
+	if !strings.Contains(badSourceRaw, "source must be github or gitee") {
+		t.Fatalf("expected invalid source rejection, got %s", badSourceRaw)
+	}
+
+	// 4. /system/update/check returns parsed check payload.
 	chkRaw := callPluginHandler(t, systemUpdateCheckHandler, "/admin/plugin/rolling-memory/system/update/check", `{"release_base":"https://example.com/releases"}`)
 	var chkResp struct {
 		Code int            `json:"code"`
@@ -74,11 +120,11 @@ exit 1
 	if err := json.Unmarshal([]byte(chkRaw), &chkResp); err != nil {
 		t.Fatalf("unmarshal check response: %v (%s)", err, chkRaw)
 	}
-	if chkResp.Code != 0 || chkResp.Data["update_available"] != true || chkResp.Data["latest_version"] != "0.0.2" {
+	if chkResp.Code != 0 || chkResp.Data["update_available"] != true || chkResp.Data["latest_tag"] != "0.0.2" {
 		t.Fatalf("unexpected check response: %+v", chkResp)
 	}
 
-	// 4. /system/update/apply runs update with --defer-console-restart and returns updated components.
+	// 5. /system/update/apply runs update with --defer-console-restart and returns updated components.
 	appRaw := callPluginHandler(t, systemUpdateApplyHandler, "/admin/plugin/rolling-memory/system/update/apply", `{"release_base":"https://example.com/releases","force":true}`)
 	var appResp struct {
 		Code int            `json:"code"`
@@ -87,7 +133,7 @@ exit 1
 	if err := json.Unmarshal([]byte(appRaw), &appResp); err != nil {
 		t.Fatalf("unmarshal apply response: %v (%s)", err, appRaw)
 	}
-	if appResp.Code != 0 || appResp.Data["updated"] != true || appResp.Data["latest_version"] != "0.0.2" {
+	if appResp.Code != 0 || appResp.Data["updated"] != true || appResp.Data["latest_tag"] != "0.0.2" {
 		t.Fatalf("unexpected apply response: %+v", appResp)
 	}
 }

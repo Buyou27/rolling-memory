@@ -598,7 +598,7 @@ func TestCloseUploadsCurrentTurnToEpisodicLayer(t *testing.T) {
 		}
 	}
 	var lineage int
-	if err := connection.DB().QueryRow(`SELECT count(*) FROM thin_vault_episodic_lineage`).Scan(&lineage); err != nil {
+	if err := connection.DB().QueryRow(`SELECT count(*) FROM rm_episodic_lineage`).Scan(&lineage); err != nil {
 		t.Fatalf("lineage table: %v", err)
 	}
 	if lineage != 2 {
@@ -658,7 +658,7 @@ func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if _, err := memory.Store.DB().Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+	if _, err := memory.Store.DB().Exec(`DROP TABLE rm_deleted_units`); err != nil {
 		t.Fatal(err)
 	}
 	out, err := importReplayEvent(memory, memory.Config, "close", payload, Options{})
@@ -894,7 +894,7 @@ func TestLocalCloseConcurrentDeletionDoesNotResurrect(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		_, deleteErr = memory.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id)
+		_, deleteErr = memory.Store.DB().Exec(`INSERT OR REPLACE INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id)
 		if deleteErr == nil {
 			_, deleteErr = memory.Store.DB().Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id)
 		}
@@ -910,7 +910,7 @@ func TestLocalCloseConcurrentDeletionDoesNotResurrect(t *testing.T) {
 	var deleted, tombstone, retained int
 	if err := memory.Store.DB().QueryRow(`SELECT
 		(SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?),
-		(SELECT count(*) FROM thin_vault_deleted_units WHERE unit_id = ?),
+		(SELECT count(*) FROM rm_deleted_units WHERE unit_id = ?),
 		(SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?)`, id, id,
 		episodicunit.DocID("mem:hooks", "[assistant] concurrent answer witness")).Scan(&deleted, &tombstone, &retained); err != nil || deleted != 0 || tombstone != 1 || retained != 1 {
 		t.Fatalf("deleted=%d tombstone=%d retained=%d err=%v", deleted, tombstone, retained, err)
@@ -945,7 +945,7 @@ func TestLocalCloseLogsVaultFailure(t *testing.T) {
 	if _, err := memory.ThinClient(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.Store.DB().Exec(`DROP TABLE thin_vault_deleted_units`); err != nil {
+	if _, err := memory.Store.DB().Exec(`DROP TABLE rm_deleted_units`); err != nil {
 		t.Fatal(err)
 	}
 	payload := map[string]any{"session_id": "s1", "transcript_path": path}
@@ -1490,7 +1490,7 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 		t.Fatalf("initial SyncBackgroundDirs: %v", err)
 	}
 	var initialSHA string
-	if err := mem.Store.DB().QueryRow(`SELECT content_sha256 FROM thin_vault_bg_files LIMIT 1`).Scan(&initialSHA); err != nil || initialSHA == "" {
+	if err := mem.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&initialSHA); err != nil || initialSHA == "" {
 		t.Fatalf("expected initial AddBackgroundDir to ingest v1 background file, got %q err=%v", initialSHA, err)
 	}
 
@@ -1516,7 +1516,7 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	}
 	memCheck := openMemory(t)
 	var afterCooldownSHA string
-	_ = memCheck.Store.DB().QueryRow(`SELECT content_sha256 FROM thin_vault_bg_files LIMIT 1`).Scan(&afterCooldownSHA)
+	_ = memCheck.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&afterCooldownSHA)
 	_ = memCheck.Close()
 	if afterCooldownSHA != initialSHA {
 		t.Fatalf("cooldown violated: file sha256 changed from %q to %q inside 60s window", initialSHA, afterCooldownSHA)
@@ -1539,20 +1539,20 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	mem3 := openMemory(t)
 	defer mem3.Close()
 	var updatedSHA string
-	if err := mem3.Store.DB().QueryRow(`SELECT content_sha256 FROM thin_vault_bg_files LIMIT 1`).Scan(&updatedSHA); err != nil {
-		t.Fatalf("query thin_vault_bg_files: %v", err)
+	if err := mem3.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&updatedSHA); err != nil {
+		t.Fatalf("query rm_bg_files: %v", err)
 	}
 	if updatedSHA == "" || updatedSHA == initialSHA {
 		t.Fatalf("expected recall hook after cooldown to auto-sync modified L1 file: initial=%s updated=%s", initialSHA, updatedSHA)
 	}
 	var noeticCount int
 	if err := mem3.Store.DB().QueryRow(
-		`SELECT COUNT(*) FROM thin_vault_noetic`,
+		`SELECT COUNT(*) FROM rm_noetic`,
 	).Scan(&noeticCount); err != nil {
-		t.Fatalf("query thin_vault_noetic: %v", err)
+		t.Fatalf("query rm_noetic: %v", err)
 	}
 	if noeticCount != 0 {
-		t.Fatalf("recall hook must never crystallize user prompts into thin_vault_noetic, got %d", noeticCount)
+		t.Fatalf("recall hook must never crystallize user prompts into rm_noetic, got %d", noeticCount)
 	}
 }
 
@@ -1859,7 +1859,7 @@ func TestBootContextUsesThinVaultAtlasAndEpisodicTail(t *testing.T) {
 	payload := map[string]any{"cwd": wsDir, "session_id": "sess_boot_2"}
 	atlas := queryDiskVerifiedWorkspaceAtlas(mem, "mem:hooks", "Rolling-Memory", payload, 5)
 	if !strings.Contains(atlas, "internal/hooks/hooks.go") {
-		t.Fatalf("expected thin_vault_noetic verified path in atlas, got %q", atlas)
+		t.Fatalf("expected rm_noetic verified path in atlas, got %q", atlas)
 	}
 	tail := queryWorkspaceEpisodicTail(mem, "mem:hooks", "Rolling-Memory", "sess_boot_2")
 	if !strings.Contains(tail, "检查 SessionStart 唤醒路标") || !strings.Contains(tail, "已修复 internal/hooks/hooks.go") {

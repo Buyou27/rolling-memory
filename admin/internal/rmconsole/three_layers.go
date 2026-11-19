@@ -134,7 +134,7 @@ const vaultCoreSchemaDDL = `
 		incarnation_id TEXT NOT NULL DEFAULT '',
 		locus TEXT NOT NULL DEFAULT ''
 	);
-	CREATE TABLE IF NOT EXISTS thin_vault_noetic (
+	CREATE TABLE IF NOT EXISTS rm_noetic (
 		noetic_id TEXT PRIMARY KEY,
 		occurred_at INTEGER NOT NULL DEFAULT 0,
 		status TEXT NOT NULL DEFAULT 'active',
@@ -147,13 +147,13 @@ const vaultCoreSchemaDDL = `
 		assistant_id TEXT NOT NULL DEFAULT '',
 		incarnation_id TEXT NOT NULL DEFAULT ''
 	);
-		CREATE TABLE IF NOT EXISTS thin_vault_bg_dirs (
+		CREATE TABLE IF NOT EXISTS rm_bg_dirs (
 			dir_id TEXT PRIMARY KEY,
 			root_path TEXT NOT NULL UNIQUE,
 			added_at INTEGER NOT NULL DEFAULT 0,
 			include_exts_json TEXT NOT NULL DEFAULT '[]'
 		);
-	CREATE TABLE IF NOT EXISTS thin_vault_bg_files (
+	CREATE TABLE IF NOT EXISTS rm_bg_files (
 		abs_path TEXT PRIMARY KEY,
 		dir_id TEXT NOT NULL,
 		rel_path TEXT NOT NULL,
@@ -162,19 +162,21 @@ const vaultCoreSchemaDDL = `
 		content_sha256 TEXT NOT NULL DEFAULT '',
 		chunk_count INTEGER NOT NULL DEFAULT 0,
 		unit_ids_json TEXT NOT NULL DEFAULT '[]',
-		chunk_hashes_json TEXT NOT NULL DEFAULT '[]'
+		chunk_hashes_json TEXT NOT NULL DEFAULT '[]',
+		chunker_generation TEXT NOT NULL DEFAULT ''
 	);
-	CREATE TABLE IF NOT EXISTS thin_vault_bg_chunks (
+	CREATE TABLE IF NOT EXISTS rm_bg_chunks (
 		unit_id TEXT PRIMARY KEY,
 		abs_path TEXT NOT NULL,
 		rel_path TEXT NOT NULL,
 		chunk_index INTEGER NOT NULL DEFAULT 0,
 		anchor TEXT NOT NULL DEFAULT '',
 		occurred_at INTEGER NOT NULL DEFAULT 0,
+		inserted_at INTEGER NOT NULL DEFAULT 0,
 		address_uri TEXT NOT NULL DEFAULT '',
 		coord64 INTEGER NOT NULL DEFAULT 0,
-		kept_indices_json TEXT NOT NULL DEFAULT '[]',
-		slots_json TEXT NOT NULL DEFAULT '[]'
+		waveform_bar TEXT NOT NULL DEFAULT '',
+		kept_indices_json TEXT NOT NULL DEFAULT '[]'
 	);`
 
 // openVaultWriteOnly 打开可写连接并保证核心表存在，**不做任何破坏性 DDL**：
@@ -193,8 +195,8 @@ func openVaultWriteOnly(dbPath string) (*sql.DB, error) {
 	if err := db.QueryRow(`
 		SELECT COUNT(*) FROM sqlite_master
 		WHERE type = 'table' AND name IN (
-			'thin_vault_meta', 'thin_vault_docs', 'thin_vault_noetic',
-			'thin_vault_bg_dirs', 'thin_vault_bg_files', 'thin_vault_bg_chunks'
+			'thin_vault_meta', 'thin_vault_docs', 'rm_noetic',
+			'rm_bg_dirs', 'rm_bg_files', 'rm_bg_chunks'
 		)
 	`).Scan(&existingTables); err == nil && existingTables == 6 {
 		return db, nil
@@ -229,12 +231,12 @@ func openWritableVaultDB(dbPath string) (*sql.DB, error) {
 		`ALTER TABLE thin_vault_docs ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE thin_vault_docs ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE thin_vault_docs ADD COLUMN locus TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN address_uri TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN coord64 INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_bg_dirs ADD COLUMN include_exts_json TEXT NOT NULL DEFAULT '[]'`,
-		`ALTER TABLE thin_vault_bg_files ADD COLUMN chunk_hashes_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE rm_noetic ADD COLUMN address_uri TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_noetic ADD COLUMN coord64 INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE rm_noetic ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_noetic ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_bg_dirs ADD COLUMN include_exts_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE rm_bg_files ADD COLUMN chunk_hashes_json TEXT NOT NULL DEFAULT '[]'`,
 	} {
 		_, _ = db.Exec(stmt)
 	}
@@ -441,9 +443,9 @@ func layersGetHandler(c *gin.Context) {
 		return
 	}
 
-	// 2. Check thin_vault_noetic
+	// 2. Check rm_noetic
 	var nid, st, qTxt, aTxt, citedJSON, nAddr, nAsst string
-	if db.QueryRow(`SELECT noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json, COALESCE(address_uri, ''), COALESCE(assistant_id, '') FROM thin_vault_noetic WHERE noetic_id = ?`, pk).
+	if db.QueryRow(`SELECT noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json, COALESCE(address_uri, ''), COALESCE(assistant_id, '') FROM rm_noetic WHERE noetic_id = ?`, pk).
 		Scan(&nid, &occ, &st, &qTxt, &aTxt, &citedJSON, &nAddr, &nAsst) == nil {
 		var cited []string
 		_ = json.Unmarshal([]byte(citedJSON), &cited)
@@ -466,10 +468,10 @@ func layersGetHandler(c *gin.Context) {
 		return
 	}
 
-	// 3. Check thin_vault_bg_chunks
+	// 3. Check rm_bg_chunks
 	var uid, absP, relP, anchor string
 	var cIdx int
-	if db.QueryRow(`SELECT unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk).
+	if db.QueryRow(`SELECT unit_id, abs_path, rel_path, chunk_index, anchor, occurred_at, address_uri FROM rm_bg_chunks WHERE unit_id = ?`, pk).
 		Scan(&uid, &absP, &relP, &cIdx, &anchor, &occ, &addr) == nil {
 		preview := fmt.Sprintf("[%s#%s] (%s)", relP, anchor, absP)
 		row := ThreeLayerRow{
@@ -544,7 +546,7 @@ func layersDeleteHandler(c *gin.Context) {
 }
 
 // deleteMemoryUnitsByPKs 在本地金库中按主键删除记忆单元，并完整维护谱系行、
-// 防同步复活墓碑（thin_vault_deleted_units）、背景文件记账收敛与 L3 引证级联置 stale。
+// 防同步复活墓碑（rm_deleted_units）、背景文件记账收敛与 L3 引证级联置 stale。
 func deleteMemoryUnitsByPKs(db *sql.DB, cleanPKs []string) (deleted int, invalidatedNoetic int, purgedIDs []string, err error) {
 	return deleteMemoryUnits(db, cleanPKs, false)
 }
@@ -555,11 +557,11 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 		return 0, 0, nil, fmt.Errorf("开始删除事务失败: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_deleted_units (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`); err != nil {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS rm_deleted_units (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`); err != nil {
 		return 0, 0, nil, fmt.Errorf("创建删除墓碑表失败: %w", err)
 	}
 	if purgeStale {
-		rows, qErr := tx.Query(`SELECT noetic_id FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
+		rows, qErr := tx.Query(`SELECT noetic_id FROM rm_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
 		if qErr != nil {
 			return 0, 0, nil, fmt.Errorf("读取失效记忆失败: %w", qErr)
 		}
@@ -580,7 +582,7 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 		if closeErr := rows.Close(); closeErr != nil {
 			return 0, 0, nil, fmt.Errorf("关闭失效记忆查询失败: %w", closeErr)
 		}
-		res, execErr := tx.Exec(`DELETE FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
+		res, execErr := tx.Exec(`DELETE FROM rm_noetic WHERE COALESCE(NULLIF(status, ''), 'active') <> 'active'`)
 		if execErr != nil {
 			return 0, 0, nil, fmt.Errorf("清理失效记忆失败: %w", execErr)
 		}
@@ -614,16 +616,16 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 			if lyr == "" {
 				lyr = "episodic"
 			}
-			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, pk, lyr, nowUnix); execErr != nil {
+			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, pk, lyr, nowUnix); execErr != nil {
 				return 0, 0, nil, fmt.Errorf("写入删除墓碑失败: %w", execErr)
 			}
-			for _, table := range []string{"thin_vault_episodic_lineage", "thin_vault_episodic_index", "thin_vault_episodic_sources"} {
+			for _, table := range []string{"rm_episodic_lineage", "rm_episodic_index", "rm_episodic_sources"} {
 				if execErr := deleteOptionalVaultRow(tx, table, "doc_id", pk); execErr != nil {
 					return 0, 0, nil, fmt.Errorf("删除记忆索引或谱系失败: %w", execErr)
 				}
 			}
 		}
-		res, execErr = tx.Exec(`DELETE FROM thin_vault_noetic WHERE noetic_id = ?`, pk)
+		res, execErr = tx.Exec(`DELETE FROM rm_noetic WHERE noetic_id = ?`, pk)
 		if execErr != nil {
 			return 0, 0, nil, fmt.Errorf("删除沉淀记忆失败: %w", execErr)
 		}
@@ -638,12 +640,12 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 		}
 		// L1 背景分块是「磁盘文件 → 分块」的派生物：删除前先记下其归属文件，
 		// 删除后必须把该文件的派生记账（chunk_count / unit_ids_json / chunk_hashes_json）收敛，
-		// 否则 thin_vault_bg_files 会一直声称这些分块仍然存在（目录统计虚高、增量同步语义错乱）。
+		// 否则 rm_bg_files 会一直声称这些分块仍然存在（目录统计虚高、增量同步语义错乱）。
 		var ownerAbsPath string
-		if scanErr := tx.QueryRow(`SELECT abs_path FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk).Scan(&ownerAbsPath); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		if scanErr := tx.QueryRow(`SELECT abs_path FROM rm_bg_chunks WHERE unit_id = ?`, pk).Scan(&ownerAbsPath); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 			return 0, 0, nil, fmt.Errorf("读取背景分块失败: %w", scanErr)
 		}
-		res, execErr = tx.Exec(`DELETE FROM thin_vault_bg_chunks WHERE unit_id = ?`, pk)
+		res, execErr = tx.Exec(`DELETE FROM rm_bg_chunks WHERE unit_id = ?`, pk)
 		if execErr != nil {
 			return 0, 0, nil, fmt.Errorf("删除背景分块失败: %w", execErr)
 		}
@@ -655,7 +657,7 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 			deleted += int(n)
 			deletedEvidence[pk] = true
 			purgedIDs = append(purgedIDs, pk)
-			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'background', ?)`, pk, nowUnix); execErr != nil {
+			if _, execErr := tx.Exec(`INSERT OR REPLACE INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'background', ?)`, pk, nowUnix); execErr != nil {
 				return 0, 0, nil, fmt.Errorf("写入删除墓碑失败: %w", execErr)
 			}
 			if strings.TrimSpace(ownerAbsPath) != "" {
@@ -671,7 +673,7 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 
 	// 若删除了底层 L1/L2/L3 单元，级联将引证它的 L3 Noetic 置为 stale（引证链不再指向失效证据）。
 	if len(deletedEvidence) > 0 {
-		nRows, qErr := tx.Query(`SELECT noetic_id, cited_unit_ids_json FROM thin_vault_noetic WHERE COALESCE(NULLIF(status, ''), 'active') = 'active'`)
+		nRows, qErr := tx.Query(`SELECT noetic_id, cited_unit_ids_json FROM rm_noetic WHERE COALESCE(NULLIF(status, ''), 'active') = 'active'`)
 		if qErr != nil {
 			return 0, 0, nil, fmt.Errorf("读取引证失败: %w", qErr)
 		}
@@ -702,7 +704,7 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 			return 0, 0, nil, fmt.Errorf("关闭引证查询失败: %w", closeErr)
 		}
 		for _, nid := range toStale {
-			if _, uErr := tx.Exec(`UPDATE thin_vault_noetic SET status = 'stale' WHERE noetic_id = ?`, nid); uErr != nil {
+			if _, uErr := tx.Exec(`UPDATE rm_noetic SET status = 'stale' WHERE noetic_id = ?`, nid); uErr != nil {
 				return 0, 0, nil, fmt.Errorf("更新引证状态失败: %w", uErr)
 			}
 			invalidatedNoetic++
@@ -731,11 +733,11 @@ func deleteOptionalVaultRow(tx *sql.Tx, table, column, id string) error {
 }
 
 // resyncBackgroundFileBookkeeping 收敛某个被 Console 改写过分块的 L1 文件的派生记账：
-// 以 thin_vault_bg_chunks 的真实剩余集合重算 chunk_count 与 unit_ids_json，并把
+// 以 rm_bg_chunks 的真实剩余集合重算 chunk_count 与 unit_ids_json，并把
 // chunk_hashes_json 置空 —— 让引擎在下一次 background sync 重新分块校验，而不是信任一份被
 // Console 拼接过的哈希表（L1 背景单元的正确收敛方式永远是从磁盘文件重新派生）。
 func resyncBackgroundFileBookkeeping(tx *sql.Tx, absPath string) error {
-	rows, err := tx.Query(`SELECT unit_id FROM thin_vault_bg_chunks WHERE abs_path = ? ORDER BY chunk_index ASC, unit_id ASC`, absPath)
+	rows, err := tx.Query(`SELECT unit_id FROM rm_bg_chunks WHERE abs_path = ? ORDER BY chunk_index ASC, unit_id ASC`, absPath)
 	if err != nil {
 		return err
 	}
@@ -760,7 +762,7 @@ func resyncBackgroundFileBookkeeping(tx *sql.Tx, absPath string) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`UPDATE thin_vault_bg_files SET chunk_count = ?, unit_ids_json = ?, chunk_hashes_json = '[]' WHERE abs_path = ?`,
+		`UPDATE rm_bg_files SET chunk_count = ?, unit_ids_json = ?, chunk_hashes_json = '[]' WHERE abs_path = ?`,
 		len(ids), string(uidJSON), absPath,
 	)
 	return err
@@ -778,7 +780,7 @@ func backgroundDirsHandler(c *gin.Context) {
 	}
 
 	out := []BackgroundDirItem{}
-	rows, err := db.Query(`SELECT dir_id, root_path, added_at, COALESCE(include_exts_json, '[]') FROM thin_vault_bg_dirs ORDER BY added_at ASC, dir_id ASC`)
+	rows, err := db.Query(`SELECT dir_id, root_path, added_at, COALESCE(include_exts_json, '[]') FROM rm_bg_dirs ORDER BY added_at ASC, dir_id ASC`)
 	if err == nil {
 		for rows.Next() {
 			var item BackgroundDirItem
@@ -797,7 +799,7 @@ func backgroundDirsHandler(c *gin.Context) {
 		}
 		rows.Close()
 	} else {
-		rowsLegacy, errLegacy := db.Query(`SELECT dir_id, root_path, added_at FROM thin_vault_bg_dirs ORDER BY added_at ASC, dir_id ASC`)
+		rowsLegacy, errLegacy := db.Query(`SELECT dir_id, root_path, added_at FROM rm_bg_dirs ORDER BY added_at ASC, dir_id ASC`)
 		if errLegacy != nil {
 			httpx.Fail(c, httpx.WithMessage(errLegacy.Error()))
 			return
@@ -813,7 +815,7 @@ func backgroundDirsHandler(c *gin.Context) {
 		}
 	}
 	for i := range out {
-		_ = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(chunk_count), 0) FROM thin_vault_bg_files WHERE dir_id = ?`, out[i].DirID).
+		_ = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(chunk_count), 0) FROM rm_bg_files WHERE dir_id = ?`, out[i].DirID).
 			Scan(&out[i].FileCount, &out[i].ChunkCount)
 	}
 	httpx.Success(c, httpx.WithData(out))
@@ -845,14 +847,14 @@ func backgroundFilesHandler(c *gin.Context) {
 	// 超过 limit 的匹配文件会被静默丢弃 —— 用户搜文件名查不到明明存在的文件。
 	rows, err := sqliteQueryJSONArgs(dbPath, `
 		SELECT abs_path, dir_id, rel_path, file_size, mtime_ns, chunk_count
-		FROM thin_vault_bg_files
+		FROM rm_bg_files
 		WHERE (? = '' OR dir_id = ?)
 		  AND (? = '' OR instr(lower(rel_path || ' ' || abs_path), ?) > 0)
 		ORDER BY rel_path ASC, abs_path ASC
 		LIMIT ?
 	`, dirFilter, dirFilter, kw, kw, req.Limit)
 	if err != nil {
-		if !vaultTablePresent(dbPath, "thin_vault_bg_files") {
+		if !vaultTablePresent(dbPath, "rm_bg_files") {
 			httpx.Success(c, httpx.WithData([]BackgroundFileItem{}))
 			return
 		}
@@ -1016,7 +1018,7 @@ func backgroundRemoveHandler(c *gin.Context) {
 			httpx.Fail(c, httpx.WithMessage(err.Error()))
 			return
 		}
-		err = db.QueryRow(`SELECT root_path FROM thin_vault_bg_dirs WHERE dir_id = ?`, targetDirID).Scan(&cleanRoot)
+		err = db.QueryRow(`SELECT root_path FROM rm_bg_dirs WHERE dir_id = ?`, targetDirID).Scan(&cleanRoot)
 		_ = db.Close()
 		if err != nil {
 			httpx.Fail(c, httpx.WithMessage("未找到待解挂目录: "+err.Error()))

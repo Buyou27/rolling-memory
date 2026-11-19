@@ -23,11 +23,19 @@ import (
 func TestConsoleReleaseBaseSemantics(t *testing.T) {
 	const official = "https://github.com/rocareer/rolling-memory/releases/latest/download"
 
+	t.Setenv("ROLLING_MEMORY_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("ROLLING_MEMORY_UPDATE_SOURCE", "github")
 	os.Unsetenv("ROLLING_MEMORY_RELEASE_BASE")
 	t.Cleanup(func() { os.Unsetenv("ROLLING_MEMORY_RELEASE_BASE") })
 	if got := consoleReleaseBase(); got != official {
 		t.Fatalf("unset base = %q, want the official channel", got)
 	}
+
+	t.Setenv("ROLLING_MEMORY_UPDATE_SOURCE", "gitee")
+	if got := consoleReleaseBase(); got != "https://gitee.com/rocareer/Rolling-Memory/releases/latest/download" {
+		t.Fatalf("gitee source = %q", got)
+	}
+	t.Setenv("ROLLING_MEMORY_UPDATE_SOURCE", "github")
 
 	for _, value := range []string{"", "off", "none", "0"} {
 		t.Setenv("ROLLING_MEMORY_RELEASE_BASE", value)

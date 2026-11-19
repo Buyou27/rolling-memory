@@ -30,6 +30,7 @@ import (
 //	rm/roi[:<scope>[:<harness>]]     → ROI 监控事实帧（roi）
 //	rm/eval                          → 评测实验室实时进度帧（eval_progress）
 //	rm/system                        → 记忆服务守护进程运行时帧（system）
+//	rm/update                        → 版本检查快照帧（update）
 const (
 	wsRoomStatus      = "rm/status"
 	wsRoomStatusProbe = "rm/status/probe"
@@ -39,6 +40,7 @@ const (
 	wsRoomROI         = "rm/roi"
 	wsRoomEval        = "rm/eval"
 	wsRoomSystem      = "rm/system"
+	wsRoomUpdate      = "rm/update"
 )
 
 type wsRoomBridge struct {
@@ -99,6 +101,8 @@ func wsRoomPermissionRules(kind streamKind) ([]string, string) {
 	case streamKindSystem:
 		// 名称与 admin_rules.name 同形（权限检查直接按规则名匹配）。
 		return []string{"plugin/rolling-memory/system/read", "plugin/rolling-memory/system/daemon"}, "OR"
+	case streamKindUpdate:
+		return []string{"plugin/rolling-memory/system/version", "plugin/rolling-memory/system/update/check", "plugin/rolling-memory/status"}, "OR"
 	default:
 		return nil, ""
 	}
@@ -216,6 +220,8 @@ func parseWSRoomSpec(room string) (streamKey, []string, bool) {
 		return streamKey{kind: streamKindEval}, []string{"eval_progress", "eval_done"}, true
 	case room == wsRoomSystem:
 		return streamKey{kind: streamKindSystem}, []string{"system"}, true
+	case room == wsRoomUpdate:
+		return streamKey{kind: streamKindUpdate}, []string{"update"}, true
 	default:
 		return streamKey{}, nil, false
 	}

@@ -8,20 +8,51 @@ import (
 	"sort"
 )
 
-// invE 是普适常数 e 的倒数：一跳透射率取 invE，二跳取 invE²（逐跳几何衰减）。
-const invE = 1.0 / math.E
+// eulerNumber is Euler's number as a named constant; ePower expressions that
+// are divisors of the local slot kernel keep this name so the divisor value and
+// its rounding stay exactly the eulerNumber double.
+const eulerNumber = math.E
+
+// transmissionPerHop is the per-hop echo transmission 1/e: one nat of surprisal
+// per hop is the unit-commensurability axiom of the delivery envelope (paper
+// Theorem 4), so the local slot kernel exp(-(d-1)/e) is its geometric series and
+// Z_local = 1/(1-e^{-1/e}) is that series' sum. It is a universal constant, not a
+// calibrated threshold; every other file refers to it by name.
+const transmissionPerHop = 1.0 / math.E
+
+// [calibrated] anchorConcentrationFloor — calendar-concentration floor at which a
+// word family counts as a temporally localized event anchor. Fitted on the reference
+// corpus; the value coincides with e^-1 but is an empirical operating point, not a
+// derivation. Replacing it with a null-model noise band was measured and regressed
+// (composite 73.67→72.94), so keep the calibrated value; recalibrate only with a
+// paired ATM arm (F-45).
+const anchorConcentrationFloor = 0.36787944117144233
+
+// [calibrated] shellScatterFloor — concentration below which a word family counts as
+// a cross-day scattered colloquial shell and is extinguished outside the anchor cone.
+// Fitted on the reference corpus; the value coincides with e^-2 but is an empirical
+// operating point. Softening this binary boundary was measured and regressed
+// (Main r@10 2 down, composite 73.67→73.60), so keep it binary (F-44).
+const shellScatterFloor = 0.1353352832366127
+
+// [calibrated] cloneDampingKernel — strength of the echo/clone redundancy damping
+// applied to a candidate's raw score. The dose ladder selected the right edge of the
+// e^-2 plateau (raising the dose past it regressed), so the value coincides with e^-2
+// but is a calibrated kernel, not a derivation. Recalibrate only with a paired ATM
+// dose arm.
+const cloneDampingKernel = 0.1353352832366127
 
 // 透射率与亲和地板三件套的包级唯一声明；此前评分、关系与筛选各函数内的
 // 同名局部副本已删除，引用处直接解析到本声明。三种历史写法（局部
-// 1.0/(E·E)、局部 invE*invE、运行时 1.0-invE 与 1.0-invE*invE）与本声明
+// 1.0/(E·E)、局部 transmissionPerHop*transmissionPerHop、运行时 1.0-transmissionPerHop 与 1.0-transmissionPerHop*transmissionPerHop）与本声明
 // 在 float64 下逐位相同，收敛不改变任何数值。
 const (
-	// invE2 是二跳透射率 e^{-2}。
-	invE2 = invE * invE
+	// transmissionTwoHop 是二跳透射率 e^{-2}（逐跳几何衰减的第二跳）。
+	transmissionTwoHop = transmissionPerHop * transmissionPerHop
 	// subFloor 是同事件邻居扫描的亲和地板 1-1/e。
-	subFloor = 1.0 - invE
+	subFloor = 1.0 - transmissionPerHop
 	// identityFloor 是克隆/旁观者判定的同源上限 1-e^{-2}。
-	identityFloor = 1.0 - invE2
+	identityFloor = 1.0 - transmissionTwoHop
 )
 
 // 单次查询的扩散计算预算（非评分参数）按种子能量组消费。
@@ -819,7 +850,7 @@ func (e *Engine) searchBaseWithPositions(qTerms map[uint64]Term, qPositions map[
 				weight := mass
 				if e.FlagsGain != 0 && int(p.Unit) < len(idx.UnitFlags) {
 					if unitFlags := idx.UnitFlags[p.Unit]; unitFlags != nil && unitFlags[hash]&docGainMask != 0 {
-						weight = mass * (1 + e.FlagsGain/math.E)
+						weight = mass * (1 + e.FlagsGain/eulerNumber)
 					}
 				}
 				shared[p.Unit] += weight
@@ -831,7 +862,7 @@ func (e *Engine) searchBaseWithPositions(qTerms map[uint64]Term, qPositions map[
 				if e.FlagsGain != 0 {
 					entries := st.docEntriesOf(p.unit)
 					if int(p.entry) >= 0 && int(p.entry) < len(entries) && entries[p.entry].flags&docGainMask != 0 {
-						weight = mass * (1 + e.FlagsGain/math.E)
+						weight = mass * (1 + e.FlagsGain/eulerNumber)
 					}
 				}
 				shared[p.unit] += weight
@@ -912,7 +943,7 @@ func (e *Engine) searchBaseWithPositions(qTerms map[uint64]Term, qPositions map[
 			timeTau = e.clusterState.meanGap
 		}
 	}
-	hop1 := e.spread(directUnits, direct, qTerms, invE, e.Hop1Budget, timeTau)
+	hop1 := e.spread(directUnits, direct, qTerms, transmissionPerHop, e.Hop1Budget, timeTau)
 	hop1Only := make([]int32, 0, len(hop1))
 	for unit, energy := range hop1 {
 		if _, isDirect := direct[unit]; isDirect {
@@ -924,7 +955,7 @@ func (e *Engine) searchBaseWithPositions(qTerms map[uint64]Term, qPositions map[
 	}
 	sortByEnergy(hop1Only, hop1, idx)
 
-	hop2 := e.spread(hop1Only, hop1, qTerms, invE*invE, e.Hop2Budget, timeTau)
+	hop2 := e.spread(hop1Only, hop1, qTerms, transmissionPerHop*transmissionPerHop, e.Hop2Budget, timeTau)
 
 	pool := make(map[int32]struct{}, len(direct)+len(hop1)+len(hop2))
 	for unit := range direct {
@@ -1168,7 +1199,7 @@ func (e *Engine) proximityIncrement(unit int32, masses map[uint64]float64) float
 				if closest < 0 {
 					continue
 				}
-				energy += 2 * leftMass * rightMass / (leftMass + rightMass) * math.Exp(-(float64(closest)-1)/math.E)
+				energy += 2 * leftMass * rightMass / (leftMass + rightMass) * math.Exp(-(float64(closest)-1)/eulerNumber)
 			}
 		}
 		return energy
@@ -1233,7 +1264,7 @@ func (e *Engine) proximityIncrement(unit int32, masses map[uint64]float64) float
 			if closest < 0 {
 				continue
 			}
-			energy += 2 * leftMass * rightMass / (leftMass + rightMass) * math.Exp(-(float64(closest)-1)/math.E)
+			energy += 2 * leftMass * rightMass / (leftMass + rightMass) * math.Exp(-(float64(closest)-1)/eulerNumber)
 		}
 	}
 	return energy

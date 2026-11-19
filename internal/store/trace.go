@@ -145,23 +145,23 @@ func (s *Store) PendingTraces(scope string, limit int, session *string) ([]Trace
 func (s *Store) PendingVaultTraces(scope string, session *string) ([]Trace, error) {
 	var hasVaultDocs int
 	if err := s.conn.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_docs')`,
+		`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rm_docs')`,
 	).Scan(&hasVaultDocs); err != nil {
 		return nil, err
 	}
 	query := "SELECT * FROM trace WHERE scope = ? AND audience IN ('shared', 'public')"
 	if hasVaultDocs != 0 {
-		query += " AND NOT EXISTS (SELECT 1 FROM thin_vault_docs d WHERE d.doc_id = 'ep_' || trace.hash)"
-		// 用户显式删除的单元（thin_vault_deleted_units 墓碑）不得因金库行消失而被判为「待镜像」重新写回：
+		query += " AND NOT EXISTS (SELECT 1 FROM rm_docs d WHERE d.unit_id = 'ep_' || trace.hash)"
+		// 用户显式删除的单元（rm_deleted_units 墓碑）不得因金库行消失而被判为「待镜像」重新写回：
 		// 删除意图优先于 mirror 状态推导，否则下一次 import 会把已删除的记忆整批复活。
 		var hasTombstones int
 		if err := s.conn.QueryRow(
-			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_deleted_units')`,
+			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rm_deleted_units')`,
 		).Scan(&hasTombstones); err != nil {
 			return nil, err
 		}
 		if hasTombstones != 0 {
-			query += " AND NOT EXISTS (SELECT 1 FROM thin_vault_deleted_units t WHERE t.unit_id = 'ep_' || trace.hash)"
+			query += " AND NOT EXISTS (SELECT 1 FROM rm_deleted_units t WHERE t.unit_id = 'ep_' || trace.hash)"
 		}
 	} else {
 		query += " AND processed = 0"

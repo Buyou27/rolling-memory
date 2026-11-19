@@ -120,6 +120,10 @@ func (a *application) printStatus(result map[string]any) {
 	// Human label for the local compatibility index (embedding provider/model);
 	// the JSON keys keep their existing names.
 	a.printf("compat:   %s / %s\n", pyStr(embedding["provider"]), pyStr(embedding["model"]))
+	if update := childMap(result, "update"); truthy(update["available"]) {
+		a.printf("update:   %s -> %s available (run `rolling-memory update --check`)\n",
+			pyStr(update["current_version"]), pyStr(update["latest_display"]))
+	}
 	if a.args.Flag("wave") {
 		seed := fmt.Sprintf("scope %s assertions %s nodes %s traces %s sessions %s",
 			pyStr(result["scope"]),
@@ -146,6 +150,10 @@ func (a *application) printDoctor(result map[string]any) {
 	}
 	for _, warning := range anyList(result["warnings"]) {
 		a.printf("  warning: %s\n", pyStr(warning))
+	}
+	if update := childMap(result, "update"); truthy(update["available"]) {
+		a.printf("  update: %s -> %s available (run `rolling-memory update --check`)\n",
+			pyStr(update["current_version"]), pyStr(update["latest_display"]))
 	}
 	integrity := childMap(result, "integrity")
 	if truthy(integrity["ok"]) {

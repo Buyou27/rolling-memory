@@ -51,7 +51,7 @@ func (v *Vault) ReanchorSameSourceByDigest(scope, docID, refPointer string, occu
 	}
 	var indexedRef string
 	var digest, payload, mac, storedKey []byte
-	err = v.db.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM thin_vault_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&indexedRef, &digest, &payload, &mac, &storedKey)
+	err = v.db.QueryRow(`SELECT ref_pointer, content_digest, payload, payload_mac, codec_key FROM rm_episodic_index WHERE doc_id = ? ORDER BY (codec_key = ?) DESC, rowid DESC LIMIT 1`, docID, key).Scan(&indexedRef, &digest, &payload, &mac, &storedKey)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Legacy rows without an index carry no sealed digest to search for.

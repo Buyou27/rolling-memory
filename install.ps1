@@ -37,6 +37,22 @@ $InstallDir = if ($env:ROLLING_MEMORY_INSTALL_DIR) { $env:ROLLING_MEMORY_INSTALL
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $TargetBin = Join-Path $InstallDir "rolling-memory.exe"
 
+$SourceRef = if ($env:ROLLING_MEMORY_SOURCE_REF) { $env:ROLLING_MEMORY_SOURCE_REF } else { "" }
+$HarnessArgs = @()
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ($args[$i] -eq "--ref") {
+        if ($i + 1 -ge $args.Count) { throw "install.ps1: --ref requires a tag" }
+        $SourceRef = $args[$i + 1]
+        $i++
+    } elseif ($args[$i] -like "--ref=*") {
+        $SourceRef = $args[$i].Substring(6)
+    } else {
+        $HarnessArgs += $args[$i]
+    }
+}
+if ($SourceRef -and $SourceRef.StartsWith("-")) { throw "install.ps1: invalid --ref value: $SourceRef" }
+if ($SourceRef) { $ReleaseBase = "" }
+
 # Map the host architecture to the release asset suffix.
 $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64" { "amd64" }
@@ -46,11 +62,21 @@ $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 
 $Built = $false
 $PrebuiltErr = ""
+$PrebuiltVersion = ""
+$PrebuiltAsset = ""
+$InstallMethod = ""
+$InstallRef = ""
+$InstallCommit = ""
+$InstallAsset = ""
+$DataDir = if ($env:XDG_DATA_HOME) { Join-Path $env:XDG_DATA_HOME "rolling-memory" } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE ".local\share\rolling-memory" } else { Join-Path $env:LOCALAPPDATA "rolling-memory" }
 $EvalDataTarget = Join-Path (Split-Path -Parent $InstallDir) "evaldata"
-if ((Test-Path "cmd\rolling-memory\main.go") -and (Get-Command go -ErrorAction SilentlyContinue)) {
+if ((-not $SourceRef) -and (Test-Path "cmd\rolling-memory\main.go") -and (Get-Command go -ErrorAction SilentlyContinue)) {
     Write-Host "[rolling-memory] Building from local checkout..."
     $env:CGO_ENABLED = "0"
     go build -trimpath -o $TargetBin .\cmd\rolling-memory
+    $InstallMethod = "local"
+    $InstallRef = (git describe --tags --always 2>$null)
+    $InstallCommit = (git rev-parse HEAD 2>$null)
     if ((Test-Path "evaldata\MANIFEST.json") -and (-not (Test-Path (Join-Path $EvalDataTarget "MANIFEST.json")))) {
         Copy-Item -Recurse -Force "evaldata" $EvalDataTarget -ErrorAction SilentlyContinue
     }
@@ -103,6 +129,7 @@ function Try-DownloadPrebuilt([string]$BaseUrl) {
         return $false
     }
 
+    $script:PrebuiltAsset = $SelectedAsset
     $AssetUrl = "$($BaseUrl.TrimEnd('/'))/$SelectedAsset"
     Write-Host "[rolling-memory] Downloading prebuilt binary ($SelectedAsset)..."
     $TmpBin = "$TargetBin.tmp.$PID"
@@ -114,6 +141,14 @@ function Try-DownloadPrebuilt([string]$BaseUrl) {
             throw "SHA256 校验失败：期望 $Want，实得 $Got。"
         }
         Move-Item -Force -Path $TmpBin -Destination $TargetBin
+        $script:PrebuiltVersion = ""
+        try {
+            $VersionText = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Uri "$($BaseUrl.TrimEnd('/'))/VERSION").Content
+            if ($VersionText -is [byte[]]) { $VersionText = [System.Text.Encoding]::UTF8.GetString($VersionText) }
+            $script:PrebuiltVersion = ([string]$VersionText).Trim()
+        } catch {
+            $script:PrebuiltVersion = ""
+        }
         Write-Host "[rolling-memory] SHA256 verified ($Got)"
         return $true
     } catch {
@@ -129,10 +164,16 @@ function Try-DownloadPrebuilt([string]$BaseUrl) {
 if ((-not $Built) -and ($ReleaseBase -ne "")) {
     if (Try-DownloadPrebuilt $ReleaseBase) {
         $Built = $true
+        $InstallMethod = "release"
+        $InstallAsset = $PrebuiltAsset
+        $InstallRef = if ($PrebuiltVersion) { $PrebuiltVersion } else { "unknown" }
     } elseif ((-not $ReleaseBaseExplicit) -and ($ReleaseMirror -ne "") -and ($ReleaseMirror -ne $ReleaseBase)) {
         Write-Host "[rolling-memory] Primary release channel unavailable; trying mirror ($ReleaseMirror)..."
         if (Try-DownloadPrebuilt $ReleaseMirror) {
             $Built = $true
+            $InstallMethod = "release"
+            $InstallAsset = $PrebuiltAsset
+            $InstallRef = if ($PrebuiltVersion) { $PrebuiltVersion } else { "unknown" }
         }
     }
     if (-not $Built) {
@@ -144,11 +185,12 @@ if ((-not $Built) -and (Get-Command go -ErrorAction SilentlyContinue) -and (Get-
     $TmpRepo = Join-Path ([System.IO.Path]::GetTempPath()) ("rm-src-" + [System.Guid]::NewGuid().ToString("N"))
     try {
         Write-Host "[rolling-memory] Cloning $RepoUrl and building..."
-        git clone --depth 1 $RepoUrl $TmpRepo
+        $CloneArgs = if ($SourceRef) { @("--depth", "1", "--branch", $SourceRef) } else { @("--depth", "1") }
+        git clone @CloneArgs $RepoUrl $TmpRepo
         if ($LASTEXITCODE -ne 0 -and $RepoMirrorUrl -and ($RepoUrl -eq $DefaultRepoUrl)) {
             Write-Host "[rolling-memory] Primary source unavailable; retrying mirror $RepoMirrorUrl..."
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $TmpRepo
-            git clone --depth 1 $RepoMirrorUrl $TmpRepo
+            git clone @CloneArgs $RepoMirrorUrl $TmpRepo
         }
         if ($LASTEXITCODE -ne 0) {
             throw "install.ps1: failed to clone $RepoUrl"
@@ -158,6 +200,9 @@ if ((-not $Built) -and (Get-Command go -ErrorAction SilentlyContinue) -and (Get-
             $env:CGO_ENABLED = "0"
             go build -trimpath -o $TargetBin .\cmd\rolling-memory
             if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+            $InstallMethod = "source"
+            $InstallRef = if ($SourceRef) { $SourceRef } else { (git describe --tags --always 2>$null) }
+            $InstallCommit = (git rev-parse HEAD 2>$null)
             if ((Test-Path "evaldata\MANIFEST.json") -and (-not (Test-Path (Join-Path $EvalDataTarget "MANIFEST.json")))) {
                 Copy-Item -Recurse -Force "evaldata" $EvalDataTarget -ErrorAction SilentlyContinue
             }
@@ -177,6 +222,20 @@ if (-not $Built) {
 # Short alias `rmem` (equivalent to the POSIX symlink pair created by install.sh).
 $RmemCmd = Join-Path $InstallDir "rmem.cmd"
 Set-Content -Path $RmemCmd -Encoding ASCII -Value "@echo off`r`n`"%~dp0rolling-memory.exe`" %*"
+New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+$MetaMethod = if ($InstallMethod) { $InstallMethod } else { "unknown" }
+$MetaRef = if ($InstallRef) { $InstallRef } else { "unknown" }
+$MetaCommit = if ($InstallCommit) { $InstallCommit } else { "" }
+$MetaAsset = if ($InstallAsset) { $InstallAsset } else { "" }
+$InstallMeta = @{
+    method = $MetaMethod
+    repo = $RepoUrl
+    ref = $MetaRef
+    commit = $MetaCommit
+    asset = $MetaAsset
+    installed_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+} | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText((Join-Path $DataDir "install.json"), $InstallMeta, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "[rolling-memory] Installed binary to $TargetBin (alias: $RmemCmd)"
 if (($env:PATH -split ';') -notcontains $InstallDir) {
     $env:PATH = "$InstallDir;$env:PATH"
@@ -197,7 +256,7 @@ if (($env:PATH -split ';') -notcontains $InstallDir) {
 
 try { & $TargetBin init --write-config *> $null } catch {}
 
-$InstallArgs = if ($args.Count -eq 0) { @("install", "--with-hooks") } else { @("install") + $args }
+$InstallArgs = if ($HarnessArgs.Count -eq 0) { @("install", "--with-hooks") } else { @("install") + $HarnessArgs }
 $PrevEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 $InstallOut = & $TargetBin @InstallArgs 2>&1

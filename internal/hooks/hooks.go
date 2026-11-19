@@ -107,7 +107,7 @@ func importReplayEvent(
 		inserted := 0
 		for _, unit := range units {
 			var exists int
-			if err := memory.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, unit.DocID).Scan(&exists); err != nil {
+			if err := memory.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_docs WHERE unit_id = ?)`, unit.DocID).Scan(&exists); err != nil {
 				logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
 				return "", nil
 			}
@@ -338,7 +338,7 @@ func queryDiskVerifiedWorkspaceAtlas(memory *facade.Memory, scope, project strin
 	if len(lines) == 0 {
 		nRows, nErr := memory.Store.DB().Query(
 			`SELECT COALESCE(query_text, ''), COALESCE(answer_text, '')
-				 FROM thin_vault_noetic
+				 FROM rm_noetic
 				 WHERE status = 'active'
 				 ORDER BY occurred_at DESC LIMIT 36`,
 		)

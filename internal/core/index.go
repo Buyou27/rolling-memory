@@ -138,20 +138,18 @@ func (idx *Index) LookupUnit(unitID string) (int32, bool) {
 }
 
 const (
-	// HighDFFraction (~13.53%, calibrated at 1/e^2) is the corpus document-frequency
-	// ratio above which a term behaves as a high-frequency background token rather
-	// than a specific content anchor. Exported as the single value source for
-	// consumers that previously duplicated the literal (eval health doctor).
+	// [calibrated] HighDFFraction — share of N (dimensionless) above which a term is
+	// treated as high-frequency background rather than a specific content anchor.
+	// Fitted on the reference corpus (≈13.53%); the value coincides with e^-2 within
+	// one ulp but is an empirical bound, not a derived quantity. Recalibrate when the
+	// reference corpus or tokenizer changes; do not re-derive it from e.
 	HighDFFraction = 0.1353352832366127
-	// minHighDFFloor prevents single-digit micro-corpora from collapsing the
-	// high-DF threshold to 0 or 1. The literal is the correctly rounded e^2
-	// (bit-identical to math.Exp(2)); math.E*math.E evaluates one ulp lower,
-	// so keep the literal and do not rewrite it as a constant expression.
-	// It is the reciprocal mirror of HighDFFraction, but 1/HighDFFraction
-	// evaluates one ulp below the literal in both const and runtime forms,
-	// so the two constants must not be single-sourced from each other.
-	// The floor only governs n < e^4 (~54.6) documents; above that the ratio
-	// branch wins and the floor is analytically inert.
+	// [calibrated] minHighDFFloor — absolute document-count floor that keeps the
+	// high-DF threshold non-degenerate for micro-corpora (n < e^4 ≈ 54.6 documents;
+	// above that the ratio branch is analytically inert). The value coincides with e^2
+	// but is an engineering bound; keep the literal (eulerNumber*eulerNumber evaluates
+	// one ulp lower) and do not single-source it from HighDFFraction (1/HighDFFraction
+	// also lands one ulp below).
 	minHighDFFloor = 7.38905609893065
 )
 

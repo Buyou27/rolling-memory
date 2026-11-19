@@ -147,7 +147,7 @@ func (a *TermExtractor) mergeQuerySpaceFaultFusionSents(idx QueryIndexView, cano
 		a.ExtractSpaceFaultFusion(canonical).MergeInto(qTerms, nil)
 		return
 	}
-	const e2 = math.E * math.E
+	const e2 = eulerSquared
 	for _, sent := range sents {
 		plan := FuseSpaceElision(sent)
 		blocks, separated := plan.Blocks, plan.Separated

@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/mcp"
+	"github.com/rocareer/rolling-memory/internal/updatecheck"
+	"github.com/rocareer/rolling-memory/internal/updatesource"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -33,37 +36,65 @@ const webDistSHA256Marker = ".sha256"
 func (a *application) runUpdate() int {
 	checkOnly := a.args.Flag("check")
 	force := a.args.Flag("force")
+	tagsOnly := a.args.Flag("tags_only")
+	quiet := a.args.Flag("quiet")
+	notify := a.args.Flag("notify")
 	withConsole := a.args.Flag("with_console")
 	noConsole := a.args.Flag("no_console")
 	noInstall := a.args.Flag("no_install")
 	deferConsoleRestart := a.args.Flag("defer_console_restart")
 
+	if schedule := strings.TrimSpace(a.args.String("schedule")); schedule != "" {
+		return a.runUpdateSchedule(schedule)
+	}
+
 	flagBase := a.args.String("release_base")
+	if source := strings.TrimSpace(a.args.String("source")); source != "" {
+		normalized, err := updatesource.Normalize(source)
+		if err != nil {
+			return a.fail(err)
+		}
+		if strings.TrimSpace(flagBase) == "" {
+			flagBase = updatesource.ReleaseBase(normalized)
+		}
+	}
+	channel := updatecheck.ResolveChannel(a.args.String("channel"))
 	base := resolveReleaseBase(flagBase)
-	if base == "" {
+	if base == "" && channel != "dev" {
 		return a.fail(fmt.Errorf("release channel is disabled (ROLLING_MEMORY_RELEASE_BASE is off); unset it or pass --release-base <url> to update"))
 	}
 
-	sumsMap, remoteVersion, err := fetchReleaseManifest(base, 15*time.Second)
-	if err != nil {
+	checked, checkErr := updatecheck.Check(context.Background(), updatecheck.Options{
+		ReleaseBase: base,
+		Channel:     channel,
+		TagsOnly:    tagsOnly,
+		Timeout:     15 * time.Second,
+	})
+	if checkErr != nil && checked.LatestTag == "" {
 		if mirror := consoleReleaseMirror(flagBase); mirror != "" && mirror != base {
-			if mSums, mVer, mErr := fetchReleaseManifest(mirror, 15*time.Second); mErr == nil {
+			if retry, retryErr := updatecheck.Check(context.Background(), updatecheck.Options{
+				ReleaseBase: mirror,
+				Channel:     channel,
+				TagsOnly:    tagsOnly,
+				Timeout:     15 * time.Second,
+			}); retryErr == nil || retry.LatestTag != "" {
 				base = mirror
-				sumsMap = mSums
-				remoteVersion = mVer
-				err = nil
+				checked = retry
+				checkErr = retryErr
 			}
 		}
-		if err != nil {
-			return a.fail(fmt.Errorf("fetch release manifest from %s: %w", base, err))
+		if checkErr != nil && checked.LatestTag == "" {
+			return a.fail(fmt.Errorf("check latest version from %s: %w", base, checkErr))
 		}
 	}
 
-	cliAsset := platformCLIAssetName()
-	wantCLISHA := sumsMap[cliAsset]
-	if wantCLISHA == "" {
-		return a.fail(fmt.Errorf("release manifest at %s has no entry for %s", base, cliAsset))
+	remoteVersion := checked.LatestTag
+	assetBase := checked.AssetBase
+	if strings.TrimSpace(assetBase) == "" {
+		assetBase = base
 	}
+	cliAsset := platformCLIAssetName()
+	wantCLISHA := checked.Sums[cliAsset]
 
 	targetBin, linkPaths := resolveUpdateTargetPaths()
 	localCLISHA := fileSHA256(targetBin)
@@ -72,41 +103,64 @@ func (a *application) runUpdate() int {
 			localCLISHA = fileSHA256(self)
 		}
 	}
-	cliNeedsUpdate := force || localCLISHA == "" || localCLISHA != wantCLISHA
 
-	// Console assets are checked if the console is already installed on disk or
-	// if --with-console was explicitly requested (unless --no-console is set).
 	cRoot, cBin, cWebDist, cAPIPID, cWebPID, cAPILog, cWebLog := consoleLayout()
 	consoleInstalled := regularFileExists(cBin) || regularFileExists(filepath.Join(cWebDist, "index.html"))
-	checkConsole := !noConsole && (consoleInstalled || withConsole)
+	checkConsole := !tagsOnly && !noConsole && (consoleInstalled || withConsole)
 
 	adminAsset := platformAdminAssetName()
-	wantAdminSHA := sumsMap[adminAsset]
-	wantWebSHA := sumsMap["web-dist.tar.gz"]
+	wantAdminSHA := checked.Sums[adminAsset]
+	wantWebSHA := checked.Sums["web-dist.tar.gz"]
 	localAdminSHA := fileSHA256(cBin)
 	localWebSHA := readWebDistSHA256(cWebDist)
 
+	cliNeedsUpdate := false
 	adminNeedsUpdate := false
 	webNeedsUpdate := false
-	if checkConsole {
-		if wantAdminSHA != "" {
-			adminNeedsUpdate = force || localAdminSHA == "" || localAdminSHA != wantAdminSHA
-		}
-		if wantWebSHA != "" {
-			webNeedsUpdate = force || !regularFileExists(filepath.Join(cWebDist, "index.html")) || localWebSHA != wantWebSHA
+	if !checked.DowngradeAvailable {
+		cliNeedsUpdate = wantCLISHA != "" && (force || localCLISHA == "" || localCLISHA != wantCLISHA)
+		if checkConsole {
+			if wantAdminSHA != "" {
+				adminNeedsUpdate = force || localAdminSHA == "" || localAdminSHA != wantAdminSHA
+			}
+			if wantWebSHA != "" {
+				webNeedsUpdate = force || !regularFileExists(filepath.Join(cWebDist, "index.html")) || localWebSHA != wantWebSHA
+			}
 		}
 	}
+	anyUpdate := checked.UpdateAvailable
+	if !tagsOnly && !checked.DowngradeAvailable {
+		anyUpdate = anyUpdate || cliNeedsUpdate || adminNeedsUpdate || webNeedsUpdate
+	}
 
-	anyUpdate := cliNeedsUpdate || adminNeedsUpdate || webNeedsUpdate
-
+	latestLabel := remoteVersion
+	if checked.LatestCommitShort != "" {
+		latestLabel = "main@" + checked.LatestCommitShort
+	}
 	if checkOnly {
 		result := map[string]any{
-			"ok":               true,
-			"action":           "check",
-			"current_version":  version.Version,
-			"latest_version":   remoteVersion,
-			"release_base":     base,
-			"update_available": anyUpdate,
+			"ok":                    true,
+			"action":                "check",
+			"current_version":       version.Version,
+			"channel":               channel,
+			"latest_tag":            remoteVersion,
+			"latest_release":        checked.LatestRelease,
+			"latest_commit":         checked.LatestCommit,
+			"latest_commit_short":   checked.LatestCommitShort,
+			"installed_commit":      checked.InstalledCommit,
+			"release_base":          base,
+			"update_source":         sourceFromBase(base),
+			"update_available":      anyUpdate,
+			"downgrade_available":   checked.DowngradeAvailable,
+			"assets_available":      checked.AssetsAvailable,
+			"assets_checked":        checked.AssetsChecked,
+			"installable":           checked.Installable && !checked.DowngradeAvailable,
+			"needs_source_baseline": checked.NeedsSourceBaseline,
+			"install_method":        checked.InstallMethod,
+			"source_update":         sourceUpdateHint(checked.InstallMethod, remoteVersion, channel, base),
+			"checked_at":            checked.CheckedAt,
+			"source":                checked.Source,
+			"tags_only":             tagsOnly,
 			"cli": map[string]any{
 				"asset":            cliAsset,
 				"path":             targetBin,
@@ -126,16 +180,42 @@ func (a *application) runUpdate() int {
 				"web_update":       webNeedsUpdate,
 			},
 		}
+		if checked.Error != "" {
+			result["error"] = checked.Error
+		}
 		human := func() {
-			verLabel := version.Version
-			if remoteVersion != "" && remoteVersion != version.Version {
-				verLabel = fmt.Sprintf("%s -> %s", version.Version, remoteVersion)
-			}
-			if !anyUpdate {
-				a.printf("up to date · version %s (%s)\n", verLabel, shortSHA(wantCLISHA))
+			if tagsOnly {
+				if checked.UpdateAvailable {
+					a.printf("update available · version %s -> %s\n", version.Version, latestLabel)
+				} else if checked.DowngradeAvailable {
+					a.printf("local version %s is newer than channel %s\n", version.Version, remoteVersion)
+				} else {
+					a.printf("up to date · version %s\n", latestLabel)
+				}
 				return
 			}
-			a.printf("update available · version %s\n", verLabel)
+			if checked.NeedsSourceBaseline {
+				a.printf("dev channel baseline needed · current %s\n", version.Version)
+				if hint := sourceUpdateHint(checked.InstallMethod, remoteVersion, channel, base); hint != "" {
+					a.printf("  %s\n", hint)
+				}
+				return
+			}
+			if checked.DowngradeAvailable {
+				a.printf("local version %s is newer than channel %s (use --force to downgrade)\n", version.Version, remoteVersion)
+				return
+			}
+			if !anyUpdate {
+				a.printf("up to date · version %s (%s)\n", version.Version, shortSHA(wantCLISHA))
+				return
+			}
+			a.printf("update available · version %s -> %s\n", version.Version, latestLabel)
+			if !checked.Installable {
+				a.printf("  release assets are unavailable for %s; source installs must update from the tag\n", cliAsset)
+				if hint := sourceUpdateHint(checked.InstallMethod, remoteVersion, channel, base); hint != "" {
+					a.printf("  %s\n", hint)
+				}
+			}
 			if cliNeedsUpdate {
 				a.printf("  cli      %s: %s -> %s\n", cliAsset, shortSHA(localCLISHA), shortSHA(wantCLISHA))
 			} else {
@@ -151,7 +231,30 @@ func (a *application) runUpdate() int {
 			}
 			a.printf("run `rolling-memory update` to install\n")
 		}
+		if notify && checked.UpdateAvailable && !checked.DowngradeAvailable {
+			_ = updatecheck.NotifyDesktop(checked.State)
+		}
+		if quiet {
+			if ok, _ := result["ok"].(bool); ok {
+				return 0
+			}
+			return 1
+		}
 		return emitOrFail(a, result, human)
+	}
+
+	if channel == "dev" {
+		hint := sourceUpdateHint(checked.InstallMethod, remoteVersion, channel, base)
+		if hint == "" {
+			hint = "set ROLLING_MEMORY_SOURCE_REF=main and run install.sh"
+		}
+		return a.fail(fmt.Errorf("dev channel tracks main and requires a source rebuild; %s", hint))
+	}
+	if checked.DowngradeAvailable && !force {
+		return a.fail(fmt.Errorf("refusing to downgrade from %s to %s; pass --force to replace the local build", version.Version, remoteVersion))
+	}
+	if wantCLISHA == "" {
+		return a.fail(fmt.Errorf("release manifest at %s has no entry for %s; this version has no installable artifacts", base, cliAsset))
 	}
 
 	updatedComponents := []string{}
@@ -161,7 +264,7 @@ func (a *application) runUpdate() int {
 		if err := os.MkdirAll(filepath.Dir(targetBin), 0o755); err != nil {
 			return a.fail(fmt.Errorf("create binary directory: %w", err))
 		}
-		if err := downloadAssetWithExpectedSHA(base, cliAsset, wantCLISHA, targetBin); err != nil {
+		if err := downloadAssetWithExpectedSHA(assetBase, cliAsset, wantCLISHA, targetBin); err != nil {
 			return a.fail(fmt.Errorf("update %s: %w", cliAsset, err))
 		}
 		ensureBinaryLinks(targetBin, linkPaths)
@@ -189,13 +292,13 @@ func (a *application) runUpdate() int {
 			if err := os.MkdirAll(filepath.Dir(cBin), 0o755); err != nil {
 				return a.fail(err)
 			}
-			if err := downloadAssetWithExpectedSHA(base, adminAsset, wantAdminSHA, cBin); err != nil {
+			if err := downloadAssetWithExpectedSHA(assetBase, adminAsset, wantAdminSHA, cBin); err != nil {
 				return a.fail(fmt.Errorf("update %s: %w", adminAsset, err))
 			}
 			updatedComponents = append(updatedComponents, adminAsset)
 		}
 		if webNeedsUpdate {
-			if err := downloadAndExtractWebDist(base, cRoot, cWebDist, wantWebSHA); err != nil {
+			if err := downloadAndExtractWebDist(assetBase, cRoot, cWebDist, wantWebSHA); err != nil {
 				return a.fail(fmt.Errorf("update web-dist.tar.gz: %w", err))
 			}
 			updatedComponents = append(updatedComponents, "web-dist.tar.gz")
@@ -214,8 +317,6 @@ func (a *application) runUpdate() int {
 
 	harnessRefreshed := false
 	if cliNeedsUpdate && !noInstall {
-		// Refresh skill + MCP wiring only: hooks are an explicit --with-hooks
-		// opt-in, and an existing hook wiring is left untouched by plain install.
 		cmd := exec.Command(targetBin, "install")
 		if err := cmd.Run(); err == nil {
 			harnessRefreshed = true
@@ -230,10 +331,11 @@ func (a *application) runUpdate() int {
 		"updated":                  len(updatedComponents) > 0,
 		"components":               updatedComponents,
 		"previous_version":         version.Version,
-		"latest_version":           remoteVersion,
+		"latest_tag":               remoteVersion,
 		"release_base":             base,
 		"binary":                   targetBin,
 		"cli_sha256":               wantCLISHA,
+		"install_method":           checked.InstallMethod,
 		"daemon_refreshed":         daemonRefreshed,
 		"harness_refreshed":        harnessRefreshed,
 		"console_restarted":        consoleRestarted,
@@ -261,20 +363,74 @@ func (a *application) runUpdate() int {
 	return emitOrFail(a, result, human)
 }
 
-func platformCLIAssetName() string {
-	asset := "rolling-memory-" + runtime.GOOS + "-" + runtime.GOARCH
-	if runtime.GOOS == "windows" {
-		asset += ".exe"
+// attachUpdateHint adds the cached update summary to read-only status receipts
+// without performing a network request.
+func attachUpdateHint(result map[string]any) map[string]any {
+	if hint := updatecheck.Hint(); hint != nil {
+		result["update"] = hint
 	}
-	return asset
+	return result
+}
+
+func sourceFromBase(base string) string {
+	if updatesource.IsGiteeBase(base) {
+		return updatesource.Gitee
+	}
+	return updatesource.GitHub
+}
+
+func sourceUpdateHint(method, version, channel, base string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return ""
+	}
+	gitee := updatesource.IsGiteeBase(base)
+	ref := "v" + version
+	repoURL := updatesource.RepoURL(updatesource.GitHub)
+	if gitee {
+		repoURL = updatesource.RepoURL(updatesource.Gitee)
+	}
+	repoEnv := "ROLLING_MEMORY_REPO_URL=" + repoURL + " "
+	if gitee {
+		if strings.EqualFold(strings.TrimSpace(channel), "dev") {
+			if runtime.GOOS == "windows" {
+				return fmt.Sprintf("source update: $env:ROLLING_MEMORY_REPO_URL='%s'; powershell -ExecutionPolicy Bypass -File install.ps1 --ref main", repoURL)
+			}
+			return "source update: " + repoEnv + "ROLLING_MEMORY_SOURCE_REF=main bash install.sh"
+		}
+		if runtime.GOOS == "windows" {
+			return fmt.Sprintf("source update: $env:ROLLING_MEMORY_REPO_URL='%s'; powershell -ExecutionPolicy Bypass -File install.ps1 --ref %s", repoURL, ref)
+		}
+		return fmt.Sprintf("source update: %sROLLING_MEMORY_SOURCE_REF=%s bash install.sh", repoEnv, ref)
+	}
+	if strings.EqualFold(strings.TrimSpace(channel), "dev") {
+		if runtime.GOOS == "windows" {
+			return "source update: powershell -ExecutionPolicy Bypass -File install.ps1 --ref main"
+		}
+		return "source update: ROLLING_MEMORY_SOURCE_REF=main bash install.sh"
+	}
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "source", "local":
+		if runtime.GOOS == "windows" {
+			return fmt.Sprintf("source update: powershell -ExecutionPolicy Bypass -File install.ps1 --ref %s", ref)
+		}
+		return fmt.Sprintf("source update: %sROLLING_MEMORY_SOURCE_REF=%s bash install.sh", repoEnv, ref)
+	case "go-install":
+		if gitee {
+			return fmt.Sprintf("source update: ROLLING_MEMORY_REPO_URL=%s ROLLING_MEMORY_SOURCE_REF=%s bash install.sh", updatesource.RepoURL(updatesource.Gitee), ref)
+		}
+		return fmt.Sprintf("go install github.com/rocareer/rolling-memory/cmd/rolling-memory@%s", ref)
+	default:
+		return ""
+	}
+}
+
+func platformCLIAssetName() string {
+	return updatecheck.PlatformCLIAssetName()
 }
 
 func platformAdminAssetName() string {
-	asset := "rolling-admin-" + runtime.GOOS + "-" + runtime.GOARCH
-	if runtime.GOOS == "windows" {
-		asset += ".exe"
-	}
-	return asset
+	return updatecheck.PlatformAdminAssetName()
 }
 
 // resolveUpdateTargetPaths returns the canonical binary path to update and any
@@ -334,48 +490,12 @@ func ensureBinaryLinks(targetBin string, linkPaths []string) {
 // archive filenames like `rolling-memory-<ver>-<os>-<arch>.tar.gz` or an
 // optional `VERSION` file).
 func fetchReleaseManifest(base string, timeout time.Duration) (map[string]string, string, error) {
-	base = strings.TrimSuffix(base, "/")
-	raw, err := httpGetWithTimeout(base+"/SHA256SUMS", timeout)
-	if err != nil {
-		return nil, "", err
-	}
-	sums, detectedVersion := parseSHA256Sums(string(raw))
-	if len(sums) == 0 {
-		return nil, "", fmt.Errorf("empty or invalid SHA256SUMS")
-	}
-	if detectedVersion == "" {
-		if verBytes, err := httpGetWithTimeout(base+"/VERSION", 3*time.Second); err == nil {
-			detectedVersion = strings.TrimSpace(string(verBytes))
-		}
-	}
-	return sums, detectedVersion, nil
+	return updatecheck.FetchManifest(context.Background(), base, timeout)
 }
 
-// parseSHA256Sums parses a standard SHA256SUMS file into an asset->sha256 map
-// and extracts the release version if a versioned archive name is present.
+// parseSHA256Sums is the package-local test seam for the shared manifest parser.
 func parseSHA256Sums(content string) (map[string]string, string) {
-	sums := make(map[string]string)
-	detectedVersion := ""
-	suffix := "-" + runtime.GOOS + "-" + runtime.GOARCH + ".tar.gz"
-	for _, line := range strings.Split(content, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		sha := strings.ToLower(strings.TrimSpace(fields[0]))
-		name := strings.TrimPrefix(strings.TrimSpace(fields[1]), "*")
-		if len(sha) != 64 {
-			continue
-		}
-		sums[name] = sha
-		if strings.HasPrefix(name, "rolling-memory-") && strings.HasSuffix(name, suffix) {
-			ver := strings.TrimSuffix(strings.TrimPrefix(name, "rolling-memory-"), suffix)
-			if ver != "" && ver != runtime.GOOS {
-				detectedVersion = ver
-			}
-		}
-	}
-	return sums, detectedVersion
+	return updatecheck.ParseSHA256Sums(content)
 }
 
 func httpGetWithTimeout(url string, timeout time.Duration) ([]byte, error) {

@@ -74,8 +74,8 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 	var snapValidIDs map[string]struct{}
 	if v.slotCacheMu != nil && v.snapRef != nil {
 		if v.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(rowid), 0), COALESCE(MAX(rowid), 0), COALESCE(SUM(LENGTH(raw_text)), 0) FROM thin_vault_docs`).Scan(&docCnt, &docRowSum, &docMaxRowID, &docTextLen) == nil &&
-			v.db.QueryRow(`SELECT revision FROM thin_vault_episodic_revision WHERE id = 1`).Scan(&episodicRevision) == nil &&
-			v.db.QueryRow(`SELECT COUNT(*) FROM thin_vault_episodic_index`).Scan(&idxCnt) == nil {
+			v.db.QueryRow(`SELECT episodic_rev FROM rm_revision WHERE id = 1`).Scan(&episodicRevision) == nil &&
+			v.db.QueryRow(`SELECT COUNT(*) FROM rm_episodic_index`).Scan(&idxCnt) == nil {
 			hasFingerprint = true
 			v.slotCacheMu.RLock()
 			if v.snapRef.faultReady &&
@@ -152,10 +152,10 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 			SELECT d.doc_id, d.raw_text, i.ref_pointer, i.codec_key IS NOT NULL,
 			       COALESCE(length(i.content_digest), 0), COALESCE(length(i.payload_mac), 0),
 			       CASE WHEN i.codec_key IS NOT NULL THEN 0
-			            ELSE EXISTS(SELECT 1 FROM thin_vault_episodic_index other WHERE other.doc_id = d.doc_id AND other.ref_pointer = d.raw_text)
+			            ELSE EXISTS(SELECT 1 FROM rm_episodic_index other WHERE other.doc_id = d.doc_id AND other.ref_pointer = d.raw_text)
 			       END
 			FROM thin_vault_docs d
-			LEFT JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id AND i.codec_key = ?
+			LEFT JOIN rm_episodic_index i ON i.doc_id = d.doc_id AND i.codec_key = ?
 			WHERE d.layer = 'episodic' AND substr(trim(d.raw_text), 1, 5) = '@ref:'`, key)
 		if lErr == nil {
 			scanOK := true
@@ -193,7 +193,7 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 			}
 			lightRows.Close()
 			if scanOK {
-				err := v.db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index i LEFT JOIN thin_vault_docs d ON d.doc_id = i.doc_id WHERE d.doc_id IS NULL`).Scan(&report.Orphaned)
+				err := v.db.QueryRow(`SELECT count(*) FROM rm_episodic_index i LEFT JOIN rm_docs d ON d.unit_id = i.doc_id WHERE d.unit_id IS NULL`).Scan(&report.Orphaned)
 				if err == nil && hasFingerprint && v.slotCacheMu != nil && v.snapRef != nil {
 					v.slotCacheMu.Lock()
 					v.snapRef.faultReady = true
@@ -228,7 +228,7 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 		}
 	}
 
-	rows, err := v.db.Query(`SELECT d.doc_id, d.raw_text, i.ref_pointer, i.codec_key, i.payload, i.content_digest, i.payload_mac, EXISTS(SELECT 1 FROM thin_vault_episodic_index other WHERE other.doc_id = d.doc_id AND other.ref_pointer = d.raw_text) FROM thin_vault_docs d LEFT JOIN thin_vault_episodic_index i ON i.doc_id = d.doc_id AND i.codec_key = ? WHERE d.layer = 'episodic' AND substr(trim(d.raw_text), 1, 5) = '@ref:'`, key)
+	rows, err := v.db.Query(`SELECT d.doc_id, d.raw_text, i.ref_pointer, i.codec_key, i.payload, i.content_digest, i.payload_mac, EXISTS(SELECT 1 FROM rm_episodic_index other WHERE other.doc_id = d.doc_id AND other.ref_pointer = d.raw_text) FROM thin_vault_docs d LEFT JOIN rm_episodic_index i ON i.doc_id = d.doc_id AND i.codec_key = ? WHERE d.layer = 'episodic' AND substr(trim(d.raw_text), 1, 5) = '@ref:'`, key)
 	if err != nil {
 		return report, err
 	}
@@ -331,7 +331,7 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 			report.Corrupt++
 		}
 	}
-	err = v.db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index i LEFT JOIN thin_vault_docs d ON d.doc_id = i.doc_id WHERE d.doc_id IS NULL`).Scan(&report.Orphaned)
+	err = v.db.QueryRow(`SELECT count(*) FROM rm_episodic_index i LEFT JOIN rm_docs d ON d.unit_id = i.doc_id WHERE d.unit_id IS NULL`).Scan(&report.Orphaned)
 	if err == nil && hasFingerprint && v.slotCacheMu != nil && v.snapRef != nil {
 		v.slotCacheMu.Lock()
 		v.snapRef.faultReady = true

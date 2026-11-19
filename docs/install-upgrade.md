@@ -1,0 +1,292 @@
+# Installation & Upgrade Guide
+
+**[English](install-upgrade.md) · [简体中文](zh-CN/install-upgrade.md) · [Documentation Hub](README.md)**
+
+This guide covers installation, update channels, every supported upgrade path, and what to do before a breaking or incompatible upgrade.
+
+---
+
+## 0. Early-stage policy: new installs default to `dev`
+
+Rolling Memory is still in an early development stage. New installations therefore default to the **`dev`** update channel, which follows the latest commit on `main`. This is intentional: fixes and compatibility work land on `main` first, and the project wants early adopters to receive them without waiting for a release tag.
+
+This default will be revisited when the community grows and the release cadence stabilizes. Until then:
+
+- users who want maximum stability should switch to `stable`;
+- users who test upcoming releases can use `beta`;
+- the choice is a saved preference, not a one-time flag.
+
+The default never installs anything automatically. `dev` only reports `main@<commit>` and asks for an explicit source rebuild.
+
+---
+
+## 1. Installation methods
+
+### 1.1 Prebuilt installer (recommended for most users)
+
+```bash
+# macOS / Linux
+curl -fsSL https://github.com/rocareer/rolling-memory/raw/main/install.sh | bash
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+The installer tries the release channel first and verifies every artifact against `SHA256SUMS`. If the release channel has no verifiable artifact for the platform, it falls back to a source clone and build (requires Git + Go).
+
+Installed files:
+
+- CLI: `~/.local/share/rolling-memory/bin/rolling-memory` (Windows: `%LOCALAPPDATA%\rolling-memory\bin`);
+- provenance: `~/.local/share/rolling-memory/install.json` (`method`, `ref`, `commit`, `asset`);
+- console: `~/.local/share/rolling-memory/admin/` after `rolling-memory panel` or `update --with-console`.
+
+### 1.2 Source installation from a tag or `main`
+
+```bash
+# Latest development main
+ROLLING_MEMORY_SOURCE_REF=main bash install.sh
+# Or a specific release tag
+ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
+# Equivalent flag
+bash install.sh --ref v0.0.6
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1 --ref main
+```
+
+Source installs require Git and Go. The installer records the source commit in `install.json`, which is what lets the `dev` channel compare `main` HEAD against the installed commit.
+
+### 1.3 Offline / portable
+
+Use the offline package and portable layout described in [usb-portable.md](usb-portable.md). Offline installs keep working without network access; update checks simply report that the channel is unreachable until network is restored.
+
+---
+
+## 2. Update channels
+
+| Channel | Source | Best for |
+|---|---|---|
+| `stable` | Published non-prerelease tags / releases | Production use; maximum predictability |
+| `beta` | Published tags including prereleases | Testing release candidates while keeping SHA-256 verification |
+| `dev` (default) | Latest `main` commit | Early adopters; source builds; fastest fixes |
+
+Switch the saved preference:
+
+```bash
+rolling-memory config set update.channel stable
+rolling-memory config set update.channel beta
+rolling-memory config set update.channel dev
+```
+
+Or set it for one process:
+
+```bash
+export ROLLING_MEMORY_UPDATE_CHANNEL=stable
+```
+
+Or switch it in the web console: **Version & Update → Update Channel**.
+
+Override a single check without saving:
+
+```bash
+rolling-memory update --check --channel stable
+```
+
+Defaults:
+
+- no config file and no environment variable → `dev`;
+- existing config files without an `[update]` section → `dev`;
+- `beta`/`stable` are always available as explicit choices.
+
+### 2.1 What `dev` means in practice
+
+`dev` compares the installed source commit with the current `main` HEAD:
+
+- source/local install with a recorded commit → reports `main@<commit>` and whether it differs;
+- release install without a source commit → reports the current `main@<commit>` and asks for **one** source baseline; it does not nag forever and does not pretend a release binary is a source build.
+
+`dev` never downloads or swaps a binary automatically. The console disables "Update Now" and shows the exact rebuild command:
+
+```bash
+ROLLING_MEMORY_SOURCE_REF=main bash install.sh
+```
+
+### 2.2 What `stable` and `beta` mean in practice
+
+Both channels use published release artifacts and verify them against `SHA256SUMS` before replacement. `beta` additionally accepts prerelease tags. A tag without attached artifacts is reported as a source-only update rather than a broken download.
+
+### 2.3 Update source
+
+`update.source` chooses the repository that supplies release tags and artifacts:
+
+| Source | Use |
+|---|---|
+| `github` (default) | Official GitHub Releases |
+| `gitee` | Gitee mirror for networks that reach Gitee faster than GitHub |
+
+Save it with `rolling-memory config set update.source gitee`, or choose it in **Version & Update → Update Source**. A one-off check can use `--source gitee`. An explicit `--release-base` URL or `ROLLING_MEMORY_RELEASE_BASE` still wins. If Gitee has tags but no attached artifacts yet, the check reports a source-only update and never offers a download that cannot succeed.
+
+---
+
+## 3. Upgrade methods
+
+### 3.1 Command line
+
+```bash
+# Read-only check
+rolling-memory update --check
+
+# Check the newest tag without downloading artifacts
+rolling-memory update --check --tags-only
+
+# Check a specific channel
+rolling-memory update --check --channel beta
+
+# Install the update (CLI + console if installed + host wiring)
+rolling-memory update
+
+# Also install or update the local web console
+rolling-memory update --with-console
+
+# Machine-readable output
+rolling-memory update --check --json
+```
+
+`update` is aliased as `upgrade`. Updating never modifies, truncates, or overwrites the local SQLite vault (`memory.db`). Use `--source gitee` to read release tags from the Gitee mirror, or pass an explicit `--release-base` URL.
+
+### 3.2 Web console
+
+Open **Version & Update** from the memory overview or the memory service page:
+
+1. the button shows a red dot when a newer version is available;
+2. the dialog shows the cached channel, latest version, component digests, and installability;
+3. **Check** performs an explicit check;
+4. **Update Now** runs the same SHA-256 verified update as the CLI;
+5. if the console itself is replaced, it restarts and reloads the page.
+
+The console receives version state over its local real-time channel; there is no polling. If the console is closed, the next open shows the cached state immediately and refreshes a stale snapshot once.
+
+### 3.3 Optional scheduled check
+
+```bash
+rolling-memory update --schedule install
+rolling-memory update --schedule status
+rolling-memory update --schedule remove
+```
+
+This registers a user-level launchd agent (macOS), systemd user timer (Linux), or Windows scheduled task. Every six hours it refreshes the cache and sends one desktop notification per new version. It never installs an update. The job follows the saved `update.channel` preference.
+
+### 3.4 Re-running the installer
+
+For source installs, re-running the installer is the supported rebuild path:
+
+```bash
+ROLLING_MEMORY_SOURCE_REF=main bash install.sh
+# or a specific tag
+ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
+```
+
+For prebuilt installs, re-running the installer is useful after the release channel publishes a new artifact or after changing the install directory.
+
+### 3.5 `go install` installations
+
+If the CLI was installed with `go install` rather than the installer:
+
+```bash
+go install github.com/rocareer/rolling-memory/cmd/rolling-memory@main
+# or a specific tag
+go install github.com/rocareer/rolling-memory/cmd/rolling-memory@v0.0.6
+```
+
+`install.json` may not exist for this method; the console then treats the channel as lacking a source baseline and asks for an explicit rebuild.
+
+---
+
+## 4. Breaking and incompatible upgrades
+
+### 4.1 Before upgrading
+
+- Read `CHANGELOG.md`, especially **Changed**, **Removed**, and migration notes.
+- Back up the vault:
+
+```bash
+cp ~/.local/share/rolling-memory/memory.db \
+   ~/.local/share/rolling-memory/memory.db.bak-$(date +%Y%m%d-%H%M%S)
+```
+
+- Keep a copy of the current binary if you may need to roll back:
+
+```bash
+cp ~/.local/share/rolling-memory/bin/rolling-memory \
+   ~/.local/share/rolling-memory/bin/rolling-memory.previous
+```
+
+### 4.2 Schema and data compatibility
+
+- Schema migrations run idempotently when the vault is opened.
+- A newer schema cannot be read by an older build; the CLI refuses with `database schema vN is newer than this build; upgrade Rolling-Memory`. Update the binary rather than downgrading the file.
+- Downgrading the binary may require restoring the pre-upgrade vault backup if the newer build already migrated the schema.
+- Updating never deletes the vault. Background files, episodic history, and crystallized memories remain in the same local file.
+
+### 4.3 Major versions and breaking changes
+
+The project follows Semantic Versioning. A major version may change CLI flags, configuration keys, on-disk schema, or host wiring. Such releases are called out in `CHANGELOG.md` and the release notes. For a major upgrade:
+
+1. back up the vault and binary;
+2. read the migration notes;
+3. update the CLI first, then the console;
+4. open the vault once and let migrations finish;
+5. run `rolling-memory doctor` and `rolling-memory check`.
+
+### 4.4 Downgrades
+
+`update` refuses to replace a newer local build with an older channel version. `--force` is an explicit override for recovery and testing:
+
+```bash
+rolling-memory update --force --release-base https://github.com/rocareer/rolling-memory/releases/download/v0.0.5
+```
+
+For source installs, rebuild the desired tag instead:
+
+```bash
+ROLLING_MEMORY_SOURCE_REF=v0.0.5 bash install.sh
+```
+
+Downgrades are not a substitute for restoring a vault backup after an incompatible migration.
+
+---
+
+## 5. Verification and security boundaries
+
+- `stable` / `beta`: every downloaded artifact is checked against the channel's `SHA256SUMS`; a mismatch aborts the update.
+- `dev`: there is no release checksum; the Git commit is the anchor. `dev` is intentionally a source-build path and never silently replaces a binary.
+- The local daemon and console binaries are replaced atomically; a failed download leaves the previous binary in place.
+- Update checks are the only network egress in this flow; memory read/write, recall, crystallization, and the graph remain offline.
+- Set `ROLLING_MEMORY_UPDATE_CHECK=off` to disable background checks. Explicit `update --check` still works.
+- Set `ROLLING_MEMORY_UPDATE_API_BASE` to use an enterprise mirror for tag discovery; set `ROLLING_MEMORY_RELEASE_BASE` to use a mirror for artifacts.
+
+---
+
+## 6. Troubleshooting
+
+| Symptom | Meaning | Action |
+|---|---|---|
+| `release assets are unavailable` | The tag exists but the channel has no binary for this platform | Switch to `stable`/`beta` after assets are published, or rebuild from source |
+| `needs_source_baseline` | A release install is on the `dev` channel and has no source commit | Run `ROLLING_MEMORY_SOURCE_REF=main bash install.sh` once |
+| `dev channel requires a source rebuild` | `dev` never auto-replaces binaries | Use the printed installer command |
+| `local version is newer than channel` | The local build is ahead of the selected channel | Keep it, or use `--force` only for an intentional downgrade |
+| `database schema is newer than this build` | The vault was migrated by a newer build | Update the binary; restore the vault backup if downgrading |
+| scheduled check did not run | The OS scheduler is unavailable or the task was removed | `rolling-memory update --schedule status` and reinstall if needed |
+
+---
+
+## 7. Summary
+
+- Default: `dev`, following `main`; no automatic replacement.
+- Stable/beta: published tags, SHA-256 verified.
+- Every upgrade path is explicit: CLI, console, scheduled check, or installer.
+- Back up the vault and binary before a major or incompatible upgrade.
+- Revisit the default channel when the project’s community and release cadence mature.

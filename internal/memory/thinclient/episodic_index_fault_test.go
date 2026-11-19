@@ -41,10 +41,10 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest) SELECT doc_id, ref_pointer, x'01', payload, content_digest FROM thin_vault_episodic_index WHERE doc_id = 'good'`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest) SELECT doc_id, ref_pointer, x'01', payload, content_digest FROM rm_episodic_index WHERE doc_id = 'good'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = x'00' WHERE doc_id = 'bad'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id = 'bad'`); err != nil {
 		t.Fatal(err)
 	}
 	// Retrieval now comes from the canonical store; an unusable source is removed
@@ -71,7 +71,7 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 	assertHits(v.SearchClientSDKDefault("quartz nebula", 10))
 	pkt, _ := v.PackBlindPacket("query", "quartz nebula", 0)
 	assertHits(NewLocalVaultTransport(v).QueryBlindManifold(context.Background(), pkt, 10))
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET content_digest = NULL WHERE doc_id = 'good' AND codec_key <> x'01'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET content_digest = NULL WHERE doc_id = 'good' AND codec_key <> x'01'`); err != nil {
 		t.Fatal(err)
 	}
 	report, err = v.EpisodicIndexFaultDiagnostics()
@@ -112,7 +112,7 @@ func TestEpisodicIndexAuthenticatedPayloadIsolation(t *testing.T) {
 	key, _ := v.episodicCodecKey()
 	otherKey, _ := other.episodicCodecKey()
 	var original, mac []byte
-	if err := db.QueryRow(`SELECT payload, payload_mac FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key = ?`, id, key).Scan(&original, &mac); err != nil {
+	if err := db.QueryRow(`SELECT payload, payload_mac FROM rm_episodic_index WHERE doc_id = ? AND codec_key = ?`, id, key).Scan(&original, &mac); err != nil {
 		t.Fatal(err)
 	}
 	slots, frames, err := plain.DecodeWireBytes(original)
@@ -127,7 +127,7 @@ func TestEpisodicIndexAuthenticatedPayloadIsolation(t *testing.T) {
 	if _, _, err := plain.DecodeWireBytes(mutated); err != nil {
 		t.Fatalf("tampered payload must remain decodable: %v", err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = ? WHERE doc_id = ? AND codec_key = ?`, mutated, id, key); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = ? WHERE doc_id = ? AND codec_key = ?`, mutated, id, key); err != nil {
 		t.Fatal(err)
 	}
 	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.Corrupt != 1 {
@@ -146,10 +146,10 @@ func TestEpisodicIndexAuthenticatedPayloadIsolation(t *testing.T) {
 		t.Fatalf("tampered payload should be an item error: %v", err)
 	}
 	var unchanged []byte
-	if err := db.QueryRow(`SELECT payload FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key = ?`, id, key).Scan(&unchanged); err != nil || string(unchanged) != string(mutated) {
+	if err := db.QueryRow(`SELECT payload FROM rm_episodic_index WHERE doc_id = ? AND codec_key = ?`, id, key).Scan(&unchanged); err != nil || string(unchanged) != string(mutated) {
 		t.Fatalf("tampered payload changed: %v", err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = ?, payload_mac = NULL WHERE doc_id = ? AND codec_key = ?`, original, id, key); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = ?, payload_mac = NULL WHERE doc_id = ? AND codec_key = ?`, original, id, key); err != nil {
 		t.Fatal(err)
 	}
 	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.NeedsRebuild != 1 {
@@ -158,22 +158,22 @@ func TestEpisodicIndexAuthenticatedPayloadIsolation(t *testing.T) {
 	if _, err := v.LoadVerifiedEpisodicPointer(id, ref); err == nil {
 		t.Fatal("missing MAC hydrated")
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = ? WHERE doc_id = ? AND codec_key = ?`, mutated, id, key); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = ? WHERE doc_id = ? AND codec_key = ?`, mutated, id, key); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := v.EnsureLocalEpisodicIndex(scope, id, ref, text); !errors.Is(err, ErrEpisodicIndexItem) {
 		t.Fatalf("unsigned tampered payload should be an item error: %v", err)
 	}
-	if err := db.QueryRow(`SELECT payload FROM thin_vault_episodic_index WHERE doc_id = ? AND codec_key = ?`, id, key).Scan(&unchanged); err != nil || string(unchanged) != string(mutated) {
+	if err := db.QueryRow(`SELECT payload FROM rm_episodic_index WHERE doc_id = ? AND codec_key = ?`, id, key).Scan(&unchanged); err != nil || string(unchanged) != string(mutated) {
 		t.Fatalf("unsigned tampered payload changed: %v", err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload = ? WHERE doc_id = ? AND codec_key = ?`, original, id, key); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = ? WHERE doc_id = ? AND codec_key = ?`, original, id, key); err != nil {
 		t.Fatal(err)
 	}
 	if created, err := v.EnsureLocalEpisodicIndex(scope, id, ref, text); err != nil || !created {
 		t.Fatalf("verified rebuild: %v %v", created, err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = ? WHERE doc_id = ? AND codec_key = ?`, mac, id, otherKey); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload_mac = ? WHERE doc_id = ? AND codec_key = ?`, mac, id, otherKey); err != nil {
 		t.Fatal(err)
 	}
 	if report, err := other.EpisodicIndexFaultDiagnostics(); err != nil || report.Corrupt != 1 {
@@ -206,13 +206,13 @@ func TestEpisodicIndexSwappedRows(t *testing.T) {
 		}
 	}
 	var mac1, mac2 []byte
-	if err := db.QueryRow(`SELECT payload_mac FROM thin_vault_episodic_index WHERE doc_id = 'one'`).Scan(&mac1); err != nil {
+	if err := db.QueryRow(`SELECT payload_mac FROM rm_episodic_index WHERE doc_id = 'one'`).Scan(&mac1); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT payload_mac FROM thin_vault_episodic_index WHERE doc_id = 'two'`).Scan(&mac2); err != nil {
+	if err := db.QueryRow(`SELECT payload_mac FROM rm_episodic_index WHERE doc_id = 'two'`).Scan(&mac2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_episodic_index SET payload_mac = CASE doc_id WHEN 'one' THEN ? ELSE ? END WHERE doc_id IN ('one', 'two')`, mac2, mac1); err != nil {
+	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload_mac = CASE doc_id WHEN 'one' THEN ? ELSE ? END WHERE doc_id IN ('one', 'two')`, mac2, mac1); err != nil {
 		t.Fatal(err)
 	}
 	if err := v.deleteCanonicalUnits("one", "two"); err != nil {
@@ -256,17 +256,17 @@ func TestEpisodicIndexSourceDeleteCascade(t *testing.T) {
 	if _, err := v.SearchClientSDKDefault("quartz", 10); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload) SELECT 'orphan', ref_pointer, codec_key, payload FROM thin_vault_episodic_index WHERE doc_id = 'keep'`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload) SELECT 'orphan', ref_pointer, codec_key, payload FROM rm_episodic_index WHERE doc_id = 'keep'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest) SELECT doc_id, ref_pointer, x'01', payload, content_digest FROM thin_vault_episodic_index WHERE doc_id = 'delete'`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest) SELECT doc_id, ref_pointer, x'01', payload, content_digest FROM rm_episodic_index WHERE doc_id = 'delete'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := v.DeleteLocalEpisodicUnit("delete", ref); err != nil {
 		t.Fatal(err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = 'delete'`).Scan(&count); err != nil || count != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = 'delete'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("deleted index: %d %v", count, err)
 	}
 	report, err := v.EpisodicIndexFaultDiagnostics()
@@ -280,7 +280,7 @@ func TestEpisodicIndexSourceDeleteCascade(t *testing.T) {
 	if _, err := NewVault(db, []byte("fault-test")); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_episodic_index WHERE doc_id = 'orphan'`).Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id = 'orphan'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("orphan changed on reopen: %d %v", count, err)
 	}
 }

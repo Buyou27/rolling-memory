@@ -4,7 +4,6 @@
 package plain
 
 import (
-	"math"
 	"strings"
 	"time"
 
@@ -64,7 +63,7 @@ func (a *TermExtractor) ResolveOrdinalSpanAnnotation(idx QueryIndexView, queryTe
 	}
 
 	qTerms, _, _ := a.ExtractQueryWithPositions(idx, queryText)
-	nOverE := float64(idx.CorpusSize()) / math.E
+	nOverE := float64(idx.CorpusSize()) / eulerNumber
 	var anchorH uint64
 	var anchorMass float64
 	for h, qa := range qTerms {
@@ -144,7 +143,7 @@ func resolveOrdinalSpanBoundary(dayUnits map[int64]int, maxUnits int, isEnd bool
 	if len(dayUnits) == 0 || maxUnits <= 0 {
 		return 0, 0, 0, false
 	}
-	floor2 := float64(maxUnits) / (math.E * math.E)
+	floor2 := float64(maxUnits) / (eulerSquared)
 	days := make([]int64, 0, len(dayUnits))
 	for d, n := range dayUnits {
 		if float64(n) >= floor2 {
@@ -170,7 +169,7 @@ func resolveOrdinalSpanBoundary(dayUnits map[int64]int, maxUnits int, isEnd bool
 		break
 	}
 	if !singleRun {
-		floor1 := float64(maxUnits) / math.E
+		floor1 := float64(maxUnits) / eulerNumber
 		coreDays := days[:0]
 		for _, d := range days {
 			if float64(dayUnits[d]) >= floor1 {
@@ -206,7 +205,7 @@ func resolveOrdinalSpanBoundary(dayUnits map[int64]int, maxUnits int, isEnd bool
 				secondCnt = coreRuns[i].cnt
 			}
 		}
-		if len(coreRuns) > 1 && float64(coreRuns[bestIdx].cnt) < math.E*float64(secondCnt) {
+		if len(coreRuns) > 1 && float64(coreRuns[bestIdx].cnt) < eulerNumber*float64(secondCnt) {
 			return 0, 0, 0, false
 		}
 		runLo, runHi = coreRuns[bestIdx].lo, coreRuns[bestIdx].hi

@@ -61,7 +61,7 @@ const (
 type BlindTokenAtom = plain.BlindTokenAtom
 
 // BlindPulsePacket is the wire request sent from the thin client.
-// All raw plaintext stays on the client (`thin_vault_docs` / `thin_vault_noetic`) across the three cognitive layers
+// All raw plaintext stays on the client (`thin_vault_docs` / `rm_noetic`) across the three cognitive layers
 // ("background" | "episodic" | "noetic").
 type BlindPulsePacket struct {
 	TenantID     string   `json:"tenant_id,omitempty"`
@@ -227,7 +227,7 @@ type QueryHit struct {
 }
 
 // LocalNoeticRecord represents a downstream-maintained L3 Noetic memory record (Query + Retrieved Sentences + Answer)
-// stored in the client's own `thin_vault_noetic` table.
+// stored in the client's own `rm_noetic` table.
 type LocalNoeticRecord struct {
 	NoeticID       string   `json:"noetic_id"`
 	OccurredAt     int64    `json:"occurred_at"`
@@ -394,11 +394,6 @@ type Vault struct {
 	// 不改动运行时上限）。构建的活集可数倍于守护进程的稳态上限，在上限内构建会退化为
 	// GC 空转而非完成，故由调用方按可用物理内存给出构建窗口。
 	coldBuildMemoryLimit *int64
-	// canonicalMigrationMu serialises the one-time derivation of the canonical
-	// store from the thin corpus; the flag short-circuits the marker lookup after
-	// the first successful pass in this process.
-	canonicalMigrationMu   sync.Mutex
-	canonicalMigrationDone bool
 }
 
 // vaultSnapshotRef holds the corpus snapshot behind a pointer shared across clones.
@@ -415,10 +410,6 @@ type vaultSnapshotRef struct {
 	// snapshot itself (a nil snap would force the full table rescan instead).
 	snapWriteGen    uint64
 	snapVerifiedGen uint64
-	// bgRevReliable reports that the thin_vault_corpus_revision bg triggers are
-	// installed, so an unchanged bg_rev can gate out the O(column) bg fingerprint
-	// aggregate. docs_rev needs no flag: its triggers install with the table.
-	bgRevReliable bool
 	// lastDocsRev / lastBgRev are the revision counters the current snapshot's
 	// fingerprints were computed against. The four-value aggregate fingerprints are
 	// blind to length-preserving UPDATEs (COUNT, SUM(rowid), MAX(rowid) and
@@ -745,45 +736,18 @@ func (v *Vault) Identity() VaultIdentity {
 	return v.identity
 }
 
-// episodicLineageDDL records every provenance occurrence of a content-addressed
-// unit: identical speech is ingested once (one blind pulse), but each turn it was
-// said in stays queryable.
-const episodicLineageDDL = `
-CREATE TABLE IF NOT EXISTS thin_vault_episodic_lineage (
-	turn_ref TEXT NOT NULL,
-	doc_id TEXT NOT NULL,
-	occurred_at INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (turn_ref, doc_id)
-);
-CREATE INDEX IF NOT EXISTS idx_thin_vault_episodic_lineage_doc ON thin_vault_episodic_lineage(doc_id);
-CREATE TABLE IF NOT EXISTS thin_vault_episodic_sources (
-	turn_ref TEXT NOT NULL,
-	doc_id TEXT NOT NULL,
-	ref_pointer TEXT NOT NULL,
-	content_digest BLOB NOT NULL,
-	source_mac BLOB NOT NULL,
-	PRIMARY KEY (turn_ref, doc_id, ref_pointer)
-);
-CREATE INDEX IF NOT EXISTS idx_thin_vault_episodic_sources_doc ON thin_vault_episodic_sources(doc_id);
-CREATE TRIGGER IF NOT EXISTS thin_episodic_sources_delete AFTER DELETE ON thin_vault_docs BEGIN DELETE FROM thin_vault_episodic_sources WHERE doc_id = OLD.doc_id; END;
-CREATE TABLE IF NOT EXISTS thin_vault_deleted_units (
-	unit_id TEXT PRIMARY KEY,
-	layer TEXT NOT NULL DEFAULT '',
-	deleted_at INTEGER NOT NULL DEFAULT 0
-);`
-
 // RecordDeletedUnits records user-deleted unit IDs as tombstones so background
 // directory sync and harness dialogue reconciliation do not re-import them.
 func (v *Vault) RecordDeletedUnits(layer string, unitIDs ...string) {
 	if v == nil || v.db == nil || len(unitIDs) == 0 {
 		return
 	}
-	_, _ = v.db.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_deleted_units (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`)
+	_, _ = v.db.Exec(`CREATE TABLE IF NOT EXISTS rm_deleted_units (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`)
 	now := time.Now().Unix()
 	lyr := strings.ToLower(strings.TrimSpace(layer))
 	for _, id := range unitIDs {
 		if trimmed := strings.TrimSpace(id); trimmed != "" {
-			_, _ = v.db.Exec(`INSERT OR REPLACE INTO thin_vault_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, trimmed, lyr, now)
+			_, _ = v.db.Exec(`INSERT OR REPLACE INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, ?, ?)`, trimmed, lyr, now)
 		}
 	}
 }
@@ -795,7 +759,7 @@ func (v *Vault) ClearDeletedUnits(unitIDs ...string) {
 	}
 	for _, id := range unitIDs {
 		if trimmed := strings.TrimSpace(id); trimmed != "" {
-			_, _ = v.db.Exec(`DELETE FROM thin_vault_deleted_units WHERE unit_id = ?`, trimmed)
+			_, _ = v.db.Exec(`DELETE FROM rm_deleted_units WHERE unit_id = ?`, trimmed)
 		}
 	}
 }
@@ -809,9 +773,9 @@ func (v *Vault) DeletedUnitSet(layer string) map[string]bool {
 	var rows *sql.Rows
 	var err error
 	if lyr == "" {
-		rows, err = v.db.Query(`SELECT unit_id FROM thin_vault_deleted_units`)
+		rows, err = v.db.Query(`SELECT unit_id FROM rm_deleted_units`)
 	} else {
-		rows, err = v.db.Query(`SELECT unit_id FROM thin_vault_deleted_units WHERE layer = ? OR layer = ''`, lyr)
+		rows, err = v.db.Query(`SELECT unit_id FROM rm_deleted_units WHERE layer = ? OR layer = ''`, lyr)
 	}
 	if err != nil {
 		return nil
@@ -829,42 +793,6 @@ func (v *Vault) DeletedUnitSet(layer string) map[string]bool {
 
 // NewVault initializes the local SQLite tables (`thin_vault_meta` and `thin_vault_docs`)
 // and loads or generates the user's 256-bit local secret key (which never leaves the machine).
-// corpusRevisionDDL mirrors the episodic-revision trigger pattern for the two
-// remaining fingerprinted tables. Row-level triggers live in the database file,
-// so every writer process bumps them; an unchanged revision therefore proves no
-// INSERT/UPDATE/DELETE touched the table since the published snapshot, letting
-// buildCorpusSnapshot skip that table's O(N) aggregate fingerprint scan
-// (SUM(LENGTH(slots_json)) over thin_vault_bg_chunks reads the whole packed
-// column: ~305MB on a grown vault, 18-650ms per build depending on page cache).
-const corpusRevisionDDL = `CREATE TABLE IF NOT EXISTS thin_vault_corpus_revision (id INTEGER PRIMARY KEY CHECK (id = 1), docs_rev INTEGER NOT NULL DEFAULT 0, bg_rev INTEGER NOT NULL DEFAULT 0);
-INSERT OR IGNORE INTO thin_vault_corpus_revision(id, docs_rev, bg_rev) VALUES (1, 0, 0);
-CREATE TRIGGER IF NOT EXISTS thin_docs_rev_insert AFTER INSERT ON thin_vault_docs BEGIN UPDATE thin_vault_corpus_revision SET docs_rev = docs_rev + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_docs_rev_update AFTER UPDATE ON thin_vault_docs BEGIN UPDATE thin_vault_corpus_revision SET docs_rev = docs_rev + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_docs_rev_delete AFTER DELETE ON thin_vault_docs BEGIN UPDATE thin_vault_corpus_revision SET docs_rev = docs_rev + 1 WHERE id = 1; END;`
-
-const corpusBgRevisionDDL = `CREATE TRIGGER IF NOT EXISTS thin_bg_rev_insert AFTER INSERT ON thin_vault_bg_chunks BEGIN UPDATE thin_vault_corpus_revision SET bg_rev = bg_rev + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_bg_rev_update AFTER UPDATE ON thin_vault_bg_chunks BEGIN UPDATE thin_vault_corpus_revision SET bg_rev = bg_rev + 1 WHERE id = 1; END;
-CREATE TRIGGER IF NOT EXISTS thin_bg_rev_delete AFTER DELETE ON thin_vault_bg_chunks BEGIN UPDATE thin_vault_corpus_revision SET bg_rev = bg_rev + 1 WHERE id = 1; END;`
-
-// ensureCorpusRevisionSchema installs the revision table and triggers. The bg
-// trigger trio is only installed when thin_vault_bg_chunks already exists
-// (background schema is created lazily); bgReliable reports whether bg_rev is
-// trustworthy for gating. When it is not, the bg aggregate fingerprint keeps
-// running exactly as before, so correctness never depends on the gate.
-func ensureCorpusRevisionSchema(db *sql.DB) (bgReliable bool) {
-	if _, err := db.Exec(corpusRevisionDDL); err != nil {
-		return false
-	}
-	var hasBG int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_bg_chunks'`).Scan(&hasBG); err != nil || hasBG == 0 {
-		return false
-	}
-	if _, err := db.Exec(corpusBgRevisionDDL); err != nil {
-		return false
-	}
-	return true
-}
-
 func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 	if db == nil {
 		return nil, errors.New("thinclient: nil sql.DB")
@@ -874,14 +802,8 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		var storageType string
 		if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err == nil && storageType == "blob" && len(stored) == 32 {
 			var readyCnt int
-			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_docs', 'thin_vault_noetic')`).Scan(&readyCnt)
+			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_docs', 'rm_noetic')`).Scan(&readyCnt)
 			if readyCnt == 2 {
-				var hasLineage int
-				if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name IN ('thin_vault_episodic_lineage', 'thin_vault_episodic_sources', 'thin_vault_deleted_units')) OR (type = 'trigger' AND name = 'thin_episodic_sources_delete')`).Scan(&hasLineage); err != nil || hasLineage < 4 {
-					if _, err := db.Exec(episodicLineageDDL); err != nil {
-						return nil, err
-					}
-				}
 				if err := initEpisodicIndex(db); err != nil {
 					return nil, err
 				}
@@ -891,12 +813,11 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 					return nil, err
 				}
 				CoreSchemaContracts()
-				bgRevReliable := ensureCorpusRevisionSchema(db)
 				v := &Vault{
 					db:                   db,
 					slotCacheMu:          &sync.RWMutex{},
 					slotCache:            make(map[string]vaultCachedDocSlots, 256),
-					snapRef:              &vaultSnapshotRef{bgRevReliable: bgRevReliable},
+					snapRef:              &vaultSnapshotRef{},
 					coldBuildMemoryLimit: new(int64),
 				}
 				copy(v.secretKey[:], stored)
@@ -925,7 +846,7 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 					incarnation_id TEXT NOT NULL DEFAULT '',
 					locus TEXT NOT NULL DEFAULT ''
 				);
-					CREATE TABLE IF NOT EXISTS thin_vault_noetic (
+					CREATE TABLE IF NOT EXISTS rm_noetic (
 						noetic_id TEXT PRIMARY KEY,
 						occurred_at INTEGER NOT NULL DEFAULT 0,
 						inserted_at INTEGER NOT NULL DEFAULT 0,
@@ -940,11 +861,8 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 						assistant_id TEXT NOT NULL DEFAULT '',
 						incarnation_id TEXT NOT NULL DEFAULT ''
 					);
-				CREATE INDEX IF NOT EXISTS idx_thin_vault_noetic_status_ts ON thin_vault_noetic(status, occurred_at DESC);`
+				CREATE INDEX IF NOT EXISTS idx_rm_noetic_status_ts ON rm_noetic(status, occurred_at DESC);`
 	if _, err := db.Exec(ddl); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(episodicLineageDDL); err != nil {
 		return nil, err
 	}
 	if err := initEpisodicIndex(db); err != nil {
@@ -962,23 +880,22 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		`ALTER TABLE thin_vault_docs ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE thin_vault_docs ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE thin_vault_docs ADD COLUMN locus TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN address_uri TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN coord64 INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE thin_vault_noetic ADD COLUMN waveform_bar TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_noetic ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_noetic ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_noetic ADD COLUMN address_uri TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE rm_noetic ADD COLUMN coord64 INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE rm_noetic ADD COLUMN waveform_bar TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)
 	}
 	ensureInsertedAtColumns(db)
-	bgRevReliable := ensureCorpusRevisionSchema(db)
 	reclaimDeadVaultIndexes(db)
 
 	v := &Vault{
 		db:                   db,
 		slotCacheMu:          &sync.RWMutex{},
 		slotCache:            make(map[string]vaultCachedDocSlots, 256),
-		snapRef:              &vaultSnapshotRef{bgRevReliable: bgRevReliable},
+		snapRef:              &vaultSnapshotRef{},
 		coldBuildMemoryLimit: new(int64),
 	}
 	if len(explicitSecret) > 0 {
@@ -1011,7 +928,7 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 }
 
 // ensureInsertedAtColumns idempotently adds `inserted_at` (first-ingest timestamp) to
-// `thin_vault_docs`, `thin_vault_noetic`, and `thin_vault_bg_chunks`, and ensures
+// `thin_vault_docs`, `rm_noetic`, and `rm_bg_chunks`, and ensures
 // secondary time/layer indexes exist with a read-only O(1) `sqlite_master` probe so
 // steady-state opens take zero write locks.
 func ensureInsertedAtColumns(db *sql.DB) {
@@ -1022,28 +939,28 @@ func ensureInsertedAtColumns(db *sql.DB) {
 	_ = db.QueryRow(`
 		SELECT
 			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_docs' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_noetic' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_bg_chunks' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_bg_chunks' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_noetic' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_chunks' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_chunks' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN type = 'index' AND name IN (
 				'idx_thin_vault_docs_occurred_at',
 				'idx_thin_vault_docs_layer_occurred',
 				'idx_thin_vault_docs_inserted_at',
-				'idx_thin_vault_noetic_inserted_at',
-				'idx_thin_vault_bg_chunks_occurred_at',
-				'idx_thin_vault_bg_chunks_inserted_at',
-				'idx_thin_vault_bg_chunks_meta'
+				'idx_rm_noetic_inserted_at',
+				'idx_rm_bg_chunks_occurred_at',
+				'idx_rm_bg_chunks_inserted_at',
+				'idx_rm_bg_chunks_meta'
 			) THEN 1 ELSE 0 END), 0)
 		FROM sqlite_master
 		WHERE name IN (
-			'thin_vault_docs', 'thin_vault_noetic', 'thin_vault_bg_chunks',
+			'thin_vault_docs', 'rm_noetic', 'rm_bg_chunks',
 			'idx_thin_vault_docs_occurred_at',
 			'idx_thin_vault_docs_layer_occurred',
 			'idx_thin_vault_docs_inserted_at',
-			'idx_thin_vault_noetic_inserted_at',
-			'idx_thin_vault_bg_chunks_occurred_at',
-			'idx_thin_vault_bg_chunks_inserted_at',
-			'idx_thin_vault_bg_chunks_meta'
+			'idx_rm_noetic_inserted_at',
+			'idx_rm_bg_chunks_occurred_at',
+			'idx_rm_bg_chunks_inserted_at',
+			'idx_rm_bg_chunks_meta'
 		)
 	`).Scan(&docsHas, &noeticHas, &bgTable, &bgHas, &idxCnt)
 	wantIdx := 4
@@ -1058,15 +975,15 @@ func ensureInsertedAtColumns(db *sql.DB) {
 		_, _ = db.Exec(`UPDATE thin_vault_docs SET inserted_at = occurred_at WHERE inserted_at = 0 AND occurred_at > 0`)
 	}
 	if noeticHas == 0 {
-		_, _ = db.Exec(`ALTER TABLE thin_vault_noetic ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
-		_, _ = db.Exec(`UPDATE thin_vault_noetic SET inserted_at = occurred_at WHERE inserted_at = 0 AND occurred_at > 0`)
+		_, _ = db.Exec(`ALTER TABLE rm_noetic ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
+		_, _ = db.Exec(`UPDATE rm_noetic SET inserted_at = occurred_at WHERE inserted_at = 0 AND occurred_at > 0`)
 	}
 	if bgTable == 1 && bgHas == 0 {
-		_, _ = db.Exec(`ALTER TABLE thin_vault_bg_chunks ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
+		_, _ = db.Exec(`ALTER TABLE rm_bg_chunks ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
 		_, _ = db.Exec(`
-			UPDATE thin_vault_bg_chunks
+			UPDATE rm_bg_chunks
 			SET inserted_at = COALESCE(
-				(SELECT MIN(c2.occurred_at) FROM thin_vault_bg_chunks c2 WHERE c2.abs_path = thin_vault_bg_chunks.abs_path AND c2.occurred_at > 0),
+				(SELECT MIN(c2.occurred_at) FROM rm_bg_chunks c2 WHERE c2.abs_path = rm_bg_chunks.abs_path AND c2.occurred_at > 0),
 				occurred_at
 			)
 			WHERE inserted_at = 0 AND occurred_at > 0
@@ -1076,13 +993,13 @@ func ensureInsertedAtColumns(db *sql.DB) {
 		CREATE INDEX IF NOT EXISTS idx_thin_vault_docs_occurred_at ON thin_vault_docs(occurred_at DESC, doc_id ASC);
 		CREATE INDEX IF NOT EXISTS idx_thin_vault_docs_layer_occurred ON thin_vault_docs(layer, occurred_at DESC, doc_id ASC);
 		CREATE INDEX IF NOT EXISTS idx_thin_vault_docs_inserted_at ON thin_vault_docs(inserted_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_noetic_inserted_at ON thin_vault_noetic(inserted_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_rm_noetic_inserted_at ON rm_noetic(inserted_at DESC);
 	`)
 	if bgTable == 1 {
 		_, _ = db.Exec(`
-			CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_occurred_at ON thin_vault_bg_chunks(occurred_at DESC, unit_id ASC);
-			CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_inserted_at ON thin_vault_bg_chunks(inserted_at DESC);
-			CREATE INDEX IF NOT EXISTS idx_thin_vault_bg_chunks_meta ON thin_vault_bg_chunks(occurred_at DESC, unit_id ASC, rel_path, anchor, abs_path, address_uri);
+			CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_occurred_at ON rm_bg_chunks(occurred_at DESC, unit_id ASC);
+			CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_inserted_at ON rm_bg_chunks(inserted_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_rm_bg_chunks_meta ON rm_bg_chunks(occurred_at DESC, unit_id ASC, rel_path, anchor, abs_path, address_uri);
 		`)
 	}
 }
@@ -1319,7 +1236,7 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 		return err
 	}
 	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
 			return err
 		}
 	}
@@ -1356,7 +1273,7 @@ func (v *Vault) RecordEpisodicLineage(turnRef, docID string, occurredAt int64) e
 	if err := checkEpisodicTombstone(tx, docID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_episodic_lineage(turn_ref, doc_id, occurred_at) SELECT ?, doc_id, ? FROM thin_vault_docs WHERE doc_id = ?`, turnRef, occurredAt, docID); err != nil {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) SELECT ?, doc_id, ? FROM thin_vault_docs WHERE doc_id = ?`, turnRef, occurredAt, docID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1368,7 +1285,7 @@ func (v *Vault) LoadLocalDocumentLayer(docID string) string {
 		return LayerBackground
 	}
 	var layer string
-	if err := v.db.QueryRow(`SELECT layer FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&layer); err == nil && strings.TrimSpace(layer) != "" {
+	if err := v.db.QueryRow(`SELECT layer FROM rm_docs WHERE unit_id = ?`, docID).Scan(&layer); err == nil && strings.TrimSpace(layer) != "" {
 		return strings.ToLower(strings.TrimSpace(layer))
 	}
 	return LayerEpisodic
@@ -1442,7 +1359,7 @@ func (v *Vault) DocLoci(docIDs []string) map[string]string {
 		for i, id := range chunk {
 			args[i] = id
 		}
-		rows, err := v.db.Query(`SELECT doc_id, locus FROM thin_vault_docs WHERE doc_id IN (`+inPlaceholders(len(chunk))+`)`, args...)
+		rows, err := v.db.Query(`SELECT d.unit_id, COALESCE(m.locus, '') FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE d.unit_id IN (`+inPlaceholders(len(chunk))+`)`, args...)
 		if err != nil {
 			continue
 		}
@@ -1460,7 +1377,7 @@ func (v *Vault) DocLoci(docIDs []string) map[string]string {
 }
 
 // DocTimes returns the stored `occurred_at` Unix timestamp (seconds) for each docID that
-// carries a positive timestamp in `thin_vault_docs`, `thin_vault_bg_chunks`, or `thin_vault_noetic`.
+// carries a positive timestamp in `thin_vault_docs`, `rm_bg_chunks`, or `rm_noetic`.
 // Zero or missing timestamps are omitted so callers never fabricate a date.
 func (v *Vault) DocTimes(docIDs []string) map[string]int64 {
 	if v == nil || v.db == nil || len(docIDs) == 0 {
@@ -1523,7 +1440,7 @@ func (v *Vault) DocTimes(docIDs []string) map[string]int64 {
 			}
 		}
 		ph := inPlaceholders(len(chunk))
-		if rows, err := v.db.Query(`SELECT doc_id, occurred_at FROM thin_vault_docs WHERE doc_id IN (`+ph+`)`, args...); err == nil {
+		if rows, err := v.db.Query(`SELECT unit_id, occurred_at FROM rm_docs WHERE unit_id IN (`+ph+`)`, args...); err == nil {
 			for rows.Next() {
 				var id string
 				var occ int64
@@ -1534,7 +1451,7 @@ func (v *Vault) DocTimes(docIDs []string) map[string]int64 {
 			rows.Close()
 		}
 		if len(bgArgs) > 0 {
-			if rows, err := v.db.Query(`SELECT unit_id, occurred_at FROM thin_vault_bg_chunks WHERE unit_id IN (`+inPlaceholders(len(bgArgs))+`)`, bgArgs...); err == nil {
+			if rows, err := v.db.Query(`SELECT unit_id, occurred_at FROM rm_bg_chunks WHERE unit_id IN (`+inPlaceholders(len(bgArgs))+`)`, bgArgs...); err == nil {
 				for rows.Next() {
 					var id string
 					var occ int64
@@ -1546,7 +1463,7 @@ func (v *Vault) DocTimes(docIDs []string) map[string]int64 {
 			}
 		}
 		if len(times) < len(chunk) {
-			if rows, err := v.db.Query(`SELECT noetic_id, occurred_at FROM thin_vault_noetic WHERE noetic_id IN (`+ph+`)`, args...); err == nil {
+			if rows, err := v.db.Query(`SELECT noetic_id, occurred_at FROM rm_noetic WHERE noetic_id IN (`+ph+`)`, args...); err == nil {
 				for rows.Next() {
 					var id string
 					var occ int64
@@ -1562,9 +1479,9 @@ func (v *Vault) DocTimes(docIDs []string) map[string]int64 {
 }
 
 // LoadLocalDocument retrieves the locally stored plaintext and cloud-distilled dry sentences for docID
-// (supporting `background` mounted directory files read LIVE on-demand from disk via `thin_vault_bg_chunks`,
+// (supporting `background` mounted directory files read LIVE on-demand from disk via `rm_bg_chunks`,
 // zero-copy `episodic` pointers `@ref:...` read LIVE on-demand from the Harness DB/JSONL,
-// `episodic`/`background` in `thin_vault_docs`, and local `noetic` records in `thin_vault_noetic`).
+// `episodic`/`background` in `thin_vault_docs`, and local `noetic` records in `rm_noetic`).
 func (v *Vault) LoadLocalDocument(docID string) (rawText string, distilledText string, keptSents []string, err error) {
 	if strings.HasPrefix(docID, "bg:") {
 		if raw, dist, kept, bgErr := v.loadBackgroundChunkLive(docID); bgErr == nil {
@@ -1627,7 +1544,7 @@ func (v *Vault) LoadLocalDocument(docID string) (rawText string, distilledText s
 			return raw, dist, kept, nil
 		}
 		var qTxt, aTxt, citedSentsJSON string
-		nErr := v.db.QueryRow(`SELECT query_text, answer_text, cited_sentences_json FROM thin_vault_noetic WHERE noetic_id = ? AND status = 'active'`, docID).
+		nErr := v.db.QueryRow(`SELECT query_text, answer_text, cited_sentences_json FROM rm_noetic WHERE noetic_id = ? AND status = 'active'`, docID).
 			Scan(&qTxt, &aTxt, &citedSentsJSON)
 		if nErr != nil {
 			if v.slotCacheMu != nil && v.CorpusSize() >= 2048 {
@@ -1659,7 +1576,7 @@ func (v *Vault) LoadLocalDocument(docID string) (rawText string, distilledText s
 	}
 	if strings.HasPrefix(strings.TrimSpace(rawText), "@ref:") && inlineEvidence {
 		var indexed int
-		if err := v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_episodic_index WHERE doc_id = ?) OR EXISTS(SELECT 1 FROM thin_vault_episodic_lineage WHERE doc_id = ? AND turn_ref = ?)`, docID, docID, rawText).Scan(&indexed); err != nil {
+		if err := v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_episodic_index WHERE doc_id = ?) OR EXISTS(SELECT 1 FROM rm_episodic_lineage WHERE doc_id = ? AND turn_ref = ?)`, docID, docID, rawText).Scan(&indexed); err != nil {
 			return "", "", nil, err
 		}
 		if indexed != 0 {
@@ -1976,7 +1893,7 @@ func (v *Vault) RecentDocs(limit int) ([]RecentDoc, error) {
 	}
 	noeticRows, err := v.db.Query(
 		`SELECT noetic_id, occurred_at, query_text, cited_unit_ids_json, assistant_id, incarnation_id
-		   FROM thin_vault_noetic
+		   FROM rm_noetic
 		  WHERE status = 'active'
 		  ORDER BY occurred_at DESC, noetic_id DESC
 		  LIMIT ?`, limit)
@@ -2075,7 +1992,7 @@ func (v *Vault) hydrateRecentPointer(entry *RecentDoc) {
 }
 
 // SaveLocalNoetic persists a downstream L3 Noetic record (Query + Retrieved Sentences + Answer)
-// into the client's own `thin_vault_noetic` table without sending it to the cloud engine.
+// into the client's own `rm_noetic` table without sending it to the cloud engine.
 func (v *Vault) SaveLocalNoetic(rec LocalNoeticRecord) error {
 	if strings.TrimSpace(rec.NoeticID) == "" {
 		return errors.New("thinclient: noetic_id is required")
@@ -2110,17 +2027,17 @@ func (v *Vault) SaveLocalNoetic(rec LocalNoeticRecord) error {
 		insertAt = rec.OccurredAt
 	}
 	_, err = v.db.Exec(`
-				INSERT INTO thin_vault_noetic(
+				INSERT INTO rm_noetic(
 					noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json,
 					address_uri, coord64, waveform_bar, assistant_id, incarnation_id
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(noetic_id) DO UPDATE SET
 					occurred_at = CASE
-						WHEN excluded.occurred_at > thin_vault_noetic.occurred_at THEN excluded.occurred_at
-						WHEN thin_vault_noetic.occurred_at > 0 THEN thin_vault_noetic.occurred_at + 1
+						WHEN excluded.occurred_at > rm_noetic.occurred_at THEN excluded.occurred_at
+						WHEN rm_noetic.occurred_at > 0 THEN rm_noetic.occurred_at + 1
 						ELSE excluded.occurred_at
 					END,
-					inserted_at = CASE WHEN thin_vault_noetic.inserted_at > 0 THEN thin_vault_noetic.inserted_at ELSE excluded.inserted_at END,
+					inserted_at = CASE WHEN rm_noetic.inserted_at > 0 THEN rm_noetic.inserted_at ELSE excluded.inserted_at END,
 					status = excluded.status,
 					query_text = excluded.query_text,
 					answer_text = excluded.answer_text,
@@ -2146,7 +2063,7 @@ func (v *Vault) SaveLocalNoetic(rec LocalNoeticRecord) error {
 // UpdateLocalNoeticManifold updates the engine-allocated manifold address for an existing Noetic record.
 func (v *Vault) UpdateLocalNoeticManifold(noeticID, addressURI string, coord64 int64, waveformBar string) error {
 	_, err := v.db.Exec(`
-		UPDATE thin_vault_noetic 
+		UPDATE rm_noetic 
 		SET address_uri = ?, coord64 = ?, waveform_bar = ? 
 		WHERE noetic_id = ?`,
 		addressURI, coord64, waveformBar, noeticID,
@@ -2174,7 +2091,7 @@ type localNoeticCitationIndex struct {
 
 func loadLocalNoeticCitationIndex(db localNoeticExecutor) (*localNoeticCitationIndex, error) {
 	index := &localNoeticCitationIndex{byUnit: make(map[string][]string, 64)}
-	rows, err := db.Query(`SELECT noetic_id, cited_unit_ids_json FROM thin_vault_noetic WHERE status = 'active'`)
+	rows, err := db.Query(`SELECT noetic_id, cited_unit_ids_json FROM rm_noetic WHERE status = 'active'`)
 	if err != nil {
 		return nil, err
 	}
@@ -2210,7 +2127,7 @@ func (idx *localNoeticCitationIndex) invalidateCited(db localNoeticExecutor, uni
 		if staled[noeticID] {
 			continue
 		}
-		if _, err := db.Exec(`UPDATE thin_vault_noetic SET status = 'stale' WHERE noetic_id = ?`, noeticID); err != nil {
+		if _, err := db.Exec(`UPDATE rm_noetic SET status = 'stale' WHERE noetic_id = ?`, noeticID); err != nil {
 			return affected, err
 		}
 		staled[noeticID] = true
@@ -2324,7 +2241,7 @@ func (v *Vault) warmupHotZCodeTurns(ctx context.Context, snap *vaultCorpusSnapsh
 }
 
 // loadCorpusSnapshot loads or reuses the fingerprint-keyed in-memory corpus snapshot
-// across `thin_vault_docs`, `thin_vault_episodic_index`, and `thin_vault_bg_chunks`.
+// across `thin_vault_docs`, `rm_episodic_index`, and `rm_bg_chunks`.
 // Sharing this snapshot between `LocalVaultTransport.QueryBlindManifold` and
 // `SearchClientSDKDefault` eliminates duplicate SQLite scans and HMAC/wire-decode passes
 // on the same recall call.
@@ -2385,10 +2302,6 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// The retrieval engine reads only the canonical store. A vault written before
-	// that store existed is derived from the thin corpus once, before any
-	// snapshot work, so an upgrade never recalls an empty corpus.
-	v.ensureCanonicalCorpus(ctx)
 	episodicCodecKey, err := v.episodicCodecKey()
 	var genAtStart uint64
 	if v.snapRef != nil {
@@ -2417,22 +2330,22 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	// O(1) revision gate, read before any aggregate so a write racing this build
 	// can only make the stored revisions conservatively stale (next build re-checks).
 	var docsRev, bgRev int64
-	revGateOK := v.db.QueryRowContext(ctx, `SELECT docs_rev, bg_rev FROM thin_vault_corpus_revision WHERE id = 1`).Scan(&docsRev, &bgRev) == nil
+	revGateOK := v.db.QueryRowContext(ctx, `SELECT docs_rev, bg_rev FROM rm_revision WHERE id = 1`).Scan(&docsRev, &bgRev) == nil
 
 	// Full fast path: both in-database revision counters unchanged proves zero
-	// INSERT/UPDATE/DELETE on thin_vault_docs and thin_vault_bg_chunks since the
+	// INSERT/UPDATE/DELETE on thin_vault_docs and rm_bg_chunks since the
 	// published snapshot (triggers fire for every writer process), which is
 	// strictly stronger than the aggregate fingerprints they gate.
 	if revGateOK && err == nil && v.slotCacheMu != nil && v.snapRef != nil {
 		v.slotCacheMu.RLock()
 		cached := v.snapRef.snap
-		revMatch := cached != nil && v.snapRef.bgRevReliable &&
+		revMatch := cached != nil &&
 			v.snapRef.lastDocsRev == docsRev && v.snapRef.lastBgRev == bgRev &&
 			cached.episodicCodecKey == string(episodicCodecKey)
 		v.slotCacheMu.RUnlock()
 		if revMatch {
 			var epiRev int64
-			_ = v.db.QueryRowContext(ctx, `SELECT revision FROM thin_vault_episodic_revision WHERE id = 1`).Scan(&epiRev)
+			_ = v.db.QueryRowContext(ctx, `SELECT episodic_rev FROM rm_revision WHERE id = 1`).Scan(&epiRev)
 			if epiRev == cached.episodicRevision {
 				v.slotCacheMu.Lock()
 				v.snapRef.lastSnapTime = time.Now()
@@ -2452,7 +2365,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	).Scan(&docCnt, &docRowSum, &docMaxRowID, &docTextLen)
 
 	var episodicRevision int64
-	_ = v.db.QueryRowContext(ctx, `SELECT revision FROM thin_vault_episodic_revision WHERE id = 1`).Scan(&episodicRevision)
+	_ = v.db.QueryRowContext(ctx, `SELECT episodic_rev FROM rm_revision WHERE id = 1`).Scan(&episodicRevision)
 	if err != nil && episodicRevision > 0 {
 		return nil, err
 	}
@@ -2463,7 +2376,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	bgFromRev := false
 	if revGateOK && v.slotCacheMu != nil && v.snapRef != nil {
 		v.slotCacheMu.RLock()
-		if cached := v.snapRef.snap; cached != nil && v.snapRef.bgRevReliable && v.snapRef.lastBgRev == bgRev {
+		if cached := v.snapRef.snap; cached != nil && v.snapRef.lastBgRev == bgRev {
 			bgCnt, bgMaxRowID, bgOccSum, bgSlotsLen = cached.bgCnt, cached.bgMaxRowID, cached.bgOccSum, cached.bgSlotsLen
 			bgFromRev = true
 		}
@@ -2472,7 +2385,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 	if !bgFromRev {
 		_ = v.db.QueryRowContext(
 			ctx,
-			`SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(SUM(occurred_at), 0), COALESCE(SUM(LENGTH(slots_json)), 0) FROM thin_vault_bg_chunks`,
+			`SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(SUM(occurred_at), 0), COALESCE(SUM(LENGTH(kept_indices_json)), 0) FROM rm_bg_chunks`,
 		).Scan(&bgCnt, &bgMaxRowID, &bgOccSum, &bgSlotsLen)
 	}
 
@@ -2480,8 +2393,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 		v.slotCacheMu.RLock()
 		// With a readable revision row, the trigger counters are the primary
 		// identity: the aggregates alone are blind to length-preserving UPDATEs.
-		revExact := !revGateOK || (v.snapRef.lastDocsRev == docsRev &&
-			(!v.snapRef.bgRevReliable || v.snapRef.lastBgRev == bgRev))
+		revExact := !revGateOK || (v.snapRef.lastDocsRev == docsRev && v.snapRef.lastBgRev == bgRev)
 		if cached := v.snapRef.snap; cached != nil && revExact &&
 			cached.docCnt == docCnt &&
 			cached.docRowSum == docRowSum &&
@@ -2647,7 +2559,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 
 	var bgDocs []vaultDocEntry
 	{
-		bgRows, bgErr := v.db.QueryContext(ctx, `SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, COALESCE(rel_path, ''), COALESCE(abs_path, ''), COALESCE(anchor, '') FROM thin_vault_bg_chunks`)
+		bgRows, bgErr := v.db.QueryContext(ctx, `SELECT unit_id, occurred_at, address_uri, coord64, waveform_bar, COALESCE(rel_path, ''), COALESCE(abs_path, ''), COALESCE(anchor, '') FROM rm_bg_chunks`)
 		if bgErr == nil {
 			type rawBgRow struct {
 				unitID  string
@@ -2757,7 +2669,7 @@ func (v *Vault) buildCorpusSnapshot(ctx context.Context) (*vaultCorpusSnapshot, 
 		// exist, silently demoting every post-write query to a full reload.
 		_ = v.db.QueryRowContext(
 			ctx,
-			`SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM thin_vault_episodic_index`,
+			`SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM rm_episodic_index`,
 		).Scan(&epiCnt, &epiMaxRowID)
 
 		episodicDocs, _, err = v.indexedEpisodicDocsSince(ctx, 0)
@@ -2871,7 +2783,7 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 		}
 	}
 
-	// Scan local Layer 3 (`thin_vault_noetic`: Agent retrieval handles `cited_unit_ids[]` + Answer stored locally)
+	// Scan local Layer 3 (`rm_noetic`: Agent retrieval handles `cited_unit_ids[]` + Answer stored locally)
 	// and automatically boost/hydrate any underlying `episodic` or `background` units cited by matched Noetic records!
 	noeticHandles, _ := (&Client{Vault: v}).RecallNoetic(queryText, topK)
 	if len(noeticHandles) > 0 {

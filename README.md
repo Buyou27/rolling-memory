@@ -84,19 +84,24 @@ In daily use, the agent does not need to call a manual "write memory" tool: a ba
 
 We evaluated this local retrieval pipeline on two public long-term memory benchmarks: the University of Cambridge **ATM-Bench** (11,034 personal multimodal text records) and **LoCoMo** (5,882 dialogue turns across 1,540 questions). All figures below can be recomputed directly from the archived per-question retrieval outputs (JSONL).
 
-> **Metric note**: ATM-Bench `Recall@10` below strictly follows the official evaluator (`comprehensive_eval.py`), which computes the **mean per-question gold-set coverage**. Binary reachability (`Any-Hit@10`, whether at least one gold item appears in the top 10) is listed separately as an auxiliary diagnostic and is never mixed with official `Recall@10` when comparing against public baselines. Daily plugin usage (`rmem recall` / MCP `recall`) and the `rmem eval` runner share the exact same local engine, sentence-harmonic encoder, and ranker.
+> **Metric note**: ATM-Bench `Recall@10` below strictly follows the official evaluator (`comprehensive_eval.py`), which computes the **mean per-question gold-set coverage**. Binary reachability (`Any-Hit@10`, whether at least one gold item appears in the top 10) and full coverage (`All-Hit@10`, whether every gold item appears in the top 10) are listed separately as auxiliary diagnostics and are never mixed with official `Recall@10` when comparing against public baselines. Daily plugin usage (`rmem recall` / MCP `recall`) and the `rmem eval` runner share the exact same local engine, sentence-harmonic encoder, and ranker.
 
 | Metric | ATM-Bench Main (1,013 questions) | ATM-Bench Hard (31 questions) | LoCoMo Full Set (1,540 questions) |
 |---|---|---|---|
-| **Official `Recall@10` (per-question gold coverage mean)** | **77.21%** | **46.12%** | — |
-| **Auxiliary `Any-Hit@10` (at least one gold item in Top-10)** | 80.45% (815/1,013) | 80.65% (25/31) | — |
+| **Official `Recall@10` (per-question gold coverage mean)** | **82.85%** | **52.43%** | — |
+| **Official `Recall@25` / `Recall@50`** | 86.41% / 90.11% | 60.14% / 70.62% | — |
+| **Auxiliary `Any-Hit@10` (at least one gold item in Top-10)** | 85.39% (865/1,013) | 80.65% (25/31) | — |
+| **Auxiliary `All-Hit@10` (every gold item in Top-10)** | 80.16% (812/1,013) | 29.03% (9/31) | — |
 | **Answer Token Recall / Answer-in-Context (2026-11-08 reference run)** | — | — | 72.93% / 53.96% (831/1,540) |
-| **End-to-end judge accuracy (deepseek-v4.1-flash judge, 2026-11-16)** | — | — | **85.26%** (1313/1540 · cat1 70.57 / cat2 87.23 / cat3 71.88 / cat4 90.96) |
-| **Per-query retrieval latency (warm cache, mean / P95)** | 29.05 ms / 58.5 ms | 41.89 ms / 86.5 ms | 31.40 ms / 49.7 ms |
+| **End-to-end judge accuracy (deepseek-v4.1-flash answerer + judge, 2026-11-16)** | — | — | **85.26%** (1313/1540 · cat1 70.57 / cat2 87.23 / cat3 71.88 / cat4 90.96) |
+| **Per-query retrieval latency (recorded run; mean / P95)** | 68.6 ms / 108.3 ms | 107.9 ms / 651 ms | 371 ms mean (P95 not recorded) |
+
+- **Current product arm**: the ATM rows above are the current `local_plain` product-arm readings (corpus `c9c4cc55…`, question sets `3c4cbf84…` / `f6f63ff1…`), re-verified 2026-11-19. Composite score (0.70 × Main R@10 + 0.30 × Hard R@10) = **73.72**. The frozen v0.0.1 readings (77.21% / 46.12%) are kept in the changelog as historical values; do not mix them with the current rows.
+- **Latency** is recorded per run and depends on cache state, CPU, and concurrency; treat the values above as a single-run reference, not a cross-run benchmark.
 
 These results show both what local lexical-statistical search can do and where its limits lie:
 
-- **Roughly one in five Main questions still misses the Top-10 (and why that matters less in coding harnesses)**: On ATM Main-1013, **199 questions (19.64%)** have no gold evidence in the top 10, and **120 questions** have none in the top 50. On Hard-31, **6 questions** miss the top 10. Inspecting those misses shows they are mainly cases with **zero lexical overlap** between the question and the record. That happens often in **human-to-human casual conversation** — for example, nicknames vs. formal names (calling someone "Old Zhang" in one place and "Zhang San" in another), dropped subjects, or vague references (*"that project… that person… got it done"*). In **coding harness workflows**, however, you typically use the same model to develop a specific project: its output is consistent and well-formed, free of ungrammatical phrasing or ambiguous references, and anchored on the same module names, symbols, and file paths. That environment fits this system's lexical-statistical architecture naturally, and dense vectors or graphs add less value here than people often assume (we are experienced in that area too — our team previously achieved a **92.79** score on LoCoMo with heavyweight vector/graph/LLM architectures; leaving them out of the default local path here is a practical engineering choice).
+- **About one in seven Main questions still misses the Top-10 (and why that matters less in coding harnesses)**: On ATM Main-1013, **148 questions (14.61%)** have no gold evidence in the top 10, and **86 questions** have none in the top 50. On Hard-31, **6 questions** miss the top 10 (and **4** miss the top 50). Inspecting those misses shows they are mainly cases with **zero lexical overlap** between the question and the record. That happens often in **human-to-human casual conversation** — for example, nicknames vs. formal names (calling someone "Old Zhang" in one place and "Zhang San" in another), dropped subjects, or vague references (*"that project… that person… got it done"*). In **coding harness workflows**, however, you typically use the same model to develop a specific project: its output is consistent and well-formed, free of ungrammatical phrasing or ambiguous references, and anchored on the same module names, symbols, and file paths. That environment fits this system's lexical-statistical architecture naturally, and dense vectors or graphs add less value here than people often assume (we are experienced in that area too — our team previously achieved a **92.79** score on LoCoMo with heavyweight vector/graph/LLM architectures; leaving them out of the default local path here is a practical engineering choice).
 - **How much a local dense vector adds (controlled test)**: On the same 11,034 ATM records, running a local `all-MiniLM-L6-v2` vector retriever alone gives an official `Recall@10` of 67.35% on Main and 29.58% on Hard. In that controlled run (pre-fusion reference baselines: Main 76.72% / Hard 41.93%), fusing the vector model with our lexical-statistical backbone at a **small weight ($w_{\mathrm{vec}} = 0.15$)** via RRF raised Main `Recall@10` to **78.42% (+1.70 percentage points, +17 net hit questions)** and Hard to **42.96%–43.20%**; however, fusing them at **equal weight ($w_{\mathrm{vec}} = 1.00$)** pulled Hard `Recall@10` down to **38.68% (-3.25 percentage points)**.
 - **Same-protocol reference points (not an official leaderboard submission)**: Under the same standard fixed 2B SGM text protocol, publicly reported ATM-Bench official `Recall@10` baselines include MemPalace (76.40%), ATM-RAG (68.70%), HippoRAG2 (66.40%), and Mem0 (61.90%) on Main; and MemoryOS (32.70%), HippoRAG2 (31.90%), ATM-RAG (30.40%), and Mem0 (23.70%) on Hard. Our numbers are local recomputations — **this system is not an official leaderboard submission and claims no official rank**.
 
@@ -132,6 +137,26 @@ rolling-memory install --with-hooks --desktop-shortcut
 irm https://github.com/rocareer/rolling-memory/raw/main/install.ps1 | iex
 ```
 
+**If `rolling-memory` is not found right after installing**: the installer writes the `PATH` entry into your shell profile, but a terminal that was already open keeps the environment it started with. Open a new terminal, or copy the matching line below, then confirm with `rolling-memory --version`:
+
+```bash
+# bash / zsh — current terminal only; a new terminal picks the entry up automatically
+export PATH="$HOME/.local/bin:$PATH"
+rolling-memory --version
+```
+
+```fish
+# fish
+fish_add_path ~/.local/bin
+rolling-memory --version
+```
+
+```powershell
+# Windows — an already-open PowerShell window keeps its old PATH; reopen it or run:
+$env:Path = "$env:LOCALAPPDATA\rolling-memory\bin;$env:Path"
+rolling-memory --version
+```
+
 ### Option B: Build from source (requires Go 1.26+)
 
 ```bash
@@ -157,6 +182,8 @@ rolling-memory update --release-base https://your-mirror.example.com/releases/la
 ```
 
 You can also click **Version & Update** in the top bar of the Web Console (`Memory Overview` or `Memory Console`) to inspect local SHA-256 digests, check for updates, and upgrade in place from the browser. Updating only swaps binaries, static web assets, and host wiring — it **never modifies or overwrites your local SQLite memory vault (`memory.db`)**.
+
+> **Early-stage default**: new installs follow the `dev` channel (`main`). Switch to `stable` or `beta` anytime with `rolling-memory config set update.channel stable` or the console's update dialog. See the full [Installation & Upgrade Guide](docs/install-upgrade.md) for channels, breaking changes, backups and rollback.
 
 ---
 

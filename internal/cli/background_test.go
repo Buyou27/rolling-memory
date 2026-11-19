@@ -125,7 +125,7 @@ func TestBackgroundCLIReadsBlindlySyncsAndPurges(t *testing.T) {
 	}
 	defer db.Close()
 	var addressedChunks int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_chunks WHERE address_uri != '' AND waveform_bar != ''`).Scan(&addressedChunks); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_chunks WHERE address_uri != '' AND waveform_bar != ''`).Scan(&addressedChunks); err != nil {
 		t.Fatalf("count addressed chunks: %v", err)
 	}
 	if addressedChunks != 1 {
@@ -173,10 +173,10 @@ func TestBackgroundRemoveDryRunPreviewsWithoutWrites(t *testing.T) {
 	}
 	defer db.Close()
 	var mountCount, fileCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&mountCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&mountCount); err != nil {
 		t.Fatalf("count mounts: %v", err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_files`).Scan(&fileCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_files`).Scan(&fileCount); err != nil {
 		t.Fatalf("count files: %v", err)
 	}
 	if mountCount != 1 || fileCount != 1 {
@@ -188,7 +188,7 @@ func TestBackgroundRemoveDryRunPreviewsWithoutWrites(t *testing.T) {
 	if removed.code != 0 {
 		t.Fatalf("background remove exit %d: %s%s", removed.code, removed.stdout, removed.stderr)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_bg_dirs`).Scan(&mountCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&mountCount); err != nil {
 		t.Fatalf("count mounts after removal: %v", err)
 	}
 	if mountCount != 0 {

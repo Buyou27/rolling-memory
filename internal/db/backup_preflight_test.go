@@ -22,10 +22,11 @@ func TestBackupPreflightReportsExternalReferencesWithoutWriting(t *testing.T) {
 	}
 	defer connection.Close()
 	for _, statement := range []string{
-		`CREATE TABLE thin_vault_docs (doc_id TEXT, raw_text TEXT)`,
-		`CREATE TABLE thin_vault_bg_files (abs_path TEXT)`,
-		`CREATE TABLE thin_vault_bg_chunks (unit_id TEXT, abs_path TEXT)`,
-		`CREATE TABLE thin_vault_bg_dirs (dir_id TEXT, root_path TEXT)`,
+		`CREATE TABLE rm_docs (unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', raw_text TEXT NOT NULL DEFAULT '', occurred_at INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE rm_unit_meta (unit_id TEXT PRIMARY KEY, ref_pointer TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE rm_bg_files (abs_path TEXT)`,
+		`CREATE TABLE rm_bg_chunks (unit_id TEXT, abs_path TEXT)`,
+		`CREATE TABLE rm_bg_dirs (dir_id TEXT, root_path TEXT)`,
 		`PRAGMA journal_mode = WAL`,
 	} {
 		if _, err := connection.Exec(statement); err != nil {
@@ -45,17 +46,20 @@ func TestBackupPreflightReportsExternalReferencesWithoutWriting(t *testing.T) {
 		{"invalid", "@ref:jsonl:bad"},
 		{"ordinary", "private text must not be returned"},
 	} {
-		if _, err := connection.Exec(`INSERT INTO thin_vault_docs VALUES (?, ?)`, row[0], row[1]); err != nil {
+		if _, err := connection.Exec(`INSERT INTO rm_docs(unit_id, raw_text) VALUES (?, '')`, row[0]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := connection.Exec(`INSERT INTO rm_unit_meta(unit_id, ref_pointer) VALUES (?, ?)`, row[0], row[1]); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := connection.Exec(`INSERT INTO thin_vault_bg_files VALUES (?)`, missing); err != nil {
+	if _, err := connection.Exec(`INSERT INTO rm_bg_files VALUES (?)`, missing); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := connection.Exec(`INSERT INTO thin_vault_bg_chunks VALUES (?, ?)`, "chunk", present); err != nil {
+	if _, err := connection.Exec(`INSERT INTO rm_bg_chunks VALUES (?, ?)`, "chunk", present); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := connection.Exec(`INSERT INTO thin_vault_bg_dirs VALUES (?, ?)`, "mount", dir); err != nil {
+	if _, err := connection.Exec(`INSERT INTO rm_bg_dirs VALUES (?, ?)`, "mount", dir); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(present)

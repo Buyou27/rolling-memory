@@ -93,7 +93,7 @@ func (a *TermExtractor) archiveProbeTerms(idx QueryIndexView, text string) []pro
 	if n <= 0 {
 		return nil
 	}
-	ubiquitous := float64(n) / math.E
+	ubiquitous := float64(n) / eulerNumber
 	var out []probeTerm
 	for sentIdx, sent := range splitSentences(text) {
 		for slot, word := range SplitWords(sent) {
@@ -176,7 +176,7 @@ func (a *TermExtractor) resolvedStemDF(idx QueryIndexView, low string, primaryDF
 	if hostWidth <= 0 {
 		return 0
 	}
-	minConservation := 1.0 - 1.0/math.E
+	minConservation := 1.0 - 1.0/eulerNumber
 	best := 0
 	for _, tag := range CanonicalCompanionTags(low) {
 		tag = strings.ToLower(strings.TrimSpace(tag))
