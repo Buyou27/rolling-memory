@@ -175,7 +175,7 @@ rolling-memory install --check
 
 ```bash
 rolling-memory update --check          # compare local SHA-256 digests against the release channel without modifying files
-rolling-memory update                  # alias: `rolling-memory upgrade` — update CLI binary, installed console, and host wiring
+rolling-memory update                  # update CLI binary, installed console, and host wiring
 rolling-memory update --with-console   # also install or update the local web console (backend :9006 + web frontend :8008)
 rolling-memory panel --update          # check and update console assets before opening http://localhost:8008/#/admin
 rolling-memory update --release-base https://your-mirror.example.com/releases/latest/download

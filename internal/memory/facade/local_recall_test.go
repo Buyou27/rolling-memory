@@ -194,7 +194,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 	for _, source := range []string{"docs", "noetic", "background"} {
 		t.Run(source, func(t *testing.T) {
 			memory := newVaultOnlyMemory(t)
-			if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_meta WHERE k = 'local_plain_scope'`); err != nil {
+			if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 				t.Fatal(err)
 			}
 			client, err := thinclient.NewVault(memory.Store.DB(), nil)
@@ -227,7 +227,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 				t.Fatalf("unbound recent = %#v, %v", items, err)
 			}
 			var bindingCount int
-			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bindingCount); err != nil || bindingCount != 0 {
+			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bindingCount); err != nil || bindingCount != 0 {
 				t.Fatalf("unbound vault was claimed: count=%d err=%v", bindingCount, err)
 			}
 			table := map[string]string{"docs": "thin_vault_docs", "noetic": "rm_noetic", "background": "rm_bg_dirs"}[source]
@@ -241,7 +241,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 
 func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_meta WHERE k = 'local_plain_scope'`); err != nil {
+	if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 		t.Fatal(err)
 	}
 	bound, populated, err := memory.LocalVaultScopePreflight()
@@ -285,7 +285,7 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 		}
 	}
 	var binding string
-	if err := memory.Store.DB().QueryRow(`SELECT v FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&binding); err != nil || binding != memory.Config.Scope {
+	if err := memory.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&binding); err != nil || binding != memory.Config.Scope {
 		t.Fatalf("scope binding changed: %q, %v", binding, err)
 	}
 	var docs, noetic int
@@ -299,7 +299,7 @@ func TestLocalVaultImportRejectsScopeBeforeWrites(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			memory := newMemory(t)
 			if scenario == "unbound" {
-				if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_meta WHERE k = 'local_plain_scope'`); err != nil {
+				if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 					t.Fatal(err)
 				}
 				vault, err := thinclient.NewVault(memory.Store.DB(), nil)
@@ -377,7 +377,7 @@ func TestLocalVaultRememberNoeticRejectsDifferentScope(t *testing.T) {
 
 func TestLocalVaultConcurrentScopeBinding(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_meta WHERE k = 'local_plain_scope'`); err != nil {
+	if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 		t.Fatal(err)
 	}
 	cfg := *memory.Config
@@ -387,7 +387,7 @@ func TestLocalVaultConcurrentScopeBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_meta WHERE k = 'local_plain_scope'`); err != nil {
+	if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 		t.Fatal(err)
 	}
 	start := make(chan struct{})

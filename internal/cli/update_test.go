@@ -206,10 +206,10 @@ func TestUpdateCheckAndSelfUpdateLifecycle(t *testing.T) {
 		t.Fatalf("web-dist .sha256 marker mismatch: got %q, want %q", readWebDistSHA256(cWebDist), sha256HexBytes(newWebTar))
 	}
 
-	// 3. Re-running `upgrade` (alias) when digests match is a fast no-op.
-	code, noopRes := runCLI("upgrade", "--no-install", "--json")
+	// 3. Re-running `update` when digests match is a fast no-op.
+	code, noopRes := runCLI("update", "--no-install", "--json")
 	if code != 0 {
-		t.Fatalf("upgrade noop exit=%d, res=%v", code, noopRes)
+		t.Fatalf("update noop exit=%d, res=%v", code, noopRes)
 	}
 	if noopRes["updated"] != false {
 		t.Fatalf("expected updated=false on second run, got %v", noopRes)

@@ -7,7 +7,7 @@ package cli
 //
 // `sync status` used to rescan every harness transcript (five harnesses, up to 2000
 // turns each, JSON-decoding tens of thousands of rows) on every call, and a reconcile
-// pass did it twice more. Counts are memoised in `thin_vault_meta` with a store
+// pass did it twice more. Counts are memoised in `rm_meta` with a store
 // fingerprint and vault count. A cache hit can be stale within the TTL; the vault
 // count cannot detect replacement of one unit by another at the same total.
 
@@ -83,7 +83,7 @@ func loadHarnessCountCache(db *sql.DB, harnessID, home string, vaultUnits int) (
 		return harnessCountCache{}, false
 	}
 	var raw []byte
-	if err := db.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, harnessCountCachePrefix+harnessID).Scan(&raw); err != nil {
+	if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, harnessCountCachePrefix+harnessID).Scan(&raw); err != nil {
 		return harnessCountCache{}, false
 	}
 	var cached harnessCountCache
@@ -125,6 +125,6 @@ func storeHarnessCountCache(db *sql.DB, harnessID, home string, vaultUnits, sess
 	if err != nil {
 		return
 	}
-	_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
+	_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
 		harnessCountCachePrefix+harnessID, []byte(strings.TrimSpace(string(raw))))
 }

@@ -190,7 +190,7 @@ const (
 	backgroundHookCooldownSec = int64(60)
 	// backgroundHookSyncTimeout bounds the incremental background sync inside a hook.
 	backgroundHookSyncTimeout = 1500 * time.Millisecond
-	// backgroundHookMetaKey stores the last background hook scan unix timestamp in thin_vault_meta.
+	// backgroundHookMetaKey stores the last background hook scan unix timestamp in rm_meta.
 	backgroundHookMetaKey = "bg_last_hook_sync_ts"
 )
 
@@ -209,15 +209,15 @@ func maybeSyncBackgroundOnHook(memory *facade.Memory) {
 	}
 	now := ids.UTCNow()
 	var raw []byte
-	if err := db.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, backgroundHookMetaKey).Scan(&raw); err == nil {
+	if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, backgroundHookMetaKey).Scan(&raw); err == nil {
 		if lastTS, pErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); pErr == nil {
 			if now-lastTS >= 0 && now-lastTS < backgroundHookCooldownSec {
 				return
 			}
 		}
 	}
-	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
-	_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
+	_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
 		backgroundHookMetaKey, []byte(strconv.FormatInt(now, 10)))
 
 	tc, err := memory.ThinClient()

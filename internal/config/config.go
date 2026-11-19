@@ -99,17 +99,6 @@ source = "github"
 # Explicit sizes accept B / KiB / MiB / GiB / TiB, e.g. "512MiB" or "2GiB".
 memory_limit = "auto"
 
-[llm]
-# none = deterministic local extractor (no model call)
-# openai = any OpenAI-compatible /chat/completions endpoint
-provider = "none"
-base_url = "https://api.openai.com/v1"
-model = "gpt-4o-mini"
-api_key_env = "OPENAI_API_KEY"
-api_key_file = ""
-timeout_sec = 30
-max_tokens = 1200
-
 [recall]
 bands = 8
 nodes = 50
@@ -133,7 +122,6 @@ activation_rank = false
 [hooks]
 boot_context = false
 max_traces = 60
-max_llm_calls = 20
 ledger = true
 
 [identity]
@@ -196,17 +184,6 @@ func newConfigError(format string, args ...any) error {
 
 func newEgressError(format string, args ...any) error {
 	return &egressError{msg: fmt.Sprintf(format, args...)}
-}
-
-// LLMConfig configures the optional OpenAI-compatible LLM.
-type LLMConfig struct {
-	Provider   string
-	BaseURL    string
-	Model      string
-	APIKeyEnv  string
-	APIKeyFile string
-	TimeoutSec float64
-	MaxTokens  int
 }
 
 // EvalConfig configures the bundled self-evaluation (`rmem eval`).
@@ -287,7 +264,6 @@ func NormalizeDeliveryWindow(raw, fallback string) (string, int, bool) {
 type HooksConfig struct {
 	BootContext bool
 	MaxTraces   int
-	MaxLLMCalls int
 	Ledger      bool
 }
 
@@ -328,7 +304,6 @@ type Config struct {
 	Mode             string
 	AllowLoopbackLLM bool
 	Log              string
-	LLM              LLMConfig
 	Recall           RecallConfig
 	Hooks            HooksConfig
 	Storage          StorageConfig
@@ -379,7 +354,6 @@ func Load(opts LoadOptions) (*Config, error) {
 
 	core := table(data, "core")
 	modeTable := table(data, "mode")
-	llmTable := table(data, "llm")
 	recallTable := table(data, "recall")
 	hooksTable := table(data, "hooks")
 	daemonTable := table(data, "daemon")
@@ -412,15 +386,6 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 	readerValue := firstTruthy(ids.OptionalNonEmptyString(opts.Reader), envValue(env, "ROLLING_MEMORY_READER"), core["reader"], "deliverable")
 
-	llmConfig := LLMConfig{
-		Provider:   pyString(envOr(env, "ROLLING_MEMORY_LLM_PROVIDER", getDefault(llmTable, "provider", "none"))),
-		BaseURL:    pyString(envOr(env, "ROLLING_MEMORY_LLM_BASE_URL", getDefault(llmTable, "base_url", "https://api.openai.com/v1"))),
-		Model:      pyString(envOr(env, "ROLLING_MEMORY_LLM_MODEL", getDefault(llmTable, "model", "gpt-4o-mini"))),
-		APIKeyEnv:  pyString(envOr(env, "ROLLING_MEMORY_LLM_API_KEY_ENV", getDefault(llmTable, "api_key_env", "OPENAI_API_KEY"))),
-		APIKeyFile: pyString(envOr(env, "ROLLING_MEMORY_LLM_API_KEY_FILE", getDefault(llmTable, "api_key_file", ""))),
-		TimeoutSec: asFloat(llmTable["timeout_sec"], 30.0),
-		MaxTokens:  asInt(llmTable["max_tokens"], 1200),
-	}
 	recallWindowRaw := pyString(envOr(env, "ROLLING_MEMORY_DELIVERY_WINDOW", getDefault(recallTable, "delivery_window", "0-16")))
 	recallWindowNorm, _, recallWindowOK := NormalizeDeliveryWindow(recallWindowRaw, "0-16")
 	if !recallWindowOK {
@@ -457,7 +422,6 @@ func Load(opts LoadOptions) (*Config, error) {
 	hooksConfig := HooksConfig{
 		BootContext: asBool(hooksTable["boot_context"], false),
 		MaxTraces:   asInt(hooksTable["max_traces"], 60),
-		MaxLLMCalls: asInt(hooksTable["max_llm_calls"], 20),
 		Ledger:      asBool(hooksTable["ledger"], true),
 	}
 	identityConfig := IdentityConfig{
@@ -526,7 +490,6 @@ func Load(opts LoadOptions) (*Config, error) {
 		Mode:             rawMode,
 		AllowLoopbackLLM: allowLoopback,
 		Log:              resolvedLog,
-		LLM:              llmConfig,
 		Recall:           recallConfig,
 		Hooks:            hooksConfig,
 		Storage:          StorageConfig{Profile: storageProfile},
@@ -555,14 +518,8 @@ func (c *Config) Validate() error {
 	if !scopeRE.MatchString(c.Scope) {
 		return newConfigError("invalid scope %s", pyRepr(c.Scope))
 	}
-	if c.LLM.Provider != "none" && c.LLM.Provider != "openai" {
-		return newConfigError("llm.provider must be 'none' or 'openai'")
-	}
 	if _, err := updatesource.Normalize(c.Update.Source); err != nil {
 		return newConfigError("%v", err)
-	}
-	if c.LLM.TimeoutSec <= 0 {
-		return newConfigError("timeouts must be positive")
 	}
 	if c.Recall.BudgetMS <= 0 {
 		return newConfigError("recall.budget_ms must be positive")
@@ -584,7 +541,6 @@ func (c *Config) Validate() error {
 		c.Recall.HookNodes,
 		c.Recall.HookChars,
 		c.Hooks.MaxTraces,
-		c.Hooks.MaxLLMCalls,
 		c.Eval.Workers,
 	} {
 		if value <= 0 {
@@ -691,11 +647,6 @@ func (c *Config) ResolveSecret(envName, filePath string) (string, error) {
 	return strings.TrimSpace(lines[0]), nil
 }
 
-// LLMKey resolves the configured LLM API key.
-func (c *Config) LLMKey() (string, error) {
-	return c.ResolveSecret(c.LLM.APIKeyEnv, c.LLM.APIKeyFile)
-}
-
 // EvalKey resolves the configured evaluation-model API key (frozen answerer / judge).
 func (c *Config) EvalKey() (string, error) {
 	return c.ResolveSecret(c.Eval.APIKeyEnv, c.Eval.APIKeyFile)
@@ -709,7 +660,7 @@ func (c *Config) SecretStatus() map[string]map[string]any {
 		envName string
 		file    string
 	}{
-		{"llm", c.LLM.APIKeyEnv, c.LLM.APIKeyFile},
+		{"eval", c.Eval.APIKeyEnv, c.Eval.APIKeyFile},
 	}
 	for _, entry := range entries {
 		key, err := c.ResolveSecret(entry.envName, entry.file)
@@ -739,7 +690,6 @@ func (c *Config) SecretStatus() map[string]map[string]any {
 
 // PublicDict returns the redacted configuration view.
 func (c *Config) PublicDict() map[string]any {
-	secrets := c.SecretStatus()
 	egress := "loopback-only"
 	if c.Mode != "local" {
 		egress = "remote-allowed"
@@ -752,12 +702,6 @@ func (c *Config) PublicDict() map[string]any {
 		"mode":   c.Mode,
 		"egress": egress,
 		"log":    c.Log,
-		"llm": map[string]any{
-			"provider": c.LLM.Provider,
-			"base_url": c.LLM.BaseURL,
-			"model":    c.LLM.Model,
-			"key":      secrets["llm"],
-		},
 		"recall": map[string]any{
 			"bands":             c.Recall.Bands,
 			"nodes":             c.Recall.Nodes,

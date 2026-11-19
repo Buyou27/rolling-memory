@@ -1,1 +1,1 @@
-{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "Rolling-Memory (local): 0 active memory units · 0 pending traces · 0 conflicts · scope mem:golden:230\n最近: [episodic] [assistant] 记住了。；[episodic] [user] 我喜欢猫。我的猫叫小白。"}}
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "Rolling-Memory (local): 2 memory units · 2 episodic · 0 background · 0 crystallized · scope mem:golden:230\n最近: [episodic] [assistant] 记住了。；[episodic] [user] 我喜欢猫。我的猫叫小白。"}}

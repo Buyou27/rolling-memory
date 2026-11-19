@@ -28,14 +28,13 @@ func (s *Store) Status(scope string) (map[string]any, error) {
 	if scope == "" {
 		scope = s.Config.Scope
 	}
-	counts, err := db.TableCounts(s.conn, scope)
-	if err != nil {
-		return nil, err
-	}
 	var hasLegacy int
 	_ = s.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'assertion'`).Scan(&hasLegacy)
 	if hasLegacy == 0 {
-		active := counts["assertion"]
+		corpus, err := db.ReadCorpusCounts(s.conn)
+		if err != nil {
+			return nil, err
+		}
 		schemaRaw, _ := db.GetMeta(s.conn, "schema_version", "1")
 		schemaVersion, _ := strconv.ParseInt(schemaRaw, 10, 64)
 		egress := "remote-allowed"
@@ -43,22 +42,18 @@ func (s *Store) Status(scope string) (map[string]any, error) {
 			egress = "loopback-only"
 		}
 		return map[string]any{
-			"scope":                 scope,
-			"db":                    s.Config.DB,
-			"db_size_bytes":         db.DBSize(s.Config.DB),
-			"mode":                  s.Config.Mode,
-			"egress":                egress,
-			"counts":                counts,
-			"active_assertions":     active,
-			"private_assertions":    0,
-			"retracted_assertions":  0,
-			"superseded_assertions": 0,
-			"pending_traces":        0,
-			"sessions":              1,
-			"conflicts_proposed":    0,
-			"last_replay":           nil,
-			"schema_version":        schemaVersion,
+			"scope":          scope,
+			"db":             s.Config.DB,
+			"db_size_bytes":  db.DBSize(s.Config.DB),
+			"mode":           s.Config.Mode,
+			"egress":         egress,
+			"corpus":         corpus.Map(),
+			"schema_version": schemaVersion,
 		}, nil
+	}
+	counts, err := db.TableCounts(s.conn, scope)
+	if err != nil {
+		return nil, err
 	}
 	active, err := queryCount(s.conn,
 		"SELECT count(*) FROM assertion WHERE scope = ? AND status = 'active' AND bare = 0", scope)

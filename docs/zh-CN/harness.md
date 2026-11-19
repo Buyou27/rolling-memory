@@ -193,7 +193,7 @@ exec "<absolute>/bin/rolling-memory" "$@"
 
 > 完整安装、通道策略、破坏性变更与回滚说明见 [install-upgrade.md](install-upgrade.md)。
 
-无需安装 `git` 或 Go 编译环境，即可通过 `rolling-memory update`（别名 `rolling-memory upgrade`）一站式升级 CLI 二进制、本地 Web 控制台与全机宿主接线：
+无需安装 `git` 或 Go 编译环境，即可通过 `rolling-memory update`一站式升级 CLI 二进制、本地 Web 控制台与全机宿主接线：
 
 ```bash
 # 1. 只读检查：拉取发布渠道 SHA256SUMS 并比对本地组件 SHA-256 指纹（不修改任何文件）
@@ -227,7 +227,7 @@ rolling-memory update --schedule remove
 - **源码安装**：源码或本地构建安装会在发布渠道没有对应二进制时标记为“仅源码更新”，并展示按标签更新的命令，不启用一键升级；预编译安装继续走原有的 SHA-256 校验原位更新。
 - **更新通道**：`dev`（默认）跟踪 `main` 最新提交；`stable` 只接受正式发布标签；`beta` 同时接受预发布标签。可用 `rolling-memory config set update.channel beta` 保存偏好（或设置 `ROLLING_MEMORY_UPDATE_CHANNEL=beta`），也可在控制台「版本与更新」弹窗切换，或用 `rolling-memory update --check --channel dev` 单次覆盖。定时检查会沿用已保存的通道。`dev` 不会自动替换二进制：只报告 `main@<commit>`，并要求源码重建（`ROLLING_MEMORY_SOURCE_REF=main bash install.sh`）。
 - **本机定时检查**：`rolling-memory update --schedule install` 会注册当前用户级的定时任务（macOS launchd、Linux systemd user timer、Windows 任务计划程序），每六小时执行一次检查。它只刷新共享缓存并在发现新版本时发送桌面通知，不会自动安装更新；`--schedule status` 查看状态，`--schedule remove` 移除。
-- **源码标签重建**：源码安装可用 `ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh`（或 `bash install.sh --ref v0.0.6`）从指定标签重新克隆并编译；Windows 可用 `powershell -ExecutionPolicy Bypass -File install.ps1 --ref v0.0.6`。安装元数据会记录来源；不会改动本地金库。
+- **源码标签重建**：源码安装可用 `ROLLING_MEMORY_SOURCE_REF=v0.0.7 bash install.sh`（或 `bash install.sh --ref v0.0.7`）从指定标签重新克隆并编译；Windows 可用 `powershell -ExecutionPolicy Bypass -File install.ps1 --ref v0.0.7`。安装元数据会记录来源；不会改动本地金库。
 - **自动检查开关**：设置 `ROLLING_MEMORY_UPDATE_CHECK=off` 可关闭后台检查；设置 `ROLLING_MEMORY_UPDATE_API_BASE` 可改用企业镜像做版本发现。显式执行 `update --check` 始终可用。
 - **SHA-256 强校验（Fail-Closed）**：每个下载产物（`rolling-memory-<os>-<arch>`、`rolling-admin-<os>-<arch>`、`web-dist.tar.gz`）在替换本地文件前均强制比对发布渠道的 `SHA256SUMS`；若校验缺失或不匹配则立即中止，绝不污染既有二进制。
 - **本地守护进程安全边界**：共享的本地守护进程只有在用户、身份和配置核验通过后才能被控制。升级后若旧守护进程仍加载上一版二进制，普通请求会失败关闭；`rolling-memory daemon restart` 会按套接字所有权、金库路径与协议身份核验该同用户实例，令其退出并启动当前二进制。`install` 检测到该情况时会直接打印这条命令。请求发送后若发生失败，不会自动重试。共享守护进程以可信的本机用户为边界，不能保证抵御同一用户运行的任意代码。

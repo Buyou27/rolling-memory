@@ -74,7 +74,6 @@ type Options struct {
 	RawLimit        int
 	Session         *string
 	Structured      map[string]string
-	DeepMeta        map[string]any
 	TimeRef         int64
 	TokenCorrect    *bool
 	AliasExpand     *bool
@@ -889,10 +888,6 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 			}
 		}
 	}
-	deepMeta := opts.DeepMeta
-	if deepMeta == nil {
-		deepMeta = map[string]any{"requested": false, "used": false}
-	}
 	meta := map[string]any{
 		"reader":          opts.Reader,
 		"mode":            opts.Mode,
@@ -914,7 +909,6 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 			"bands": truncatedBands, "nodes": truncatedNodes, "chars": false,
 		},
 		"deterministic":    true,
-		"deep":             deepMeta,
 		"date_window":      window,
 		"session":          ids.OptionalString(opts.Session),
 		"canonical_merges": canonicalMerges,

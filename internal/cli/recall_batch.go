@@ -67,7 +67,6 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 	includeRaw := a.args.FlagPtr("include_raw")
 	budgetMS := a.args.IntPtr("budget_ms")
 	sessionOpt := a.args.StringPtr("session")
-	deep := a.args.Flag("deep")
 	tokenCorrect := a.args.FlagPtr("token_correct")
 	aliasExpand := a.args.FlagPtr("alias_expand")
 	relativeTag := a.args.FlagPtr("relative_tag")
@@ -145,7 +144,6 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 					BudgetMS:        budgetMS,
 					RawLimit:        rawLimit,
 					Session:         sessionOpt,
-					Deep:            deep,
 					TimeRef:         timeRef,
 					TokenCorrect:    tokenCorrect,
 					AliasExpand:     aliasExpand,

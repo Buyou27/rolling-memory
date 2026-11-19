@@ -89,7 +89,7 @@ func TestSecurityFileExportAudiencePreflight(t *testing.T) {
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			memory := newMemory(t)
-			if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_meta WHERE k = 'local_plain_scope'`); err != nil {
+			if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 				t.Fatal(err)
 			}
 			raw, err := json.Marshal(map[string]any{"format": version.ExportFormat, "scope": memory.Config.Scope, "traces": fixture.traces})
@@ -101,7 +101,7 @@ func TestSecurityFileExportAudiencePreflight(t *testing.T) {
 				t.Fatalf("invalid export accepted: %#v %v", result, err)
 			}
 			var traces, cursors, bindings int
-			if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor), (SELECT COUNT(*) FROM thin_vault_meta WHERE k = 'local_plain_scope')`).Scan(&traces, &cursors, &bindings); err != nil || traces != 0 || cursors != 0 || bindings != 0 {
+			if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor), (SELECT COUNT(*) FROM rm_meta WHERE k = 'local_plain_scope')`).Scan(&traces, &cursors, &bindings); err != nil || traces != 0 || cursors != 0 || bindings != 0 {
 				t.Fatalf("rejected export wrote data: traces=%d cursors=%d bindings=%d err=%v", traces, cursors, bindings, err)
 			}
 		})

@@ -39,11 +39,11 @@ func TestConsoleVaultScopeGuard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`CREATE TABLE thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL); CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, raw_text TEXT); INSERT INTO thin_vault_docs VALUES ('secret', 'private content')`); err != nil {
+			if _, err := db.Exec(`CREATE TABLE rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL); CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, raw_text TEXT); INSERT INTO thin_vault_docs VALUES ('secret', 'private content')`); err != nil {
 				t.Fatal(err)
 			}
 			if tc.binding != nil {
-				if _, err := db.Exec(`INSERT INTO thin_vault_meta VALUES ('local_plain_scope', ?)`, tc.binding); err != nil {
+				if _, err := db.Exec(`INSERT INTO rm_meta VALUES ('local_plain_scope', ?)`, tc.binding); err != nil {
 					t.Fatal(err)
 				}
 			}

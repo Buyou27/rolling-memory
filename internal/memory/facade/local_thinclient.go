@@ -65,13 +65,13 @@ func (m *Memory) LocalVaultScopePreflight() (string, bool, error) {
 		return "", false, fmt.Errorf("local_plain vault preflight requires an open store")
 	}
 	var metaExists int
-	if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_meta')`).Scan(&metaExists); err != nil {
+	if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rm_meta')`).Scan(&metaExists); err != nil {
 		return "", false, err
 	}
 	var bound string
 	if metaExists != 0 {
 		var storageType string
-		err := m.Store.DB().QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
+		err := m.Store.DB().QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return "", false, err
 		}
@@ -106,9 +106,9 @@ func (m *Memory) bindLocalVaultScope() error {
 		return fmt.Errorf("local_plain vault requires a scope")
 	}
 	var metaExists int
-	if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_meta')`).Scan(&metaExists); err == nil && metaExists != 0 {
+	if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rm_meta')`).Scan(&metaExists); err == nil && metaExists != 0 {
 		var bound, storageType string
-		if err := m.Store.DB().QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err == nil {
+		if err := m.Store.DB().QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err == nil {
 			if storageType != "text" || bound != scope {
 				return fmt.Errorf("local_plain vault scope does not match its binding")
 			}
@@ -120,11 +120,11 @@ func (m *Memory) bindLocalVaultScope() error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		return err
 	}
 	var bound, storageType string
-	err = tx.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
+	err = tx.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
 	if errors.Is(err, sql.ErrNoRows) {
 		for _, table := range []string{"rm_docs", "rm_noetic", "rm_bg_dirs", "rm_bg_files", "rm_bg_chunks", "rm_episodic_lineage", "rm_episodic_index"} {
 			var exists int
@@ -142,7 +142,7 @@ func (m *Memory) bindLocalVaultScope() error {
 				return fmt.Errorf("local_plain vault scope is unbound; existing data is preserved and cannot be assigned automatically. Back up the database and referenced sources, independently verify the ownership of all records, and obtain explicit authorization before a non-destructive scope binding")
 			}
 		}
-		if _, err := tx.Exec(`INSERT INTO thin_vault_meta(k, v) VALUES ('local_plain_scope', ?)`, scope); err != nil {
+		if _, err := tx.Exec(`INSERT INTO rm_meta(k, v) VALUES ('local_plain_scope', ?)`, scope); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -276,7 +276,7 @@ func (m *Memory) thinClientRemember(req RememberRequest) (map[string]any, error)
 			"id":          docID,
 			"address_uri": resp.AddressURI,
 			"waveform":    resp.WaveformBar,
-			"reason":      "thin_vault_ingested",
+			"reason":      "vault_ingested",
 			"chunk_index": index,
 		})
 	}

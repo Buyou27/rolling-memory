@@ -108,31 +108,31 @@ func IsEpisodicSyncPaused(db *sql.DB, cfgPath string) bool {
 		return false
 	}
 	var raw string
-	if err := db.QueryRow(`SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = ?`, episodicSyncPausedMetaKey).Scan(&raw); err == nil {
+	if err := db.QueryRow(`SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = ?`, episodicSyncPausedMetaKey).Scan(&raw); err == nil {
 		trimmed := strings.ToLower(strings.TrimSpace(raw))
 		return trimmed == "1" || trimmed == "true" || trimmed == "paused"
 	}
 	return false
 }
 
-// SetEpisodicSyncPaused toggles the runtime pause flag in `thin_vault_meta`.
+// SetEpisodicSyncPaused toggles the runtime pause flag in `rm_meta`.
 // When pausing, it also revokes any active autowatch lease so an in-flight pass stops within 500ms.
 func SetEpisodicSyncPaused(db *sql.DB, paused bool) error {
 	if db == nil {
 		return fmt.Errorf("database is required")
 	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		return err
 	}
 	val := "0"
 	if paused {
 		val = "1"
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_meta(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, episodicSyncPausedMetaKey, val); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_meta(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, episodicSyncPausedMetaKey, val); err != nil {
 		return err
 	}
 	if paused {
-		_, _ = db.Exec(`DELETE FROM thin_vault_meta WHERE k = 'autowatch_lease'`)
+		_, _ = db.Exec(`DELETE FROM rm_meta WHERE k = 'autowatch_lease'`)
 	}
 	return nil
 }
@@ -449,7 +449,7 @@ func harnessTranscriptChangedSince(db *sql.DB, home string) bool {
 		return false
 	}
 	var raw []byte
-	if err := db.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, harnessEpisodeSyncMetaKey).Scan(&raw); err != nil {
+	if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, harnessEpisodeSyncMetaKey).Scan(&raw); err != nil {
 		return true
 	}
 	last, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
@@ -465,7 +465,7 @@ func markHarnessTranscriptSynced(db *sql.DB, home string) {
 	if latest == 0 {
 		return
 	}
-	_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
+	_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
 		harnessEpisodeSyncMetaKey, []byte(strconv.FormatInt(latest, 10)))
 }
 
@@ -476,7 +476,7 @@ type autoWatchLease struct {
 }
 
 func acquireAutoWatchLease(db *sql.DB, cancel context.CancelFunc) (*autoWatchLease, bool) {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		return nil, false
 	}
 	var token [16]byte
@@ -484,7 +484,7 @@ func acquireAutoWatchLease(db *sql.DB, cancel context.CancelFunc) (*autoWatchLea
 		return nil, false
 	}
 	lease := &autoWatchLease{value: fmt.Sprintf("%d:%d:%x", os.Getpid(), time.Now().Unix()+autoWatchLeaseSeconds, token), done: make(chan struct{}), stop: make(chan struct{})}
-	result, err := db.Exec(`INSERT INTO thin_vault_meta(k, v) VALUES ('autowatch_lease', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v WHERE instr(CAST(thin_vault_meta.v AS TEXT), ':') > 1 AND substr(CAST(thin_vault_meta.v AS TEXT), instr(CAST(thin_vault_meta.v AS TEXT), ':') + 1, 1) BETWEEN '0' AND '9' AND CAST(substr(CAST(thin_vault_meta.v AS TEXT), instr(CAST(thin_vault_meta.v AS TEXT), ':') + 1) AS INTEGER) < ?`, lease.value, time.Now().Unix())
+	result, err := db.Exec(`INSERT INTO rm_meta(k, v) VALUES ('autowatch_lease', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v WHERE instr(CAST(rm_meta.v AS TEXT), ':') > 1 AND substr(CAST(rm_meta.v AS TEXT), instr(CAST(rm_meta.v AS TEXT), ':') + 1, 1) BETWEEN '0' AND '9' AND CAST(substr(CAST(rm_meta.v AS TEXT), instr(CAST(rm_meta.v AS TEXT), ':') + 1) AS INTEGER) < ?`, lease.value, time.Now().Unix())
 	if err != nil {
 		return nil, false
 	}
@@ -503,7 +503,7 @@ func acquireAutoWatchLease(db *sql.DB, cancel context.CancelFunc) (*autoWatchLea
 				return
 			case <-pauseTicker.C:
 				var pausedVal, curLease string
-				if qErr := db.QueryRow(`SELECT COALESCE((SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = ?), '0'), COALESCE((SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = 'autowatch_lease'), '')`, episodicSyncPausedMetaKey).Scan(&pausedVal, &curLease); qErr == nil {
+				if qErr := db.QueryRow(`SELECT COALESCE((SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = ?), '0'), COALESCE((SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = 'autowatch_lease'), '')`, episodicSyncPausedMetaKey).Scan(&pausedVal, &curLease); qErr == nil {
 					if pausedVal == "1" || pausedVal == "true" || curLease != lease.value {
 						cancel()
 						return
@@ -511,7 +511,7 @@ func acquireAutoWatchLease(db *sql.DB, cancel context.CancelFunc) (*autoWatchLea
 				}
 			case <-ticker.C:
 				next := fmt.Sprintf("%d:%d:%x", os.Getpid(), time.Now().Unix()+autoWatchLeaseSeconds, token)
-				result, err := db.Exec(`UPDATE thin_vault_meta SET v = ? WHERE k = 'autowatch_lease' AND v = ?`, next, lease.value)
+				result, err := db.Exec(`UPDATE rm_meta SET v = ? WHERE k = 'autowatch_lease' AND v = ?`, next, lease.value)
 				if err != nil {
 					cancel()
 					return
@@ -530,5 +530,5 @@ func acquireAutoWatchLease(db *sql.DB, cancel context.CancelFunc) (*autoWatchLea
 func releaseAutoWatchLease(db *sql.DB, lease *autoWatchLease) {
 	close(lease.stop)
 	<-lease.done
-	_, _ = db.Exec(`DELETE FROM thin_vault_meta WHERE k = 'autowatch_lease' AND v = ?`, lease.value)
+	_, _ = db.Exec(`DELETE FROM rm_meta WHERE k = 'autowatch_lease' AND v = ?`, lease.value)
 }

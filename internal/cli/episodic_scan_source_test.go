@@ -472,7 +472,7 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 		t.Fatalf("healthy item in failed source starved: count=%d err=%v", n, err)
 	}
 	var itemErrors int
-	if err := memory.Store.DB().QueryRow(`SELECT CAST(v AS INTEGER) FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_item_errors:mem:legacy").Scan(&itemErrors); err != nil || itemErrors == 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT CAST(v AS INTEGER) FROM rm_meta WHERE k = ?`, "episodic_source_scan_item_errors:mem:legacy").Scan(&itemErrors); err != nil || itemErrors == 0 {
 		t.Fatalf("missing durable source diagnostic: errors=%d err=%v", itemErrors, err)
 	}
 	status, err := inspectEnvHealthAndSync(context.Background(), memory, "")
@@ -498,7 +498,7 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 	if _, err := tc.Vault.LoadVerifiedEpisodicPointer(id, pointer); err != nil {
 		t.Fatalf("legacy source did not recover: %v", err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT CAST(v AS INTEGER) FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_item_errors:mem:legacy").Scan(&itemErrors); !errors.Is(err, sql.ErrNoRows) {
+	if err := memory.Store.DB().QueryRow(`SELECT CAST(v AS INTEGER) FROM rm_meta WHERE k = ?`, "episodic_source_scan_item_errors:mem:legacy").Scan(&itemErrors); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("source diagnostic not cleared after recovery: errors=%d err=%v", itemErrors, err)
 	}
 	status, err = inspectEnvHealthAndSync(context.Background(), memory, "")
@@ -704,7 +704,7 @@ func TestEpisodicStatusRejectsMalformedCheckpoint(t *testing.T) {
 	if _, err := memory.ThinClient(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.Store.DB().Exec(`INSERT INTO thin_vault_meta(k, v) VALUES (?, ?)`, "episodic_source_scan_cursor:mem:checkpoint", []byte("invalid")); err != nil {
+	if _, err := memory.Store.DB().Exec(`INSERT INTO rm_meta(k, v) VALUES (?, ?)`, "episodic_source_scan_cursor:mem:checkpoint", []byte("invalid")); err != nil {
 		t.Fatal(err)
 	}
 	status, err := inspectEnvHealthAndSync(context.Background(), memory, "")

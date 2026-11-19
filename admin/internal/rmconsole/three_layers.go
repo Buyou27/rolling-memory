@@ -195,7 +195,7 @@ func openVaultWriteOnly(dbPath string) (*sql.DB, error) {
 	if err := db.QueryRow(`
 		SELECT COUNT(*) FROM sqlite_master
 		WHERE type = 'table' AND name IN (
-			'thin_vault_meta', 'thin_vault_docs', 'rm_noetic',
+			'rm_meta', 'thin_vault_docs', 'rm_noetic',
 			'rm_bg_dirs', 'rm_bg_files', 'rm_bg_chunks'
 		)
 	`).Scan(&existingTables); err == nil && existingTables == 6 {

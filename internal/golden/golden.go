@@ -40,7 +40,7 @@ const FixedNow = int64(1793102400)
 const ResealHint = "golden expectations record user-visible surfaces; if this change is intentional run the repository golden reseal workflow and review its diff, otherwise revert the surface change"
 
 // deterministicFixtureSecretKeyHex pins the scenario database's HMAC root
-// (thin_vault_meta.user_secret_key) before the facade opens it. Freshly
+// (rm_meta.user_secret_key) before the facade opens it. Freshly
 // replayed fixture databases then stay byte-reproducible across reseals instead
 // of carrying a per-run random key that turns every seal into a manual
 // dump-diff decision.
@@ -58,10 +58,10 @@ func seedFixtureSecretKey(path string) error {
 		return err
 	}
 	defer connection.Close()
-	if _, err := connection.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := connection.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		return err
 	}
-	_, err = connection.Exec(`INSERT OR IGNORE INTO thin_vault_meta(k, v) VALUES ('user_secret_key', ?)`, key)
+	_, err = connection.Exec(`INSERT OR IGNORE INTO rm_meta(k, v) VALUES ('user_secret_key', ?)`, key)
 	return err
 }
 
@@ -714,7 +714,6 @@ func (r *Runner) opRecall(args map[string]any) (any, error) {
 		BudgetMS:        argIntPtr(args, "budget_ms"),
 		RawLimit:        argIntDefault(args, "raw_limit", 5),
 		Session:         argStringPtr(args, "session"),
-		Deep:            argBool(args, "deep"),
 		TimeRef:         args["time_ref"],
 		TokenCorrect:    argBoolPtr(args, "token_correct"),
 		AliasExpand:     argBoolPtr(args, "alias_expand"),
@@ -1341,12 +1340,8 @@ func applyConfigOverride(cfg *config.Config, dotted string, value any) error {
 		cfg.Recall.Nodes = int(asInt64(value))
 	case "recall.chars":
 		cfg.Recall.Chars = int(asInt64(value))
-	case "llm.provider":
-		cfg.LLM.Provider = asString(value)
 	case "hooks.max_traces":
 		cfg.Hooks.MaxTraces = int(asInt64(value))
-	case "hooks.max_llm_calls":
-		cfg.Hooks.MaxLLMCalls = int(asInt64(value))
 	default:
 		return fmt.Errorf("unsupported config override %q", dotted)
 	}

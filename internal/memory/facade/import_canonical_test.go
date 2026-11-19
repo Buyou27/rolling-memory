@@ -4,7 +4,6 @@
 package facade_test
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -85,62 +84,5 @@ func TestImportJSONLCanonicalReceiptShape(t *testing.T) {
 	var docs int
 	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docs); err != nil || docs != 2 {
 		t.Fatalf("docs = %d err=%v", docs, err)
-	}
-}
-
-// TestDoctorReportsLegacyEpisodicIdentityReadOnly locks the doctor diagnostic:
-// inline episodic rows whose id predates the content-addressed derivation are
-// counted and reported, and the audit never rewrites or deletes them.
-func TestDoctorReportsLegacyEpisodicIdentityReadOnly(t *testing.T) {
-	memory := newMemory(t)
-	clean, err := memory.Doctor()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, warning := range clean["warnings"].([]any) {
-		if strings.Contains(fmt.Sprint(warning), "legacy-identity") {
-			t.Fatalf("fresh database reported a legacy identity backlog: %v", warning)
-		}
-	}
-	if _, err := memory.ImportFile(writeTranscript(t, "session.jsonl", completedJSONLTurn), nil, nil, "shared", false); err != nil {
-		t.Fatal(err)
-	}
-	withUnits, err := memory.Doctor()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, warning := range withUnits["warnings"].([]any) {
-		if strings.Contains(fmt.Sprint(warning), "legacy-identity") {
-			t.Fatalf("canonical units reported as legacy identity: %v", warning)
-		}
-	}
-	legacyID := "ep_" + strings.Repeat("0", 32)
-	if _, err := memory.Store.DB().Exec(`INSERT INTO rm_docs(unit_id, layer, occurred_at, ingested_at, raw_text) VALUES (?, 'episodic', 1, 1, 'legacy inline witness')`, legacyID); err != nil {
-		t.Fatal(err)
-	}
-	report, err := memory.Doctor()
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, warning := range report["warnings"].([]any) {
-		if strings.Contains(fmt.Sprint(warning), "1 legacy-identity episodic units") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("legacy identity backlog not reported: %#v", report["warnings"])
-	}
-	var raw string
-	var occurred, inserted int64
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text, occurred_at, ingested_at FROM rm_docs WHERE unit_id = ?`, legacyID).Scan(&raw, &occurred, &inserted); err != nil {
-		t.Fatal(err)
-	}
-	if raw != "legacy inline witness" || occurred != 1 || inserted != 1 {
-		t.Fatalf("doctor rewrote history: raw=%q occurred=%d inserted=%d", raw, occurred, inserted)
-	}
-	var docs int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docs); err != nil || docs != 3 {
-		t.Fatalf("doctor deleted history: docs=%d err=%v", docs, err)
 	}
 }

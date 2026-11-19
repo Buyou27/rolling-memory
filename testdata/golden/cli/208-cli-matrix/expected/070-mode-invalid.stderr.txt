@@ -1,0 +1,2 @@
+usage: rolling-memory mode [-h] [--config CONFIG] [--db DB] [--scope SCOPE] [--mode {local}] [--json] [{local}]
+rolling-memory: error: argument name: invalid choice: 'cloud' (choose from 'local')

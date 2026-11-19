@@ -498,7 +498,7 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 	key := "episodic_source_scan_cursor:" + scope
 	var raw []byte
 	var cursor episodicSourceCursor
-	err = db.QueryRowContext(ctx, `SELECT v FROM thin_vault_meta WHERE k = ?`, key).Scan(&raw)
+	err = db.QueryRowContext(ctx, `SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -537,11 +537,11 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 		return errors.Join(discoveryErr, scanErr, fmt.Errorf("episodic source scan checkpoint: %w", err))
 	}
 	if next.ItemErrors > 0 {
-		if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`, "episodic_source_scan_item_errors:"+scope, next.ItemErrors); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, "episodic_source_scan_item_errors:"+scope, next.ItemErrors); err != nil {
 			return errors.Join(discoveryErr, scanErr, err)
 		}
 	} else if discoveryErr == nil && scanErr == nil && !more {
-		if _, err := db.ExecContext(ctx, `DELETE FROM thin_vault_meta WHERE k = ? AND EXISTS (SELECT 1 FROM thin_vault_meta WHERE k = ? AND CAST(v AS BLOB) = ?)`, "episodic_source_scan_item_errors:"+scope, key, nextRaw); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM rm_meta WHERE k = ? AND EXISTS (SELECT 1 FROM rm_meta WHERE k = ? AND CAST(v AS BLOB) = ?)`, "episodic_source_scan_item_errors:"+scope, key, nextRaw); err != nil {
 			return err
 		}
 	}

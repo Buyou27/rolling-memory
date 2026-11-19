@@ -144,33 +144,6 @@ func TestImportAudienceChoicesNarrowed(t *testing.T) {
 	}
 }
 
-func TestExportRejectsBeforeOpeningDatabase(t *testing.T) {
-	env := newEnv(t)
-	dbPath := filepath.Join(env.base, "untouched.db")
-	outPath := filepath.Join(env.base, "existing.json")
-	writeFile(t, dbPath, "database sentinel")
-	writeFile(t, outPath, "output sentinel")
-	for _, args := range [][]string{
-		{"export", "--db", dbPath, "--out", outPath},
-		{"export", "--db", dbPath, "--out", dbPath, "--json"},
-		{"export", "--db", dbPath, "--json"},
-	} {
-		result := run(t, args...)
-		if result.code != 1 || !strings.Contains(result.stderr+result.stdout, "not a complete backup") {
-			t.Fatalf("export = %d %q %q", result.code, result.stdout, result.stderr)
-		}
-	}
-	for path, want := range map[string]string{dbPath: "database sentinel", outPath: "output sentinel"} {
-		raw, err := os.ReadFile(path)
-		if err != nil || string(raw) != want {
-			t.Fatalf("%s changed: %q, %v", path, raw, err)
-		}
-	}
-}
-
-// TestImportJSONExportHumanLine pins the receipt branch of _print_import
-// : the export path prints per-table counts, not the
-// transcript summary.
 func TestImportJSONExportHumanLine(t *testing.T) {
 	env := newEnv(t)
 	exportPath := writeFile(t, filepath.Join(env.base, "export.json"),

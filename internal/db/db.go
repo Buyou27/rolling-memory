@@ -554,7 +554,7 @@ func IntegrityCheck(connection *sql.DB) ([]string, error) {
 		// On multi-hundred-MB production vaults (>32MB), full-database PRAGMA integrity_check
 		// scans every FTS5 trigram posting block and 200MB+ of packed binary slot blobs (~4s).
 		// Check each core relational metadata/document table's B-tree and indexes directly.
-		for _, tbl := range []string{"db_meta", "thin_vault_meta", "rm_docs", "rm_noetic"} {
+		for _, tbl := range []string{"db_meta", "rm_meta", "rm_docs", "rm_noetic"} {
 			var exists int
 			if connection.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", tbl).Scan(&exists) != nil || exists == 0 {
 				continue

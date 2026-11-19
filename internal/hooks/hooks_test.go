@@ -478,8 +478,8 @@ func TestStartBootContext(t *testing.T) {
 		t.Fatalf("recent: %v", err)
 	}
 	expected := fmt.Sprintf(
-		"Rolling-Memory (local): %d active memory units · %d pending traces · %d conflicts · scope mem:hooks",
-		status["active_assertions"], status["pending_traces"], status["conflicts_proposed"],
+		"Rolling-Memory (local): %d memory units · 0 episodic · 0 background · 0 crystallized · scope mem:hooks",
+		status["active_assertions"],
 	)
 	if status["active_assertions"] != int64(1) {
 		t.Fatalf("seed should leave one active assertion: %#v", status["active_assertions"])
@@ -1503,7 +1503,7 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 
 	// 3. 冷却期内（距上次 10s < 60s）：触发 recall 钩子不应扫描或更新。
 	nowTS := ids.UTCNow()
-	_, err = mem.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
+	_, err = mem.Store.DB().Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
 		backgroundHookMetaKey, []byte(fmt.Sprintf("%d", nowTS-10)))
 	if err != nil {
 		t.Fatalf("seed cooldown meta: %v", err)
@@ -1524,7 +1524,7 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 
 	// 4. 冷却期已过（距上次 65s >= 60s）：触发 recall 钩子必须自动增量同步 v2 文件。
 	mem2 := openMemory(t)
-	_, err = mem2.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`,
+	_, err = mem2.Store.DB().Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
 		backgroundHookMetaKey, []byte(fmt.Sprintf("%d", ids.UTCNow()-65)))
 	if err != nil {
 		t.Fatalf("seed expired cooldown meta: %v", err)

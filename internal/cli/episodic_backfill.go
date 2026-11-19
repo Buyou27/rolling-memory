@@ -41,7 +41,7 @@ func runEpisodicIndexBackfillTick(ctx context.Context, memory *facade.Memory) (t
 	// earlier references; values contain no source text.
 	key := "episodic_index_backfill_cursor:" + scope
 	var cursor string
-	err = db.QueryRowContext(ctx, `SELECT v FROM thin_vault_meta WHERE k = ?`, key).Scan(&cursor)
+	err = db.QueryRowContext(ctx, `SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&cursor)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return report, err
 	}
@@ -67,9 +67,9 @@ func saveEpisodicCheckpoint(db *sql.DB, key string, previous []byte, exists bool
 	var result sql.Result
 	var err error
 	if exists {
-		result, err = db.Exec(`UPDATE thin_vault_meta SET v = ? WHERE k = ? AND CAST(v AS BLOB) = ?`, next, key, previous)
+		result, err = db.Exec(`UPDATE rm_meta SET v = ? WHERE k = ? AND CAST(v AS BLOB) = ?`, next, key, previous)
 	} else {
-		result, err = db.Exec(`INSERT INTO thin_vault_meta(k, v) VALUES (?, ?) ON CONFLICT(k) DO NOTHING`, key, next)
+		result, err = db.Exec(`INSERT INTO rm_meta(k, v) VALUES (?, ?) ON CONFLICT(k) DO NOTHING`, key, next)
 	}
 	if err != nil {
 		return err

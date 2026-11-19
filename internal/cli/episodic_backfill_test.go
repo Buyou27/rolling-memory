@@ -58,7 +58,7 @@ func TestAutoWatchLeaseConcurrentAndFencedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	const workers = 24
@@ -91,22 +91,22 @@ func TestAutoWatchLeaseConcurrentAndFencedRelease(t *testing.T) {
 	if _, ok := acquireAutoWatchLease(db, func() {}); ok {
 		t.Fatal("same-process lease acquired twice")
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_meta SET v = 'other:9999999999:token' WHERE k = 'autowatch_lease'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_meta SET v = 'other:9999999999:token' WHERE k = 'autowatch_lease'`); err != nil {
 		t.Fatal(err)
 	}
 	releaseAutoWatchLease(db, winner)
 	var value string
-	if err := db.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = 'autowatch_lease'`).Scan(&value); err != nil || value != "other:9999999999:token" {
+	if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = 'autowatch_lease'`).Scan(&value); err != nil || value != "other:9999999999:token" {
 		t.Fatalf("stale release modified current lease: %q %v", value, err)
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_meta SET v = 'corrupt' WHERE k = 'autowatch_lease'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_meta SET v = 'corrupt' WHERE k = 'autowatch_lease'`); err != nil {
 		t.Fatal(err)
 	}
 	if lease, ok := acquireAutoWatchLease(db, func() {}); ok {
 		releaseAutoWatchLease(db, lease)
 		t.Fatal("corrupt lease was overwritten")
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_meta SET v = '123:1' WHERE k = 'autowatch_lease'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_meta SET v = '123:1' WHERE k = 'autowatch_lease'`); err != nil {
 		t.Fatal(err)
 	}
 	lease, ok := acquireAutoWatchLease(db, func() {})
@@ -144,13 +144,13 @@ func TestEpisodicCheckpointConcurrentWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	for _, exists := range []bool{false, true} {
 		key := fmt.Sprintf("checkpoint-%t", exists)
 		if exists {
-			if _, err := db.Exec(`INSERT INTO thin_vault_meta(k, v) VALUES (?, ?)`, key, "old"); err != nil {
+			if _, err := db.Exec(`INSERT INTO rm_meta(k, v) VALUES (?, ?)`, key, "old"); err != nil {
 				t.Fatal(err)
 			}
 		}

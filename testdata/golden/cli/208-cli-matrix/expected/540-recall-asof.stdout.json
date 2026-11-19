@@ -1,4 +1,4 @@
 {
-  "error": "graph recall cannot enforce session, asof or window filters across all sources",
+  "error": "local_plain recall does not support session, asof or window filters",
   "ok": false
 }

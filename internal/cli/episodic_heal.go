@@ -92,7 +92,7 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, lim
 
 	cursorKey := episodicHealCursorKey(scope)
 	var cursorRaw []byte
-	if err := db.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, cursorKey).Scan(&cursorRaw); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, cursorKey).Scan(&cursorRaw); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, err
 	}
 	cursor := string(cursorRaw)
@@ -132,7 +132,7 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, lim
 	if len(rows) == limit {
 		nextCursor = rows[len(rows)-1].docID
 	}
-	if _, err := db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`, cursorKey, []byte(nextCursor)); err != nil {
+	if _, err := db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, cursorKey, []byte(nextCursor)); err != nil {
 		return 0, 0, err
 	}
 

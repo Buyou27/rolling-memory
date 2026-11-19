@@ -206,7 +206,7 @@ func (r *Runner) opConfigEgress(args map[string]any) (any, error) {
 }
 
 // opConfigSecret mirrors the driver's config_secret: write the case key file
-// (default text golden-key-value, default mode 0600), point the LLM key slots
+// (default text golden-key-value, default mode 0600), point the eval key slots
 // at it, and report status plus the resolved value under the case environment.
 func (r *Runner) opConfigSecret(args map[string]any) (any, error) {
 	caseName := cmp.Or(argString(args, "case"), "secret")
@@ -234,8 +234,8 @@ func (r *Runner) opConfigSecret(args map[string]any) (any, error) {
 		return nil, err
 	}
 	envName := argString(args, "env_name")
-	loaded.LLM.APIKeyEnv = envName
-	loaded.LLM.APIKeyFile = filePath
+	loaded.Eval.APIKeyEnv = envName
+	loaded.Eval.APIKeyFile = filePath
 	env := map[string]string{}
 	if envName != "" {
 		env[envName] = argStringDefault(args, "env_value", "")
@@ -243,7 +243,7 @@ func (r *Runner) opConfigSecret(args map[string]any) (any, error) {
 	restore := temporaryEnv(env)
 	defer restore()
 	result := map[string]any{"case": caseName, "status": loaded.SecretStatus()}
-	value, err := loaded.LLMKey()
+	value, err := loaded.EvalKey()
 	if err != nil {
 		result["error"] = "ConfigError"
 		result["message"] = err.Error()

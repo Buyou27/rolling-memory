@@ -22,7 +22,7 @@
                             <span class="live-dot"></span>
                             <span>
                                 {{ rmData.engine_online ? $t('dashboard.engineOnline') : $t('dashboard.engineOffline') }}
-                                · v{{ rmData.version || '0.0.6' }} · Core v1.0.1
+                                · v{{ rmData.version || '0.0.7' }} · Core v1.0.1
                             </span>
                         </div>
                         <div class="meta-item meta-mode-switch" data-testid="dashboard-mode-switch">

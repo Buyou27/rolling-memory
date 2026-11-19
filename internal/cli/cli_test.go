@@ -245,7 +245,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("status exit %d: %s", status.code, status.stderr)
 	}
 	// 薄库（vault-only）：CLI 不生成任何断言图表（数据库里根本没有 assertion 表），
-	// status 的 active_assertions 映射为活体记忆单元数（docs + active noetic）。
+	// status 的 corpus 只报规范语料计数（docs + active noetic）。
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(env.base, "memory.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -266,8 +266,9 @@ func TestEndToEnd(t *testing.T) {
 	if vaultUnits == 0 {
 		t.Fatal("expected seeded vault units in the thin database")
 	}
-	if active := jsonObject(t, status.stdout)["active_assertions"]; active != float64(vaultUnits) {
-		t.Fatalf("active_assertions = %#v (want %d vault units: docs + active noetic)", active, vaultUnits)
+	corpus, _ := jsonObject(t, status.stdout)["corpus"].(map[string]any)
+	if corpus == nil || corpus["memories"] != float64(vaultUnits) {
+		t.Fatalf("corpus = %#v (want %d memory units: docs + active noetic)", corpus, vaultUnits)
 	}
 
 	recent := run(t, "recent", "--json")
@@ -316,10 +317,8 @@ func TestConfigAndMode(t *testing.T) {
 	if data["mode"] != "local" {
 		t.Fatalf("mode = %#v", data["mode"])
 	}
-	llm, _ := data["llm"].(map[string]any)
-	key, _ := llm["key"].(map[string]any)
-	if _, ok := key["configured"]; !ok {
-		t.Fatalf("llm.key = %#v", llm["key"])
+	if _, ok := data["llm"]; ok {
+		t.Fatalf("config show still exposes the retired llm block: %#v", data["llm"])
 	}
 	update, _ := data["update"].(map[string]any)
 	if update["source"] != "github" {
@@ -353,34 +352,6 @@ func TestConfigAndMode(t *testing.T) {
 	recall, _ := afterSet["recall"].(map[string]any)
 	if recall["bands"] != float64(6) {
 		t.Fatalf("recall.bands = %#v", recall["bands"])
-	}
-}
-
-// TestExportUnavailableAfterImportedUnits locks export refusal once an import
-// left durable local data: the canonical JSONL import writes content-addressed
-// vault units (it no longer populates the retired event graph), and the export
-// still refuses because the vault and referenced sources are not covered.
-func TestExportUnavailableAfterImportedUnits(t *testing.T) {
-	env := newEnv(t)
-	ensureLegacyGraphEnv(t, env)
-	seedTranscript(t)
-
-	exportPath := filepath.Join(env.base, "export.json")
-	exported := run(t, "export", "--out", exportPath)
-	if exported.code != 1 || exported.stdout != "" || !strings.Contains(exported.stderr, "not a complete backup") {
-		t.Fatalf("export = %d %q %q", exported.code, exported.stdout, exported.stderr)
-	}
-	if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
-		t.Fatalf("export output exists or cannot be checked: %v", err)
-	}
-	db, err := sql.Open("sqlite", filepath.Join(env.base, "memory.db")+"?_pragma=busy_timeout(5000)")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-	var units int
-	if err := db.QueryRow("SELECT count(*) FROM thin_vault_docs").Scan(&units); err != nil || units != 2 {
-		t.Fatalf("units = %d, err = %v; want 2 imported units", units, err)
 	}
 }
 
@@ -520,7 +491,7 @@ func TestRetiredAssertionGraphCommandsRejected(t *testing.T) {
 	retired := []string{
 		"remember", "replay", "nodes", "why", "changed", "portrait",
 		"meta", "govern", "forget", "conflicts", "resolve", "alias",
-		"promote", "merge", "unmerge",
+		"promote", "merge", "unmerge", "export", "reindex", "upgrade",
 	}
 	for _, cmd := range retired {
 		res := run(t, cmd)
@@ -675,20 +646,6 @@ func TestInstallList(t *testing.T) {
 	}
 }
 
-func TestReindexAndSyncGap(t *testing.T) {
-	env := newEnv(t)
-	ensureLegacyGraphEnv(t, env)
-	seedTranscript(t)
-	reindex := run(t, "reindex", "--json")
-	if reindex.code != 0 {
-		t.Fatalf("reindex exit %d: %s", reindex.code, reindex.stderr)
-	}
-	payload := jsonObject(t, reindex.stdout)
-	if _, ok := payload["fts"]; !ok {
-		t.Fatalf("reindex = %s", reindex.stdout)
-	}
-}
-
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -733,24 +690,6 @@ func TestCheckExitsOneOnError(t *testing.T) {
 	payload := jsonObject(t, result.stdout)
 	if ok, _ := payload["ok"].(bool); ok {
 		t.Fatalf("check ok = true: %s", result.stdout)
-	}
-}
-
-func TestExportWithoutOutIsUnavailable(t *testing.T) {
-	newEnv(t)
-	seedTranscript(t)
-	result := run(t, "export")
-	if result.code != 1 || result.stdout != "" || !strings.Contains(result.stderr, "not a complete backup") {
-		t.Fatalf("export = %d %q %q", result.code, result.stdout, result.stderr)
-	}
-	result = run(t, "export", "--json")
-	if result.code != 1 || result.stderr != "" {
-		t.Fatalf("export --json = %d %q %q", result.code, result.stdout, result.stderr)
-	}
-	payload := jsonObject(t, result.stdout)
-	message, _ := payload["error"].(string)
-	if payload["ok"] != false || !strings.Contains(message, "not a complete backup") {
-		t.Fatalf("export --json payload = %#v", payload)
 	}
 }
 

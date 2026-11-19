@@ -105,7 +105,7 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 			v.slotCacheMu.RUnlock()
 			if idxCnt >= 1024 && len(snapValidIDs) == 0 {
 				var rawCache string
-				if v.db.QueryRow(`SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = ?`, episodicFaultCacheMetaKey).Scan(&rawCache) == nil && rawCache != "" {
+				if v.db.QueryRow(`SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = ?`, episodicFaultCacheMetaKey).Scan(&rawCache) == nil && rawCache != "" {
 					var pc persistedEpisodicFaultCache
 					if json.Unmarshal([]byte(rawCache), &pc) == nil &&
 						pc.DocCnt == docCnt &&
@@ -218,7 +218,7 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 							CodecKeyHex: hex.EncodeToString(key),
 							Report:      report,
 						}); mErr == nil {
-							_, _ = v.db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`, episodicFaultCacheMetaKey, encoded)
+							_, _ = v.db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, episodicFaultCacheMetaKey, encoded)
 						}
 					}
 				}
@@ -356,7 +356,7 @@ func (v *Vault) computeEpisodicIndexFaultDiagnostics(key []byte) (EpisodicIndexF
 				CodecKeyHex: hex.EncodeToString(key),
 				Report:      report,
 			}); mErr == nil {
-				_, _ = v.db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`, episodicFaultCacheMetaKey, encoded)
+				_, _ = v.db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, episodicFaultCacheMetaKey, encoded)
 			}
 		}
 	}

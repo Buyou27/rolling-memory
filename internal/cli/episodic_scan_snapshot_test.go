@@ -266,14 +266,14 @@ func TestEpisodicSourceScanSnapshotAndStreamingSaveIdenticalRows(t *testing.T) {
 		// Both ingest runs share one vault key, so the keyed payload bytes, digests
 		// and MACs are comparable row by row (a fresh database otherwise derives its
 		// own random key, which would make every keyed byte differ by construction).
-		if _, err := memory.Store.DB().Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+		if _, err := memory.Store.DB().Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 			t.Fatal(err)
 		}
 		key := make([]byte, 32)
 		for i := range key {
 			key[i] = byte(i + 1)
 		}
-		if _, err := memory.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES ('user_secret_key', ?)`, key); err != nil {
+		if _, err := memory.Store.DB().Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES ('user_secret_key', ?)`, key); err != nil {
 			t.Fatal(err)
 		}
 		return memory
@@ -419,14 +419,14 @@ func TestEpisodicReconcileVerifiedSaveMatchesStreamingRows(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { memory.Close() })
-		if _, err := memory.Store.DB().Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+		if _, err := memory.Store.DB().Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 			t.Fatal(err)
 		}
 		key := make([]byte, 32)
 		for i := range key {
 			key[i] = byte(i + 1)
 		}
-		if _, err := memory.Store.DB().Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES ('user_secret_key', ?)`, key); err != nil {
+		if _, err := memory.Store.DB().Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES ('user_secret_key', ?)`, key); err != nil {
 			t.Fatal(err)
 		}
 		return memory

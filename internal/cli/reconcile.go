@@ -341,14 +341,14 @@ func (a *application) runSyncCommand(memory *facade.Memory) (int, error) {
 				scanCtx, cancelScan := context.WithTimeout(context.Background(), autoWatchReconcileBudget)
 				for scanCtx.Err() == nil {
 					var beforeCursor []byte
-					_ = memory.Store.DB().QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, scanKey).Scan(&beforeCursor)
+					_ = memory.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, scanKey).Scan(&beforeCursor)
 					sErr := runEpisodicSourceScanTick(scanCtx, memory, home)
 					if sErr != nil {
 						scanErr = sErr
 						break
 					}
 					var afterCursor []byte
-					_ = memory.Store.DB().QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, scanKey).Scan(&afterCursor)
+					_ = memory.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, scanKey).Scan(&afterCursor)
 					if string(afterCursor) == string(beforeCursor) || len(afterCursor) == 0 || string(afterCursor) == "{}" || strings.Contains(string(afterCursor), `"source":""`) {
 						break
 					}
@@ -431,17 +431,6 @@ func resolveSyncTransport(memory *facade.Memory) (*thinclient.Client, bool, erro
 		return nil, false, fmt.Errorf("init thinclient failed: no client returned")
 	}
 	return tc, false, nil
-}
-
-// cloudFaceWarning 报告「配置声明云端但实际仅有本地面」的降级事实（本地对齐照常执行）。
-func cloudFaceWarning(memory *facade.Memory) string {
-	if memory == nil || memory.Config == nil {
-		return ""
-	}
-	if strings.EqualFold(strings.TrimSpace(memory.Config.Mode), "cloud") {
-		return "cloud mode configured but no cloud transport bound (missing credentials or endpoint): reconciled locally only"
-	}
-	return ""
 }
 
 // inspectEnvHealth builds the health/sync snapshot. withTurnCounts selects whether
@@ -722,12 +711,12 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 			}
 		}
 		if healthDB != nil {
-			if err := healthDB.QueryRow(`SELECT CAST(v AS INTEGER) FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_item_errors:"+scope).Scan(&status.SourceItemErrors); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if err := healthDB.QueryRow(`SELECT CAST(v AS INTEGER) FROM rm_meta WHERE k = ?`, "episodic_source_scan_item_errors:"+scope).Scan(&status.SourceItemErrors); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				status.Error = err.Error()
 			}
-			_ = healthDB.QueryRow(`SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = ?`, "episodic_index_backfill_cursor:"+scope).Scan(&status.BackfillCursor)
+			_ = healthDB.QueryRow(`SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = ?`, "episodic_index_backfill_cursor:"+scope).Scan(&status.BackfillCursor)
 			var scanRaw []byte
-			scanErr := healthDB.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, "episodic_source_scan_cursor:"+scope).Scan(&scanRaw)
+			scanErr := healthDB.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, "episodic_source_scan_cursor:"+scope).Scan(&scanRaw)
 			if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 				status.Error = scanErr.Error()
 			} else if scanErr == nil && len(scanRaw) > 0 {
@@ -754,7 +743,7 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 				}
 			}
 			var leaseVal string
-			if healthDB.QueryRow(`SELECT CAST(v AS TEXT) FROM thin_vault_meta WHERE k = 'autowatch_lease'`).Scan(&leaseVal) == nil && strings.Contains(leaseVal, ":") {
+			if healthDB.QueryRow(`SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = 'autowatch_lease'`).Scan(&leaseVal) == nil && strings.Contains(leaseVal, ":") {
 				parts := strings.Split(leaseVal, ":")
 				if len(parts) >= 2 {
 					if exp, pErr := strconv.ParseInt(parts[1], 10, 64); pErr == nil && exp >= time.Now().Unix() && !status.Paused {
@@ -1081,12 +1070,6 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 	if memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
 		scope = strings.TrimSpace(memory.Config.Scope)
 	}
-	// 纯本地零外呼硬边界：只补齐本地（宿主对话导入 + 挂载目录分块），不推远端、
-	// 不等云端可达；远端计数恒为 0。
-	if warning := cloudFaceWarning(memory); warning != "" {
-		rep.Warnings = append(rep.Warnings, warning)
-	}
-
 	// Pre-fetch current status so we know which harness is active and which units are missing on remote.
 	// A background pass (caller supplied a deadline) skips the transcript turn counting:
 	// it must stay inside the auto-watch tick and only needs wiring + remote unit sets.

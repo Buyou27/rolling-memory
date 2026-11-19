@@ -107,7 +107,7 @@ func TestCLISmoke(t *testing.T) {
 	status := sb.run("status", "--json")
 	assertExit(t, status, 0, "status")
 	summary := jsonObject(t, status.stdout)
-	// 薄库（vault-only）：active_assertions 映射为活体记忆单元数（docs + active noetic），
+	// 薄库（vault-only）：corpus 只报规范语料计数（docs + active noetic），
 	// 库里不再有任何断言图表。
 	connection, err := sql.Open("sqlite", "file:"+sb.db)
 	if err != nil {
@@ -123,7 +123,8 @@ func TestCLISmoke(t *testing.T) {
 	if vaultUnits == 0 {
 		t.Fatal("expected imported vault units in the smoke database")
 	}
-	if numberField(t, summary, "active_assertions") != float64(vaultUnits) || summary["db"] != sb.db || summary["scope"] != "mem:e2e" {
+	corpus, _ := summary["corpus"].(map[string]any)
+	if corpus == nil || corpus["memories"] != float64(vaultUnits) || summary["db"] != sb.db || summary["scope"] != "mem:e2e" {
 		t.Fatalf("status = %s", status.stdout)
 	}
 

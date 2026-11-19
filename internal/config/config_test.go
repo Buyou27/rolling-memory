@@ -55,9 +55,6 @@ func TestDefaultsAndEnvOverrides(t *testing.T) {
 	if cfg.Mode != "local" || cfg.Scope != "mem:task:demo" || cfg.DB != filepath.Join(tmp, "x.db") {
 		t.Fatalf("unexpected overrides: %+v", cfg)
 	}
-	if cfg.LLM.Provider != "none" {
-		t.Fatalf("unexpected provider: %+v", cfg.LLM)
-	}
 	if cfg.Reader != "deliverable" || cfg.AllowLoopbackLLM != true {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
@@ -245,8 +242,6 @@ func TestValidation(t *testing.T) {
 		content string
 		substr  string
 	}{
-		{"provider", "[llm]\nprovider = \"other\"\n", "llm.provider must be 'none' or 'openai'"},
-		{"timeout", "[llm]\ntimeout_sec = 0\n", "timeouts must be positive"},
 		{"budget", "[recall]\nbudget_ms = 0\n", "recall.budget_ms must be positive"},
 		{"caps", "[hooks]\nmax_traces = 0\n", "caps and batch sizes must be positive"},
 	}
@@ -331,36 +326,36 @@ func TestSecretFilePermissions(t *testing.T) {
 	if err := os.WriteFile(secret, []byte("secret-value\n"), 0o600); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
-	cfg.LLM.APIKeyFile = secret
-	if got, err := cfg.LLMKey(); err != nil || got != "secret-value" {
-		t.Fatalf("LLMKey = (%q, %v), want secret-value", got, err)
+	cfg.Eval.APIKeyFile = secret
+	if got, err := cfg.EvalKey(); err != nil || got != "secret-value" {
+		t.Fatalf("EvalKey = (%q, %v), want secret-value", got, err)
 	}
-	cfg.LLM.APIKeyEnv = ""
+	cfg.Eval.APIKeyEnv = ""
 	status := cfg.SecretStatus()
-	if status["llm"]["configured"] != true || status["llm"]["source"] != "file" {
-		t.Fatalf("file secret status = %+v", status["llm"])
+	if status["eval"]["configured"] != true || status["eval"]["source"] != "file" {
+		t.Fatalf("file secret status = %+v", status["eval"])
 	}
 	if err := os.Chmod(secret, 0o644); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	if _, err := cfg.LLMKey(); !errors.Is(err, ErrConfig) ||
+	if _, err := cfg.EvalKey(); !errors.Is(err, ErrConfig) ||
 		!strings.Contains(err.Error(), "must not be group/other accessible") {
 		t.Fatalf("permission error = %v, want ErrConfig", err)
 	}
 
 	t.Setenv("RM_TEST_KEY", "from-env")
-	cfg.LLM.APIKeyEnv = "RM_TEST_KEY"
-	if got, err := cfg.LLMKey(); err != nil || got != "from-env" {
-		t.Fatalf("env LLMKey = (%q, %v), want from-env", got, err)
+	cfg.Eval.APIKeyEnv = "RM_TEST_KEY"
+	if got, err := cfg.EvalKey(); err != nil || got != "from-env" {
+		t.Fatalf("env EvalKey = (%q, %v), want from-env", got, err)
 	}
 
 	empty := filepath.Join(tmp, "empty")
 	if err := os.WriteFile(empty, nil, 0o600); err != nil {
 		t.Fatalf("write empty: %v", err)
 	}
-	cfg.LLM.APIKeyEnv = ""
-	cfg.LLM.APIKeyFile = empty
-	if _, err := cfg.LLMKey(); !errors.Is(err, ErrConfig) ||
+	cfg.Eval.APIKeyEnv = ""
+	cfg.Eval.APIKeyFile = empty
+	if _, err := cfg.EvalKey(); !errors.Is(err, ErrConfig) ||
 		!strings.Contains(err.Error(), "list index out of range") {
 		t.Fatalf("empty secret error = %v, want index error", err)
 	}
@@ -368,7 +363,7 @@ func TestSecretFilePermissions(t *testing.T) {
 
 func TestSecretStatusAndPublicDict(t *testing.T) {
 	isolateHome(t)
-	t.Setenv("OPENAI_API_KEY", "super-secret")
+	t.Setenv("ROLLING_MEMORY_EVAL_API_KEY", "super-secret")
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "c.toml")
 	cfg, err := Load(LoadOptions{Path: &path, Mode: stringPtr("local"), Env: map[string]string{}})
@@ -376,8 +371,8 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	status := cfg.SecretStatus()
-	if status["llm"]["configured"] != true || status["llm"]["source"] != "env" {
-		t.Fatalf("llm secret status = %+v", status["llm"])
+	if status["eval"]["configured"] != true || status["eval"]["source"] != "env" {
+		t.Fatalf("eval secret status = %+v", status["eval"])
 	}
 	public := cfg.PublicDict()
 	serialized := strings.ToLower(strings.Join(flatten(public), " "))
@@ -391,12 +386,8 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 	if !ok || len(recall) != 13 {
 		t.Fatalf("recall public shape = %#v", public["recall"])
 	}
-	llm, ok := public["llm"].(map[string]any)
-	if !ok {
-		t.Fatalf("llm public shape = %#v", public["llm"])
-	}
-	if _, ok := llm["key"].(map[string]any); !ok {
-		t.Fatalf("llm.key shape = %#v", llm["key"])
+	if _, ok := public["llm"]; ok {
+		t.Fatalf("public config still exposes the retired llm block: %#v", public["llm"])
 	}
 
 	local, err := Load(LoadOptions{Path: &path, Mode: stringPtr("local"), Env: map[string]string{}})

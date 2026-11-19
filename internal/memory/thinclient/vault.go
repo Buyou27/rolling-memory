@@ -812,7 +812,7 @@ func ensureLegacyCorpusView(db *sql.DB) error {
 	} {
 		_, _ = db.Exec(stmt)
 	}
-	rows, err := db.Query(`SELECT name, type FROM sqlite_master WHERE name LIKE 'thin_vault_%' AND name <> 'thin_vault_meta' AND name NOT LIKE 'thin_vault_docs_fts%' AND name <> 'thin_vault_fts_map'`)
+	rows, err := db.Query(`SELECT name, type FROM sqlite_master WHERE name LIKE 'thin_vault_%' AND name <> 'rm_meta' AND name NOT LIKE 'thin_vault_docs_fts%' AND name <> 'thin_vault_fts_map'`)
 	if err != nil {
 		return err
 	}
@@ -935,16 +935,42 @@ func ensureLegacyCorpusView(db *sql.DB) error {
 	return err
 }
 
-// NewVault initializes the local SQLite tables (`thin_vault_meta` and `thin_vault_docs`)
+// migrateMetaTable renames the last thin-era bookkeeping table in place. The
+// vault key lives there; recreating an empty table would silently invalidate
+// every stored pointer index and payload MAC.
+func migrateMetaTable(db *sql.DB) error {
+	if db == nil {
+		return nil
+	}
+	var hasRM, hasLegacy int
+	if err := db.QueryRow(`
+		SELECT COALESCE(SUM(CASE WHEN name = 'rm_meta' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN name = 'thin_vault_meta' THEN 1 ELSE 0 END), 0)
+		  FROM sqlite_master
+		 WHERE type = 'table' AND name IN ('rm_meta', 'thin_vault_meta')`).Scan(&hasRM, &hasLegacy); err != nil {
+		return err
+	}
+	if hasRM == 0 && hasLegacy != 0 {
+		if _, err := db.Exec(`ALTER TABLE thin_vault_meta RENAME TO rm_meta`); err != nil {
+			return fmt.Errorf("thinclient: rename vault meta table: %w", err)
+		}
+	}
+	return nil
+}
+
+// NewVault initializes the local SQLite tables (`rm_meta` and `thin_vault_docs`)
 // and loads or generates the user's 256-bit local secret key (which never leaves the machine).
 func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 	if db == nil {
 		return nil, errors.New("thinclient: nil sql.DB")
 	}
+	if err := migrateMetaTable(db); err != nil {
+		return nil, err
+	}
 	if len(explicitSecret) == 0 {
 		var stored []byte
 		var storageType string
-		if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err == nil && storageType == "blob" && len(stored) == 32 {
+		if err := db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err == nil && storageType == "blob" && len(stored) == 32 {
 			var readyCnt int
 			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('rm_docs', 'rm_noetic')`).Scan(&readyCnt)
 			if readyCnt == 2 {
@@ -973,7 +999,7 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		}
 	}
 	ddl := `
-	CREATE TABLE IF NOT EXISTS thin_vault_meta (
+	CREATE TABLE IF NOT EXISTS rm_meta (
 		k TEXT PRIMARY KEY,
 		v BLOB NOT NULL
 	);
@@ -1036,16 +1062,16 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 
 	var stored []byte
 	var storageType string
-	err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType)
+	err := db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType)
 	if errors.Is(err, sql.ErrNoRows) {
 		var fresh [32]byte
 		if _, err := rand.Read(fresh[:]); err != nil {
 			return nil, err
 		}
-		if _, err := db.Exec(`INSERT OR IGNORE INTO thin_vault_meta(k, v) VALUES ('user_secret_key', ?)`, fresh[:]); err != nil {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO rm_meta(k, v) VALUES ('user_secret_key', ?)`, fresh[:]); err != nil {
 			return nil, err
 		}
-		err = db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType)
+		err = db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType)
 	}
 	if err != nil {
 		return nil, err

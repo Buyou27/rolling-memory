@@ -97,11 +97,11 @@ func TestStatusAndDoctor(t *testing.T) {
 	if _, ok := status["config"].(map[string]any); !ok {
 		t.Fatalf("config = %#v", status["config"])
 	}
-	if _, ok := status["llm_warning"]; !ok {
-		t.Fatal("status missing llm_warning")
+	if _, ok := status["llm_warning"]; ok {
+		t.Fatal("status still reports the retired llm_warning field")
 	}
-	if _, ok := status["vector_warning"]; !ok {
-		t.Fatal("status missing vector_warning")
+	if _, ok := status["vector_warning"]; ok {
+		t.Fatal("status still reports the retired vector_warning field")
 	}
 	doctor, err := memory.Doctor()
 	if err != nil {
@@ -112,7 +112,7 @@ func TestStatusAndDoctor(t *testing.T) {
 	for _, check := range checks {
 		names = append(names, check.(map[string]any)["name"].(string))
 	}
-	want := []string{"db_exists", "db_writable", "fts5", "json1", "config", "llm", "embedding", "sync"}
+	want := []string{"db_exists", "db_writable", "config", "json1", "corpus"}
 	if len(names) != len(want) {
 		t.Fatalf("checks = %#v", names)
 	}

@@ -52,7 +52,7 @@ func TestVaultKeyConcurrentInitialization(t *testing.T) {
 		close(start)
 		wg.Wait()
 		var stored []byte
-		if err := dbs[0].QueryRow(`SELECT v FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored); err != nil {
+		if err := dbs[0].QueryRow(`SELECT v FROM rm_meta WHERE k = 'user_secret_key'`).Scan(&stored); err != nil {
 			t.Fatal(err)
 		}
 		for i := range dbs {
@@ -89,11 +89,11 @@ func TestVaultKeyInvalidExistingValue(t *testing.T) {
 			if _, err := NewVault(db, []byte("schema-initialization")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`INSERT INTO thin_vault_meta(k, v) VALUES ('user_secret_key', ?)`, tc.value); err != nil {
+			if _, err := db.Exec(`INSERT INTO rm_meta(k, v) VALUES ('user_secret_key', ?)`, tc.value); err != nil {
 				t.Fatal(err)
 			}
 			if value, ok := tc.value.(string); ok {
-				if _, err := db.Exec(`UPDATE thin_vault_meta SET v = CAST(? AS TEXT) WHERE k = 'user_secret_key'`, value); err != nil {
+				if _, err := db.Exec(`UPDATE rm_meta SET v = CAST(? AS TEXT) WHERE k = 'user_secret_key'`, value); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -102,7 +102,7 @@ func TestVaultKeyInvalidExistingValue(t *testing.T) {
 			}
 			var stored []byte
 			var storageType string
-			if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err != nil {
+			if err := db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err != nil {
 				t.Fatal(err)
 			}
 			switch value := tc.value.(type) {

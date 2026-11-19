@@ -175,7 +175,7 @@ rolling-memory install --check
 
 ```bash
 rolling-memory update --check          # 仅比对本地文件与发布渠道的 SHA-256 指纹，不修改任何文件
-rolling-memory update                  # 别名：rolling-memory upgrade —— 原地升级 CLI 二进制、已装控制台与宿主接线
+rolling-memory update                  # 原地升级 CLI 二进制、已装控制台与宿主接线
 rolling-memory update --with-console   # 一并安装或升级本地 Web 控制台（后端 :9006 + 前端 :8008）
 rolling-memory panel --update          # 启动控制台前自动检查并更新前后端资源，随后打开 http://localhost:8008/#/admin
 rolling-memory update --release-base https://your-mirror.example.com/releases/latest/download

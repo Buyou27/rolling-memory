@@ -81,8 +81,8 @@ func TestLegacyGraphLivenessOnFreshDatabase(t *testing.T) {
 	want := []string{
 		"db_meta",
 		"injection_ledger",
+		"rm_meta",
 		"sqlite_sequence",
-		"thin_vault_meta",
 		"transcript_cursor",
 	}
 	sort.Strings(tables)

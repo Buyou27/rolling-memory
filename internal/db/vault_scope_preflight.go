@@ -60,10 +60,13 @@ func BindVaultScope(connection *sql.DB, scope string) error {
 	if scope == "" {
 		return fmt.Errorf("vault requires a scope")
 	}
+	if err := MigrateVaultMetaTable(connection); err != nil {
+		return err
+	}
 	var metaExists int
-	if err := connection.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_meta')`).Scan(&metaExists); err == nil && metaExists != 0 {
+	if err := connection.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rm_meta')`).Scan(&metaExists); err == nil && metaExists != 0 {
 		var bound, storageType string
-		if err := connection.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err == nil {
+		if err := connection.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err == nil {
 			if storageType != "text" || bound != scope {
 				return fmt.Errorf("vault scope does not match its binding")
 			}
@@ -74,24 +77,46 @@ func BindVaultScope(connection *sql.DB, scope string) error {
 		if err := checkVaultScope(tx, scope); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 			return fmt.Errorf("vault scope preflight: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO thin_vault_meta(k, v) VALUES ('local_plain_scope', ?)`, scope); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO rm_meta(k, v) VALUES ('local_plain_scope', ?)`, scope); err != nil {
 			return fmt.Errorf("vault scope preflight: %w", err)
 		}
 		return checkVaultScope(tx, scope)
 	})
 }
 
-func checkVaultScope(tx *sql.Tx, scope string) error {
-	var metaExists int
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_meta')`).Scan(&metaExists); err != nil {
-		return fmt.Errorf("vault scope preflight: %w", err)
+// vaultMetaTable resolves the bookkeeping table, preferring the canonical
+// name. A pre-rename vault still reads its scope binding and key from the
+// thin-era table; the write path renames it in place before serving.
+func vaultMetaTable(tx *sql.Tx) (string, error) {
+	var canonical, legacy int
+	if err := tx.QueryRow(`
+		SELECT COALESCE(SUM(CASE WHEN name = 'rm_meta' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN name = 'thin_vault_meta' THEN 1 ELSE 0 END), 0)
+		  FROM sqlite_master
+		 WHERE type = 'table' AND name IN ('rm_meta', 'thin_vault_meta')`).Scan(&canonical, &legacy); err != nil {
+		return "", fmt.Errorf("vault scope preflight: %w", err)
 	}
-	if metaExists != 0 {
+	if canonical != 0 {
+		return "rm_meta", nil
+	}
+	if legacy != 0 {
+		return "thin_vault_meta", nil
+	}
+	return "", nil
+}
+
+func checkVaultScope(tx *sql.Tx, scope string) error {
+	metaTable, err := vaultMetaTable(tx)
+	if err != nil {
+		return err
+	}
+	metaExists := metaTable != ""
+	if metaExists {
 		var bound, storageType string
-		err := tx.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
+		err := tx.QueryRow(`SELECT v, typeof(v) FROM "`+metaTable+`" WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
 		if err == nil {
 			if storageType != "text" || bound != scope {
 				return fmt.Errorf("vault scope does not match its binding")
@@ -109,14 +134,14 @@ func checkVaultScope(tx *sql.Tx, scope string) error {
 	if integrity != "ok" {
 		return fmt.Errorf("vault scope preflight: database integrity check failed")
 	}
-	if metaExists != 0 {
+	if metaExists {
 		// Existing first-party personal vaults (scope "default" or "mem:self") initialized
 		// before local_plain_scope existed already carry a 32-byte user_secret_key blob in
-		// thin_vault_meta; allow seamless upgrade binding for the default personal scope.
+		// rm_meta; allow seamless upgrade binding for the default personal scope.
 		if scope == "default" || scope == "mem:self" {
 			var keyLen int
 			var keyType string
-			if kErr := tx.QueryRow(`SELECT length(v), typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&keyLen, &keyType); kErr == nil && keyType == "blob" && keyLen == 32 {
+			if kErr := tx.QueryRow(`SELECT length(v), typeof(v) FROM "`+metaTable+`" WHERE k = 'user_secret_key'`).Scan(&keyLen, &keyType); kErr == nil && keyType == "blob" && keyLen == 32 {
 				return nil
 			}
 		}
@@ -168,11 +193,11 @@ func checkVaultScope(tx *sql.Tx, scope string) error {
 		"node_fts_content": true, "node_fts_docsize": true, "node_fts_config": true,
 	}
 	hasSecretKeyOnlyMeta := false
-	if metaExists != 0 {
+	if metaExists {
 		var metaCount, keyLen int
 		var keyType string
-		if cErr := tx.QueryRow(`SELECT count(*) FROM thin_vault_meta`).Scan(&metaCount); cErr == nil && metaCount == 1 {
-			if kErr := tx.QueryRow(`SELECT length(v), typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&keyLen, &keyType); kErr == nil && keyType == "blob" && keyLen == 32 {
+		if cErr := tx.QueryRow(`SELECT count(*) FROM "` + metaTable + `"`).Scan(&metaCount); cErr == nil && metaCount == 1 {
+			if kErr := tx.QueryRow(`SELECT length(v), typeof(v) FROM "`+metaTable+`" WHERE k = 'user_secret_key'`).Scan(&keyLen, &keyType); kErr == nil && keyType == "blob" && keyLen == 32 {
 				var docsCnt, mapCnt int
 				_ = tx.QueryRow(`SELECT count(*) FROM rm_docs`).Scan(&docsCnt)
 				_ = tx.QueryRow(`SELECT count(*) FROM thin_vault_fts_map`).Scan(&mapCnt)
@@ -187,7 +212,7 @@ func checkVaultScope(tx *sql.Tx, scope string) error {
 		if hasEngineMeta && name == "db_meta" {
 			continue
 		}
-		if hasSecretKeyOnlyMeta && (name == "thin_vault_meta" || strings.HasPrefix(name, "thin_vault_docs_fts")) {
+		if hasSecretKeyOnlyMeta && (name == "rm_meta" || strings.HasPrefix(name, "thin_vault_docs_fts")) {
 			continue
 		}
 		quoted := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`

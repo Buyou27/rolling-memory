@@ -523,7 +523,7 @@ func facetsFileSignature(dbPath string) string {
 	b.WriteByte('|')
 	if st, err := os.Stat(dbPath + "-wal"); err == nil {
 		if isLarge {
-			// 生产大库（≥16MiB）后台 autowatch 每秒刷新 thin_vault_meta 租约会持续改写 WAL mtime/size；
+			// 生产大库（≥16MiB）后台 autowatch 每秒刷新 rm_meta 租约会持续改写 WAL mtime/size；
 			// 按 15s 时间窗量化 WAL 指纹，避免每秒打穿全站只读缓存，而控制台自身写操作经 invalidateVaultReadCaches 即刻失效。
 			b.WriteString(strconv.FormatInt(st.ModTime().Unix()/15, 10))
 		} else {
@@ -2557,7 +2557,7 @@ func computeDashboardData(home, reqScope string) DashboardResponse {
 			idxPtrCnt := ptrCnt
 			if ptrCnt > 0 {
 				usedCachedIdx := false
-				if metaRows, mErr := sqliteQueryJSON(dbPath, `SELECT CAST(v AS TEXT) AS raw FROM thin_vault_meta WHERE k = 'episodic_fault_report_cache' LIMIT 1;`); mErr == nil && len(metaRows) > 0 {
+				if metaRows, mErr := sqliteQueryJSON(dbPath, `SELECT CAST(v AS TEXT) AS raw FROM rm_meta WHERE k = 'episodic_fault_report_cache' LIMIT 1;`); mErr == nil && len(metaRows) > 0 {
 					var cachedFault struct {
 						DocCnt int `json:"doc_cnt"`
 						Report struct {

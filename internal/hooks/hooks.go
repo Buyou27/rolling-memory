@@ -168,13 +168,17 @@ func bootContext(memory *facade.Memory, cfg *config.Config, payload map[string]a
 	if err != nil {
 		return "", err
 	}
+	corpus, canonical := status["corpus"].(map[string]int)
+	memories, episodic, background, crystallized := corpus["memories"], corpus["episodic"], corpus["background"], corpus["crystallized"]
+	if !canonical {
+		// Legacy assertion-graph databases (test fixtures, historical vaults)
+		// report their active units under the old counter; the shipped product
+		// always takes the canonical branch.
+		memories = asIntDefault(status["active_assertions"], 0)
+	}
 	text := fmt.Sprintf(
-		"Rolling-Memory (%s): %d active memory units · %d pending traces · %d conflicts · scope %s",
-		cfg.Mode,
-		asIntDefault(status["active_assertions"], 0),
-		asIntDefault(status["pending_traces"], 0),
-		asIntDefault(status["conflicts_proposed"], 0),
-		cfg.Scope,
+		"Rolling-Memory (%s): %d memory units · %d episodic · %d background · %d crystallized · scope %s",
+		cfg.Mode, memories, episodic, background, crystallized, cfg.Scope,
 	)
 	project := workspaceProject(payload)
 	if project == "" {
@@ -1105,17 +1109,17 @@ func captureUserPrompt(memory *facade.Memory, cfg *config.Config, session, promp
 	if !memory.Store.HasLegacyGraph() {
 		if session != "" && session != "default" {
 			db := memory.Store.DB()
-			_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
+			_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
 			key := "hook_cadence_turns:" + cfg.Scope + ":" + session
 			var raw []byte
 			turns := 0
-			if err := db.QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, key).Scan(&raw); err == nil {
+			if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw); err == nil {
 				if n, pErr := strconv.Atoi(strings.TrimSpace(string(raw))); pErr == nil && n > 0 {
 					turns = n
 				}
 			}
 			turns++
-			_, _ = db.Exec(`INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES (?, ?)`, key, []byte(strconv.Itoa(turns)))
+			_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, key, []byte(strconv.Itoa(turns)))
 		}
 		return 0
 	}
@@ -1323,7 +1327,7 @@ func isCadenceReminderDue(memory *facade.Memory, scope, session string) bool {
 	if !memory.Store.HasLegacyGraph() {
 		key := "hook_cadence_turns:" + scope + ":" + session
 		var raw []byte
-		if err := memory.Store.DB().QueryRow(`SELECT v FROM thin_vault_meta WHERE k = ?`, key).Scan(&raw); err != nil {
+		if err := memory.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw); err != nil {
 			return false
 		}
 		n, err := strconv.Atoi(strings.TrimSpace(string(raw)))

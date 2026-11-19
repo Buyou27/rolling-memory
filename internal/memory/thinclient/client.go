@@ -886,7 +886,7 @@ func (v *Vault) verifyTransportScope(scope string) error {
 		}
 	}
 	var bound, storageType string
-	err := v.db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
+	err := v.db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType)
 	if err == nil {
 		bound = strings.TrimSpace(bound)
 		if storageType != "text" || bound == "" {

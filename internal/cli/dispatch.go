@@ -165,10 +165,8 @@ func (a *application) dispatch() int {
 		return a.runInstall()
 	case "panel":
 		return a.runPanel()
-	case "update", "upgrade":
+	case "update":
 		return a.runUpdate()
-	case "export":
-		return a.fail(facade.ExportUnavailable())
 	case "engine":
 		return a.runEngine()
 	case "daemon":
@@ -235,12 +233,6 @@ func (a *application) runWithMemory(memory *facade.Memory) (int, error) {
 			return 1, err
 		}
 		return 0, a.emit(result, func() { a.printImport(result) })
-	case "export":
-		result, err := memory.Export(a.args.StringPtr("out"), nil)
-		if err != nil {
-			return 1, err
-		}
-		return 0, a.emit(result, func() { a.printExport(result) })
 	case "background":
 		return a.runBackground(memory)
 	case "sync":
@@ -271,12 +263,6 @@ func (a *application) runWithMemory(memory *facade.Memory) (int, error) {
 			return 0, nil
 		}
 		return 1, nil
-	case "reindex":
-		result, err := memory.Reindex()
-		if err != nil {
-			return 1, err
-		}
-		return 0, a.emit(result, func() { a.printReindex(result) })
 	case "maintain":
 		return a.runMaintainCommand(memory)
 	case "eject":
@@ -399,7 +385,6 @@ func (a *application) tryDaemonRecall() (int, bool) {
 		BudgetMS:        a.args.IntPtr("budget_ms"),
 		RawLimit:        a.args.Int("raw_limit"),
 		Session:         a.args.StringPtr("session"),
-		Deep:            a.args.Flag("deep"),
 		TimeRef:         timeRef,
 		TokenCorrect:    a.args.FlagPtr("token_correct"),
 		AliasExpand:     a.args.FlagPtr("alias_expand"),
@@ -502,7 +487,6 @@ func (a *application) runRecall(memory *facade.Memory) (int, error) {
 		BudgetMS:        a.args.IntPtr("budget_ms"),
 		RawLimit:        a.args.Int("raw_limit"),
 		Session:         a.args.StringPtr("session"),
-		Deep:            a.args.Flag("deep"),
 		TimeRef:         timeRef,
 		TokenCorrect:    a.args.FlagPtr("token_correct"),
 		AliasExpand:     a.args.FlagPtr("alias_expand"),

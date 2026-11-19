@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -412,7 +411,6 @@ type RecallRequest struct {
 	// callers (such as harness hooks) where the query is an unverified user prompt rather
 	// than an agent-initiated retrieval cue.
 	NoCrystallize   bool
-	Deep            bool
 	TimeRef         any
 	TokenCorrect    *bool
 	AliasExpand     *bool
@@ -451,7 +449,6 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 	// (2026-11-06) and the runtime model leg is retired — the local client never
 	// calls a model, so the hint set stays empty.
 	hints := map[string]string{}
-	deepMeta := map[string]any{"requested": req.Deep, "used": false}
 	scope := m.Config.Scope
 	if req.Scope != nil && *req.Scope != "" {
 		scope = *req.Scope
@@ -474,7 +471,7 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 		CapsChains: req.CapsChains, CapsRows: req.CapsRows,
 		Offset: req.Offset, Depth: req.Depth, IncludeRaw: req.IncludeRaw,
 		BudgetMS: req.BudgetMS, RawLimit: req.RawLimit, Session: req.Session,
-		Structured: hints, DeepMeta: deepMeta,
+		Structured:   hints,
 		TimeRef:      ids.ParseTime(req.TimeRef, ids.ParseTimeOptions{TimeRef: &timeRef, Default: 0}),
 		TokenCorrect: req.TokenCorrect, AliasExpand: req.AliasExpand,
 		RelativeTag: req.RelativeTag, MentionBackfill: req.MentionBackfill,
@@ -541,7 +538,7 @@ func (m *Memory) Recent(scope, reader *string, limit int) ([]map[string]any, err
 	return items, nil
 }
 
-// Status returns store counters plus version/config/runtime warnings.
+// Status returns the canonical corpus counters plus version and config.
 func (m *Memory) Status(scope string) (map[string]any, error) {
 	result, err := m.Store.Status(scope)
 	if err != nil {
@@ -549,12 +546,10 @@ func (m *Memory) Status(scope string) (map[string]any, error) {
 	}
 	result["version"] = version.Version
 	result["config"] = m.Config.PublicDict()
-	result["llm_warning"] = nil
-	result["vector_warning"] = m.vectorWarning()
 	return result, nil
 }
 
-// Doctor runs the fixed eight-check environment report.
+// Doctor runs the fixed environment and integrity report.
 func (m *Memory) Doctor() (map[string]any, error) {
 	checks := []any{}
 	warnings := []any{}
@@ -565,30 +560,21 @@ func (m *Memory) Doctor() (map[string]any, error) {
 	_, statErr := os.Stat(dbPath)
 	check("db_exists", statErr == nil, dbPath)
 	check("db_writable", writable(filepath.Dir(dbPath)), filepath.Dir(dbPath))
-	// FTS5 backs the legacy assertion-graph lexical legs only; the plaintext
-	// vault path is pure Go and needs no tokenizer, so thin (fresh) databases
-	// pass this check regardless of the platform's FTS5 support.
-	check("fts5", m.Store == nil || !m.Store.HasLegacyGraph() || db.FTS5Available(),
-		"trigram tokenizer required for the legacy assertion-graph lexical legs (the plaintext vault needs none)")
-	check("json1", db.JSONExtractAvailable(), "needed by some inspection queries")
 	check("config", true, m.Config.Path)
-	check("llm", true, m.Config.LLM.Provider)
-	check("embedding", true, "hash")
-	check("sync", true, "local plaintext vault; remote sync retired")
+	check("json1", db.JSONExtractAvailable(), "required by transcript inspection queries")
+	corpus, err := db.ReadCorpusCounts(m.Store.DB())
+	if err != nil {
+		return nil, err
+	}
+	terms, err := db.CountCorpusTerms(m.Store.DB())
+	if err != nil {
+		return nil, err
+	}
+	check("corpus", true, fmt.Sprintf("%d memory units · %d term postings", corpus.MemoryUnits(), terms))
 	// The deployment face only speaks when it has something to say: the fixed check
 	// list is a published contract, while an image/deployment mismatch is an alarm.
 	if deployOK, deployDetail := deploymentConsistency(); !deployOK {
 		warnings = append(warnings, deployDetail)
-	}
-	if warning := m.vectorWarning(); warning != nil {
-		warnings = append(warnings, warning)
-	}
-	// A read-only identity audit: episodic rows whose id predates the shared
-	// content-addressed derivation cannot be deduplicated against scanner units,
-	// and that backlog is reported instead of migrated — history is never
-	// rewritten or deleted automatically.
-	if legacy := legacyEpisodicIdentityCount(m.Store.DB(), m.Config.Scope); legacy > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d legacy-identity episodic units (inline text with non-canonical ids); no automatic dedup migration has been applied", legacy))
 	}
 	integrity, err := m.Store.Check()
 	if err != nil {
@@ -1052,37 +1038,6 @@ func (m *Memory) Efficacy(scope *string, harnessID string, limit, budgetSeconds 
 }
 
 // ------------------------------------------------------------------ helpers
-
-// legacyEpisodicIdentityCount counts episodic documents whose id predates the
-// shared content-addressed derivation: inline (non-pointer) rows whose doc_id
-// does not equal `episodicunit.DocID(scope, raw_text)`. Pointer rows are excluded
-// by construction — their doc_id addresses the unit text, not the pointer — and
-// the count is strictly read-only.
-func legacyEpisodicIdentityCount(database *sql.DB, scope string) int {
-	if database == nil {
-		return 0
-	}
-	var present int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_docs'`).Scan(&present); err != nil || present == 0 {
-		return 0
-	}
-	rows, err := database.Query(`SELECT d.unit_id, d.raw_text FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE (d.layer = 'episodic' OR d.layer = '') AND COALESCE(m.ref_pointer, '') = '' AND d.raw_text NOT LIKE '@ref:%'`)
-	if err != nil {
-		return 0
-	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		var docID, raw string
-		if rows.Scan(&docID, &raw) != nil {
-			continue
-		}
-		if docID != episodicunit.DocID(scope, raw) {
-			count++
-		}
-	}
-	return count
-}
 
 func (m *Memory) vectorWarning() any {
 	if m == nil || m.Store == nil {

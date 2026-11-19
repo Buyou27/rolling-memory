@@ -202,7 +202,7 @@ func TestHarnessCountCacheInvalidatesOnVaultCountChange(t *testing.T) {
 		t.Fatalf("open vault: %v", err)
 	}
 	defer vdb.Close()
-	if _, err := vdb.Exec(`CREATE TABLE thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := vdb.Exec(`CREATE TABLE rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		t.Fatalf("create meta: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func TestHarnessCountCacheInvalidatesOnVaultCountChange(t *testing.T) {
 		t.Fatalf("other-harness growth must not mutate cached counts: %+v, %v", cached, ok)
 	}
 	legacy := `{"fp":1,"vault":100,"computed_at":` + fmt.Sprint(time.Now().Unix()) + `,"local_turns":100,"synced":85,"unsynced":15}`
-	if _, err := vdb.Exec(`UPDATE thin_vault_meta SET v = ? WHERE k = ?`, []byte(legacy), harnessCountCachePrefix+"zcode"); err != nil {
+	if _, err := vdb.Exec(`UPDATE rm_meta SET v = ? WHERE k = ?`, []byte(legacy), harnessCountCachePrefix+"zcode"); err != nil {
 		t.Fatal(err)
 	}
 	if cached, ok := loadHarnessCountCache(vdb, "zcode", home, 100); ok {
@@ -235,7 +235,7 @@ func TestHarnessTranscriptChangedSinceDetectsNestedJSONLAndDSH(t *testing.T) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer dbConn.Close()
-	if _, err := dbConn.Exec(`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+	if _, err := dbConn.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
 		t.Fatalf("create meta: %v", err)
 	}
 

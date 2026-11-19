@@ -112,6 +112,7 @@ func TestNewVaultBootstrapTableSet(t *testing.T) {
 		"rm_episodic_index",
 		"rm_episodic_lineage",
 		"rm_episodic_sources",
+		"rm_meta",
 		"rm_migration",
 		"rm_noetic",
 		"rm_revision",
@@ -119,7 +120,6 @@ func TestNewVaultBootstrapTableSet(t *testing.T) {
 		"rm_unit_meta",
 		"sqlite_sequence",
 		"thin_vault_docs",
-		"thin_vault_meta",
 		"transcript_cursor",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

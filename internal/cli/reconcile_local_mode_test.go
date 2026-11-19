@@ -164,7 +164,7 @@ func TestSyncReportsUnboundVaultWithoutLeakingData(t *testing.T) {
 		t.Fatalf("unbound document changed: value=%q err=%v", saved, err)
 	}
 	var bindings int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_meta'`).Scan(&bindings); err != nil || bindings != 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_meta'`).Scan(&bindings); err != nil || bindings != 0 {
 		t.Fatalf("unbound vault was bound: tables=%d err=%v", bindings, err)
 	}
 	if got := atomic.LoadInt32(&hits); got != 0 {

@@ -48,9 +48,9 @@ Installed files:
 # Latest development main
 ROLLING_MEMORY_SOURCE_REF=main bash install.sh
 # Or a specific release tag
-ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
+ROLLING_MEMORY_SOURCE_REF=v0.0.7 bash install.sh
 # Equivalent flag
-bash install.sh --ref v0.0.6
+bash install.sh --ref v0.0.7
 ```
 
 ```powershell
@@ -186,7 +186,7 @@ For source installs, re-running the installer is the supported rebuild path:
 ```bash
 ROLLING_MEMORY_SOURCE_REF=main bash install.sh
 # or a specific tag
-ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
+ROLLING_MEMORY_SOURCE_REF=v0.0.7 bash install.sh
 ```
 
 For prebuilt installs, re-running the installer is useful after the release channel publishes a new artifact or after changing the install directory.
@@ -198,7 +198,7 @@ If the CLI was installed with `go install` rather than the installer:
 ```bash
 go install github.com/rocareer/rolling-memory/cmd/rolling-memory@main
 # or a specific tag
-go install github.com/rocareer/rolling-memory/cmd/rolling-memory@v0.0.6
+go install github.com/rocareer/rolling-memory/cmd/rolling-memory@v0.0.7
 ```
 
 `install.json` may not exist for this method; the console then treats the channel as lacking a source baseline and asks for an explicit rebuild.

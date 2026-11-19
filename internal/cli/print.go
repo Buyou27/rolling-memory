@@ -92,45 +92,28 @@ func (a *application) printImport(result map[string]any) {
 	}
 }
 
-func (a *application) printExport(result map[string]any) {
-	if path, ok := result["path"]; ok {
-		a.printf("exported: %s  %s\n", pyStr(path), pyRepr(getOr(result, "counts", map[string]any{})))
-		return
-	}
-	_ = a.printJSON(result)
-}
-
 // ---------------------------------------------------------------- diagnostics
 
 func (a *application) printStatus(result map[string]any) {
-	counts := childMap(result, "counts")
-	embedding := childMap(result, "embedding")
+	corpus := childMap(result, "corpus")
 	a.printf("version:  %s\n", pyStr(result["version"]))
 	a.printf("db:       %s  (%s bytes)\n", pyStr(result["db"]), pyStr(getOr(result, "db_size_bytes", 0)))
 	a.printf("scope:    %s\n", pyStr(result["scope"]))
 	a.printf("mode:     %s (%s)\n", pyStr(result["mode"]), pyStr(result["egress"]))
-	a.printf("graph:    %s active memory units · %s nodes · %s traces · %s private\n",
-		pyStr(getOr(result, "active_assertions", 0)), pyStr(getOr(counts, "node", 0)),
-		pyStr(getOr(counts, "trace", 0)), pyStr(getOr(result, "private_assertions", 0)))
-	a.printf("queue:    %s pending · %s conflicts · %s sessions\n",
-		pyStr(getOr(result, "pending_traces", 0)), pyStr(getOr(result, "conflicts_proposed", 0)),
-		pyStr(getOr(result, "sessions", 0)))
-	a.printf("history:  %s retracted · %s superseded\n",
-		pyStr(getOr(result, "retracted_assertions", 0)), pyStr(getOr(result, "superseded_assertions", 0)))
-	// Human label for the local compatibility index (embedding provider/model);
-	// the JSON keys keep their existing names.
-	a.printf("compat:   %s / %s\n", pyStr(embedding["provider"]), pyStr(embedding["model"]))
+	a.printf("corpus:   %s memory units · %s episodic · %s background · %s crystallized\n",
+		pyStr(getOr(corpus, "memories", 0)), pyStr(getOr(corpus, "episodic", 0)),
+		pyStr(getOr(corpus, "background", 0)), pyStr(getOr(corpus, "crystallized", 0)))
 	if update := childMap(result, "update"); truthy(update["available"]) {
 		a.printf("update:   %s -> %s available (run `rolling-memory update --check`)\n",
 			pyStr(update["current_version"]), pyStr(update["latest_display"]))
 	}
 	if a.args.Flag("wave") {
-		seed := fmt.Sprintf("scope %s assertions %s nodes %s traces %s sessions %s",
+		seed := fmt.Sprintf("scope %s memories %s episodic %s background %s crystallized %s",
 			pyStr(result["scope"]),
-			pyStr(getOr(result, "active_assertions", 0)),
-			pyStr(getOr(counts, "node", 0)),
-			pyStr(getOr(counts, "trace", 0)),
-			pyStr(getOr(result, "sessions", 0)))
+			pyStr(getOr(corpus, "memories", 0)),
+			pyStr(getOr(corpus, "episodic", 0)),
+			pyStr(getOr(corpus, "background", 0)),
+			pyStr(getOr(corpus, "crystallized", 0)))
 		amps, hexCode, slots := ComputeTerminalWaveSpec(seed)
 		a.printf("%s", RenderBrailleOscilloscope("Status Telemetry Wave", amps, hexCode, slots, 44))
 	}
@@ -175,21 +158,10 @@ func (a *application) printCheck(result map[string]any) {
 	for _, issue := range childList(result, "issues") {
 		a.printf("  %s: %s: %s\n", pyStr(issue["severity"]), pyStr(issue["code"]), pyStr(issue["detail"]))
 	}
-	counts := childMap(result, "counts")
-	a.printf("counts: nodes=%s assertions=%s traces=%s bare=%s conflicts=%s\n",
-		pyStr(getOr(counts, "node", 0)), pyStr(getOr(counts, "assertion", 0)),
-		pyStr(getOr(counts, "trace", 0)), pyStr(getOr(result, "bare_assertions", 0)),
-		pyStr(getOr(result, "conflicts_proposed", 0)))
-}
-
-func (a *application) printReindex(result map[string]any) {
-	// "vectors" and "fts" are the JSON receipt keys; the human line reports the
-	// legacy assertion-graph index plus the local compatibility index, which never
-	// feeds the local plaintext vault retrieval.
-	a.printf("reindex: fts=%s local_compat_index=%s\n", pyStr(result["fts"]), pyStr(result["vectors"]))
-	if truthy(result["warning"]) {
-		a.printf("  warning: %s\n", pyStr(result["warning"]))
-	}
+	corpus := childMap(result, "corpus")
+	a.printf("corpus: %s memory units · %s episodic · %s background · %s crystallized\n",
+		pyStr(getOr(corpus, "memories", 0)), pyStr(getOr(corpus, "episodic", 0)),
+		pyStr(getOr(corpus, "background", 0)), pyStr(getOr(corpus, "crystallized", 0)))
 }
 
 func (a *application) printEfficacy(m map[string]any) {

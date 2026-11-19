@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-11-19
+
 ### Changed
 
 - **Live host attachment**: the console now names a coding host only while a session is actually attached. The local MCP sidecar renews a lease every thirty seconds, a prompt hook records a two-minute heartbeat, and an expired lease means no live host — a newest transcript or a leftover presence file is no longer presented as the current environment. When nothing is attached the badge reads "No live host detected", and a separate "Recent activity" badge names the host with the newest transcript. `rolling-memory sync status --json` carries the same distinction as `attachment` / `attachments` alongside `recent_harness_id` and `recent_harness_label`, and a process whose host cannot be identified is reported as unknown instead of being labelled as a generic CLI session.
 - **One physical corpus**: the legacy `thin_vault_*` tables are dropped when the vault opens, and `rm_docs`/`rm_unit_meta` become the only stored corpus. A read-only `thin_vault_docs` projection keeps older readers working without a second copy. The first open also removes pointer units that no longer have a canonical index and their orphan term postings; upgrade intentionally rebuilds from the surviving corpus/sources rather than migrating the old tables.
 - Benchmark disclosure now uses the current product arm: ATM-Bench Main-1013 official R@10 82.85%, R@25 86.41%, R@50 90.11%; Hard-31 R@10 52.43%, R@25 60.14%, R@50 70.62%; composite score 73.72. The corpus and question pins were re-verified on 2026-11-19. The frozen v0.0.1 readings (77.21% / 46.12%) remain in the v0.0.1 changelog entry as historical values. LoCoMo full-set end-to-end judge accuracy remains 85.26% (1,313/1,540; Top-96 delivery; LLM answerer + judge).
+- `rolling-memory status`, `check`, and `doctor` report one corpus only: the canonical counters (memories, episodic, background, crystallized) plus the vault's term statistics. The retired deep-metadata fields are gone, and the configuration block shows the `update.channel` / `update.source` preferences instead of the removed `[llm]` section.
 
 ### Fixed
 
@@ -29,8 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Global update entry**: the console top bar now shows an update badge whenever a newer release is available, from any page. One click opens the same SHA-256 verified updater that refreshes the CLI, the console backend, and the web assets in place, then restarts the console.
 - **Automatic version awareness**: the web console now surfaces a newer release as soon as its real-time channel connects, with a badge on the version button and a one-time notification. The cached state is refreshed in the background after six hours (thirty minutes after a failure), and the CLI `status` / `doctor` receipts carry the same cached hint without a network request. A tag without installable release artifacts is reported as a source-only update instead of offering a download that cannot succeed.
 - **Update channels**: `stable` accepts published non-prerelease tags, `beta` also accepts prerelease tags, and `dev` tracks the latest `main` commit and is the default for new installs during this early stage. The preference is saved in the CLI config (`update.channel`), exposed as a selector in the console's Version & Update dialog, and honored by the optional scheduled check. `dev` reports `main@<commit>` and requires an explicit source rebuild; it never replaces a binary automatically.
-- **Optional OS-level update check**: `rolling-memory update --schedule install` registers a user-level launchd agent, systemd user timer, or Windows scheduled task that refreshes the cache and sends one desktop notification per new version. It never installs an update automatically, and `--schedule remove` cleans it up. Source installs can rebuild from a tag with `ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh` or `bash install.sh --ref v0.0.6`.
+- **Optional OS-level update check**: `rolling-memory update --schedule install` registers a user-level launchd agent, systemd user timer, or Windows scheduled task that refreshes the cache and sends one desktop notification per new version. It never installs an update automatically, and `--schedule remove` cleans it up. Source installs can rebuild from a tag with `ROLLING_MEMORY_SOURCE_REF=v0.0.7 bash install.sh` or `bash install.sh --ref v0.0.7`.
 - **Update source selector**: the Version & Update dialog now offers GitHub (official) and Gitee (mainland mirror) alongside a custom mirror URL. The choice is saved as `update.source`, reused by the CLI and background checks, and can be set with `rmem config set update.source gitee` or overridden per run with `rmem update --source gitee`. A Gitee tag without attached binaries is reported as a source-only update with a Gitee-specific rebuild hint.
+
+### Removed
+
+- Retired command surfaces are removed instead of kept as stubs: `export`, `reindex`, and `recall --deep` no longer parse, `--mode` and `mode` accept only `local`, and the unused `[llm]` configuration section is gone.
 
 ## [0.0.6] - 2026-11-19
 
@@ -143,7 +150,9 @@ Initial public release.
 - **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
 - **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
 
-[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/rocareer/rolling-memory/compare/v0.0.6...v0.0.7
+[0.0.6]: https://github.com/rocareer/rolling-memory/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/rocareer/rolling-memory/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/rocareer/rolling-memory/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/rocareer/rolling-memory/compare/v0.0.2...v0.0.3

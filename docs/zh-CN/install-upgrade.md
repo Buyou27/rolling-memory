@@ -48,9 +48,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 # 最新开发版 main
 ROLLING_MEMORY_SOURCE_REF=main bash install.sh
 # 或指定正式标签
-ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
+ROLLING_MEMORY_SOURCE_REF=v0.0.7 bash install.sh
 # 等价参数
-bash install.sh --ref v0.0.6
+bash install.sh --ref v0.0.7
 ```
 
 ```powershell
@@ -186,7 +186,7 @@ rolling-memory update --schedule remove
 ```bash
 ROLLING_MEMORY_SOURCE_REF=main bash install.sh
 # 或指定正式标签
-ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
+ROLLING_MEMORY_SOURCE_REF=v0.0.7 bash install.sh
 ```
 
 预编译安装也可在发布渠道出现新产物、或需要更换安装目录时重新执行安装脚本。
@@ -198,7 +198,7 @@ ROLLING_MEMORY_SOURCE_REF=v0.0.6 bash install.sh
 ```bash
 go install github.com/rocareer/rolling-memory/cmd/rolling-memory@main
 # 或指定标签
-go install github.com/rocareer/rolling-memory/cmd/rolling-memory@v0.0.6
+go install github.com/rocareer/rolling-memory/cmd/rolling-memory@v0.0.7
 ```
 
 这种方式可能没有 `install.json`，控制台会把它视为缺少源码基线，并提示显式重建。

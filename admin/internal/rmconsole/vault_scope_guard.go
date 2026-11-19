@@ -80,7 +80,7 @@ func checkConsoleRequestScope(c *gin.Context) error {
 	return nil
 }
 
-// resolveBoundVaultScope reads the local_plain_scope binding from thin_vault_meta so CLI
+// resolveBoundVaultScope reads the local_plain_scope binding from rm_meta so CLI
 // subprocesses (--scope) receive the exact personal scope identifier ("default" or "mem:self")
 // bound in the SQLite vault.
 func resolveBoundVaultScope(dbPath, fallback string) string {
@@ -100,7 +100,7 @@ func resolveBoundVaultScope(dbPath, fallback string) string {
 	}
 	defer db.Close()
 	var bound, storageType string
-	if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err == nil {
+	if err := db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err == nil {
 		bound = strings.TrimSpace(bound)
 		if storageType == "text" && (bound == UserScope || bound == LegacyUserScope) {
 			return bound
@@ -157,7 +157,7 @@ func checkConsoleVaultScope(home string) error {
 	}
 	defer db.Close()
 	var bound, storageType string
-	if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err != nil {
+	if err := db.QueryRow(`SELECT v, typeof(v) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bound, &storageType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("local_plain vault has no scope binding")
 		}

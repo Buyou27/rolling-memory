@@ -136,8 +136,8 @@ func TestAuthorizeRMWSRoomAndToggleDeleteMemoryGuards(t *testing.T) {
 	dbPath := filepath.Join(home, "guard_test.db")
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	seedVault(t, dbPath,
-		`CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
-		 INSERT INTO thin_vault_meta(k, v) VALUES ('local_plain_scope', 'default');
+		`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+		 INSERT INTO rm_meta(k, v) VALUES ('local_plain_scope', 'default');
 		 INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-guard-1', 'episodic', 1793270000, 'secret text', 'C6:L1:LOCAL#doc-guard-1');
 		 INSERT INTO rm_noetic(noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json, status)

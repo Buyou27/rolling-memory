@@ -32,10 +32,6 @@
       "rejected": "outside_corpus",
       "start": 0
     },
-    "deep": {
-      "requested": false,
-      "used": false
-    },
     "depth": 2,
     "deterministic": true,
     "elapsed_ms": 0,

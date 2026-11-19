@@ -38,8 +38,8 @@ func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	_, err = db.Exec(`
-			CREATE TABLE IF NOT EXISTS thin_vault_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL);
-			INSERT OR REPLACE INTO thin_vault_meta(k, v) VALUES ('local_plain_scope', 'mem:test');
+			CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL);
+			INSERT OR REPLACE INTO rm_meta(k, v) VALUES ('local_plain_scope', 'mem:test');
 			CREATE TABLE IF NOT EXISTS thin_vault_docs (
 			doc_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT 'episodic', occurred_at INTEGER NOT NULL DEFAULT 0,
 			raw_text TEXT NOT NULL, sentences_json TEXT NOT NULL DEFAULT '[]', address_uri TEXT NOT NULL DEFAULT '',

@@ -4,15 +4,6 @@
   },
   "db": "<DB>",
   "egress": "loopback-only",
-  "llm": {
-    "base_url": "https://api.openai.com/v1",
-    "key": {
-      "configured": false,
-      "source": "none"
-    },
-    "model": "gpt-4o-mini",
-    "provider": "none"
-  },
   "log": "<LOG>",
   "mode": "local",
   "path": "<CFG>",

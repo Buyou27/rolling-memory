@@ -648,8 +648,8 @@ func commonOptions() []*Option {
 			"config file (default: $XDG_CONFIG_HOME/rolling-memory/config.toml)"),
 		stringOption([]string{"--db"}, "db", nil, "database path"),
 		stringOption([]string{"--scope"}, "scope", nil, "memory scope"),
-		choiceOption([]string{"--mode"}, "mode", []string{"local", "cloud"}, nil,
-			"override mode for this command (only local is accepted)"),
+		choiceOption([]string{"--mode"}, "mode", []string{"local"}, nil,
+			"override mode for this command (local only)"),
 		flagOption([]string{"--json"}, "json", false, ""),
 	}
 }
@@ -658,7 +658,7 @@ func commonOptions() []*Option {
 func BuildParser() *Parser {
 	parser := &Parser{
 		Prog:        "rolling-memory",
-		Description: "Local-first graph memory for coding agents (SQLite, single `recall` MCP tool).",
+		Description: "Local-first persistent memory for coding agents (SQLite, single `recall` MCP tool).",
 	}
 	root := &command{
 		SubDest: "command",
@@ -681,10 +681,10 @@ func BuildParser() *Parser {
 	}
 
 	modeCmd := &command{
-		Name: "mode", Path: []string{"mode"}, Help: "show or switch storage mode (local/cloud)",
+		Name: "mode", Path: []string{"mode"}, Help: "show the local storage mode",
 		Options: commonOptions(),
 		Positionals: []*positional{{
-			Name: "name", Choices: []string{"local", "cloud"},
+			Name: "name", Choices: []string{"local"},
 		}},
 	}
 
@@ -742,8 +742,6 @@ func BuildParser() *Parser {
 				Help: "deliver items in pure relevance order without grouping"},
 			&Option{Names: []string{"--caps-chains"}, Dest: "caps_chains", Kind: kindInt, Default: nil, Help: ""},
 			&Option{Names: []string{"--caps-rows"}, Dest: "caps_rows", Kind: kindInt, Default: nil, Help: ""},
-			flagOption([]string{"--deep"}, "deep", false,
-				"allow one LLM query rewrite (cloud/loopback only)"),
 			flagOption([]string{"--wave"}, "wave", false,
 				"render high-resolution Unicode Braille oscilloscope waveform in terminal"),
 			flagOption([]string{"--no-crystallize"}, "no_crystallize", false,
@@ -848,11 +846,6 @@ func BuildParser() *Parser {
 		Positionals: []*positional{{Name: "path", Required: true}},
 	}
 
-	exportCmd := &command{
-		Name: "export", Path: []string{"export"}, Help: "unavailable: JSON export is not a complete backup",
-		Options: append(commonOptions(), stringOption([]string{"--out"}, "out", nil, "")),
-	}
-
 	syncCmd := &command{
 		Name: "sync", Path: []string{"sync"}, Help: "local alignment status and reconcile (zero network egress)",
 		SubDest: "sync_command",
@@ -947,11 +940,6 @@ func BuildParser() *Parser {
 		Name: "check", Path: []string{"check"}, Help: "run integrity checks; exit 1 on errors",
 		Options: commonOptions(),
 	}
-	reindexCmd := &command{
-		Name: "reindex", Path: []string{"reindex"}, Help: "rebuild the legacy assertion-graph index and the local compatibility index（本地明文金库检索无需重建）",
-		Options: commonOptions(),
-	}
-
 	maintainCmd := &command{
 		Name: "maintain", Path: []string{"maintain"},
 		Help:    "user maintenance: inspect reclaimable space, clean obsolete backups/caches, compact the vault",
@@ -1125,12 +1113,6 @@ func BuildParser() *Parser {
 		Help:    "self-update the CLI binary, web console assets and host integrations (SHA-256 verified, no git required)",
 		Options: updateOptions,
 	}
-	upgradeCmd := &command{
-		Name: "upgrade", Path: []string{"upgrade"},
-		Help:    "alias for `update`: self-update the CLI binary, web console assets and host integrations",
-		Options: updateOptions,
-	}
-
 	// engine 是控制台与自动化专用的内部已核验守护通道（请求 JSON 走 stdin、响应 JSON 走
 	// stdout）：不在用户文档中宣传，也不改变任何用户面命令的行为。
 	engineCmd := &command{
@@ -1144,9 +1126,9 @@ func BuildParser() *Parser {
 
 	root.Subcommands = []*command{
 		initCmd, modeCmd, configCmd, recallCmd, recentCmd,
-		importCmd, exportCmd, syncCmd, backgroundCmd, mcpCmd, hookCmd,
-		statusCmd, doctorCmd, checkCmd, reindexCmd, installCmd, evalCmd,
-		ejectCmd, efficacyCmd, waveCmd, panelCmd, updateCmd, upgradeCmd,
+		importCmd, syncCmd, backgroundCmd, mcpCmd, hookCmd,
+		statusCmd, doctorCmd, checkCmd, installCmd, evalCmd,
+		ejectCmd, efficacyCmd, waveCmd, panelCmd, updateCmd,
 		maintainCmd, daemonCmd, engineCmd,
 	}
 	for _, sub := range root.Subcommands {

@@ -852,7 +852,6 @@ func recallRequest(arguments map[string]any) (facade.RecallRequest, error) {
 		Depth:          2,
 		RawLimit:       rawLimit,
 		Session:        sessionPtr,
-		Deep:           pyTruthy(arguments["deep"]),
 	}, nil
 }
 

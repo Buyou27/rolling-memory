@@ -255,7 +255,6 @@ type UnixRecallPayload struct {
 	BudgetMS        *int                      `json:"budget_ms,omitempty"`
 	RawLimit        int                       `json:"raw_limit,omitempty"`
 	Session         *string                   `json:"session,omitempty"`
-	Deep            bool                      `json:"deep,omitempty"`
 	TimeRef         any                       `json:"time_ref,omitempty"`
 	TokenCorrect    *bool                     `json:"token_correct,omitempty"`
 	AliasExpand     *bool                     `json:"alias_expand,omitempty"`
@@ -1594,7 +1593,6 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *facade.Mem
 		BudgetMS:        payload.BudgetMS,
 		RawLimit:        payload.RawLimit,
 		Session:         payload.Session,
-		Deep:            payload.Deep,
 		TimeRef:         payload.TimeRef,
 		TokenCorrect:    payload.TokenCorrect,
 		AliasExpand:     payload.AliasExpand,

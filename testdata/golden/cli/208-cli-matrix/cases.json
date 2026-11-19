@@ -63,9 +63,9 @@
         "mode",
         "cloud"
       ],
-      "id": "070-mode-cloud",
+      "id": "070-mode-invalid",
       "kind": "cli",
-      "note": "writes mode.name to the config file"
+      "note": "cloud mode is retired; the CLI accepts local only"
     },
     {
       "argv": [
@@ -144,26 +144,6 @@
     },
     {
       "argv": [
-        "export",
-        "--json"
-      ],
-      "id": "410-export",
-      "kind": "cli",
-      "note": ""
-    },
-    {
-      "argv": [
-        "export",
-        "--out",
-        "<OUT>/export.json",
-        "--json"
-      ],
-      "id": "420-export-out",
-      "kind": "cli",
-      "note": ""
-    },
-    {
-      "argv": [
         "status",
         "--json"
       ],
@@ -190,13 +170,13 @@
       "note": ""
     },
     {
-      "id": "480-break-anchor",
+      "id": "480-break-corpus",
       "kind": "sql",
-      "note": "direct write outside the CLI, so `check` reports an issue",
+      "note": "direct write outside the CLI, so `check` reports an orphan term posting",
       "params": [
-        "a_2fd10b49248dcd516858"
+        "ghost-unit"
       ],
-      "sql": "UPDATE assertion SET anchor_end = anchor_end + 999 WHERE node_id = ?"
+      "sql": "INSERT INTO rm_terms(term_hash, unit_id, bits_x10) VALUES (1, ?, 0)"
     },
     {
       "argv": [
@@ -206,15 +186,6 @@
       "id": "490-check-failed",
       "kind": "cli",
       "note": "non-ok -> exit 1"
-    },
-    {
-      "argv": [
-        "reindex",
-        "--json"
-      ],
-      "id": "500-reindex",
-      "kind": "cli",
-      "note": ""
     },
     {
       "argv": [

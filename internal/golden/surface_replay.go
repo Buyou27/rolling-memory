@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/cli"
-	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
 )
 
@@ -135,28 +134,10 @@ func newSurfaceSandbox(workRoot, repoRoot, kind, scenario string) (*surfaceSandb
 	if err := sandbox.copyInputs(kind, scenario); err != nil {
 		return nil, err
 	}
-	// The frozen scenarios replay the historical surface: pre-create the sandbox
-	// database with the canonical assertion-graph schema (fresh production
-	// databases bootstrap thin, but the sealed expectations were recorded on
-	// historical-style databases).
-	if err := seedSandboxLegacySchema(sandbox.dbPath); err != nil {
-		return nil, err
-	}
+	// The scenarios exercise the shipped surface: `init` (the first case)
+	// bootstraps the canonical vault, and no historical assertion-graph schema
+	// is pre-created.
 	return sandbox, nil
-}
-
-// seedSandboxLegacySchema creates the scenario database with the canonical
-// historical schema so surface replays run against the sealed shape.
-func seedSandboxLegacySchema(dbPath string) error {
-	connection, err := db.Connect(dbPath, db.LocalProfile())
-	if err != nil {
-		return err
-	}
-	defer connection.Close()
-	if _, err := db.Migrate(connection); err != nil {
-		return err
-	}
-	return db.EnsureLegacyGraphSchema(connection)
 }
 
 // copyInputs copies <golden>/<kind>/<scenario>/input to <CASE>/input when the

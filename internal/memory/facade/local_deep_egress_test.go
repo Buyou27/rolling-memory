@@ -15,7 +15,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 )
 
-func TestLocalLegacyDeepEnvironmentDoesNotContactSentinel(t *testing.T) {
+func TestLocalLegacyEnvironmentDoesNotContactSentinel(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -44,7 +44,7 @@ func TestLocalLegacyDeepEnvironmentDoesNotContactSentinel(t *testing.T) {
 	}
 	defer memory.Close()
 	// Fresh production databases bootstrap thin; this test exercises the
-	// legacy assertion-graph deep path, so apply its schema.
+	// legacy assertion-graph path, so apply its schema.
 	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
 		t.Fatal(err)
 	}
@@ -52,15 +52,10 @@ func TestLocalLegacyDeepEnvironmentDoesNotContactSentinel(t *testing.T) {
 	if !memory.Store.HasLegacyGraph() {
 		t.Fatal("fixture did not exercise the legacy graph")
 	}
-	result, err := memory.Recall(facade.RecallRequest{Cue: "local sentinel", Deep: true})
-	if err != nil {
+	if _, err := memory.Recall(facade.RecallRequest{Cue: "local sentinel"}); err != nil {
 		t.Fatal(err)
 	}
-	deep, ok := result.Meta["deep"].(map[string]any)
-	if !ok || deep["requested"] != true || deep["used"] != false {
-		t.Fatalf("deep metadata = %#v", result.Meta["deep"])
-	}
 	if got := requests.Load(); got != 0 {
-		t.Fatalf("local legacy deep sent %d requests to sentinel", got)
+		t.Fatalf("local recall sent %d requests to the sentinel", got)
 	}
 }
