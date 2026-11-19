@@ -196,8 +196,7 @@ In local mode, evaluation hooks and evaluation cards are enabled by default so y
 # Option 1: Wire only the pure MCP recall tool (removes all hooks and instruction blocks)
 rolling-memory install --mcp-only
 
-# Option 2: Keep the install, but disable boot-context injection or hook ledger recording
-rolling-memory config set hooks.boot_context false
+# Option 2: Keep the install, but disable hook ledger recording
 rolling-memory config set hooks.ledger false
 ```
 

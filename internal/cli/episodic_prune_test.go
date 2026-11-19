@@ -12,7 +12,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // TestEpisodicPruneRetiresAbsentUnitsOnly pins the bounded prune contract: only a
@@ -39,9 +39,9 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil || tc == nil || tc.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	turnRef := "@ref:jsonl:" + source + ":0"
 	type unit struct{ id, ref, text string }
@@ -51,7 +51,7 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 		{"missing", "@ref:jsonl:" + goneSource + ":0#0", ""},
 	}
 	for index := range units {
-		text, rErr := thinclient.ResolveEpisodicPointerLive(units[index].ref)
+		text, rErr := localvault.ResolveEpisodicPointerLive(units[index].ref)
 		if rErr != nil || strings.TrimSpace(text) == "" {
 			t.Fatalf("resolve %s: %q %v", units[index].ref, text, rErr)
 		}
@@ -91,7 +91,7 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 		t.Fatalf("candidates = %+v", dry.Candidates)
 	}
 	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("dry run must not delete: count=%d err=%v", count, err)
 	}
 	if _, err := pruneEpisodicUnits(context.Background(), memory, 100, true, false); err == nil {
@@ -110,7 +110,7 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_noetic WHERE noetic_id IN ('nt_orphan','nt_probe')`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("orphan/probe noetic rows survived: count=%d err=%v", count, err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("dropped row survived: count=%d err=%v", count, err)
 	}
 	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_episodic_index WHERE doc_id='dropped'`).Scan(&count); err != nil || count != 0 {
@@ -120,12 +120,12 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 		t.Fatalf("dropped lineage survived: count=%d err=%v", count, err)
 	}
 	for _, id := range []string{"kept", "missing"} {
-		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id=?`, id).Scan(&count); err != nil || count != 1 {
+		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id=?`, id).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("%s must be kept: count=%d err=%v", id, count, err)
 		}
 	}
 	var healedPtr string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id='kept'`).Scan(&healedPtr); err != nil || healedPtr != turnRef+"#1" {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id='kept'`).Scan(&healedPtr); err != nil || healedPtr != turnRef+"#1" {
 		t.Fatalf("relocatable unit was not healed in-place: got %q err=%v", healedPtr, err)
 	}
 	receipt, err := os.ReadFile(applied.Receipt)
@@ -145,16 +145,16 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 	if withUnreadable.Verified != 1 || withUnreadable.Unreadable != 1 || withUnreadable.Removed != 1 {
 		t.Fatalf("include-unreadable apply = %+v", withUnreadable)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id='missing'`).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id='missing'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("missing row survived include-unreadable: count=%d err=%v", count, err)
 	}
 
 	// Inline episodic rows that merely mention markers like `[thinking]` or `[tool_result]`
 	// mid-sentence must stay Verified, whereas line-anchored unstripped traces are retired.
-	if err := tc.Vault.SaveLocalPlaintext("inline_legit", 10, "[user] 请排查为什么解析器遇到了 [thinking] 和 [tool_result] 字面量。", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("inline_legit", 10, "[user] 请排查为什么解析器遇到了 [thinking] 和 [tool_result] 字面量。", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tc.Vault.SaveLocalPlaintext("inline_polluted", 11, "[assistant]\n[thinking]\ninternal scratchpad trace", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("inline_polluted", 11, "[assistant]\n[thinking]\ninternal scratchpad trace", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	inlinePrune, err := pruneEpisodicUnits(context.Background(), memory, 100, true, true)
@@ -164,10 +164,10 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 	if inlinePrune.Removed != 1 {
 		t.Fatalf("expected only line-anchored polluted inline unit to be removed, got %+v", inlinePrune)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id='inline_legit'`).Scan(&count); err != nil || count != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id='inline_legit'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("legitimate inline memory mentioning [thinking] was deleted: count=%d err=%v", count, err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id='inline_polluted'`).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id='inline_polluted'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("polluted inline trace survived: count=%d err=%v", count, err)
 	}
 }

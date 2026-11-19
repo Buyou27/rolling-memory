@@ -24,7 +24,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
@@ -67,14 +67,11 @@ type HealthCheckSubItem struct {
 	DetailEN string `json:"detail_en"`
 }
 
-// LayerAlignmentStat holds the local vs remote cloud alignment state for one cognitive layer.
+// LayerAlignmentStat holds the local indexing state for one cognitive layer.
 type LayerAlignmentStat struct {
 	Layer                string `json:"layer"`
 	LocalVaultCount      int    `json:"local_vault_count"`
-	RemoteCloudCount     int    `json:"remote_cloud_count"`
 	SyncedCount          int    `json:"synced_count"`
-	LocalMissingOnRemote int    `json:"local_missing_on_remote"`
-	RemoteOnlyCount      int    `json:"remote_only_count"`
 	HarnessUnsyncedTurns int    `json:"harness_unsynced_turns,omitempty"`
 	MountedDirsCount     int    `json:"mounted_dirs_count,omitempty"`
 	TrackedFilesCount    int    `json:"tracked_files_count,omitempty"`
@@ -122,12 +119,8 @@ type EnvHealthAndSyncStatus struct {
 	// last call. They are telemetry, never a substitute for Attachment.
 	RecentHarnessID    string                        `json:"recent_harness_id,omitempty"`
 	RecentHarnessLabel string                        `json:"recent_harness_label,omitempty"`
-	Mode               string                        `json:"mode"` // local | cloud：本地模式远端读数恒为 0（零外呼）
+	Mode               string                        `json:"mode"`
 	Harnesses          []HarnessEnvItem              `json:"harnesses"`
-	CloudOnline        bool                          `json:"cloud_online"`
-	CloudLatencyMS     int                           `json:"cloud_latency_ms"`
-	CloudEndpoint      string                        `json:"cloud_endpoint"`
-	CloudUserID        string                        `json:"cloud_user_id"`
 	HealthScore        int                           `json:"health_score"`
 	HealthGrade        string                        `json:"health_grade"` // "healthy" | "subhealthy" | "degraded"
 	HealthChecks       []HealthCheckSubItem          `json:"health_checks"`
@@ -154,10 +147,7 @@ type ReconcileReport struct {
 	EpisodicIndexMissing         int                    `json:"episodic_index_missing"`
 	EpisodicIndexCorrupt         int                    `json:"episodic_index_corrupt"`
 	EpisodicIndexNeedsRebuild    int                    `json:"episodic_index_needs_rebuild"`
-	EpisodicPushedToRemote       int                    `json:"episodic_pushed_to_remote"`
 	BackgroundSyncedFiles        int                    `json:"background_synced_files"`
-	BackgroundPushedToRemote     int                    `json:"background_pushed_to_remote"`
-	NoeticPushedToRemote         int                    `json:"noetic_pushed_to_remote"`
 	TotalReconciled              int                    `json:"total_reconciled"`
 	ElapsedMS                    int                    `json:"elapsed_ms"`
 	Warnings                     []string               `json:"warnings,omitempty"`
@@ -248,19 +238,13 @@ func (a *application) runSyncCommand(memory *facade.Memory) (int, error) {
 			return 1, err
 		}
 		return 0, a.emit(rep, func() {
-			if strings.EqualFold(strings.TrimSpace(rep.Status.Mode), "local") {
-				a.printf("reconcile (%s, local_plain): harness +%d · background files +%d · health %d%%\n",
-					rep.Layer, rep.EpisodicImportedFromHar, rep.BackgroundSyncedFiles, rep.Status.HealthScore)
-				a.printf("episodic index: +%d backfilled · %d compatible · %d missing · %d incompatible · %d corrupt · %d need rebuild\n",
-					rep.EpisodicIndexesBackfilled, rep.EpisodicIndexCompatible, rep.EpisodicIndexMissing, rep.EpisodicIndexIncompatible, rep.EpisodicIndexCorrupt, rep.EpisodicIndexNeedsRebuild)
-				for _, warning := range rep.Warnings {
-					a.printf("warning: %s\n", warning)
-				}
-				return
+			a.printf("reconcile (%s, local_plain): harness +%d · background files +%d · health %d%%\n",
+				rep.Layer, rep.EpisodicImportedFromHar, rep.BackgroundSyncedFiles, rep.Status.HealthScore)
+			a.printf("episodic index: +%d backfilled · %d compatible · %d missing · %d incompatible · %d corrupt · %d need rebuild\n",
+				rep.EpisodicIndexesBackfilled, rep.EpisodicIndexCompatible, rep.EpisodicIndexMissing, rep.EpisodicIndexIncompatible, rep.EpisodicIndexCorrupt, rep.EpisodicIndexNeedsRebuild)
+			for _, warning := range rep.Warnings {
+				a.printf("warning: %s\n", warning)
 			}
-			a.printf("reconcile (%s): episodic +%d (harness +%d) · background +%d · noetic +%d · health %d%%\n",
-				rep.Layer, rep.EpisodicPushedToRemote, rep.EpisodicImportedFromHar,
-				rep.BackgroundPushedToRemote, rep.NoeticPushedToRemote, rep.Status.HealthScore)
 		})
 	case "prune":
 		report, err := pruneEpisodicUnitsWithOptions(context.Background(), memory, EpisodicPruneOptions{
@@ -310,7 +294,7 @@ func (a *application) runSyncCommand(memory *facade.Memory) (int, error) {
 				return 1, fmt.Errorf("sync watch --step requires an open local store")
 			}
 			stepCtx, cancelStep := context.WithTimeout(context.Background(), autoWatchReconcileBudget)
-			var backfillRep thinclient.EpisodicIndexBackfillReport
+			var backfillRep localvault.EpisodicIndexBackfillReport
 			var backfillErr error
 			for stepCtx.Err() == nil {
 				pageRep, pErr := runEpisodicIndexBackfillTick(stepCtx, memory)
@@ -398,16 +382,16 @@ func (a *application) runSyncCommand(memory *facade.Memory) (int, error) {
 			intervalSec = 10
 		}
 		if a.args.Flag("once") {
-			ran, bgChunks, epiPushed := RunAutoWatchTick(context.Background(), memory, bgSettleWindow, episodicQuiescenceWindow)
+			ran, bgChunks, epiImported := RunAutoWatchTick(context.Background(), memory, bgSettleWindow, episodicQuiescenceWindow)
 			out := map[string]any{
 				"ok":                true,
 				"once":              true,
 				"ran":               ran,
 				"background_chunks": bgChunks,
-				"episodic_pushed":   epiPushed,
+				"episodic_imported": epiImported,
 			}
 			return 0, a.emit(out, func() {
-				a.printf("sync watch (once): ran=%v · background +%d · episodic +%d\n", ran, bgChunks, epiPushed)
+				a.printf("sync watch (once): ran=%v · background +%d · episodic +%d\n", ran, bgChunks, epiImported)
 			})
 		}
 		RunAutoWatchLoop(context.Background(), memory, time.Duration(intervalSec)*time.Second)
@@ -421,16 +405,17 @@ func inspectEnvHealthAndSync(ctx context.Context, memory *facade.Memory, harness
 	return inspectEnvHealth(ctx, memory, harnessFilter, true)
 }
 
-// resolveSyncTransport 初始化并返回薄客户端及本地金库传输面（纯本地模式零外呼，cloudFace 恒为 false）。
-func resolveSyncTransport(memory *facade.Memory) (*thinclient.Client, bool, error) {
-	tc, err := memory.ThinClient()
+// resolveSyncTransport opens the local vault client shared by the sync report
+// and the reconcile pass.
+func resolveSyncTransport(memory *facade.Memory) (*localvault.Client, error) {
+	tc, err := memory.LocalVault()
 	if err != nil {
-		return nil, false, fmt.Errorf("init thinclient failed: %w", err)
+		return nil, fmt.Errorf("init localvault failed: %w", err)
 	}
 	if tc == nil {
-		return nil, false, fmt.Errorf("init thinclient failed: no client returned")
+		return nil, fmt.Errorf("init localvault failed: no client returned")
 	}
-	return tc, false, nil
+	return tc, nil
 }
 
 // inspectEnvHealth builds the health/sync snapshot. withTurnCounts selects whether
@@ -466,7 +451,7 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 	if memory != nil && memory.Store != nil && memory.Store.DB() != nil {
 		db := memory.Store.DB()
 		healthDB = db
-		if rows, err := db.Query(`SELECT doc_id, COALESCE(layer, 'episodic') FROM thin_vault_docs`); err == nil {
+		if rows, err := db.Query(`SELECT unit_id, COALESCE(layer, 'episodic') FROM rm_docs`); err == nil {
 			for rows.Next() {
 				var id, lyr string
 				if rows.Scan(&id, &lyr) == nil && strings.TrimSpace(id) != "" {
@@ -676,15 +661,13 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		out.RecentHarnessLabel = recentID
 	}
 
-	// 3. Probe Cloud Engine & fetch remote unit sets via /open/memory/v1/units。
-	// 云面判定以实际传输为准：只有绑定 HTTP 传输（云端配置或显式端点覆盖）才探针与取远端全集；
-	// 本地金库传输 = 零外呼硬边界，远端读数恒为 0。
+	// 3. Read the local vault's index coverage and scan progress. The product
+	// has no remote transport: every alignment counter is local.
 	endIndexStage := stageStart(progressStageIndex, nil)
-	tc, cloudFace, err := resolveSyncTransport(memory)
+	tc, err := resolveSyncTransport(memory)
 	if err != nil {
 		return out, err
 	}
-	localMode := !cloudFace
 	if tc != nil && tc.Vault != nil {
 		cfgPath := ""
 		if memory != nil && memory.Config != nil {
@@ -761,24 +744,20 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		indexFields["coverage_pct"] = out.EpisodicIndex.CoveragePct
 	}
 	endIndexStage(indexFields)
-	remoteEpisodic := map[string]bool{}
-	remoteBackground := map[string]bool{}
-	remoteNoetic := map[string]bool{}
 	out.Mode = "local"
-	out.CloudEndpoint = "local://vault"
 
 	// 4. Compute per-layer alignment stats
-	epiStat := computeLayerDiff("episodic", localEpisodic, remoteEpisodic, out.CloudOnline, localMode, totalHarnessUnsynced, 0)
+	epiStat := computeLayerDiff("episodic", localEpisodic, totalHarnessUnsynced, 0)
 	if !harnessAlignmentKnown || (out.EpisodicIndex != nil && (out.EpisodicIndex.SourceItemErrors > 0 || out.EpisodicIndex.Missing > 0 || out.EpisodicIndex.Corrupt > 0 || out.EpisodicIndex.NeedsRebuild > 0 || out.EpisodicIndex.Error != "")) {
 		epiStat.AlignmentKnown = false
 		epiStat.Aligned = false
 	}
-	bgStat := computeLayerDiff("background", localBackground, remoteBackground, out.CloudOnline, localMode, 0, dirtyFilesCount)
+	bgStat := computeLayerDiff("background", localBackground, 0, dirtyFilesCount)
 	bgStat.MountedDirsCount = mountedDirsCount
 	bgStat.TrackedFilesCount = trackedFilesCount
 	bgStat.DirtyFilesCount = dirtyFilesCount
 
-	noeStat := computeLayerDiff("noetic", localNoeticActive, remoteNoetic, out.CloudOnline, localMode, 0, 0)
+	noeStat := computeLayerDiff("noetic", localNoeticActive, 0, 0)
 	noeStat.StaleCount = localNoeticStaleCount
 
 	out.Layers["episodic"] = epiStat
@@ -789,32 +768,13 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 	// 5. Compute 5-dimension Memory Health Score (0-100)
 	totalScore := 0
 
-	// (1) Cloud Engine (25 pts) / Local Vault (25 pts · 本地模式)
-	cScore := 0
-	cStatus := "error"
-	cDetailZH := "云端记忆引擎未连接或不可达"
-	cDetailEN := "Cloud memory engine unreachable"
-	if localMode {
-		cScore = 25
-		cStatus = "healthy"
-		cDetailZH = fmt.Sprintf("本地明文金库 (local_plain) · 零云端请求 · scope=%s", out.CloudEndpoint)
-		cDetailEN = fmt.Sprintf("Local plaintext vault (local_plain) · zero cloud requests · scope=%s", out.CloudEndpoint)
-	} else if out.CloudOnline {
-		cScore = 25
-		cStatus = "healthy"
-		cDetailZH = fmt.Sprintf("在线 · 延迟 %dms · 命名空间 user_id=%s", out.CloudLatencyMS, out.CloudUserID)
-		cDetailEN = fmt.Sprintf("Online · %dms · user_id=%s", out.CloudLatencyMS, out.CloudUserID)
-	}
-	totalScore += cScore
-	engineLabelZH := "云端引擎连通性"
-	engineLabelEN := "Cloud Engine Connectivity"
-	if localMode {
-		engineLabelZH = "本地金库可用性 (local_plain)"
-		engineLabelEN = "Local Vault Availability (local_plain)"
-	}
+	// (1) Local Vault Availability (25 pts)
+	vaultDetailZH := fmt.Sprintf("本地明文金库 (local_plain) · 零云端请求 · scope=local://vault")
+	vaultDetailEN := "Local plaintext vault (local_plain) · zero cloud requests · scope=local://vault"
+	totalScore += 25
 	out.HealthChecks = append(out.HealthChecks, HealthCheckSubItem{
-		Key: "cloud_engine", LabelZH: engineLabelZH, LabelEN: engineLabelEN,
-		Status: cStatus, Score: cScore, MaxScore: 25, DetailZH: cDetailZH, DetailEN: cDetailEN,
+		Key: "local_vault", LabelZH: "本地金库可用性 (local_plain)", LabelEN: "Local Vault Availability (local_plain)",
+		Status: "healthy", Score: 25, MaxScore: 25, DetailZH: vaultDetailZH, DetailEN: vaultDetailEN,
 	})
 
 	// (2) Active Harness Wiring (15 pts)
@@ -863,16 +823,10 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		}
 		eStatus = "warning"
 	}
-	eDetailZH := fmt.Sprintf("本地金库 %d · 远端 %d · 宿主待导入对话 %d 轮 · 远端待补齐 %d",
-		epiStat.LocalVaultCount, epiStat.RemoteCloudCount, epiStat.HarnessUnsyncedTurns, epiStat.LocalMissingOnRemote)
-	eDetailEN := fmt.Sprintf("Local %d · Remote %d · Unsynced turns %d · Remote missing %d",
-		epiStat.LocalVaultCount, epiStat.RemoteCloudCount, epiStat.HarnessUnsyncedTurns, epiStat.LocalMissingOnRemote)
-	if localMode {
-		eDetailZH = fmt.Sprintf("本地金库 %d · 宿主待导入对话 %d 轮（本地模式无远端）",
-			epiStat.LocalVaultCount, epiStat.HarnessUnsyncedTurns)
-		eDetailEN = fmt.Sprintf("Local %d · Unsynced turns %d (remote disabled in local mode)",
-			epiStat.LocalVaultCount, epiStat.HarnessUnsyncedTurns)
-	}
+	eDetailZH := fmt.Sprintf("本地金库 %d · 宿主待导入对话 %d 轮",
+		epiStat.LocalVaultCount, epiStat.HarnessUnsyncedTurns)
+	eDetailEN := fmt.Sprintf("Local %d · Unsynced turns %d",
+		epiStat.LocalVaultCount, epiStat.HarnessUnsyncedTurns)
 	if !epiStat.AlignmentKnown {
 		eDetailZH += " · 部分宿主或历史范围未确认"
 		eDetailEN += " · Some hosts or history are not verified"
@@ -892,16 +846,10 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		}
 		bStatus = "warning"
 	}
-	bDetailZH := fmt.Sprintf("挂载目录 %d · 本地分块 %d · 远端 %d · 待同步 %d",
-		bgStat.MountedDirsCount, bgStat.LocalVaultCount, bgStat.RemoteCloudCount, bgStat.TotalPendingSync)
-	bDetailEN := fmt.Sprintf("Dirs %d · Local chunks %d · Remote %d · Pending %d",
-		bgStat.MountedDirsCount, bgStat.LocalVaultCount, bgStat.RemoteCloudCount, bgStat.TotalPendingSync)
-	if localMode {
-		bDetailZH = fmt.Sprintf("挂载目录 %d · 本地分块 %d · 待处理文件 %d（本地模式无远端）",
-			bgStat.MountedDirsCount, bgStat.LocalVaultCount, bgStat.TotalPendingSync)
-		bDetailEN = fmt.Sprintf("Dirs %d · Local chunks %d · Pending files %d (remote disabled in local mode)",
-			bgStat.MountedDirsCount, bgStat.LocalVaultCount, bgStat.TotalPendingSync)
-	}
+	bDetailZH := fmt.Sprintf("挂载目录 %d · 本地分块 %d · 待处理文件 %d",
+		bgStat.MountedDirsCount, bgStat.LocalVaultCount, bgStat.TotalPendingSync)
+	bDetailEN := fmt.Sprintf("Dirs %d · Local chunks %d · Pending files %d",
+		bgStat.MountedDirsCount, bgStat.LocalVaultCount, bgStat.TotalPendingSync)
 	totalScore += bScore
 	out.HealthChecks = append(out.HealthChecks, HealthCheckSubItem{
 		Key: "background_sync", LabelZH: "L1 Background 背景知识对齐", LabelEN: "L1 Background Corpus Sync",
@@ -917,16 +865,10 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		}
 		nStatus = "warning"
 	}
-	nDetailZH := fmt.Sprintf("活跃印迹 %d · 远端 %d · 待补投 %d · 失效(Stale) %d",
-		noeStat.LocalVaultCount, noeStat.RemoteCloudCount, noeStat.LocalMissingOnRemote, noeStat.StaleCount)
-	nDetailEN := fmt.Sprintf("Active %d · Remote %d · Pending %d · Stale %d",
-		noeStat.LocalVaultCount, noeStat.RemoteCloudCount, noeStat.LocalMissingOnRemote, noeStat.StaleCount)
-	if localMode {
-		nDetailZH = fmt.Sprintf("活跃印迹 %d · 失效(Stale) %d（本地模式无远端）",
-			noeStat.LocalVaultCount, noeStat.StaleCount)
-		nDetailEN = fmt.Sprintf("Active %d · Stale %d (remote disabled in local mode)",
-			noeStat.LocalVaultCount, noeStat.StaleCount)
-	}
+	nDetailZH := fmt.Sprintf("活跃印迹 %d · 失效(Stale) %d",
+		noeStat.LocalVaultCount, noeStat.StaleCount)
+	nDetailEN := fmt.Sprintf("Active %d · Stale %d",
+		noeStat.LocalVaultCount, noeStat.StaleCount)
 	totalScore += nScore
 	out.HealthChecks = append(out.HealthChecks, HealthCheckSubItem{
 		Key: "noetic_sync", LabelZH: "L3 Noetic 知性印迹健康度", LabelEN: "L3 Noetic Imprint Health",
@@ -946,29 +888,10 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 	return out, nil
 }
 
-func computeLayerDiff(layer string, localSet, remoteSet map[string]bool, cloudOnline, localMode bool, extraHarnessUnsynced, dirtyFiles int) LayerAlignmentStat {
-	synced := 0
-	missingOnRemote := 0
-	remoteOnly := 0
-	if cloudOnline && !localMode {
-		for id := range localSet {
-			if remoteSet[id] {
-				synced++
-			} else {
-				missingOnRemote++
-			}
-		}
-		for id := range remoteSet {
-			if !localSet[id] {
-				remoteOnly++
-			}
-		}
-	} else {
-		// 本地模式（或云端不可达）：无远端可对齐，等待项只剩宿主未导入与待处理文件。
-		synced = len(localSet)
-	}
-	pending := missingOnRemote + extraHarnessUnsynced + dirtyFiles
-	denom := len(localSet) + extraHarnessUnsynced + dirtyFiles
+func computeLayerDiff(layer string, localSet map[string]bool, extraHarnessUnsynced, dirtyFiles int) LayerAlignmentStat {
+	synced := len(localSet)
+	pending := extraHarnessUnsynced + dirtyFiles
+	denom := len(localSet) + pending
 	pct := 100
 	if denom > 0 {
 		pct = (synced * 100) / denom
@@ -976,26 +899,15 @@ func computeLayerDiff(layer string, localSet, remoteSet map[string]bool, cloudOn
 			pct = 100
 		}
 	}
-	aligned := pending == 0
-	if !localMode {
-		aligned = cloudOnline && pending == 0
-	}
-	remoteCount := len(remoteSet)
-	if localMode {
-		remoteCount = 0
-	}
 	return LayerAlignmentStat{
 		Layer:                layer,
 		LocalVaultCount:      len(localSet),
-		RemoteCloudCount:     remoteCount,
 		SyncedCount:          synced,
-		LocalMissingOnRemote: missingOnRemote,
-		RemoteOnlyCount:      remoteOnly,
 		HarnessUnsyncedTurns: extraHarnessUnsynced,
 		TotalPendingSync:     pending,
 		AlignmentPct:         pct,
-		AlignmentKnown:       localMode || cloudOnline,
-		Aligned:              aligned,
+		AlignmentKnown:       true,
+		Aligned:              pending == 0,
 	}
 }
 
@@ -1060,7 +972,7 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 		return rep, fmt.Errorf("reconcile requires an open local SQLite memory store")
 	}
 
-	tc, _, err := resolveSyncTransport(memory)
+	tc, err := resolveSyncTransport(memory)
 	if err != nil {
 		return rep, err
 	}
@@ -1070,9 +982,10 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 	if memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
 		scope = strings.TrimSpace(memory.Config.Scope)
 	}
-	// Pre-fetch current status so we know which harness is active and which units are missing on remote.
-	// A background pass (caller supplied a deadline) skips the transcript turn counting:
-	// it must stay inside the auto-watch tick and only needs wiring + remote unit sets.
+	// Pre-fetch current status so we know which harness is active and which units
+	// are still missing locally. A background pass (caller supplied a deadline)
+	// skips the transcript turn counting: it must stay inside the auto-watch tick
+	// and only needs wiring + local unit sets.
 	_, backgroundPass := ctx.Deadline()
 	preStatus, err := inspectEnvHealth(ctx, memory, harnessFilter, !backgroundPass)
 	if err != nil {
@@ -1092,7 +1005,11 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 		storedRaw := map[string]string{}
 		pointerDocs := map[string][]string{}
 		unverified := map[string]bool{}
-		if rows, qErr := db.Query(`SELECT doc_id, raw_text FROM thin_vault_docs WHERE layer = 'episodic' OR layer = ''`); qErr == nil {
+		if rows, qErr := db.Query(`
+			SELECT d.unit_id, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text)
+			FROM rm_docs d
+			LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+			WHERE d.layer = 'episodic' OR d.layer = ''`); qErr == nil {
 			for rows.Next() {
 				var id, raw string
 				if rows.Scan(&id, &raw) == nil && id != "" {
@@ -1164,7 +1081,7 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 						continue
 					}
 					vault := tc.Vault.CloneWithSharedSlotCache()
-					vault.SetIdentity(thinclient.VaultIdentity{AssistantID: turn.HarnessID, IncarnationID: turn.SessionID, Locus: turn.Locus})
+					vault.SetIdentity(localvault.VaultIdentity{AssistantID: turn.HarnessID, IncarnationID: turn.SessionID, Locus: turn.Locus})
 					for _, id := range pointerDocs[turn.RefPointer] {
 						if id != turn.DocID && !changedSources[id] {
 							changedSources[id] = true
@@ -1174,7 +1091,7 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 					if localEpi[turn.DocID] {
 						stored, ok := storedRaw[turn.DocID]
 						if !ok {
-							if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&stored); err != nil {
+							if err := db.QueryRow(`SELECT COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE d.unit_id = ?`, turn.DocID).Scan(&stored); err != nil {
 								rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
 								continue
 							}
@@ -1184,9 +1101,9 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 							if stored != turn.RefPointer {
 								healed := false
 								if strings.TrimSpace(turn.Text) != "" {
-									if sErr := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); sErr == nil {
+									if sErr := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, localvault.IngestResponse{}); sErr == nil {
 										var current string
-										if err := db.QueryRowContext(ctx, `SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&current); err != nil {
+										if err := db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE d.unit_id = ?`, turn.DocID).Scan(&current); err != nil {
 											return rep, err
 										}
 										storedRaw[turn.DocID] = current
@@ -1194,10 +1111,10 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 											delete(unverified, turn.DocID)
 										}
 										healed = true
-									} else if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
+									} else if errors.Is(sErr, localvault.ErrEpisodicUnitDeleted) {
 										deletedEpi[turn.DocID] = true
 										continue
-									} else if !errors.Is(sErr, thinclient.ErrEpisodicIndexItem) && !errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
+									} else if !errors.Is(sErr, localvault.ErrEpisodicIndexItem) && !errors.Is(sErr, localvault.ErrEpisodicPointerSourceConflict) {
 										return rep, sErr
 									}
 								}
@@ -1207,11 +1124,11 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 							} else if strings.TrimSpace(turn.Text) != "" {
 								created, err := vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, turn.DocID, turn.RefPointer, turn.Text)
 								if err != nil {
-									if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+									if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 										deletedEpi[turn.DocID] = true
 										continue
 									}
-									if !errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+									if !errors.Is(err, localvault.ErrEpisodicIndexItem) {
 										return rep, err
 									}
 									rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic index %s: %v", turn.DocID, err))
@@ -1220,7 +1137,7 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 									if created {
 										rep.EpisodicIndexesBackfilled++
 									}
-									if _, err := db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM rm_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+									if err := updateEpisodicUnitSourceMeta(ctx, db, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
 										return rep, err
 									}
 								}
@@ -1231,12 +1148,12 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 					if strings.TrimSpace(turn.Text) == "" || turn.RefPointer == "" {
 						continue
 					}
-					if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); err != nil {
-						if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+					if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, localvault.IngestResponse{}); err != nil {
+						if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 							deletedEpi[turn.DocID] = true
 							continue
 						}
-						if !errors.Is(err, thinclient.ErrEpisodicIndexItem) && !errors.Is(err, thinclient.ErrEpisodicPointerSourceConflict) {
+						if !errors.Is(err, localvault.ErrEpisodicIndexItem) && !errors.Is(err, localvault.ErrEpisodicPointerSourceConflict) {
 							return rep, err
 						}
 						rep.Warnings = append(rep.Warnings, fmt.Sprintf("episodic import %s: %v", turn.DocID, err))

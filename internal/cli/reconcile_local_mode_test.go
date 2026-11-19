@@ -52,13 +52,13 @@ func TestLocalModeSyncMakesZeroCloudRequests(t *testing.T) {
 	}
 	defer db.Close()
 	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS thin_vault_docs (
+		CREATE TABLE IF NOT EXISTS rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT 'episodic', occurred_at INTEGER NOT NULL DEFAULT 0,
 			raw_text TEXT NOT NULL, sentences_json TEXT NOT NULL DEFAULT '[]', address_uri TEXT NOT NULL DEFAULT '',
 			coord64 INTEGER NOT NULL DEFAULT 0, waveform_bar TEXT NOT NULL DEFAULT '', doc_macro_wave TEXT NOT NULL DEFAULT '',
 			kept_indices_json TEXT NOT NULL DEFAULT '[]'
 		);
-		INSERT OR REPLACE INTO thin_vault_docs
+		INSERT OR REPLACE INTO rm_units
 			(doc_id, layer, occurred_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json)
 		VALUES ('local_only_1', 'episodic', ?, '本地模式零外呼探针', '[]', 'C6:L1:B001#00', 1, '', '', '[]');
 	`, time.Now().Unix()); err != nil {
@@ -76,16 +76,16 @@ func TestLocalModeSyncMakesZeroCloudRequests(t *testing.T) {
 	if status["mode"] != "local" {
 		t.Fatalf("status mode = %v, want local", status["mode"])
 	}
-	if status["cloud_online"] != false {
-		t.Fatalf("local mode reported cloud_online=%v", status["cloud_online"])
+	if _, ok := status["cloud_online"]; ok {
+		t.Fatalf("sync status still reports cloud_online")
 	}
 	layers, _ := status["layers"].(map[string]any)
 	epi, _ := layers["episodic"].(map[string]any)
 	if epi == nil {
 		t.Fatalf("missing episodic layer stats: %+v", status["layers"])
 	}
-	if epi["remote_cloud_count"].(float64) != 0 {
-		t.Fatalf("local mode remote_cloud_count = %v, want 0", epi["remote_cloud_count"])
+	if _, ok := epi["remote_cloud_count"]; ok {
+		t.Fatalf("sync status still reports remote_cloud_count")
 	}
 	if epi["local_vault_count"].(float64) != 1 {
 		t.Fatalf("local_vault_count = %v, want 1", epi["local_vault_count"])
@@ -103,8 +103,8 @@ func TestLocalModeSyncMakesZeroCloudRequests(t *testing.T) {
 		t.Fatalf("decode reconcile: %v (%s)", err, rec.stdout)
 	}
 	for _, key := range []string{"episodic_pushed_to_remote", "background_pushed_to_remote", "noetic_pushed_to_remote"} {
-		if rep[key].(float64) != 0 {
-			t.Fatalf("local mode %s = %v, want 0: %+v", key, rep[key], rep)
+		if _, ok := rep[key]; ok {
+			t.Fatalf("local reconcile still reports %s: %+v", key, rep)
 		}
 	}
 	if got := atomic.LoadInt32(&hits); got != 0 {
@@ -131,8 +131,8 @@ func TestSyncReportsUnboundVaultWithoutLeakingData(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, raw_text TEXT NOT NULL);
-		INSERT INTO thin_vault_docs (doc_id, raw_text) VALUES ('unbound-doc', ?)`, secret); err != nil {
+	if _, err := db.Exec(`CREATE TABLE rm_units (doc_id TEXT PRIMARY KEY, raw_text TEXT NOT NULL);
+		INSERT INTO rm_units (doc_id, raw_text) VALUES ('unbound-doc', ?)`, secret); err != nil {
 		t.Fatalf("seed unbound vault: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestSyncReportsUnboundVaultWithoutLeakingData(t *testing.T) {
 		}
 	}
 	var saved string
-	if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = 'unbound-doc'`).Scan(&saved); err != nil || saved != secret {
+	if err := db.QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = 'unbound-doc'`).Scan(&saved); err != nil || saved != secret {
 		t.Fatalf("unbound document changed: value=%q err=%v", saved, err)
 	}
 	var bindings int

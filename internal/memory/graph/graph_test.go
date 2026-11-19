@@ -13,7 +13,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/graphmodel"
 	"github.com/rocareer/rolling-memory/internal/memory/graph"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	_ "modernc.org/sqlite"
 )
 
@@ -24,21 +24,21 @@ func TestGraphViewProjectsWordsPhrasesClustersAndCitations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	vault, err := thinclient.NewVault(db, secret)
+	vault, err := localvault.NewVault(db, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vault.SetIdentity(thinclient.VaultIdentity{Locus: "test"})
+	vault.SetIdentity(localvault.VaultIdentity{Locus: "test"})
 	const alphaText = "Alpha project graph memory units."
 	for i, id := range []string{"ep_a1", "ep_a2", "ep_a3", "ep_a4", "ep_a5", "ep_a6"} {
-		if err := vault.SaveLocalPlaintext(id, 1700000000+int64(i)*100, alphaText, nil, thinclient.IngestResponse{
+		if err := vault.SaveLocalPlaintext(id, 1700000000+int64(i)*100, alphaText, nil, localvault.IngestResponse{
 			Layer:      "episodic",
 			AddressURI: "C6:L1:LOCAL#" + id,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := vault.SaveLocalPlaintext("ep_free", 0, "", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := vault.SaveLocalPlaintext("ep_free", 0, "", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO rm_noetic(noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json)
@@ -126,13 +126,13 @@ func TestGraphViewLabelsCJKSurfaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	vault, err := thinclient.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
+	vault, err := localvault.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	const cjkText = "记忆图谱使用词族和短语连接记忆单元。"
 	for i, id := range []string{"ep_cjk_1", "ep_cjk_2", "ep_cjk_3"} {
-		if err := vault.SaveLocalPlaintext(id, 1700000000+int64(i)*100, cjkText, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := vault.SaveLocalPlaintext(id, 1700000000+int64(i)*100, cjkText, nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -158,7 +158,7 @@ func TestGraphViewGroupsChunksBySourceProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	vault, err := thinclient.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
+	vault, err := localvault.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestGraphViewGroupsChunksBySourceProvenance(t *testing.T) {
 	if err := os.WriteFile(pathB, []byte(strings.Repeat("beta other line\n", 5)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	client := thinclient.NewLocalClient(vault)
+	client := localvault.NewLocalClient(vault)
 	if _, err := client.AddBackgroundDir(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestGraphViewIsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	vault, err := thinclient.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
+	vault, err := localvault.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestGraphViewIsDeterministic(t *testing.T) {
 		{"ep_a", "Graph words and phrases repeat in memory."},
 		{"ep_b", "Graph words and phrases repeat in clusters."},
 	} {
-		if err := vault.SaveLocalPlaintext(doc.id, 1700000000+int64(i)*100, doc.text, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := vault.SaveLocalPlaintext(doc.id, 1700000000+int64(i)*100, doc.text, nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}

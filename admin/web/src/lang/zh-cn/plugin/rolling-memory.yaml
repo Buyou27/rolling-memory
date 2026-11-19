@@ -11,7 +11,6 @@ widget:
     conflicts: 陈旧结晶
     lastEvent: 最近事件
     latency: 延迟
-    boot: Boot注入
     ledger: 调用账本
     scope: 记忆域
     bgTask: 后台任务
@@ -76,7 +75,6 @@ background:
     pageSub: 仅由您自己挂载的本地目录文件构成：原位读取正文 → 分块入 L1；Harness 对话记录永不进入本层（对话属于 L2 会话记录）
     reconcileSuccess: 'L1 对齐完成：+{bg} 个挂载文档分块（本层不含任何 Harness 对话记录）'
     reconcileSuccessLocal: 'L1 本地对齐完成：+{bg} 个挂载文档分块（本地模式零云端请求）'
-    reconcileResult: 'L1 同步结果：处理文件 {files}，推送分块 {chunks}'
     syncBtn: 立即增量同步
     manualBtn: 手动输入路径
     manualHint: 系统目录选择器不可用（如远程访问）时，可直接手输服务器路径挂载；挂载即触发一次增量同步。
@@ -99,7 +97,6 @@ episodic:
     totalUnit: 条
     pageTitle: L2 会话记录 · 对话单元与本机 Harness 同步
     pageSub: 仅由 Harness 对话记录构成：后台自动同步 + 历史会话对齐导入；本地目录文件永不进入本层（文件属于 L1 文档与代码）
-    reconcileResult: 'L2 同步结果：导入宿主对话 {har} 轮，推送 {epi} 条'
     reconcileSuccess: 'L2 对齐完成：导入 Harness 对话 +{har} 轮 · 同步 +{epi}（Harness 对话只进 L2，不进 L1）'
     reconcileSuccessLocal: 'L2 本地对齐完成：导入 Harness 对话 +{har} 轮（本地模式零云端请求）'
     unitsTitle: 会话记录单元（L2）
@@ -130,7 +127,6 @@ noetic:
     unit: 条
     pageTitle: L3 检索沉淀 · Agent 检索线索与引用证据
     pageSub: 仅由 Agent 每次带证据的 recall 自动沉淀（检索线索 + 引用的证据单元），检索时写入；不承接 Harness 对话或本地目录文件。行内「在调试台重放」可复现 Agent 当时看到的结果
-    reconcileResult: 'L3 同步结果：推送 {noe} 条检索沉淀'
     reconcileSuccess: 'L3 对齐完成：+{noe} 条检索沉淀（来自 Agent 检索线索 + 引用证据）'
     reconcileSuccessLocal: 'L3 本地模式无需对齐：检索沉淀由 Agent 检索在本地自动写入（零云端请求）'
     unitsTitle: 检索沉淀（L3）
@@ -158,7 +154,6 @@ overview:
     healthChecksTitle: 五维记忆健康诊断与本地 ⇄ 远端三层对齐
     healthChecksTitleLocal: 五维记忆健康诊断与本地三层金库
     localVaultLbl: 本地金库
-    remoteCloudLbl: 远端云端
     pendingSyncLbl: 待对齐差额
     harnessUnsyncedLbl: 宿主未导入对话
     alignedTag: 已对齐
@@ -215,7 +210,6 @@ overview:
     progressError: 检测未完成，可在下方重试
     progressRetry: 重试
     refreshFailed: 重新检测未完成，请稍后重试
-    reconcileResult: '同步结果：导入宿主对话 {har} 轮 · 处理 L1 文件 {files} · 推送 L2 {epi} / L1 {bg} / L3 {noe}'
     reconcileWarnings: '同步有警告，结果可能不完整：'
     reconcileNoReport: 同步未返回结果，状态未知
     autoSyncModeLbl: 自动监控同步

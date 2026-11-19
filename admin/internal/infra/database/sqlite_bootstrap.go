@@ -807,7 +807,7 @@ func bootstrapRollingMemoryEvalTables(db *gorm.DB) error {
 			"qs_score" real NOT NULL DEFAULT 0,
 			"engine_transport" varchar(64) NOT NULL DEFAULT '',
 			"engine_scope" varchar(128) NOT NULL DEFAULT '',
-			"cloud_hits" integer NOT NULL DEFAULT 0,
+			"local_hits" integer NOT NULL DEFAULT 0,
 			"recall_ms" integer NOT NULL DEFAULT 0,
 			"delivered_tokens" integer NOT NULL DEFAULT 0,
 			"delivered_items" integer NOT NULL DEFAULT 0,

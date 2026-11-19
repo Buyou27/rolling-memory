@@ -1570,7 +1570,7 @@ func loadVaultFollowupDocs(ctx context.Context, db *sql.DB, home, memoryPath str
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT doc_id, coalesce(occurred_at, 0), coalesce(locus, ''), coalesce(raw_text, ''), coalesce(sentences_json, '')
-		FROM thin_vault_docs
+		FROM rm_units
 		WHERE occurred_at >= ?
 		ORDER BY occurred_at ASC, rowid ASC
 		LIMIT 400

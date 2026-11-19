@@ -60,9 +60,9 @@ func TestLayerListKeywordAndSingleDayBetween(t *testing.T) {
 	dayA := time.Date(2026, 11, 10, 12, 0, 0, 0, time.Local).Unix()
 	dayB := time.Date(2026, 11, 11, 12, 0, 0, 0, time.Local).Unix()
 	seedVault(t, dbPath,
-		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		fmt.Sprintf(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-alpha', 'episodic', %d, 'alpha login flow', 'C6:L1:B001#00')`, dayA),
-		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		fmt.Sprintf(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-beta', 'episodic', %d, 'beta billing flow', 'C6:L1:B002#00')`, dayB))
 
 	kw := decodeLayersStatsPayload(t, callPluginHandler(t, layersStatsHandler,
@@ -135,9 +135,9 @@ func TestLayerListHydratedPointerKeywordSearchAndCorruptedDBError(t *testing.T) 
 		return engineReplyJSON(t, map[string]any{"ok": true, "texts": texts}), nil
 	})
 	seedVault(t, dbPath,
-		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		fmt.Sprintf(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-ref', 'episodic', 1762380000, %q, 'C6:L1:B001#00')`, ref),
-		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		fmt.Sprintf(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-jsonl-ref', 'episodic', 1762380010, %q, 'C6:L1:B001#01')`, jsonlRef))
 
 	// 等待下一次 plugin 处理，强制让缓存生效（此测试用的是内存 DB，需在 seed 后手动刷新一次）
@@ -328,9 +328,9 @@ func TestLayerListSortOnlyAvoidsFullHydration(t *testing.T) {
 	dayA := time.Date(2026, 11, 10, 12, 0, 0, 0, time.Local).Unix()
 	dayB := time.Date(2026, 11, 11, 12, 0, 0, 0, time.Local).Unix()
 	seedVault(t, dbPath,
-		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		fmt.Sprintf(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-old', 'episodic', %d, '@ref:zcode:sess-old:msg-old', 'C6:L1:B001#00')`, dayA),
-		fmt.Sprintf(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		fmt.Sprintf(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-new', 'episodic', %d, '@ref:zcode:sess-new:msg-new', 'C6:L1:B002#00')`, dayB))
 
 	// 表头默认排序（occurred_at desc）：新行在前，且正文已由指针水合。

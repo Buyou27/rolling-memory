@@ -18,7 +18,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestAutoWatchLeaseOtherProcess(t *testing.T) {
@@ -190,7 +190,7 @@ func TestEpisodicBackfillTickResumesAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestEpisodicBackfillTickResumesAndRetries(t *testing.T) {
 		text := fmt.Sprintf("[user] historical entry %d", i)
 		id := episodicunit.DocID(cfg.Scope, text)
 		ref := fmt.Sprintf("@ref:jsonl:%s:%d#0", path, i)
-		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.IngestResponse{}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", localvault.IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -233,7 +233,7 @@ func TestEpisodicBackfillTickStopsOnIndexWriteError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestEpisodicBackfillTickStopsOnIndexWriteError(t *testing.T) {
 		id := episodicunit.DocID(cfg.Scope, "[user] "+text)
 		ids = append(ids, id)
 		ref := fmt.Sprintf("@ref:jsonl:%s:%d#0", path, i)
-		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.IngestResponse{}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", localvault.IngestResponse{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -284,7 +284,7 @@ func TestEpisodicSyncPauseStepResumeAndProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestEpisodicSyncPauseStepResumeAndProgress(t *testing.T) {
 	}
 	id := episodicunit.DocID(cfg.Scope, "[user] pause resume witness")
 	ref := "@ref:jsonl:" + path + ":0#0"
-	if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", thinclient.IngestResponse{}); err != nil {
+	if err := tc.Vault.SaveLocalEpisodicPointer(id, 1, ref, "", localvault.IngestResponse{}); err != nil {
 		t.Fatal(err)
 	}
 	db := memory.Store.DB()

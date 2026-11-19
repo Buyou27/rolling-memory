@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
@@ -25,7 +25,7 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 			memory := newMemory(t)
-			client, err := memory.ThinClient()
+			client, err := memory.LocalVault()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -35,7 +35,7 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 			}
 			text := "[user] quartz nebula evidence"
 			packet, _ := client.Vault.PackBlindPacket("ep_gap", text, testNow)
-			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_gap", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_gap", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 				t.Fatal(err)
 			}
 			if tc.mutation != "" {
@@ -48,7 +48,6 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			thinclient.PurgeLegacyTables(memory.Store.DB())
 			responses := runSession(t, memory, toolCallMessage(1, "recall", map[string]any{"cue": "quartz nebula evidence", "mode": "full"}))
 			if len(responses) != 1 || isError(t, responses[0]) {
 				t.Fatalf("unexpected response: %#v", responses)
@@ -67,16 +66,15 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 func TestLocalRecallMCPTextReportsCharacterTruncation(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"chars-a", "chars-b", "chars-c"} {
-		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id+" "+strings.Repeat("sample ", 100), nil, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id+" "+strings.Repeat("sample ", 100), nil, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	responses := runSession(t, memory, toolCallMessage(1, "recall", map[string]any{"cue": "quartz evidence", "mode": "full", "caps": map[string]any{"chars": 200}}))
 	if len(responses) != 1 || isError(t, responses[0]) {
 		t.Fatalf("unexpected response: %#v", responses)
@@ -90,16 +88,15 @@ func TestLocalRecallMCPTextReportsCharacterTruncation(t *testing.T) {
 func TestLocalRecallMCPTextReportsDeliveryCaps(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"caps-a", "caps-b", "caps-c"} {
-		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id, nil, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow, "quartz evidence "+id, nil, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	responses := runSession(t, memory, toolCallMessage(1, "recall", map[string]any{"cue": "quartz evidence", "mode": "full", "caps": map[string]any{"bands": 1}}))
 	if len(responses) != 1 || isError(t, responses[0]) {
 		t.Fatalf("unexpected response: %#v", responses)

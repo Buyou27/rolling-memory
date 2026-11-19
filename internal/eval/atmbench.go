@@ -667,8 +667,8 @@ func atmHighResolutionSubUnits(item *ATMSGMItem) []local.SubUnit {
 	return subs
 }
 
-func atmCloudDocuments(items []*ATMSGMItem) []CloudDocument {
-	documents := make([]CloudDocument, 0, len(items))
+func atmEvalDocuments(items []*ATMSGMItem) []EvalDocument {
+	documents := make([]EvalDocument, 0, len(items))
 	for _, item := range items {
 		if item == nil {
 			continue
@@ -680,7 +680,7 @@ func atmCloudDocuments(items []*ATMSGMItem) []CloudDocument {
 		if totalLines < 1 {
 			totalLines = 1
 		}
-		documents = append(documents, CloudDocument{
+		documents = append(documents, EvalDocument{
 			// 评测原始语料统一作为 L2 episodic 写入：引擎只理解 background / episodic / noetic
 			// 三个记忆层，不理解 ATM 业务；题目需要的 ID 标注由评测模块自己维护。
 			ID:         item.ItemID,
@@ -701,9 +701,9 @@ func atmCloudDocuments(items []*ATMSGMItem) []CloudDocument {
 }
 
 // IngestATMCorpus writes source-faithful SGM units through the strict local store.
-func IngestATMCorpus(engine *LocalEngine, items []*ATMSGMItem, forceRebuild, reuse bool, logf func(string, ...any)) (CloudManifest, float64, error) {
+func IngestATMCorpus(engine *LocalEngine, items []*ATMSGMItem, forceRebuild, reuse bool, logf func(string, ...any)) (EvalManifest, float64, error) {
 	start := time.Now()
-	documents := atmCloudDocuments(items)
+	documents := atmEvalDocuments(items)
 	manifest, err := engine.Prepare(context.Background(), documents, forceRebuild, reuse, 8, logf)
 	return manifest, time.Since(start).Seconds(), err
 }
@@ -1034,10 +1034,10 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 		return nil, err
 	}
 
-	prepared := CloudManifest{Transport: "oracle-gold", Scope: scope, Suite: SuiteATM, LocalFallback: false}
+	prepared := EvalManifest{Transport: "oracle-gold", Scope: scope, Suite: SuiteATM, LocalFallback: false}
 	ingestSec := 0.0
 	if opts.VerifyPrepare {
-		verified, verifyErr := engine.VerifyPrepared(context.Background(), atmCloudDocuments(items))
+		verified, verifyErr := engine.VerifyPrepared(context.Background(), atmEvalDocuments(items))
 		if verifyErr != nil {
 			return nil, verifyErr
 		}
@@ -1263,7 +1263,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 					rowTransport = "oracle-gold"
 				}
 
-				// "cloud_hits" / "engine_transport" 为跨版本数据兼容保留的历史键名（现值为本地命中数/本地通道）。
+				// local_hits is the local retrieval hit count; engine_transport names the local channel.
 				results[idx] = map[string]any{
 					"id":                   q.ID,
 					"sample_id":            q.QType,
@@ -1297,7 +1297,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 					"recall_seconds":       PyRound(recallSec, 4),
 					"bands":                0,
 					"nodes":                0,
-					"cloud_hits":           cloudHits,
+					"local_hits":           cloudHits,
 					"engine_transport":     rowTransport,
 					"engine_scope":         scope,
 					"local_fallback":       false,
@@ -1380,7 +1380,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 	// unscored 分母显式化：答案/判官链路最终失败（重试耗尽）的题不计入 qs_score 分母，
 	// 但必须同时给出全量分母读数与逐题原因，禁止用「未判分」掩盖「答不上」。
 	applyATMUnscoredAccounting(summary, results, qsSum, qsCnt)
-	// inserted = 真实写入数（CloudManifest.InsertedUnits：全量重灌 / 断点补灌 / 正文自愈重灌），
+	// inserted = 真实写入数（EvalManifest.InsertedUnits：全量重灌 / 断点补灌 / 正文自愈重灌），
 	// 不得用 corpus 大小冒充；VerifyPrepared 复用为零写入。
 	inserted := prepared.InsertedUnits
 	if prepared.Reused {

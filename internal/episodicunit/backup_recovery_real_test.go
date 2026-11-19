@@ -52,7 +52,7 @@ func TestPrepareRealZCodeBackup(t *testing.T) {
 		t.Fatal("cannot read vault")
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT doc_id, raw_text FROM thin_vault_docs WHERE (layer = 'episodic' OR layer = '') AND substr(raw_text, 1, 11) = '@ref:zcode:'`)
+	rows, err := tx.Query(`SELECT doc_id, raw_text FROM rm_units WHERE (layer = 'episodic' OR layer = '') AND substr(raw_text, 1, 11) = '@ref:zcode:'`)
 	if err != nil {
 		t.Fatal("cannot read references")
 	}

@@ -50,6 +50,27 @@ export function sizeOf(degree: number): number {
     return Math.min(30, 7 + Math.sqrt(Math.max(0, degree)) * 4.6)
 }
 
+/** 黄金角（Fibonacci Sphere 均布采样步进） */
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
+
+/**
+ * 黄金球面斐波那契采样（纯函数，供 3D 引擎与 Web Worker 共用）。
+ *
+ * 关键约束：`|point| === radius` 必须对任意 `idx` 恒成立。早期实现把 `total`
+ * 当成固定分母（如 40 / 48），当调用方传入的节点数超过分母时 `y` 会跌出
+ * `[-1, 1]`，`z` 随之按 `y * radius` 无限下拉，形成整条拖到球体外的“彗尾”。
+ * 这里对索引取模并严格夹紧 `y`，分母失真时只会在球面上重叠，绝不会离开球面。
+ */
+export function fibonacciSpherePoint(idx: number, total: number, radius: number, phaseSeed = 0): [number, number, number] {
+    const count = Math.max(1, Math.floor(total) || 1)
+    const i = ((Math.floor(idx) % count) + count) % count
+    if (count <= 1) return [0, 0, radius * 0.35]
+    const y = Math.max(-1, Math.min(1, 1 - ((i + 0.5) / count) * 2))
+    const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y))
+    const theta = i * GOLDEN_ANGLE + phaseSeed
+    return [Math.cos(theta) * radiusAtY * radius, Math.sin(theta) * radiusAtY * radius, y * radius]
+}
+
 /**
  * 单节点独立下钻布局（Ego-Centric Radial Concentric Layout）：
  * - focusId 固定在 (0, 0)，坐标等向同性（完美同心圆环，便于叠加轨道引导圈）

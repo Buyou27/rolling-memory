@@ -100,7 +100,7 @@ func (a *application) runEval() int {
 	storePath := a.args.String("eval_store")
 	if storePath == "" {
 		baseName := "eval-locomo"
-		if suite == eval.SuiteATM {
+		if suite == eval.SuiteATM || suite == eval.SuiteATMProbes {
 			baseName = "eval-atm"
 		}
 		// 现役唯一合法模式 = local_plain（脉冲云端臂已移除）：store 名固定带 -local-plain 后缀；
@@ -112,9 +112,12 @@ func (a *application) runEval() int {
 	if suite == eval.SuiteATM && !a.args.provided["tier"] {
 		tier = eval.TierATMHard
 	}
+	if suite == eval.SuiteATMProbes && !a.args.provided["tier"] {
+		tier = eval.TierProbeAbsence
+	}
 	rawLimit := a.args.Int("raw_limit")
 	if !a.args.provided["raw_limit"] || rawLimit <= 0 {
-		if suite == eval.SuiteATM {
+		if suite == eval.SuiteATM || suite == eval.SuiteATMProbes {
 			// ATM-Bench 默认智能交付窗口 = 0–64 items（基于物理信息能量包络 E(u_k) >= E(u_1)/e 零保底自适应选材）。
 			rawLimit = 64
 		} else {
@@ -130,6 +133,7 @@ func (a *application) runEval() int {
 	opts := eval.Options{
 		Suite:           suite,
 		DataDir:         a.args.String("eval_data"),
+		ProbeDir:        a.args.String("probes"),
 		Tier:            tier,
 		Limit:           intOr(a.args.Int("limit"), 0),
 		Offset:          a.args.Int("offset"),

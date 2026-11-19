@@ -34,7 +34,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
@@ -61,7 +61,7 @@ func uploadCurrentEpisodicTurn(memory *facade.Memory, cfg *config.Config, sessio
 	if len(units) == 0 {
 		return map[string]any{"uploaded": 0}
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil || tc == nil || tc.Transport == nil {
 		return map[string]any{"uploaded": 0}
 	}
@@ -72,7 +72,7 @@ func uploadCurrentEpisodicTurn(memory *facade.Memory, cfg *config.Config, sessio
 	firstUnit := ""
 	for _, unit := range units {
 		if _, err := tc.RememberEpisodicByRef(ctx, unit.DocID, unit.RefPointer, unit.TurnRef, unit.Text, unit.OccurredAt); err != nil {
-			if !errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+			if !errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 				logHook(cfg, "episodic_upload", map[string]any{"vault_write_error": ids.Redact(err.Error())})
 			}
 			continue
@@ -182,49 +182,4 @@ func unitsForSegments(scope, pointerPrefix string, segments []episodic.Segment, 
 		}
 	}
 	return units, readCnt
-}
-
-const (
-	// backgroundHookCooldownSec throttles L1 Background directory scans inside the
-	// UserPromptSubmit hook so back-to-back prompts within 60s incur zero scan work.
-	backgroundHookCooldownSec = int64(60)
-	// backgroundHookSyncTimeout bounds the incremental background sync inside a hook.
-	backgroundHookSyncTimeout = 1500 * time.Millisecond
-	// backgroundHookMetaKey stores the last background hook scan unix timestamp in rm_meta.
-	backgroundHookMetaKey = "bg_last_hook_sync_ts"
-)
-
-// maybeSyncBackgroundOnHook triggers a lightweight incremental L1 Background sync
-// during UserPromptSubmit when at least one directory is mounted in `rm_bg_dirs`
-// and the 60s cooldown window has elapsed. Unchanged files are skipped in O(1) via
-// `os.Stat(mtime_ns, size)` inside `SyncBackgroundDirs`.
-func maybeSyncBackgroundOnHook(memory *facade.Memory) {
-	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
-		return
-	}
-	db := memory.Store.DB()
-	var dirCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_bg_dirs`).Scan(&dirCount); err != nil || dirCount <= 0 {
-		return
-	}
-	now := ids.UTCNow()
-	var raw []byte
-	if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, backgroundHookMetaKey).Scan(&raw); err == nil {
-		if lastTS, pErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); pErr == nil {
-			if now-lastTS >= 0 && now-lastTS < backgroundHookCooldownSec {
-				return
-			}
-		}
-	}
-	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
-	_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
-		backgroundHookMetaKey, []byte(strconv.FormatInt(now, 10)))
-
-	tc, err := memory.ThinClient()
-	if err != nil || tc == nil || tc.Transport == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), backgroundHookSyncTimeout)
-	defer cancel()
-	_, _ = tc.SyncBackgroundDirs(ctx)
 }

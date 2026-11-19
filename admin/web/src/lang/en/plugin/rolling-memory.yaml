@@ -11,7 +11,6 @@ widget:
     conflicts: Stale Noetic
     lastEvent: Last Event
     latency: Latency
-    boot: Boot Context
     ledger: Recall Ledger
     scope: Scope
     bgTask: Task
@@ -76,7 +75,6 @@ background:
     pageSub: 'Built only from local folders you mount yourself: read text in place → chunk into L1. Harness dialogue records never enter this layer (dialogues belong to L2 Sessions)'
     reconcileSuccess: 'L1 aligned: +{bg} mounted-document chunks (this layer contains no Harness dialogue records)'
     reconcileSuccessLocal: 'L1 locally aligned: +{bg} mounted-document chunks (local mode makes zero cloud requests)'
-    reconcileResult: 'L1 sync result: {files} files processed, {chunks} chunks pushed'
     syncBtn: Sync Now
     manualBtn: Enter Path Manually
     manualHint: When the native folder picker is unavailable (e.g. remote access), type the server-side path directly; mounting triggers an incremental sync.
@@ -99,7 +97,6 @@ episodic:
     totalUnit: ''
     pageTitle: L2 Sessions · Dialogue Units & Local Harness Sync
     pageSub: 'Built only from Harness dialogue records: background auto-sync + historical session reconcile. Local folder files never enter this layer (files belong to L1 Docs & Code)'
-    reconcileResult: 'L2 sync result: {har} harness turns imported, {epi} entries pushed'
     reconcileSuccess: 'L2 aligned: +{har} Harness turns imported · +{epi} synced (Harness dialogue stays in L2, never L1)'
     reconcileSuccessLocal: 'L2 locally aligned: +{har} Harness turns imported (local mode makes zero cloud requests)'
     unitsTitle: Session Units (L2)
@@ -130,7 +127,6 @@ noetic:
     unit: ''
     pageTitle: L3 Recall Trail · Agent Cues & Cited Evidence
     pageSub: 'Recorded automatically from every Agent recall that returned evidence (the cue + the evidence units it cited), written at recall time; it never absorbs Harness dialogues or local folder files. Use "Replay in Debugger" on a row to reproduce exactly what the Agent saw'
-    reconcileResult: 'L3 sync result: {noe} recall entries pushed'
     reconcileSuccess: 'L3 aligned: +{noe} recall entries (Agent cue + cited evidence)'
     reconcileSuccessLocal: 'L3 needs no reconcile in local mode: recall entries are written locally by Agent recall (zero cloud requests)'
     unitsTitle: Recall Trail (L3)
@@ -158,7 +154,6 @@ overview:
     healthChecksTitle: 5-Dimension Memory Health & Local ⇄ Cloud 3-Layer Alignment
     healthChecksTitleLocal: 5-Dimension Memory Health & Local 3-Layer Vault
     localVaultLbl: Local Vault
-    remoteCloudLbl: Remote Cloud
     pendingSyncLbl: Pending Sync
     harnessUnsyncedLbl: Unimported Turns
     alignedTag: Aligned
@@ -215,7 +210,6 @@ overview:
     progressError: Check did not complete; retry below
     progressRetry: Retry
     refreshFailed: Re-check did not complete; try again
-    reconcileResult: 'Sync result: {har} harness turns imported · {files} L1 files processed · pushed L2 {epi} / L1 {bg} / L3 {noe}'
     reconcileWarnings: 'Sync reported warnings; results may be incomplete:'
     reconcileNoReport: No sync report returned; status unknown
     autoSyncModeLbl: Auto Watch Sync

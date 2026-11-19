@@ -11,10 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/graphmodel"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
 
@@ -158,11 +159,15 @@ type hydratedUnit struct {
 }
 
 type rawPhrase struct {
-	a       uint64
-	b       uint64
-	df      int
-	joint   float64
-	binding float64
+	a           uint64
+	b           uint64
+	df          int
+	dfA         int
+	dfB         int
+	containment float64
+	lift        float64
+	joint       float64
+	binding     float64
 }
 
 type wordAgg struct {
@@ -181,14 +186,18 @@ type phraseKey struct {
 }
 
 type phraseAgg struct {
-	a        uint64
-	b        uint64
-	df       int
-	joint    float64
-	binding  float64
-	unitSpan int
-	units    map[string]float64
-	layers   map[string]int
+	a           uint64
+	b           uint64
+	df          int
+	dfA         int
+	dfB         int
+	containment float64
+	lift        float64
+	joint       float64
+	binding     float64
+	unitSpan    int
+	units       map[string]float64
+	layers      map[string]int
 }
 
 func (s *viewState) hydrate(ctx context.Context) {
@@ -232,33 +241,55 @@ func (s *viewState) extractLexical(vu *hydratedUnit, text string) {
 		})
 	}
 	pkt, _ := s.builder.vault.PackBlindPacket(vu.unit.Row.UnitID, text, vu.unit.Row.OccurredAt)
+	overlapPairs := hanRunWindowPairs(text)
 	surfaces := make([]string, 0, 64)
 	for _, sentence := range plain.SplitSentences(text) {
 		for _, word := range plain.SplitWords(sentence) {
-			surface := strings.ToLower(strings.TrimSpace(plain.CanonicalizeApostrophe(word)))
+			surface := canonicalPhraseSurface(word)
 			if surface == "" {
 				continue
 			}
 			surfaces = append(surfaces, surface)
 		}
 	}
-	if len(surfaces) > 0 {
-		hashes := s.builder.vault.SurfaceHashes(surfaces)
-		for _, surface := range surfaces {
-			hash := hashes[surface]
-			if hash == 0 || s.snap.engine.Index.TermDF(hash) <= 0 {
-				continue
-			}
-			group := s.termGroup(hash)
-			if group == 0 {
-				continue
-			}
-			counts := s.groupSurface[group]
-			if counts == nil {
-				counts = map[string]int{}
-				s.groupSurface[group] = counts
-			}
-			counts[surface]++
+	overlapSurfaces := make([]string, 0, len(overlapPairs)*2)
+	for _, pair := range overlapPairs {
+		overlapSurfaces = append(overlapSurfaces, canonicalPhraseSurface(pair[0]), canonicalPhraseSurface(pair[1]))
+	}
+	hashes := s.builder.vault.SurfaceHashes(append(surfaces, overlapSurfaces...))
+	for _, surface := range surfaces {
+		hash := hashes[surface]
+		if hash == 0 || s.snap.engine.Index.TermDF(hash) <= 0 {
+			continue
+		}
+		group := s.termGroup(hash)
+		if group == 0 {
+			continue
+		}
+		counts := s.groupSurface[group]
+		if counts == nil {
+			counts = map[string]int{}
+			s.groupSurface[group] = counts
+		}
+		counts[surface]++
+	}
+	// Adjacent sliding windows of one Han run overlap by construction, so their
+	// co-occurrence is forced by the text and carries no association evidence.
+	// They stay in the retrieval index (recall keys), but not in the phrase
+	// projection: one character run projected twice is one observation.
+	overlap := make(map[phraseKey]struct{}, len(overlapPairs))
+	for _, pair := range overlapPairs {
+		a := hashes[canonicalPhraseSurface(pair[0])]
+		b := hashes[canonicalPhraseSurface(pair[1])]
+		if a == 0 || b == 0 {
+			continue
+		}
+		overlap[orderPhraseKey(a, b)] = struct{}{}
+	}
+	surfaceByHash := make(map[uint64]string, len(hashes))
+	for surface, hash := range hashes {
+		if hash != 0 {
+			surfaceByHash[hash] = surface
 		}
 	}
 	if pkt.SentenceFrames == nil {
@@ -275,38 +306,159 @@ func (s *viewState) extractLexical(vu *hydratedUnit, text string) {
 		}
 	}
 	dyads := plain.ExtractPulsePrimaryDyads(frames)
-	if len(dyads) > maxPhraseCandidates {
-		dyads = dyads[:maxPhraseCandidates]
-	}
 	seen := map[phraseKey]struct{}{}
-	for _, dyad := range dyads {
-		if dyad.Left == 0 || dyad.Right == 0 || dyad.Left == dyad.Right {
-			continue
+	kept := 0
+	addPhrase := func(left, right uint64) {
+		if kept >= maxPhraseCandidates {
+			return
 		}
-		if _, dup := seen[phraseKey{a: dyad.Left, b: dyad.Right}]; dup {
-			continue
+		if left == 0 || right == 0 || left == right {
+			return
 		}
-		profile, ok := s.snap.engine.PhraseEnergyVector(dyad.Left, dyad.Right)
+		key := orderPhraseKey(left, right)
+		if _, skip := overlap[key]; skip {
+			return
+		}
+		if decomposedHanUnigrams(surfaceByHash, hashes, s.snap.engine.Index, key.a, key.b) {
+			return
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		profile, ok := s.snap.engine.PhraseEnergyVector(key.a, key.b)
 		if !ok || profile.BindingEnergyNats <= 0 {
-			continue
+			return
 		}
 		a, b := profile.TermA, profile.TermB
 		if a == 0 || b == 0 || a == b {
-			continue
+			return
 		}
-		key := phraseKey{a: a, b: b}
-		if _, dup := seen[key]; dup {
-			continue
+		final := phraseKey{a: a, b: b}
+		if _, dup := seen[final]; dup {
+			return
 		}
-		seen[key] = struct{}{}
+		seen[final] = struct{}{}
+		dfA, dfB, containment, lift := phraseEvidence(s.snap.engine.Index, profile)
 		vu.phrases = append(vu.phrases, rawPhrase{
-			a:       a,
-			b:       b,
-			df:      profile.PhraseDF,
-			joint:   profile.JointSurprisalNats,
-			binding: profile.BindingEnergyNats,
+			a:           a,
+			b:           b,
+			df:          profile.PhraseDF,
+			dfA:         dfA,
+			dfB:         dfB,
+			containment: containment,
+			lift:        lift,
+			joint:       profile.JointSurprisalNats,
+			binding:     profile.BindingEnergyNats,
 		})
+		kept++
 	}
+	for _, dyad := range dyads {
+		addPhrase(dyad.Left, dyad.Right)
+	}
+	// The dual track emits every bigram before every unigram, so adjacent
+	// primaries are always overlapping windows (dropped above). Recover the
+	// disjoint tilings of each Han run instead: windows at stride two cover the
+	// run with distinct text material, which is the only same-run pairing that
+	// is not a tautology.
+	for _, run := range hanRuns(text) {
+		runes := []rune(run)
+		for parity := 0; parity < 2; parity++ {
+			for k := parity; k+4 <= len(runes); k += 2 {
+				addPhrase(
+					hashes[canonicalPhraseSurface(string(runes[k:k+2]))],
+					hashes[canonicalPhraseSurface(string(runes[k+2:k+4]))],
+				)
+			}
+		}
+	}
+}
+
+// canonicalPhraseSurface mirrors the encoder's surface canonicalization so a
+// projected run window hashes to the same term the index stored.
+func canonicalPhraseSurface(surface string) string {
+	return strings.ToLower(strings.TrimSpace(plain.CanonicalizeApostrophe(surface)))
+}
+
+// hanRunWindowPairs returns every pair of adjacent two-character sliding
+// windows of the same Han run. Each pair shares one character, so it is one
+// text run seen twice rather than two independent observations.
+func hanRunWindowPairs(text string) [][2]string {
+	var pairs [][2]string
+	for _, run := range hanRuns(text) {
+		runes := []rune(run)
+		for k := 0; k+3 <= len(runes); k++ {
+			pairs = append(pairs, [2]string{string(runes[k : k+2]), string(runes[k+1 : k+3])})
+		}
+	}
+	return pairs
+}
+
+func hanRuns(text string) []string {
+	var runs []string
+	start := -1
+	for i, r := range text {
+		if unicode.Is(unicode.Han, r) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			runs = append(runs, text[start:i])
+			start = -1
+		}
+	}
+	if start >= 0 {
+		runs = append(runs, text[start:])
+	}
+	return runs
+}
+
+func orderPhraseKey(a, b uint64) phraseKey {
+	if a > b {
+		a, b = b, a
+	}
+	return phraseKey{a: a, b: b}
+}
+
+// phraseEvidence pairs the phrase document frequency with the two member
+// document frequencies: containment measures how much of the rarer member's
+// life is covered by the pair, lift measures the pair against the independence
+// expectation dfA*dfB/N.
+func phraseEvidence(idx *core.Index, profile core.PhraseEnergyProfile) (dfA, dfB int, containment, lift float64) {
+	if idx == nil {
+		return 0, 0, 0, 0
+	}
+	dfA = idx.TermDF(profile.TermA)
+	dfB = idx.TermDF(profile.TermB)
+	minDF := dfA
+	if dfB < minDF {
+		minDF = dfB
+	}
+	if minDF > 0 {
+		containment = float64(profile.PhraseDF) / float64(minDF)
+	}
+	if dfA > 0 && dfB > 0 && idx.N > 0 {
+		lift = float64(profile.PhraseDF) * float64(idx.N) / (float64(dfA) * float64(dfB))
+	}
+	return dfA, dfB, containment, lift
+}
+
+// decomposedHanUnigrams reports whether two single Han characters are the
+// unigram track of one longer indexed term (e.g. 暴 + 露 behind 暴露). The
+// maximality principle keeps the longer term and drops the decomposition from
+// the phrase projection; the short tokens remain retrieval keys.
+func decomposedHanUnigrams(surfaceByHash map[uint64]string, hashes map[string]uint64, idx *core.Index, a, b uint64) bool {
+	if idx == nil {
+		return false
+	}
+	sa, sb := surfaceByHash[a], surfaceByHash[b]
+	ra, rb := []rune(sa), []rune(sb)
+	if len(ra) != 1 || len(rb) != 1 || !unicode.Is(unicode.Han, ra[0]) || !unicode.Is(unicode.Han, rb[0]) {
+		return false
+	}
+	joined := hashes[sa+sb]
+	return joined != 0 && idx.TermDF(joined) > 0
 }
 
 func (s *viewState) termGroup(term uint64) uint64 {
@@ -417,12 +569,16 @@ func (s *viewState) buildUnitPayloads() {
 			agg := s.phraseAgg[key]
 			if agg == nil {
 				agg = &phraseAgg{
-					a:      raw.a,
-					b:      raw.b,
-					df:     raw.df,
-					joint:  raw.joint,
-					units:  map[string]float64{},
-					layers: map[string]int{},
+					a:           raw.a,
+					b:           raw.b,
+					df:          raw.df,
+					dfA:         raw.dfA,
+					dfB:         raw.dfB,
+					containment: raw.containment,
+					lift:        raw.lift,
+					joint:       raw.joint,
+					units:       map[string]float64{},
+					layers:      map[string]int{},
 				}
 				s.phraseAgg[key] = agg
 			}
@@ -529,7 +685,7 @@ func (s *viewState) assemble() ([]graphmodel.Node, []graphmodel.Edge, graphmodel
 				if _, ok := unitPayloads[cited]; !ok {
 					continue
 				}
-				addEdge(unitKey, citedKey, graphmodel.RelationCites, thinclient.LayerNoetic, "citation", 1)
+				addEdge(unitKey, citedKey, graphmodel.RelationCites, localvault.LayerNoetic, "citation", 1)
 			}
 		}
 	}
@@ -628,8 +784,8 @@ func (s *viewState) assemble() ([]graphmodel.Node, []graphmodel.Edge, graphmodel
 		}
 	}
 	for pair, count := range coCiteCounts {
-		addEdge(pair[0], pair[1], graphmodel.RelationCoCites, thinclient.LayerEpisodic, "co-citation", count)
-		addEdge(pair[1], pair[0], graphmodel.RelationCoCites, thinclient.LayerEpisodic, "co-citation", count)
+		addEdge(pair[0], pair[1], graphmodel.RelationCoCites, localvault.LayerEpisodic, "co-citation", count)
+		addEdge(pair[1], pair[0], graphmodel.RelationCoCites, localvault.LayerEpisodic, "co-citation", count)
 	}
 
 	// Word nodes: phrase endpoints first so phrase_has_word always resolves.
@@ -694,7 +850,7 @@ func (s *viewState) assemble() ([]graphmodel.Node, []graphmodel.Edge, graphmodel
 			Status:     "active",
 			Confidence: 1,
 			Anchor:     "phrase://" + hex16(key.a) + ":" + hex16(key.b),
-			Span:       fmt.Sprintf("df=%d J=%.2f binding=%.2f", agg.df, agg.joint, agg.binding),
+			Span:       fmt.Sprintf("df=%d dfA=%d dfB=%d contain=%.2f lift=%.2f J=%.2f binding=%.2f", agg.df, agg.dfA, agg.dfB, agg.containment, agg.lift, agg.joint, agg.binding),
 			Weight:     agg.binding,
 			EnergyNats: agg.binding,
 			LayerMix:   agg.layers,
@@ -702,6 +858,10 @@ func (s *viewState) assemble() ([]graphmodel.Node, []graphmodel.Edge, graphmodel
 				Left:               left,
 				Right:              right,
 				DF:                 agg.df,
+				LeftDF:             agg.dfA,
+				RightDF:            agg.dfB,
+				Containment:        agg.containment,
+				Lift:               agg.lift,
 				JointSurprisalNats: agg.joint,
 				BindingEnergyNats:  agg.binding,
 				UnitSpan:           agg.unitSpan,
@@ -930,14 +1090,19 @@ func (s *viewState) topClusterPhrases(weights map[phraseKey]float64, limit int) 
 	out := make([]graphmodel.PhraseFragment, 0, len(items))
 	for _, it := range items {
 		agg := s.phraseAgg[it.key]
-		df, joint := 0, 0.0
+		df, dfA, dfB, joint, containment, lift := 0, 0, 0, 0.0, 0.0, 0.0
 		if agg != nil {
-			df, joint = agg.df, agg.joint
+			df, dfA, dfB, joint = agg.df, agg.dfA, agg.dfB, agg.joint
+			containment, lift = agg.containment, agg.lift
 		}
 		out = append(out, graphmodel.PhraseFragment{
 			Left:               s.labelForGroup(s.termGroup(it.key.a)),
 			Right:              s.labelForGroup(s.termGroup(it.key.b)),
 			DF:                 df,
+			LeftDF:             dfA,
+			RightDF:            dfB,
+			Containment:        containment,
+			Lift:               lift,
 			JointSurprisalNats: joint,
 			BindingEnergyNats:  it.binding,
 		})
@@ -1118,9 +1283,9 @@ func selectUnits(snap *Snapshot, limit int, keyword string, layers map[string]bo
 	}
 
 	buckets := map[string][]*Unit{
-		thinclient.LayerNoetic:     {},
-		thinclient.LayerBackground: {},
-		thinclient.LayerEpisodic:   {},
+		localvault.LayerNoetic:     {},
+		localvault.LayerBackground: {},
+		localvault.LayerEpisodic:   {},
 	}
 	for _, u := range filtered {
 		buckets[u.Row.Layer] = append(buckets[u.Row.Layer], u)
@@ -1134,9 +1299,9 @@ func selectUnits(snap *Snapshot, limit int, keyword string, layers map[string]bo
 		layer string
 		take  int
 	}{
-		{thinclient.LayerNoetic, 1},
-		{thinclient.LayerBackground, 2},
-		{thinclient.LayerEpisodic, 2},
+		{localvault.LayerNoetic, 1},
+		{localvault.LayerBackground, 2},
+		{localvault.LayerEpisodic, 2},
 	}
 	for len(selected) < limit {
 		progressed := false
@@ -1333,12 +1498,12 @@ func normalizeLayerSet(layers []string) map[string]bool {
 	out := map[string]bool{}
 	for _, layer := range layers {
 		switch strings.ToLower(strings.TrimSpace(layer)) {
-		case thinclient.LayerBackground, "bg":
-			out[thinclient.LayerBackground] = true
-		case thinclient.LayerNoetic, "qa", "insight":
-			out[thinclient.LayerNoetic] = true
-		case thinclient.LayerEpisodic:
-			out[thinclient.LayerEpisodic] = true
+		case localvault.LayerBackground, "bg":
+			out[localvault.LayerBackground] = true
+		case localvault.LayerNoetic, "qa", "insight":
+			out[localvault.LayerNoetic] = true
+		case localvault.LayerEpisodic:
+			out[localvault.LayerEpisodic] = true
 		}
 	}
 	return out
@@ -1377,7 +1542,7 @@ func agentLayer(snap *Snapshot, unitID string) string {
 	if u := snap.UnitByID[unitID]; u != nil {
 		return u.Row.Layer
 	}
-	return thinclient.LayerEpisodic
+	return localvault.LayerEpisodic
 }
 
 func termDF(snap *Snapshot, group uint64) int {

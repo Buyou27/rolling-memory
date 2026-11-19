@@ -136,7 +136,7 @@
                         <span class="ws-span font-mono">{{ windowMetaOf(w.key).span }}</span>
                     </div>
                     <div class="ws-card-main font-mono">
-                        <span class="text-primary">+{{ w.noetic_crystallized }} {{ isEn ? 'Noetic' : '结晶' }}</span>
+                        <span class="text-layer-noetic">+{{ w.noetic_crystallized }} {{ isEn ? 'Noetic' : '结晶' }}</span>
                         <span class="ws-dot">·</span>
                         <span class="text-success">{{ w.citation_links }} {{ isEn ? 'Citations' : '次引证' }}</span>
                     </div>
@@ -174,9 +174,9 @@
                             </div>
                         </el-popover>
                     </span>
-                    <Icon name="el-magic-stick" :size="16" class="text-primary" />
+                    <Icon name="el-magic-stick" :size="16" style="color: var(--rm-layer-noetic)" />
                 </div>
-                <div class="rc-val font-mono text-primary">
+                <div class="rc-val font-mono text-layer-noetic">
                     {{ activeWindow.noetic_crystallized }}
                     <span class="rc-unit">{{ isEn ? 'crystallized' : '次认知结晶' }}</span>
                     <span class="rc-pill is-success">{{ activeWindow.citation_links }} {{ isEn ? 'citations' : '条引证链' }}</span>
@@ -307,7 +307,7 @@
                             </div>
                         </el-popover>
                     </span>
-                    <Icon name="lucide-database" :size="16" class="text-primary" />
+                    <Icon name="lucide-database" :size="16" style="color: var(--rm-layer-background)" />
                 </div>
                 <div class="rc-val font-mono">
                     {{ vault?.episodic_pointer_ratio_pct ?? 0 }}%
@@ -699,13 +699,7 @@
                             <div class="unit-cell">
                                 <span class="font-mono unit-id">{{ row.unit_id }}</span>
                                 <div class="unit-tags">
-                                    <el-tag
-                                        size="small"
-                                        :type="row.layer === 'background' ? 'warning' : row.layer === 'noetic' ? 'success' : 'primary'"
-                                        effect="plain"
-                                    >
-                                        {{ row.layer === 'background' ? 'L1' : row.layer === 'noetic' ? 'L3' : 'L2' }}
-                                    </el-tag>
+                                    <MemoryLayerBadge :layer="row.layer" :label="memoryLayerShortLabel(row.layer)" />
                                     <span v-if="row.locus" class="unit-locus font-mono">{{ row.locus }}</span>
                                 </div>
                             </div>
@@ -1031,13 +1025,7 @@
                     </div>
                     <div v-for="unit in selectedNoetic.cited_units" :key="unit.unit_id" class="cite-record">
                         <div class="cite-head font-mono">
-                            <el-tag
-                                size="small"
-                                :type="unit.layer === 'background' ? 'warning' : unit.layer === 'noetic' ? 'success' : 'primary'"
-                                effect="plain"
-                            >
-                                {{ unit.layer === 'background' ? 'L1' : unit.layer === 'noetic' ? 'L3' : 'L2' }}
-                            </el-tag>
+                            <MemoryLayerBadge :layer="unit.layer" :label="memoryLayerShortLabel(unit.layer)" />
                             <span class="unit-id">{{ unit.unit_id }}</span>
                             <span v-if="unit.locus" class="text-secondary">{{ unit.locus }}</span>
                             <el-tag v-if="unit.is_hydrated" size="small" type="success" effect="plain">
@@ -1076,8 +1064,10 @@ import { useRouter } from 'vue-router'
 import { useAdminInfo } from '@/stores/adminInfo'
 import { useConfig } from '@/stores/config'
 import { useLoadingProgressText } from '@/utils/loadingProgress'
+import { memoryLayerShortLabel } from '@/utils/memoryLayers'
 import { MonitorSocket } from '@/utils/monitorSocket'
 import request from '@/utils/request'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
 import MarkdownPreview from '@/views/admin/plugin/rolling-memory/MarkdownPreview.vue'
 import MemoryHoverPreview from '@/views/admin/plugin/rolling-memory/MemoryHoverPreview.vue'
 
@@ -2124,11 +2114,15 @@ onBeforeUnmount(() => {
 }
 
 .lg-dot.is-ep {
-    background: var(--el-color-primary);
+    background: var(--rm-layer-episodic);
 }
 
 .lg-dot.is-bg {
-    background: var(--el-color-warning);
+    background: var(--rm-layer-background);
+}
+
+.text-layer-noetic {
+    color: var(--rm-layer-noetic);
 }
 
 .trend-chips {
@@ -2306,11 +2300,11 @@ onBeforeUnmount(() => {
 }
 
 .bar-seg.is-ep {
-    background: var(--el-color-primary);
+    background: var(--rm-layer-episodic);
 }
 
 .bar-seg.is-bg {
-    background: var(--el-color-warning);
+    background: var(--rm-layer-background);
 }
 
 .bar-seg.is-hover,
@@ -2349,7 +2343,7 @@ onBeforeUnmount(() => {
 }
 
 .line-svg.is-noetic polyline {
-    stroke: var(--el-color-success);
+    stroke: var(--rm-layer-noetic);
 }
 
 .line-svg.is-adopt polyline {
@@ -2375,7 +2369,7 @@ onBeforeUnmount(() => {
 }
 
 .trend-dot.is-nt {
-    background: var(--el-color-success);
+    background: var(--rm-layer-noetic);
 }
 
 .trend-dot.is-ad {
@@ -2389,7 +2383,7 @@ onBeforeUnmount(() => {
 }
 
 .trend-dot.is-nt.is-hollow {
-    border: 2px solid var(--el-color-success);
+    border: 2px solid var(--rm-layer-noetic);
 }
 
 .trend-dot.is-ad.is-hollow {

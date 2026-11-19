@@ -493,7 +493,7 @@
                         :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'molecule' }"
                         @click="roleFilter = roleFilter === 'molecule' ? 'all' : 'molecule'"
                     >
-                        <i class="geo-glyph" style="background: #a855f7" />
+                        <i class="geo-glyph geo-glyph--molecule" />
                         {{ isEn ? `Molecule (${roleCounts.molecule})` : `分子包 (${roleCounts.molecule})` }}
                     </span>
                 </template>
@@ -548,19 +548,16 @@
                         </el-tag>
                     </el-descriptions-item>
                     <el-descriptions-item :label="isEn ? 'Layer' : '所属认知层'">
-                        <el-tag
-                            size="small"
-                            :type="currentNode.layer === 'noetic' ? 'danger' : currentNode.layer === 'background' ? 'primary' : 'success'"
-                            effect="plain"
-                        >
-                            {{
+                        <MemoryLayerBadge
+                            :layer="currentNode.layer"
+                            :label="
                                 currentNode.layer === 'noetic'
                                     ? 'L3 Noetic'
                                     : currentNode.layer === 'background'
                                       ? 'L1 Background'
                                       : 'L2 Episodic'
-                            }}
-                        </el-tag>
+                            "
+                        />
                     </el-descriptions-item>
                     <el-descriptions-item :span="2" :label="isEn ? 'C6 Address / Anchor' : 'C6 寻址坐标 / 句柄'">
                         <code>{{ currentNode.anchor || currentNode.node_key }}</code>
@@ -615,6 +612,8 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { Hypergraph3DEngine, type Graph3DNode, type Graph3DSpaceMode } from '@/components/graph/engine'
 import GraphDrillOverlay from '@/components/graph/GraphDrillOverlay.vue'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
+import { MEMORY_LAYER_COLORS, memoryLayerColor } from '@/utils/memoryLayers'
 import { computeEgoLayout, computeLayout, type LayoutEdge, type LayoutNode, type LayoutResult } from '@/components/graph/layout'
 import LayoutWorker from '@/components/graph/layout.worker?worker'
 
@@ -837,7 +836,7 @@ function parseNoeticQA(node: GraphNode): { q: string; a: string } {
 function nodeGlyphClass(n: { kind: string; layer?: string }): string {
     if (n.kind === 'cell') return 'geo-glyph--cell'
     if (n.kind === 'atom') return 'geo-glyph--focus'
-    if (n.kind === 'molecule') return 'geo-glyph--noetic'
+    if (n.kind === 'molecule') return 'geo-glyph--molecule'
     if (n.layer === 'noetic') return 'geo-glyph--noetic'
     if (n.layer === 'background') return 'geo-glyph--bg'
     return 'geo-glyph--ep'
@@ -881,9 +880,7 @@ function nodeDotColor(n: { kind: string; layer?: string }): string {
     if (n.kind === 'cell') return '#0891b2'
     if (n.kind === 'atom') return '#f59e0b'
     if (n.kind === 'molecule') return '#a855f7'
-    if (n.layer === 'noetic') return '#ec4899'
-    if (n.layer === 'background') return '#3b82f6'
-    return '#10b981'
+    return memoryLayerColor(n.layer, MEMORY_LAYER_COLORS.episodic.hex)
 }
 
 function toggleRelationChip(rel: string) {
@@ -1761,18 +1758,25 @@ onBeforeUnmount(() => {
         }
 
         &--bg {
-            background: #3b82f6;
+            background: var(--rm-layer-background);
         }
 
         &--ep {
-            background: #10b981;
+            background: var(--rm-layer-episodic);
         }
 
         &--noetic {
             width: 10px;
             height: 10px;
-            background: #ec4899;
-            box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.28);
+            background: var(--rm-layer-noetic);
+            box-shadow: 0 0 0 2px rgba(var(--rm-layer-noetic-rgb), 0.28);
+        }
+
+        &--molecule {
+            width: 10px;
+            height: 10px;
+            background: #a855f7;
+            box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.28);
         }
 
         &--focus {
@@ -1901,6 +1905,21 @@ onBeforeUnmount(() => {
                 background: rgba(56, 189, 248, 0.22);
                 border-color: #38bdf8;
                 color: #ffffff;
+            }
+
+            &.is-bg.is-active {
+                background: rgba(var(--rm-layer-background-rgb), 0.24);
+                border-color: var(--rm-layer-background);
+            }
+
+            &.is-ep.is-active {
+                background: rgba(var(--rm-layer-episodic-rgb), 0.24);
+                border-color: var(--rm-layer-episodic);
+            }
+
+            &.is-noetic.is-active {
+                background: rgba(var(--rm-layer-noetic-rgb), 0.26);
+                border-color: var(--rm-layer-noetic);
             }
         }
 

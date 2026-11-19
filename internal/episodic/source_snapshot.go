@@ -329,7 +329,7 @@ func (s *SourceSnapshot) Resolve(refPointer string) (text string, ok bool) {
 
 // parseJSONLSegmentRef parses one segment pointer of the jsonl form. The suffix
 // grammar is the one the ingest writes (`SegmentUnits`) and the live resolver parses
-// (`thinclient.splitPointerSegment`): `#<k>` names the whole segment, `#<k>.<c>`
+// (`localvault.splitPointerSegment`): `#<k>` names the whole segment, `#<k>.<c>`
 // chunk c of it, and a tail without a `#` suffix is a whole-turn pointer, which is
 // not a segment and is rejected here.
 func parseJSONLSegmentRef(refPointer string) (path string, turnIndex, segmentIndex, chunkIndex int, hasChunk, ok bool) {

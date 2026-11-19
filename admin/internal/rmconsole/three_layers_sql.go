@@ -4,7 +4,7 @@
 // 三层语义（不得破坏）：
 //
 //	· L1 Background = 用户自己挂载的本地目录文件底物（rm_bg_dirs → rm_bg_files → rm_bg_chunks）；
-//	· L2 Episodic   = Harness 对话记录单元（thin_vault_docs，layer='episodic'，空 layer 按旧口径回退为 episodic）；
+//	· L2 Episodic   = Harness 对话记录单元（rm_units，layer='episodic'，空 layer 按旧口径回退为 episodic）；
 //	· L3 Noetic     = Agent 提问 + 检索证据固化（rm_noetic，cited_unit_ids_json 指回 L1/L2 单元）。
 //
 // 三层不是三张同构表，而是「两张物理表 + 一个派生层标签」；本文件把它们投影成一张统一视图，
@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-// 三层记忆的规范层名（与前端 layerBrowser 的 layer 取值、以及引擎 thin_vault_docs.layer 取值一致）。
+// 三层记忆的规范层名（与前端 layerBrowser 的 layer 取值、以及引擎 rm_units.layer 取值一致）。
 const (
 	backgroundLayer = "background"
 	episodicLayer   = "episodic"
@@ -125,7 +125,7 @@ func fillCachedLayerGlobalCounts(dbPath string, resp *LayerStatsResponse) {
 			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(layer,''))) = 'background' THEN 1 ELSE 0 END), 0) AS bg_doc_cnt,
 			COALESCE(SUM(CASE WHEN layer = 'episodic' OR COALESCE(layer, '') = '' THEN 1 ELSE 0 END), 0) AS ep_cnt,
 			COUNT(DISTINCT CASE WHEN (layer = 'episodic' OR COALESCE(layer, '') = '') AND address_uri != '' THEN substr(address_uri, 1, instr(address_uri || '#', '#') - 1) END) AS ep_cells
-		FROM thin_vault_docs;
+		FROM rm_units;
 	`); err == nil && len(rows) > 0 {
 		bgDocsCnt = asInt(rows[0]["bg_doc_cnt"])
 		c.epCount = asInt(rows[0]["ep_cnt"])
@@ -169,16 +169,16 @@ func vaultTablePresent(dbPath, table string) bool {
 	return err == nil && len(rows) > 0
 }
 
-// vaultHasDocPointers 探测 thin_vault_docs 在指定层下是否存在 @ref: 零拷贝指针行。
+// vaultHasDocPointers 探测 rm_units 在指定层下是否存在 @ref: 零拷贝指针行。
 func vaultHasDocPointers(dbPath, layer string) bool {
-	if !vaultTablePresent(dbPath, "thin_vault_docs") {
+	if !vaultTablePresent(dbPath, "rm_units") {
 		return false
 	}
 	if layer == backgroundLayer {
-		rows, err := sqliteQueryJSON(dbPath, `SELECT 1 AS cnt FROM thin_vault_docs WHERE lower(trim(COALESCE(layer, ''))) = 'background' AND substr(ltrim(raw_text), 1, 5) = '@ref:' LIMIT 1;`)
+		rows, err := sqliteQueryJSON(dbPath, `SELECT 1 AS cnt FROM rm_units WHERE lower(trim(COALESCE(layer, ''))) = 'background' AND substr(ltrim(raw_text), 1, 5) = '@ref:' LIMIT 1;`)
 		return err == nil && len(rows) > 0
 	}
-	rows, err := sqliteQueryJSON(dbPath, `SELECT 1 AS cnt FROM thin_vault_docs WHERE substr(ltrim(raw_text), 1, 5) = '@ref:' LIMIT 1;`)
+	rows, err := sqliteQueryJSON(dbPath, `SELECT 1 AS cnt FROM rm_units WHERE substr(ltrim(raw_text), 1, 5) = '@ref:' LIMIT 1;`)
 	return err == nil && len(rows) > 0
 }
 
@@ -192,11 +192,11 @@ var (
 	pointerDocsCache   = map[string]pointerDocsCacheEntry{}
 )
 
-// cachedVaultPointerDocRows 按金库文件签名（facetsFileSignature）缓存 thin_vault_docs 中所有 @ref: 指针行的投影，
+// cachedVaultPointerDocRows 按金库文件签名（facetsFileSignature）缓存 rm_units 中所有 @ref: 指针行的投影，
 // 避免每次关键词搜索、正文筛选或按 title/content 排序都让 SQLite 全表扫描并 JSON 序列化数万条指针行（单次省 ~120ms）。
 func cachedVaultPointerDocRows(dbPath string, q layerListQuery) ([]map[string]any, error) {
 	includeDocs := q.layer == "" || q.layer == backgroundLayer || q.layer == episodicLayer
-	if !includeDocs || !vaultTablePresent(dbPath, "thin_vault_docs") {
+	if !includeDocs || !vaultTablePresent(dbPath, "rm_units") {
 		return nil, nil
 	}
 	sig := facetsFileSignature(dbPath)
@@ -226,7 +226,7 @@ func cachedVaultPointerDocRows(dbPath string, q layerListQuery) ([]map[string]an
 			'' AS rel_path, '' AS anchor, '' AS abs_path,
 			occurred_at AS occurred_at,
 			'' AS cited_json
-		FROM thin_vault_docs
+		FROM rm_units
 		WHERE substr(ltrim(raw_text), 1, 5) = '@ref:'`
 	allRows, err := sqliteQueryJSON(dbPath, ptrSQL)
 	if err != nil {
@@ -885,7 +885,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 					ORDER BY %s LIMIT %d
 				)`, noeticWhere, noeticOrder, branchCap))
 		}
-		if (q.layer == "" || q.layer == backgroundLayer || q.layer == episodicLayer) && vaultTablePresent(dbPath, "thin_vault_docs") {
+		if (q.layer == "" || q.layer == backgroundLayer || q.layer == episodicLayer) && vaultTablePresent(dbPath, "rm_units") {
 			docWhere := "1=1"
 			if q.layer == episodicLayer {
 				docWhere = "lower(trim(COALESCE(layer, ''))) NOT IN ('background', 'noetic')"
@@ -903,7 +903,7 @@ func queryLayerRows(dbPath string, q layerListQuery, home string) ([]ThreeLayerR
 				       COALESCE(address_uri, '') AS address_uri,
 				       '' AS rel_path, '' AS anchor, '' AS abs_path,
 				       occurred_at AS occurred_at, '' AS cited_json
-				FROM thin_vault_docs
+				FROM rm_units
 				WHERE %s
 				ORDER BY %s LIMIT %d
 			)`, docWhere, docOrder, branchCap))
@@ -1018,11 +1018,11 @@ func layerUnionSQLMode(dbPath string, q layerListQuery, excludeDocPointers bool)
 		selects = append(selects, sel)
 	}
 
-	// ── L2 Episodic（thin_vault_docs 中的 episodic 行）与 L1 Background 独立文档 ────────
+	// ── L2 Episodic（rm_units 中的 episodic 行）与 L1 Background 独立文档 ────────
 	// 只有请求明确指向这三层之一时才纳入 docs 分支：无法识别的层名一律按「无匹配」处置，
 	// 绝不把未知层名静默放大成全表（与历史「未知层 → 0 行」口径一致）。
 	includeDocs := q.layer == "" || q.layer == backgroundLayer || q.layer == episodicLayer
-	if includeDocs && vaultTablePresent(dbPath, "thin_vault_docs") {
+	if includeDocs && vaultTablePresent(dbPath, "rm_units") {
 		sel := `
 			SELECT
 				CASE
@@ -1040,9 +1040,9 @@ func layerUnionSQLMode(dbPath string, q layerListQuery, excludeDocPointers bool)
 				'' AS rel_path, '' AS anchor, '' AS abs_path,
 				occurred_at AS occurred_at,
 				'' AS cited_json
-			FROM thin_vault_docs
+			FROM rm_units
 			WHERE NOT (lower(trim(COALESCE(layer, ''))) = 'background' AND (? <> '' OR ? <> ''))`
-		// 指定了挂载目录 / 相对路径时，thin_vault_docs 中的独立背景文档不属于任何 dir_id，按历史口径剔除。
+		// 指定了挂载目录 / 相对路径时，rm_units 中的独立背景文档不属于任何 dir_id，按历史口径剔除。
 		args = append(args, q.dirID, q.relPath)
 		switch q.layer {
 		case episodicLayer:

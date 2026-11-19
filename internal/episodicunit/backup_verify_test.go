@@ -218,7 +218,7 @@ func TestVerifyRealZCodeBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer vault.Close()
-	rows, err := vault.Query(`SELECT doc_id, raw_text FROM thin_vault_docs WHERE raw_text LIKE '@ref:zcode:%'`)
+	rows, err := vault.Query(`SELECT doc_id, raw_text FROM rm_units WHERE raw_text LIKE '@ref:zcode:%'`)
 	if err != nil {
 		t.Fatal(err)
 	}

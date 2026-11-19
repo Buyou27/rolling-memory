@@ -115,7 +115,7 @@ func (l *LazyMemory) Get() (*facade.Memory, error) {
 		}
 	}
 	if l.memory == nil && l.err == nil {
-		l.memory, l.err = openMemory()
+		l.memory, l.err = openRecallMemory()
 		if l.memory != nil && l.memory.Config != nil && l.memory.Config.DB != "" && l.memory.Config.DB != ":memory:" {
 			l.dbPath = l.memory.Config.DB
 			l.dbInfo, _ = os.Stat(l.dbPath)
@@ -172,6 +172,19 @@ func openMemory() (*facade.Memory, error) {
 		return nil, err
 	}
 	return facade.New(cfg)
+}
+
+// openRecallMemory opens the MCP surface memory in read-only snapshot mode: a
+// missing or stale disk cluster degrades to a warming recall instead of a
+// minute-scale build inside the tool call. The background builder publishes the
+// cluster in its own process.
+func openRecallMemory() (*facade.Memory, error) {
+	memory, err := openMemory()
+	if err != nil || memory == nil {
+		return memory, err
+	}
+	memory.SetSnapshotOnly(true)
+	return memory, nil
 }
 
 // Server is one stdio session. Zero fields fall back to the process streams.

@@ -3,8 +3,8 @@
     <div class="default-main plugin-rolling-memory">
         <!-- 顶部提示条（参照 plugins/ai/web/views/channel/index.vue 标准） -->
         <el-alert
-            class="rm-alert"
-            type="success"
+            class="rm-alert rm-layer-alert is-layer-episodic"
+            type="info"
             :closable="false"
             show-icon
             :title="t('plugin.rolling-memory.episodic.pageTitle')"
@@ -36,16 +36,8 @@
                 </span>
             </div>
             <div class="stat-item" :class="!alignmentKnown ? 'info' : epiAlign.aligned ? 'success' : 'warning'">
-                <span class="stat-label">{{
-                    isLocalMode
-                        ? t('plugin.rolling-memory.overview.localVaultLbl')
-                        : `${t('plugin.rolling-memory.overview.localVaultLbl')} ⇄ ${t('plugin.rolling-memory.overview.remoteCloudLbl')}`
-                }}</span>
-                <span v-if="isLocalMode" class="stat-value">{{ epiAlign.local_vault_count ?? stats.episodic_count ?? 0 }}</span>
-                <span v-else-if="!alignmentKnown" class="stat-value">{{ t('plugin.rolling-memory.overview.unknownStatus') }}</span>
-                <span v-else class="stat-value"
-                    >{{ epiAlign.local_vault_count }} / {{ epiAlign.remote_cloud_count }} ({{ epiAlign.alignment_pct }}%)</span
-                >
+                <span class="stat-label">{{ t('plugin.rolling-memory.overview.localVaultLbl') }}</span>
+                <span class="stat-value">{{ epiAlign.local_vault_count ?? stats.episodic_count ?? 0 }}</span>
             </div>
         </div>
 
@@ -318,7 +310,7 @@ const handleToggleAutoSync = async (val: string | number | boolean) => {
         await request<any>({
             url: '/admin/plugin/rolling-memory/toggle',
             method: 'POST',
-            data: { key: 'cloud_auto_sync', value: enabled ? 'true' : 'false' },
+            data: { key: 'sync_auto_watch', value: enabled ? 'true' : 'false' },
         })
         envHealth.value.auto_sync_enabled = enabled
         envHealth.value.sync_mode = enabled ? 'auto' : 'manual'
@@ -337,7 +329,7 @@ const isLocalMode = computed(() => envHealth.value?.mode !== 'cloud')
 const alignmentKnown = computed(() =>
     Boolean(
         envHealth.value?.layers?.episodic?.alignment_known === true &&
-        (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true))
+        isLocalMode.value
     )
 )
 
@@ -448,14 +440,9 @@ const handleSyncHarness = async (harnessId: string) => {
         })
         const rep = res.data?.data
         if (rep) {
-            const summary = isLocalMode.value
-                ? t('plugin.rolling-memory.episodic.reconcileSuccessLocal', {
-                      har: rep.episodic_imported_from_harness ?? 0,
-                  })
-                : t('plugin.rolling-memory.episodic.reconcileResult', {
-                      har: rep.episodic_imported_from_harness ?? 0,
-                      epi: rep.episodic_pushed_to_remote ?? 0,
-                  })
+            const summary = t('plugin.rolling-memory.episodic.reconcileSuccessLocal', {
+                har: rep.episodic_imported_from_harness ?? 0,
+            })
             const actionableWarnings = (rep.warnings || []).filter(
                 (w: string) => !String(w).includes('episodic index backfill covers only the scanned harness window')
             )

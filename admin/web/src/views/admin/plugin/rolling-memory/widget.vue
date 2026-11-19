@@ -66,7 +66,6 @@
                     {{ info.last_recall_ms }}ms
                 </div>
                 <div class="rm-widget-tip-meta">
-                    {{ t('plugin.rolling-memory.widget.boot') }}: {{ info.boot_context ? 'ON' : 'OFF' }} ·
                     {{ t('plugin.rolling-memory.widget.ledger') }}: {{ info.ledger ? 'ON' : 'OFF' }}
                 </div>
                 <div v-if="info.bg_task" class="rm-widget-tip-meta">{{ t('plugin.rolling-memory.widget.bgTask') }}: {{ info.bg_task }}</div>
@@ -140,7 +139,6 @@ interface WidgetInfo {
     last_event_ts?: number
     event_count?: number
     last_recall_ms: number
-    boot_context: boolean
     ledger: boolean
     bg_task?: string
     sampled_at_ms?: number

@@ -274,11 +274,11 @@ func writeEvalTaskItemRowsOn(db *gorm.DB, runID string, items []EvalQuestionResu
 			}
 			if err := tx.Exec(`INSERT INTO "`+evalTaskItemTableName+`" (
 					"run_id", "seq", "question_id", "category", "correct", "evidence_hit", "qs_score",
-					"engine_transport", "engine_scope", "cloud_hits",
+					"engine_transport", "engine_scope", "local_hits",
 					"recall_ms", "delivered_tokens", "delivered_items", "total_ms", "payload", "create_time"
 				) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				runID, seq, item.ID, item.Category, correct, evidenceHit, item.QSScore,
-				// 列名 "cloud_hits" 为跨版本数据兼容保留的历史键名（现值为本地检索命中数）。
+				// local_hits is the local retrieval hit count.
 				item.EngineTransport, item.EngineScope, item.LocalHits,
 				item.RecallMS, item.DeliveredTokens, item.DeliveredItems, item.TotalMS, string(payload), now,
 			).Error; err != nil {

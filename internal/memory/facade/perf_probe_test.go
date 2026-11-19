@@ -36,9 +36,9 @@ func TestPerfProbeLocalRecall(t *testing.T) {
 		t.Fatalf("api: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
 	const cue = "ATM 官方 Recall@10 口径 local_plain"
 	for i := 0; i < 5; i++ {

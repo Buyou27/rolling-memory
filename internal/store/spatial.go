@@ -15,7 +15,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 )
 
 // HierarchicalLCPScore computes the language-agnostic, domain-neutral Longest Common Prefix (LCP)
@@ -25,7 +25,7 @@ import (
 //
 // Disjoint or empty paths return 0.0 (zero penalty for far-field / global memories).
 func HierarchicalLCPScore(pathA, pathB string) float64 {
-	return memcore.HierarchicalLCPScore(pathA, pathB)
+	return delivery.HierarchicalLCPScore(pathA, pathB)
 }
 
 // EnsureDualTrackLocus materializes Track 2 of Dual-Track Spatial Encoding:
@@ -35,14 +35,14 @@ func HierarchicalLCPScore(pathA, pathB string) float64 {
 //   - Registers the leaf segment short name (e.g. "hooks") as an alias on the leaf
 //     spatial node when the alias is not already bound to another live node in scope.
 func (s *Store) EnsureDualTrackLocus(scope, rawLocus, audience string) (string, []string, error) {
-	prefixes, leafShort := memcore.DualTrackLocusPrefixes(rawLocus)
+	prefixes, leafShort := delivery.DualTrackLocusPrefixes(rawLocus)
 	if len(prefixes) == 0 {
 		return "", nil, nil
 	}
 	if audience == "" || audience == "private" {
 		audience = "shared"
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	world := "actual"
 	now := clock.Unix()
 	nodeIDs := make([]string, 0, len(prefixes))
@@ -92,14 +92,14 @@ func (s *Store) EnsureDualTrackLocus(scope, rawLocus, audience string) (string, 
 // (e.g. "coding/zcode/main" -> "coding" -> "coding/zcode" -> "coding/zcode/main")
 // as incarnation nodes linked by active subtype-of meta edges, returning the leaf node id.
 func (s *Store) EnsureIncarnationHierarchy(scope, rawIncarnation, audience string) (string, error) {
-	prefixes := memcore.IncarnationHierarchyPrefixes(rawIncarnation)
+	prefixes := delivery.IncarnationHierarchyPrefixes(rawIncarnation)
 	if len(prefixes) == 0 {
 		return "", nil
 	}
 	if audience == "" || audience == "private" {
 		audience = "shared"
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	now := clock.Unix()
 	var parentID, leafID string
 	for _, prefix := range prefixes {
@@ -124,7 +124,7 @@ func (s *Store) BindAssertionIncarnation(scope, assertionNodeID, incarnationNode
 	if assertionNodeID == "" || incarnationNodeID == "" {
 		return nil
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	return db.WithImmediateTx(s.conn, func(tx *sql.Tx) error {
 		_, err := tx.Exec(
 			`INSERT INTO node_ext(node_id, scope, incarnation_id, ext_ref, origin)
@@ -143,7 +143,7 @@ func (s *Store) AssertionIncarnationLabels(scope string, assertionNodeIDs []stri
 	if len(assertionNodeIDs) == 0 {
 		return out, nil
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	unique := ids.UniqueOrdered(assertionNodeIDs)
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(unique)), ",")
 	args := make([]any, 0, 1+len(unique))
@@ -176,10 +176,10 @@ func (s *Store) ObserveSpatialEpisode(scope, assertionNodeID, world, carrier, lo
 	if assertionNodeID == "" || strings.TrimSpace(locus) == "" {
 		return
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	w := cmp.Or(strings.TrimSpace(world), "actual")
 	c := cmp.Or(strings.TrimSpace(carrier), "virtual")
-	loc := memcore.NormalizeHierarchicalPath(locus)
+	loc := delivery.NormalizeHierarchicalPath(locus)
 	if loc == "" {
 		loc = strings.TrimSpace(locus)
 	}
@@ -193,7 +193,7 @@ func (s *Store) ObserveSpatialEpisode(scope, assertionNodeID, world, carrier, lo
 	period := time.Unix(ts, 0).UTC().Format("2006-01")
 	epKey := fmt.Sprintf("ep:l1:%s:%s:%s:%s:%s", scope, w, c, period, loc)
 	now := clock.Unix()
-	_ = s.MemcoreBackend().UpsertEpisodeContainer(context.Background(), memcore.EpisodeContainer{
+	_ = s.DeliveryBackend().UpsertEpisodeContainer(context.Background(), delivery.EpisodeContainer{
 		Scope:       scope,
 		EpKey:       epKey,
 		Generation:  1,
@@ -208,7 +208,7 @@ func (s *Store) ObserveSpatialEpisode(scope, assertionNodeID, world, carrier, lo
 		TSourceMax:  tSource,
 		MemberCount: 1,
 		UpdatedAt:   now,
-	}, []memcore.EpisodeMember{
+	}, []delivery.EpisodeMember{
 		{
 			Scope:      scope,
 			MemberID:   assertionNodeID,
@@ -223,7 +223,7 @@ func (s *Store) setNodeOriginFillEmpty(scope, nodeID, origin string) error {
 	if nodeID == "" || origin == "" {
 		return nil
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	return db.WithImmediateTx(s.conn, func(tx *sql.Tx) error {
 		_, err := tx.Exec(
 			`INSERT INTO node_ext(node_id, scope, incarnation_id, ext_ref, origin)
@@ -246,7 +246,7 @@ func (s *Store) NodeOrigin(nodeID string) (string, error) {
 	if nodeID == "" {
 		return "", nil
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 	row, err := queryOneMap(s.conn, `SELECT origin FROM node_ext WHERE node_id = ?`, nodeID)
 	if err != nil || row == nil {
 		return "", err
@@ -262,7 +262,7 @@ func SplitInlineCategoryNames(raw any) []string {
 	var rawItems []any
 	switch v := raw.(type) {
 	case string:
-		s := strings.TrimSpace(memcore.StripModalBracketSlotPrefix(v))
+		s := strings.TrimSpace(delivery.StripModalBracketSlotPrefix(v))
 		if s == "" {
 			return nil
 		}
@@ -290,9 +290,9 @@ func SplitInlineCategoryNames(raw any) []string {
 	out := make([]string, 0, len(rawItems))
 	seen := map[string]bool{}
 	for _, it := range rawItems {
-		for _, seg := range splitInlineCategorySegment(memcore.StripModalBracketSlotPrefix(fmt.Sprint(it))) {
-			cat := strings.TrimSpace(memcore.StripModalBracketSlotPrefix(seg))
-			if cat == "" || cat == "<nil>" || memcore.CanonicalMultimodalProtocolTag(cat) != "" || memcore.IsRolePlaceholder(cat) {
+		for _, seg := range splitInlineCategorySegment(delivery.StripModalBracketSlotPrefix(fmt.Sprint(it))) {
+			cat := strings.TrimSpace(delivery.StripModalBracketSlotPrefix(seg))
+			if cat == "" || cat == "<nil>" || delivery.CanonicalMultimodalProtocolTag(cat) != "" || delivery.IsRolePlaceholder(cat) {
 				continue
 			}
 			lo := strings.ToLower(cat)
@@ -367,7 +367,7 @@ func (s *Store) BindAssertionParticipants(scope, assertionNodeID, audience strin
 	if assertionNodeID == "" || len(participants) == 0 {
 		return nil
 	}
-	if err := db.EnsureMemcoreSchema(s.conn); err != nil {
+	if err := db.EnsureDeliverySchema(s.conn); err != nil {
 		return err
 	}
 	if audience == "" || audience == "private" {
@@ -412,11 +412,11 @@ func (s *Store) EnsureExplicitMetaEdge(scope, rawKind, lhsID, rhsID, evidence st
 	if lhsID == "" || rhsID == "" || lhsID == rhsID {
 		return nil
 	}
-	canon := memcore.NormalizeMetaKind(rawKind)
-	if !memcore.IsCanonicalMetaKind(canon) {
+	canon := delivery.NormalizeMetaKind(rawKind)
+	if !delivery.IsCanonicalMetaKind(canon) {
 		return nil
 	}
-	if err := db.EnsureMemcoreSchema(s.conn); err != nil {
+	if err := db.EnsureDeliverySchema(s.conn); err != nil {
 		return err
 	}
 	hyphenKind := strings.ReplaceAll(canon, "_", "-")
@@ -444,7 +444,7 @@ func (s *Store) ensureActiveMetaEdge(scope, metaKind, lhsID, rhsID, evidence str
 	})
 }
 
-func (s *Store) applyCandidatePresenceResonance(scope string, presence memcore.PresenceCoordinates, candidates []Candidate, gaps map[string]int) {
+func (s *Store) applyCandidatePresenceResonance(scope string, presence delivery.PresenceCoordinates, candidates []Candidate, gaps map[string]int) {
 	if len(candidates) == 0 || presence.IsEmpty() {
 		return
 	}
@@ -471,7 +471,7 @@ func (s *Store) applyCandidatePresenceResonance(scope string, presence memcore.P
 		if incLabels != nil {
 			incLabel = incLabels[candidates[i].Data.NodeID]
 		}
-		mult := memcore.SpacetimeResonanceMultiplier(presence, rowLocus, rowCarrier, incLabel)
+		mult := delivery.SpacetimeResonanceMultiplier(presence, rowLocus, rowCarrier, incLabel)
 		if mult > 1.0 {
 			candidates[i].Score *= mult
 			candidates[i].LexScore *= mult

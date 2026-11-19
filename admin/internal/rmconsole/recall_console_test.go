@@ -87,10 +87,10 @@ func TestRecentRecallCuesAndWorkspaceFacet(t *testing.T) {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
 	seeds := []string{
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_a', 'episodic', 100, 'a', 'Rolling-Memory')`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_b', 'episodic', 101, 'b', 'Rolling-Memory')`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_c', 'episodic', 102, 'c', 'demo-app')`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text) VALUES ('ep_d', 'episodic', 103, 'd')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_a', 'episodic', 100, 'a', 'Rolling-Memory')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_b', 'episodic', 101, 'b', 'Rolling-Memory')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_c', 'episodic', 102, 'c', 'demo-app')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text) VALUES ('ep_d', 'episodic', 103, 'd')`,
 		`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
 		 VALUES ('nt_old', 200, 'active', '[Rolling-Memory] 本地模式 recall 缓存', 'x', '["ep_a","ep_b"]')`,
 		`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
@@ -136,9 +136,9 @@ func TestQueryFacetsMergesWorkspaceDuplicates(t *testing.T) {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
 	seeds := []string{
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_1', 'episodic', 100, 'a', 'Rolling-Memory')`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_2', 'episodic', 101, 'b', 'Rolling-Memory')`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_3', 'episodic', 102, 'c', 'demo-app')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_1', 'episodic', 100, 'a', 'Rolling-Memory')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_2', 'episodic', 101, 'b', 'Rolling-Memory')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, locus) VALUES ('ep_3', 'episodic', 102, 'c', 'demo-app')`,
 		`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('bg_rm', '/repos/Rolling-Memory', 1)`,
 		`INSERT INTO rm_bg_files(abs_path, dir_id, rel_path, chunk_count) VALUES ('/repos/Rolling-Memory/a.md', 'bg_rm', 'a.md', 4)`,
 		`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('bg_rb', '/repos/workspace-b', 2)`,

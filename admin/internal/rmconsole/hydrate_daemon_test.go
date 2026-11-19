@@ -510,7 +510,7 @@ func TestPointerRowSnapshotDoesNotCacheVerifiedText(t *testing.T) {
 	home := t.TempDir()
 	dbPath := filepath.Join(home, "vault.db")
 	ref := "@ref:zcode:session:message#0"
-	seedVault(t, dbPath, `INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('doc-a', 'episodic', 1, '`+ref+`', 'addr')`)
+	seedVault(t, dbPath, `INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('doc-a', 'episodic', 1, '`+ref+`', 'addr')`)
 	trapDaemonSocket(t)
 	stubEngineRunner(t, func(call engineCall) (string, error) {
 		texts := []map[string]any{}
@@ -550,7 +550,7 @@ func TestLargePointerSearchFindsLateVerifiedMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 513; i++ {
-		if _, err := tx.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES (?, 'episodic', ?, ?, '')`, fmt.Sprintf("doc-%03d", i), i, fmt.Sprintf("@ref:zcode:session:msg-%03d#0", i)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri) VALUES (?, 'episodic', ?, ?, '')`, fmt.Sprintf("doc-%03d", i), i, fmt.Sprintf("@ref:zcode:session:msg-%03d#0", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -591,7 +591,7 @@ func TestListSearchAndDashboardDoNotReuseStalePointerText(t *testing.T) {
 	dbPath := filepath.Join(home, "vault.db")
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	ref := "@ref:zcode:session:message#0"
-	seedVault(t, dbPath, `INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('doc-a', 'episodic', 1700000000, '`+ref+`', 'addr')`)
+	seedVault(t, dbPath, `INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('doc-a', 'episodic', 1700000000, '`+ref+`', 'addr')`)
 	trapDaemonSocket(t)
 	var valid atomic.Bool
 	valid.Store(true)
@@ -655,10 +655,10 @@ func TestTerminalStreamLinesHydratePointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open vault fixture: %v", err)
 	}
-	if _, err := db.Exec(`CREATE TABLE thin_vault_docs (doc_id TEXT, layer TEXT, occurred_at INTEGER, address_uri TEXT, raw_text TEXT);`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE rm_units (doc_id TEXT, layer TEXT, occurred_at INTEGER, address_uri TEXT, raw_text TEXT);`); err != nil {
 		t.Fatalf("create fixture: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_docs (doc_id, layer, occurred_at, address_uri, raw_text) VALUES ('ep_term_1', 'episodic', 1700000000, 'addr-1', ?);`, ref); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_units (doc_id, layer, occurred_at, address_uri, raw_text) VALUES ('ep_term_1', 'episodic', 1700000000, 'addr-1', ?);`, ref); err != nil {
 		t.Fatalf("seed fixture: %v", err)
 	}
 	_ = db.Close()
@@ -730,10 +730,10 @@ func TestVaultFollowupDocsWarmUncachedPointers(t *testing.T) {
 		t.Fatalf("open vault fixture: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec(`CREATE TABLE thin_vault_docs (doc_id TEXT, layer TEXT, occurred_at INTEGER, address_uri TEXT, raw_text TEXT, sentences_json TEXT, locus TEXT);`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE rm_units (doc_id TEXT, layer TEXT, occurred_at INTEGER, address_uri TEXT, raw_text TEXT, sentences_json TEXT, locus TEXT);`); err != nil {
 		t.Fatalf("create fixture: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_docs (doc_id, layer, occurred_at, address_uri, raw_text, sentences_json, locus) VALUES ('ep_follow_1', 'episodic', 1700000200, 'addr-f', ?, '[]', 'locus-f');`, ref); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_units (doc_id, layer, occurred_at, address_uri, raw_text, sentences_json, locus) VALUES ('ep_follow_1', 'episodic', 1700000200, 'addr-f', ?, '[]', 'locus-f');`, ref); err != nil {
 		t.Fatalf("seed fixture: %v", err)
 	}
 
@@ -744,7 +744,7 @@ func TestVaultFollowupDocsWarmUncachedPointers(t *testing.T) {
 	if rows[0].text != "[assistant] 审计语料正文" || rows[0].docID != "ep_follow_1" {
 		t.Fatalf("row = %+v, want canonical hydrated text", rows[0])
 	}
-	if _, err := db.Exec(`UPDATE thin_vault_docs SET sentences_json = '["unverified fallback"]' WHERE doc_id = 'ep_follow_1'`); err != nil {
+	if _, err := db.Exec(`UPDATE rm_units SET sentences_json = '["unverified fallback"]' WHERE doc_id = 'ep_follow_1'`); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ROLLING_MEMORY_DAEMON", "0")

@@ -28,7 +28,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/hostid"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
@@ -284,7 +284,7 @@ type UnixHydrateItem struct {
 }
 
 // UnixHydratePayload carries one display-hydration batch over the local Unix socket.
-// Callers pass the pointers exactly as stored in `thin_vault_docs.raw_text`; the daemon
+// Callers pass the pointers exactly as stored in `rm_units.raw_text`; the daemon
 // answers with the canonical turn segmentation (the same resolver the product surfaces
 // `recall` / `recent` use), so display layers cannot drift from ingest segmentation.
 type UnixHydratePayload struct {
@@ -1439,7 +1439,7 @@ func ServeUnix(sockPath string, memory *facade.Memory, onStart func(context.Cont
 			active, _ = lazy.Get()
 		}
 		if active != nil {
-			if tc, err := active.ThinClient(); err == nil && tc != nil && tc.Vault != nil {
+			if tc, err := active.LocalVault(); err == nil && tc != nil && tc.Vault != nil {
 				tc.Vault.InvalidateRuntimeCaches()
 				graphStore.invalidate(tc.Vault)
 			}
@@ -1670,8 +1670,8 @@ func handleUnixHydrate(w http.ResponseWriter, r *http.Request, memory *facade.Me
 	if len(items) > maxUnixHydrateItems {
 		items = items[:maxUnixHydrateItems]
 	}
-	var vault *thinclient.Vault
-	if tc, tcErr := active.ThinClient(); tcErr == nil && tc != nil {
+	var vault *localvault.Vault
+	if tc, tcErr := active.LocalVault(); tcErr == nil && tc != nil {
 		vault = tc.Vault
 	}
 	if vault == nil {
@@ -1740,8 +1740,8 @@ func handleUnixDocuments(w http.ResponseWriter, r *http.Request, memory *facade.
 	if len(items) > maxUnixDocumentItems {
 		items = items[:maxUnixDocumentItems]
 	}
-	var vault *thinclient.Vault
-	if tc, tcErr := active.ThinClient(); tcErr == nil && tc != nil {
+	var vault *localvault.Vault
+	if tc, tcErr := active.LocalVault(); tcErr == nil && tc != nil {
 		vault = tc.Vault
 	}
 	if vault == nil {

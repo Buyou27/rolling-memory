@@ -34,7 +34,7 @@ func TestSyncWatchOnceCommand(t *testing.T) {
 	if payload["ok"] != true || payload["once"] != true {
 		t.Fatalf("sync watch --once = %s", res.stdout)
 	}
-	for _, key := range []string{"ran", "background_chunks", "episodic_pushed"} {
+	for _, key := range []string{"ran", "background_chunks", "episodic_imported"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("sync watch --once misses %q: %s", key, res.stdout)
 		}
@@ -84,34 +84,12 @@ func TestImportTranscriptCommand(t *testing.T) {
 	}
 
 	second := writeFile(t, filepath.Join(env.base, "notes.txt"), "老张养了一只猫。\n")
-	replayed := run(t, "import", second, "--replay", "--json")
-	if replayed.code != 0 {
-		t.Fatalf("replay import exit %d: %s%s", replayed.code, replayed.stdout, replayed.stderr)
-	}
-	replayPayload := jsonObject(t, replayed.stdout)
-	replay, _ := replayPayload["replay"].(map[string]any)
-	if replay == nil {
-		t.Fatalf("replay receipt missing: %s", replayed.stdout)
-	}
-	for _, key := range []string{"ok", "scope", "processed", "written", "skipped", "anchor_failed", "resolve_failed", "llm_calls", "warnings"} {
-		if _, ok := replay[key]; !ok {
-			t.Fatalf("replay misses %q: %s", key, replayed.stdout)
-		}
-	}
-	if replay["processed"] != float64(1) {
-		t.Fatalf("replay = %s", replayed.stdout)
-	}
-
-	// Human output goes through _print_import / _print_replay.
-	human := run(t, "import", second, "--replay")
+	human := run(t, "import", second)
 	if human.code != 0 {
 		t.Fatalf("human import exit %d: %s", human.code, human.stderr)
 	}
-	if !strings.HasPrefix(human.stdout, "import: 1 messages · 0 new traces · session notes · offset 1/1\n") {
+	if !strings.HasPrefix(human.stdout, "import: 1 messages · 1 new traces · session notes · offset 1/1\n") {
 		t.Fatalf("human import = %q", human.stdout)
-	}
-	if !strings.Contains(human.stdout, "\nreplay: ") {
-		t.Fatalf("human import misses the replay block: %q", human.stdout)
 	}
 
 	// The canonical JSONL path reports content-addressed units, not traces.

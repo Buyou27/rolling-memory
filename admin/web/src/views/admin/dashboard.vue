@@ -324,7 +324,7 @@
                             </div>
                         </el-popover>
                     </div>
-                    <Icon :size="16" name="el-coin" />
+                    <Icon :size="16" name="el-coin" style="color: var(--rm-layer-noetic)" />
                 </div>
                 <div class="kpi-value">
                     <template v-if="efficacyUnavailable">—</template>
@@ -446,12 +446,12 @@
                                 </template>
                                 <div class="rm-help-body">
                                     <p v-if="config.lang.active === 'en'">
-                                        Chart: dual-axis. Right axis = per-bucket assets: stacked bars L1 Background (amber) / L2 Episodic (cyan) / L3
-                                        Recall Trail (purple) plus the L1+L2+L3 total line (green); left axis = Recall Triggers (blue line).
+                                        Chart: dual-axis. Right axis = per-bucket assets: stacked bars L1 Background (blue) / L2 Episodic (emerald) / L3
+                                        Recall Trail (pink) plus the L1+L2+L3 total line (slate); left axis = Recall Triggers (amber line).
                                     </p>
                                     <p v-else>
-                                        图表口径：双轴。右轴柱=按时间桶统计的三层资产（L1 背景文档·琥珀 / L2 情景对话·青色 / L3 认知结晶·紫红），绿线=
-                                        三层合计；左轴蓝线=该桶内实际发生的检索召回次数。
+                                        图表口径：双轴。右轴柱=按时间桶统计的三层资产（L1 背景文档·蓝 / L2 情景对话·翠绿 / L3 认知结晶·玫红），灰线=
+                                        三层合计；左轴琥珀线=该桶内实际发生的检索召回次数。
                                     </p>
                                     <p v-if="config.lang.active === 'en'">
                                         Bucket time follows each memory unit's initial ingest timestamp: editing an existing background file updates
@@ -506,31 +506,31 @@
                 </div>
                 <div class="trend-summary-strip">
                     <div class="ts-item">
-                        <span class="ts-dot" style="background: #67c23a"></span>
+                        <span class="ts-dot" :style="{ background: CHART_LAYER_COLORS.total }"></span>
                         <span class="ts-label">{{ config.lang.active === 'en' ? 'Total Assets (L1–L3)' : '总资产 (L1–L3)' }}</span>
-                        <span class="ts-val text-success">
+                        <span class="ts-val">
                             {{ totalLayerAssets.toLocaleString() }}
                             <small class="font-mono">(+{{ trendSummary.totalAssertions.toLocaleString() }})</small>
                         </span>
                     </div>
                     <div class="ts-item">
-                        <span class="ts-dot" style="background: #e6a23c"></span>
+                        <span class="ts-dot" :style="{ background: CHART_LAYER_COLORS.background }"></span>
                         <span class="ts-label">{{ config.lang.active === 'en' ? 'L1 Background' : 'L1 背景资产' }}</span>
                         <span class="ts-val">
                             {{ (rmData.l1_total ?? 0).toLocaleString() }}
-                            <small class="font-mono text-warning">(+{{ trendSummary.totalL1.toLocaleString() }})</small>
+                            <small class="font-mono">(+{{ trendSummary.totalL1.toLocaleString() }})</small>
                         </span>
                     </div>
                     <div class="ts-item">
-                        <span class="ts-dot" style="background: #36cfc9"></span>
+                        <span class="ts-dot" :style="{ background: CHART_LAYER_COLORS.episodic }"></span>
                         <span class="ts-label">{{ config.lang.active === 'en' ? 'L2 Episodic' : 'L2 情景资产' }}</span>
                         <span class="ts-val">
                             {{ (rmData.l2_total ?? rmData.user_traces ?? 0).toLocaleString() }}
-                            <small class="font-mono text-primary">(+{{ trendSummary.totalL2.toLocaleString() }})</small>
+                            <small class="font-mono">(+{{ trendSummary.totalL2.toLocaleString() }})</small>
                         </span>
                     </div>
                     <div class="ts-item">
-                        <span class="ts-dot" style="background: #b37feb"></span>
+                        <span class="ts-dot" :style="{ background: CHART_LAYER_COLORS.noetic }"></span>
                         <span class="ts-label">{{ config.lang.active === 'en' ? 'L3 Noetic' : 'L3 结晶资产' }}</span>
                         <span class="ts-val">
                             {{ (rmData.l3_total ?? 0).toLocaleString() }}
@@ -538,9 +538,9 @@
                         </span>
                     </div>
                     <div class="ts-item">
-                        <span class="ts-dot" style="background: #409eff"></span>
+                        <span class="ts-dot" :style="{ background: CHART_LAYER_COLORS.recall }"></span>
                         <span class="ts-label">{{ config.lang.active === 'en' ? 'Recall Triggers' : '检索召回触发' }}</span>
-                        <span class="ts-val text-primary">{{ trendSummary.totalRecalls.toLocaleString() }}</span>
+                        <span class="ts-val">{{ trendSummary.totalRecalls.toLocaleString() }}</span>
                     </div>
                     <div class="ts-item">
                         <span class="ts-label">{{ config.lang.active === 'en' ? 'Peak Bucket' : '窗口峰值桶' }}</span>
@@ -902,6 +902,7 @@ import { useAdminInfo } from '@/stores/adminInfo'
 import { useConfig } from '@/stores/config'
 import { useTerminal } from '@/stores/terminal'
 import { MonitorSocket } from '@/utils/monitorSocket'
+import { MEMORY_LAYER_COLORS, normalizeMemoryLayer } from '@/utils/memoryLayers'
 import request from '@/utils/request'
 import { Local } from '@/utils/storage'
 import { useEventListener } from '@vueuse/core'
@@ -972,6 +973,15 @@ const withAlpha = (color: string, alpha: number) => {
         return `rgba(${r}, ${g}, ${b}, ${alpha})`
     }
     return color
+}
+
+/** 趋势图配色：三层取自统一色板，合计与召回使用独立中性色，避免与任一层撞色。 */
+const CHART_LAYER_COLORS = {
+    background: MEMORY_LAYER_COLORS.background.hex,
+    episodic: MEMORY_LAYER_COLORS.episodic.hex,
+    noetic: MEMORY_LAYER_COLORS.noetic.hex,
+    total: '#94a3b8',
+    recall: '#e6a23c',
 }
 
 // ==================== 顶部欢迎条 ====================
@@ -2115,7 +2125,7 @@ const renderTrend = (force = false) => {
     const isEn = config.lang.active === 'en'
 
     chart.setOption({
-        color: ['#e6a23c', '#36cfc9', '#b37feb', '#67c23a', '#409eff'],
+        color: [CHART_LAYER_COLORS.background, CHART_LAYER_COLORS.episodic, CHART_LAYER_COLORS.noetic, CHART_LAYER_COLORS.total, CHART_LAYER_COLORS.recall],
         tooltip: buildTooltip({
             trigger: 'axis',
             axisPointer: { type: 'shadow' },
@@ -2126,8 +2136,8 @@ const renderTrend = (force = false) => {
                 const isLast = idx === dates.length - 1
                 const slotTag = isLast
                     ? isEn
-                        ? ' <span style="color:#409eff;font-size:11px">(in progress)</span>'
-                        : ' <span style="color:#409eff;font-size:11px">(当前桶进行中)</span>'
+                        ? ` <span style="color:${CHART_LAYER_COLORS.recall};font-size:11px">(in progress)</span>`
+                        : ` <span style="color:${CHART_LAYER_COLORS.recall};font-size:11px">(当前桶进行中)</span>`
                     : ''
                 const l1Val = l1[idx] ?? 0
                 const l2Val = l2[idx] ?? 0
@@ -2136,11 +2146,11 @@ const renderTrend = (force = false) => {
                 const recVal = recalls[idx] ?? 0
                 return [
                     `<div style="font-weight:700;margin-bottom:4px">${dates[idx] || ''}${slotTag}</div>`,
-                    `<div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#67c23a;margin-right:6px"></span>${labelAssertions}: <b>${asrtVal.toLocaleString()}</b></div>`,
-                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#e6a23c;margin-right:6px"></span>${labelL1}: <b>${l1Val.toLocaleString()}</b></div>`,
-                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#36cfc9;margin-right:6px"></span>${labelL2}: <b>${l2Val.toLocaleString()}</b></div>`,
-                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#b37feb;margin-right:6px"></span>${labelL3}: <b>${l3Val.toLocaleString()}</b></div>`,
-                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#409eff;margin-right:6px"></span>${labelRecalls}: <b>${recVal.toLocaleString()}</b></div>`,
+                    `<div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${CHART_LAYER_COLORS.total};margin-right:6px"></span>${labelAssertions}: <b>${asrtVal.toLocaleString()}</b></div>`,
+                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${CHART_LAYER_COLORS.background};margin-right:6px"></span>${labelL1}: <b>${l1Val.toLocaleString()}</b></div>`,
+                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${CHART_LAYER_COLORS.episodic};margin-right:6px"></span>${labelL2}: <b>${l2Val.toLocaleString()}</b></div>`,
+                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${CHART_LAYER_COLORS.noetic};margin-right:6px"></span>${labelL3}: <b>${l3Val.toLocaleString()}</b></div>`,
+                    `<div style="margin-top:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${CHART_LAYER_COLORS.recall};margin-right:6px"></span>${labelRecalls}: <b>${recVal.toLocaleString()}</b></div>`,
                 ].join('')
             },
         }),
@@ -2162,7 +2172,7 @@ const renderTrend = (force = false) => {
                 position: 'left',
                 minInterval: 1,
                 ...buildAxis({ hideLine: true }),
-                axisLabel: { color: '#409eff' },
+                axisLabel: { color: CHART_LAYER_COLORS.recall },
             },
             {
                 type: 'value',
@@ -2170,7 +2180,7 @@ const renderTrend = (force = false) => {
                 minInterval: 1,
                 ...buildAxis({ hideLine: true }),
                 splitLine: { show: false },
-                axisLabel: { color: '#67c23a' },
+                axisLabel: { color: CHART_LAYER_COLORS.total },
             },
         ],
         series: [
@@ -2181,7 +2191,7 @@ const renderTrend = (force = false) => {
                 yAxisIndex: 1,
                 data: l1,
                 barMaxWidth: 18,
-                itemStyle: { color: '#e6a23c' },
+                itemStyle: { color: CHART_LAYER_COLORS.background },
                 emphasis: { focus: 'series' },
             },
             {
@@ -2191,7 +2201,7 @@ const renderTrend = (force = false) => {
                 yAxisIndex: 1,
                 data: l2,
                 barMaxWidth: 18,
-                itemStyle: { color: '#36cfc9' },
+                itemStyle: { color: CHART_LAYER_COLORS.episodic },
                 emphasis: { focus: 'series' },
             },
             {
@@ -2201,7 +2211,7 @@ const renderTrend = (force = false) => {
                 yAxisIndex: 1,
                 data: l3,
                 barMaxWidth: 18,
-                itemStyle: { color: '#b37feb', borderRadius: [3, 3, 0, 0] },
+                itemStyle: { color: CHART_LAYER_COLORS.noetic, borderRadius: [3, 3, 0, 0] },
                 emphasis: { focus: 'series' },
             },
             {
@@ -2211,8 +2221,8 @@ const renderTrend = (force = false) => {
                 data: uv,
                 smooth: true,
                 showSymbol: false,
-                lineStyle: { color: '#67c23a', width: 2 },
-                areaStyle: { color: makeAreaGradient('#67c23a', 0.14, 0) },
+                lineStyle: { color: CHART_LAYER_COLORS.total, width: 2 },
+                areaStyle: { color: makeAreaGradient(CHART_LAYER_COLORS.total, 0.14, 0) },
                 emphasis: { focus: 'series' },
             },
             {
@@ -2222,8 +2232,8 @@ const renderTrend = (force = false) => {
                 data: recalls,
                 smooth: true,
                 showSymbol: false,
-                lineStyle: { color: '#409eff', width: 2.2 },
-                areaStyle: { color: makeAreaGradient('#409eff', 0.18, 0) },
+                lineStyle: { color: CHART_LAYER_COLORS.recall, width: 2.2 },
+                areaStyle: { color: makeAreaGradient(CHART_LAYER_COLORS.recall, 0.18, 0) },
                 emphasis: { focus: 'series' },
             },
         ],
@@ -2258,10 +2268,17 @@ const renderSource = (force = false) => {
     const chart = ensureChart('source')
     if (!chart) return
     const themeTokens = theme.value
-    const pieData = rmData.warrant_dist.map((w) => ({
-        value: w.count,
-        name: warrantLabel(w.value),
-    }))
+    const otherWarrantColors = ['#94a3b8', '#a855f7', '#06b6d4', '#f59e0b']
+    let otherIndex = 0
+    const pieData = rmData.warrant_dist.map((w) => {
+        const layer = normalizeMemoryLayer(w.value)
+        const color = layer ? MEMORY_LAYER_COLORS[layer].hex : otherWarrantColors[otherIndex++ % otherWarrantColors.length]
+        return {
+            value: w.count,
+            name: warrantLabel(w.value),
+            itemStyle: { color },
+        }
+    })
     const sig = `${pieData.map((d) => `${d.name}:${d.value}`).join(',')}|${rmData.total_assertions}|${isDark.value}|${config.lang.active}`
     if (!force && chartSigs.source === sig) {
         return
@@ -2269,7 +2286,7 @@ const renderSource = (force = false) => {
     chartSigs.source = sig
 
     chart.setOption({
-        color: ['#409eff', '#67c23a', '#e6a23c', '#909399'],
+        color: otherWarrantColors,
         tooltip: buildTooltip({ trigger: 'item', formatter: '{b}: <b>{c}</b> ({d}%)' }),
         graphic: [
             {

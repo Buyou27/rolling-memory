@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -490,6 +491,11 @@ func ensureConsoleBinary(root, binPath string, downloaded *[]string) (string, er
 	}
 	if info, err := os.Stat(binPath); err == nil && info.Mode().IsRegular() {
 		stripDarwinQuarantine(binPath, false)
+		if sourceRoot := consoleSourceDir(); sourceRoot != "" && consoleBinaryStale(sourceRoot, binPath) {
+			if built := buildConsoleFromSource(root, binPath); built != "" {
+				return built, nil
+			}
+		}
 		return binPath, nil
 	}
 	if built := buildConsoleFromSource(root, binPath); built != "" {
@@ -556,20 +562,89 @@ func candidateRepoRoots() []string {
 	return roots
 }
 
+// consoleSourceDir resolves the console module source from a local checkout:
+// the repository root, the admin module root, or a standalone console checkout.
+func consoleSourceDir() string {
+	for _, candidate := range candidateRepoRoots() {
+		if info, err := os.Stat(filepath.Join(candidate, "admin", "cmd")); err == nil && info.IsDir() {
+			return filepath.Join(candidate, "admin")
+		}
+		if info, err := os.Stat(filepath.Join(candidate, "cmd")); err == nil && info.IsDir() && regularFileExists(filepath.Join(candidate, "go.mod")) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// consoleSourceSkipDirs lists build output and dependency trees that never
+// indicate a source change.
+var consoleSourceSkipDirs = map[string]bool{
+	".git": true, "node_modules": true, "dist": true, "web-dist": true,
+	"vendor": true, "bin": true, "data": true, "testdata": true,
+}
+
+// maxSourceModTime returns the newest modification time among files under root
+// that keep accepts. Walk errors are ignored: the probe only decides whether a
+// rebuild is worth attempting and must never block startup.
+func maxSourceModTime(root string, keep func(path string) bool) time.Time {
+	var newest time.Time
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != root && consoleSourceSkipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !keep(path) {
+			return nil
+		}
+		if info, statErr := d.Info(); statErr == nil && info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	return newest
+}
+
+// consoleBinaryStale reports whether the console module source is newer than the
+// installed server binary, which happens whenever the checkout is edited after a
+// previous build.
+func consoleBinaryStale(sourceRoot, binPath string) bool {
+	info, err := os.Stat(binPath)
+	if err != nil {
+		return true
+	}
+	newest := maxSourceModTime(sourceRoot, func(path string) bool {
+		base := filepath.Base(path)
+		return strings.HasSuffix(base, ".go") || base == "go.mod" || base == "go.sum"
+	})
+	return newest.After(info.ModTime())
+}
+
+// consoleWebDistStale reports whether the console frontend source is newer than
+// the installed web bundle.
+func consoleWebDistStale(webRoot, distIndex string) bool {
+	info, err := os.Stat(distIndex)
+	if err != nil {
+		return true
+	}
+	newest := maxSourceModTime(webRoot, func(path string) bool {
+		switch filepath.Ext(path) {
+		case ".ts", ".vue", ".js", ".mjs", ".json", ".html", ".css", ".scss":
+			return true
+		}
+		return false
+	})
+	return newest.After(info.ModTime())
+}
+
 // buildConsoleFromSource compiles the console from a source checkout when the
 // current directory, executable location, or home checkout carries the admin module and Go.
 func buildConsoleFromSource(root, binPath string) string {
-	sourceRoot := ""
-	for _, candidate := range candidateRepoRoots() {
-		if info, err := os.Stat(filepath.Join(candidate, "admin", "cmd")); err == nil && info.IsDir() {
-			sourceRoot = filepath.Join(candidate, "admin")
-			break
-		}
-		if info, err := os.Stat(filepath.Join(candidate, "cmd")); err == nil && info.IsDir() && regularFileExists(filepath.Join(candidate, "go.mod")) {
-			sourceRoot = candidate
-			break
-		}
-	}
+	sourceRoot := consoleSourceDir()
 	if sourceRoot == "" {
 		return ""
 	}
@@ -589,24 +664,26 @@ func buildConsoleFromSource(root, binPath string) string {
 	return binPath
 }
 
-// buildConsoleWebFromSource builds admin/web from a local source checkout when
-// package.json is present and npm is available on PATH.
-func buildConsoleWebFromSource() string {
-	webRoot := ""
+// consoleWebSourceDir resolves the console frontend source directory from a
+// local checkout.
+func consoleWebSourceDir() string {
 	for _, repoRoot := range candidateRepoRoots() {
 		for _, candidate := range []string{
 			filepath.Join(repoRoot, "admin", "web"),
 			filepath.Join(repoRoot, "web"),
 		} {
 			if regularFileExists(filepath.Join(candidate, "package.json")) && regularFileExists(filepath.Join(candidate, "vite.config.ts")) {
-				webRoot = candidate
-				break
+				return candidate
 			}
 		}
-		if webRoot != "" {
-			break
-		}
 	}
+	return ""
+}
+
+// buildConsoleWebFromSource builds admin/web from a local source checkout when
+// package.json is present and npm is available on PATH.
+func buildConsoleWebFromSource() string {
+	webRoot := consoleWebSourceDir()
 	if webRoot == "" {
 		return ""
 	}
@@ -643,6 +720,13 @@ func ensureConsoleWebDist(root, webDist string, downloaded *[]string) error {
 		return fmt.Errorf("ROLLING_MEMORY_ADMIN_WEB_DIST has no index.html: %s", override)
 	}
 	if regularFileExists(filepath.Join(webDist, "index.html")) {
+		if webRoot := consoleWebSourceDir(); webRoot != "" && consoleWebDistStale(webRoot, filepath.Join(webDist, "index.html")) {
+			if built := buildConsoleWebFromSource(); built != "" {
+				if err := copyTree(built, webDist); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	}
 	for _, repoRoot := range candidateRepoRoots() {

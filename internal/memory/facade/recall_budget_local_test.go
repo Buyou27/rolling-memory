@@ -9,23 +9,22 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestLocalRecallDefaultAndExpandedBudgets(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 70; i++ {
 		id := fmt.Sprintf("budget-%02d", i)
 		body := "quartz evidence " + id + " " + strings.Repeat("evidence ", 200)
-		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), body, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), body, nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	for _, tc := range []struct {
 		name  string
 		limit int

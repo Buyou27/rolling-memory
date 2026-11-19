@@ -39,7 +39,7 @@ func TestConsoleVaultScopeGuard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`CREATE TABLE rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL); CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, raw_text TEXT); INSERT INTO thin_vault_docs VALUES ('secret', 'private content')`); err != nil {
+			if _, err := db.Exec(`CREATE TABLE rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL); CREATE TABLE rm_units (doc_id TEXT PRIMARY KEY, raw_text TEXT); INSERT INTO rm_units VALUES ('secret', 'private content')`); err != nil {
 				t.Fatal(err)
 			}
 			if tc.binding != nil {
@@ -62,7 +62,7 @@ func TestConsoleVaultScopeGuard(t *testing.T) {
 					return
 				}
 				defer wdb.Close()
-				if _, err := wdb.Exec(`DELETE FROM thin_vault_docs`); err != nil {
+				if _, err := wdb.Exec(`DELETE FROM rm_units`); err != nil {
 					c.Status(http.StatusInternalServerError)
 					return
 				}
@@ -98,7 +98,7 @@ func TestConsoleVaultScopeGuard(t *testing.T) {
 			}
 			defer db.Close()
 			var count int
-			if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 1 {
+			if err := db.QueryRow(`SELECT COUNT(*) FROM rm_units`).Scan(&count); err != nil || count != 1 {
 				t.Fatalf("vault changed: count=%d err=%v", count, err)
 			}
 		})

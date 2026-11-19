@@ -13,7 +13,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -70,7 +70,7 @@ func TestLocalRecallEpisodicIndexDiagnostics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			memory := newVaultOnlyMemory(t)
-			client, err := memory.ThinClient()
+			client, err := memory.LocalVault()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -81,7 +81,7 @@ func TestLocalRecallEpisodicIndexDiagnostics(t *testing.T) {
 			ref := "@ref:jsonl:" + path + ":0#0"
 			text := "[user] quartz nebula evidence"
 			packet, _ := client.Vault.PackBlindPacket("ep_index", text, testNow)
-			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_index", testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+			if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_index", testNow, ref, "", text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 				t.Fatal(err)
 			}
 			if tt.mutation != "" {
@@ -112,7 +112,7 @@ func TestLocalRecallEpisodicIndexDiagnostics(t *testing.T) {
 
 func TestLocalRecallEmptyIndexDiagnostics(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	if _, err := memory.ThinClient(); err != nil {
+	if _, err := memory.LocalVault(); err != nil {
 		t.Fatal(err)
 	}
 	result, err := memory.Recall(facade.RecallRequest{Cue: "quartz nebula", NoCrystallize: true})
@@ -127,7 +127,7 @@ func TestLocalRecallEmptyIndexDiagnostics(t *testing.T) {
 
 func TestLocalRecallIndexSchemaFailurePrecedesDiagnostics(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	if _, err := memory.ThinClient(); err != nil {
+	if _, err := memory.LocalVault(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.Store.DB().Exec(`ALTER TABLE rm_episodic_index RENAME COLUMN content_digest TO hidden_digest`); err != nil {

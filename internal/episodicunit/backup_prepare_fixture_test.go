@@ -80,7 +80,7 @@ func prepareFixtureRecovery(ctx context.Context, dir, sourcePath, vaultPath, sco
 		return fixtureRecoveryReceipt{}, err
 	}
 	defer vault.Close()
-	rows, err := vault.QueryContext(ctx, `SELECT doc_id, raw_text FROM thin_vault_docs WHERE (layer = 'episodic' OR layer = '') AND substr(raw_text, 1, 11) = '@ref:zcode:' ORDER BY doc_id`)
+	rows, err := vault.QueryContext(ctx, `SELECT doc_id, raw_text FROM rm_units WHERE (layer = 'episodic' OR layer = '') AND substr(raw_text, 1, 11) = '@ref:zcode:' ORDER BY doc_id`)
 	if err != nil {
 		return fixtureRecoveryReceipt{}, err
 	}
@@ -134,7 +134,7 @@ func TestFixtureRecoveryPreparationAuditAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vault.Exec(`CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, layer TEXT, raw_text TEXT)`); err != nil {
+	if _, err := vault.Exec(`CREATE TABLE rm_units (doc_id TEXT PRIMARY KEY, layer TEXT, raw_text TEXT)`); err != nil {
 		t.Fatal(err)
 	}
 	id := DocID("mem:test", Text("assistant", "fixture answer"))
@@ -144,7 +144,7 @@ func TestFixtureRecoveryPreparationAuditAndIsolation(t *testing.T) {
 		{"ep_missing", "@ref:zcode:s1:missing#0"},
 		{"ep_legacy", "@ref:zcode:s1:m1"},
 	} {
-		if _, err := vault.Exec(`INSERT INTO thin_vault_docs VALUES (?, 'episodic', ?)`, row[0], row[1]); err != nil {
+		if _, err := vault.Exec(`INSERT INTO rm_units VALUES (?, 'episodic', ?)`, row[0], row[1]); err != nil {
 			t.Fatal(err)
 		}
 	}

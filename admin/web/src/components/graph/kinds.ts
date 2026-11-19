@@ -6,6 +6,8 @@
  * and the console views read this registry so a new kind cannot drift between
  * the canvas, the legend and the filters.
  */
+import { MEMORY_LAYER_COLORS, normalizeMemoryLayer } from '@/utils/memoryLayers'
+
 export type GraphKind = 'cluster' | 'unit' | 'word' | 'phrase' | 'free_unit' | 'cell' | 'atom' | 'molecule'
 
 export type ClusterType = 'episode' | 'entity' | 'source'
@@ -73,14 +75,7 @@ export function nodeAccentColor(node: { kind?: string; layer?: string; cluster_t
     if (node.kind === 'free_unit') return KIND_META.free_unit.color
     if (isWordKind(node.kind)) return KIND_META.word.color
     if (isPhraseKind(node.kind)) return KIND_META.phrase.color
-    switch (node.layer) {
-        case 'background':
-            return '#3b82f6'
-        case 'noetic':
-            return '#ec4899'
-        case 'episodic':
-            return '#10b981'
-        default:
-            return kindMeta(node.kind).color
-    }
+    const layer = normalizeMemoryLayer(node.layer)
+    if (layer) return MEMORY_LAYER_COLORS[layer].hex
+    return kindMeta(node.kind).color
 }

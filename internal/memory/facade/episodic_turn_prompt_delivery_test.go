@@ -13,7 +13,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // A turn band must show what the user asked even when retrieval only matched a later
@@ -21,7 +21,7 @@ import (
 // hydrated from the verified index and prepended ahead of the delivered hit window.
 func TestLocalRecallEpisodicTurnKeepsUserPromptOutsideHitWindow(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,11 +45,10 @@ func TestLocalRecallEpisodicTurnKeepsUserPromptOutsideHitWindow(t *testing.T) {
 	}
 	for index, segment := range segments {
 		packet, _ := client.Vault.PackBlindPacket(segment.id, segment.text, testNow+int64(index))
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(segment.id, testNow+int64(index), segment.ptr, turnRef, segment.text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(segment.id, testNow+int64(index), segment.ptr, turnRef, segment.text, packet, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatalf("save %s: %v", segment.id, err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 
 	// The cue matches only the assistant segment; the prompt unit must stay outside the
 	// hit window and still be delivered as the turn's provenance head.
@@ -84,7 +83,7 @@ func TestLocalRecallEpisodicTurnKeepsUserPromptOutsideHitWindow(t *testing.T) {
 // never inferred from content).
 func TestLocalRecallLongTurnFollowerChunkKeepsSpeakerAttribution(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,11 +116,10 @@ func TestLocalRecallLongTurnFollowerChunkKeepsSpeakerAttribution(t *testing.T) {
 		id := fmt.Sprintf("ep_long_chunk_%d", index)
 		pointer := fmt.Sprintf("%s#1.%d", turnRef, index)
 		packet, _ := client.Vault.PackBlindPacket(id, chunk, testNow+int64(index))
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow+int64(index), pointer, turnRef, chunk, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow+int64(index), pointer, turnRef, chunk, packet, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatalf("save chunk %d: %v", index, err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 
 	result, err := memory.Recall(facade.RecallRequest{Cue: "zebra quokka evidence", NoCrystallize: true})
 	if err != nil {

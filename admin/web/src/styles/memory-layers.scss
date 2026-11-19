@@ -1,0 +1,38 @@
+/**
+ * 记忆三层页面级说明条：色相统一取自 --rm-layer-*（真源见 utils/memoryLayers.ts）。
+ * 仅用于 L1 / L2 / L3 页面顶部的层身份说明，不改变状态类告警的语义色。
+ */
+.el-alert.rm-layer-alert {
+    border-left-width: 3px;
+    border-left-style: solid;
+
+    &.is-layer-background {
+        --rm-layer-alert-color: var(--rm-layer-background);
+        --rm-layer-alert-rgb: var(--rm-layer-background-rgb);
+    }
+
+    &.is-layer-episodic {
+        --rm-layer-alert-color: var(--rm-layer-episodic);
+        --rm-layer-alert-rgb: var(--rm-layer-episodic-rgb);
+    }
+
+    &.is-layer-noetic {
+        --rm-layer-alert-color: var(--rm-layer-noetic);
+        --rm-layer-alert-rgb: var(--rm-layer-noetic-rgb);
+    }
+
+    &.is-light {
+        background-color: rgba(var(--rm-layer-alert-rgb), 0.08);
+        border-left-color: var(--rm-layer-alert-color);
+        color: var(--rm-layer-alert-color);
+    }
+
+    &.is-light .el-alert__icon,
+    &.is-light .el-alert__title {
+        color: var(--rm-layer-alert-color);
+    }
+
+    &.is-light .el-alert__description {
+        color: var(--el-text-color-secondary);
+    }
+}

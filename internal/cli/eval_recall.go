@@ -145,15 +145,15 @@ func localEvalRecallPayload(engine *eval.LocalEngine, cue string, topK int) (map
 		unitIDs = append(unitIDs, hit.UnitID)
 	}
 	meta := engine.Metadata()
-	// "engine_transport" / "cloud_hits" 为跨版本数据兼容保留的历史键名（现值为本地通道/本地命中数）。
+	// local_hits is the local retrieval hit count; engine_transport names the local channel.
 	meta["engine_transport"] = eval.TransportForPulseMode(engine.PulseMode)
 	meta["engine_scope"] = engine.Scope
 	meta["engine_upstream"] = engine.Endpoint
 	meta["local_fallback"] = false
-	meta["cloud_hits"] = len(hits)
+	meta["local_hits"] = len(hits)
 	// 语料摘要属于评测模块自己的证据标签（从本套件 manifest 只读获取）；
 	// 记忆引擎不参与、也不需要理解任何评测字段。
-	if manifest, manifestErr := eval.ReadCloudManifest(engine.StorePath); manifestErr == nil {
+	if manifest, manifestErr := eval.ReadEvalManifest(engine.StorePath); manifestErr == nil {
 		meta["corpus_sha256"] = manifest.CorpusSHA256
 	}
 	return map[string]any{

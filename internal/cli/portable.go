@@ -117,7 +117,7 @@ func (a *application) runInitPortable(rawDir string) int {
 	}
 	// Materialize the canonical vault schema before the receipt is read: a
 	// portable payload is complete at creation time, not on its first recall.
-	if _, err := memory.ThinClient(); err != nil {
+	if _, err := memory.LocalVault(); err != nil {
 		_ = memory.Close()
 		return a.fail(err)
 	}

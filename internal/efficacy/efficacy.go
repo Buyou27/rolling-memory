@@ -38,7 +38,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
@@ -1038,7 +1038,7 @@ func Evaluate(st *store.Store, cfg *config.Config, opts Options) (*Report, error
 		}
 
 		// 1. Run deterministic graph recall (IncludeRaw=false so the prompt never self-echoes).
-		// All filtering relies strictly on memcore's mathematical score, graph node degree (IDF),
+		// All filtering relies strictly on delivery's mathematical score, graph node degree (IDF),
 		// and structural path/entity node labels — zero closed-set word lists.
 		var rendered string
 		var bandTitles []string
@@ -1511,7 +1511,7 @@ func Evaluate(st *store.Store, cfg *config.Config, opts Options) (*Report, error
 			// Recalled memory matched a specific non-echo epistemic entity/ruling/gotcha in the assistant's action or reply.
 			// Require >= 2 distinct novel entity anchors (or 1 high-self-information anchor >= 20 Shannon bits)
 			// AND verified low exploration steps (< baselineSteps) before crediting guardrail round savings.
-			strongEntityHit := len(matchedEntities) >= 2 || memcore.StringShannonBits(matchedEntities[0]) >= 20.0
+			strongEntityHit := len(matchedEntities) >= 2 || delivery.StringShannonBits(matchedEntities[0]) >= 20.0
 			valuePillar = "guardrail"
 			if isShortContinuityTurn {
 				valuePillar = "continuity"
@@ -3563,7 +3563,7 @@ func loadPreindexedActiveSubjects(st *store.Store, scope string) []preindexedSub
 	for rows.Next() {
 		var lbl, body string
 		var minTS int64
-		if rows.Scan(&lbl, &minTS, &body) == nil && lbl != "" && memcore.StringShannonBits(lbl) >= 4.0 {
+		if rows.Scan(&lbl, &minTS, &body) == nil && lbl != "" && delivery.StringShannonBits(lbl) >= 4.0 {
 			if len(body) > 600 {
 				body = strings.ToValidUTF8(body[:600], "")
 			}

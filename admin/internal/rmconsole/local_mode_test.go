@@ -113,7 +113,7 @@ func TestWidgetAndGraphHandlersMakeZeroCloudCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}
-	if _, err := db.Exec(`INSERT OR REPLACE INTO thin_vault_docs
+	if _, err := db.Exec(`INSERT OR REPLACE INTO rm_units
 		(doc_id, layer, occurred_at, raw_text, sentences_json, address_uri, coord64, kept_indices_json)
 		VALUES ('local_graph_1', 'episodic', 1762380000, '本地图谱单元', '[]', 'C6:L1:B001#00', 1, '[]')`); err != nil {
 		_ = db.Close()

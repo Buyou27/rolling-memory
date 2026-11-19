@@ -53,7 +53,7 @@ func TestLayersStatsFiltersAndBackgroundFiles(t *testing.T) {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
 	seeds := []string{
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('EPI-1', 'episodic', 1762380000, 'episodic turn', 'C6:L1:B001#00')`,
 		`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
 		 VALUES ('NOE-ACT', 1762380100, 'active', 'q-active', 'a-active', '["EPI-1"]')`,
@@ -334,32 +334,14 @@ func TestMemoryBrowserSharedComponentAndNoWaveformRegression(t *testing.T) {
 	}
 }
 
-func TestEnvHealthAndSyncReconcileHandlersAndLegacyTablePurge(t *testing.T) {
+func TestEnvHealthAndSyncReconcileHandlers(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "clean_rame.db")
 	db, err := openWritableVaultDB(dbPath)
 	if err != nil {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
-	if _, err := db.Exec(`CREATE TABLE trace (hash TEXT PRIMARY KEY); CREATE TABLE assertion (node_id TEXT PRIMARY KEY);`); err != nil {
-		_ = db.Close()
-		t.Fatalf("seed legacy tables: %v", err)
-	}
 	_ = db.Close()
-
-	db2, err := openWritableVaultDB(dbPath)
-	if err != nil {
-		t.Fatalf("re-openWritableVaultDB: %v", err)
-	}
-	var legacyCnt int
-	if err := db2.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('trace','assertion','node','vector')`).Scan(&legacyCnt); err != nil {
-		_ = db2.Close()
-		t.Fatalf("check legacy tables: %v", err)
-	}
-	_ = db2.Close()
-	if legacyCnt != 0 {
-		t.Fatalf("expected openWritableVaultDB to purge legacy tables, found %d", legacyCnt)
-	}
 
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	prevExec := executeAdminSyncCLI
@@ -372,7 +354,7 @@ func TestEnvHealthAndSyncReconcileHandlersAndLegacyTablePurge(t *testing.T) {
 		if action == "status" {
 			return []byte(`{"active_harness_id":"zcode","active_harness_label":"ZCode","health_score":96,"health_grade":"healthy","total_pending_sync":1}`), nil
 		}
-		return []byte(`{"layer":"` + layer + `","episodic_imported_from_harness":2,"episodic_pushed_to_remote":2,"total_reconciled":2,"status":{"health_score":100}}`), nil
+		return []byte(`{"layer":"` + layer + `","episodic_imported_from_harness":2,"total_reconciled":2,"status":{"health_score":100}}`), nil
 	}
 
 	healthRaw := callPluginHandler(t, envHealthHandler, "/admin/plugin/rolling-memory/env/health", `{}`)
@@ -472,7 +454,7 @@ func TestDeleteMemoryUnitsRollsBackWhenTombstoneFails(t *testing.T) {
 		`CREATE TABLE rm_episodic_lineage(turn_ref TEXT, doc_id TEXT)`,
 		`CREATE TABLE rm_episodic_index(doc_id TEXT, payload TEXT)`,
 		`CREATE TABLE rm_episodic_sources(doc_id TEXT, ref_pointer TEXT)`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha body'), ('doc-b', 'episodic', 'beta body')`,
+		`INSERT INTO rm_units(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha body'), ('doc-b', 'episodic', 'beta body')`,
 		`INSERT INTO rm_episodic_lineage VALUES ('turn-a', 'doc-a'), ('turn-b', 'doc-b')`,
 		`INSERT INTO rm_episodic_index VALUES ('doc-a', 'index-a'), ('doc-b', 'index-b')`,
 		`INSERT INTO rm_episodic_sources VALUES ('doc-a', 'ref-a'), ('doc-b', 'ref-b')`,
@@ -489,7 +471,7 @@ func TestDeleteMemoryUnitsRollsBackWhenTombstoneFails(t *testing.T) {
 		t.Fatalf("delete result: deleted=%d invalidated=%d purged=%v err=%v", deleted, invalidated, purged, err)
 	}
 	for query, want := range map[string]int{
-		`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id IN ('doc-a', 'doc-b')`:      2,
+		`SELECT COUNT(*) FROM rm_units WHERE doc_id IN ('doc-a', 'doc-b')`:             2,
 		`SELECT COUNT(*) FROM rm_episodic_lineage`:                                     2,
 		`SELECT COUNT(*) FROM rm_episodic_index`:                                       2,
 		`SELECT COUNT(*) FROM rm_episodic_sources`:                                     2,
@@ -507,7 +489,7 @@ func TestDeleteMemoryUnitsRollsBackWhenTombstoneFails(t *testing.T) {
 func TestDeleteMemoryUnitsPurgesStaleAndSelectedTogether(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "delete_and_purge.db")
 	seedVault(t, dbPath,
-		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha')`,
+		`INSERT INTO rm_units(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha')`,
 		`INSERT INTO rm_noetic(noetic_id, status, query_text, answer_text, cited_unit_ids_json) VALUES ('nt-stale', 'stale', 'q', 'a', '[]'), ('nt-active', 'active', 'q', 'a', '["doc-a"]')`,
 	)
 	db, err := openVaultWriteOnly(dbPath)
@@ -537,7 +519,7 @@ func TestDeleteMemoryUnitsRollsBackWhenIndexCleanupFails(t *testing.T) {
 		`CREATE TABLE rm_deleted_units(unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE rm_episodic_index(doc_id TEXT, payload TEXT)`,
 		`CREATE TRIGGER reject_index_delete BEFORE DELETE ON rm_episodic_index BEGIN SELECT RAISE(ABORT, 'blocked index'); END`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha body')`,
+		`INSERT INTO rm_units(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'alpha body')`,
 		`INSERT INTO rm_episodic_index VALUES ('doc-a', 'index-a')`,
 	)
 	db, err := openVaultWriteOnly(dbPath)
@@ -549,9 +531,9 @@ func TestDeleteMemoryUnitsRollsBackWhenIndexCleanupFails(t *testing.T) {
 		t.Fatalf("index failure = %v", err)
 	}
 	for query, want := range map[string]int{
-		`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id='doc-a'`: 1,
-		`SELECT COUNT(*) FROM rm_deleted_units`:                     0,
-		`SELECT COUNT(*) FROM rm_episodic_index`:                    1,
+		`SELECT COUNT(*) FROM rm_units WHERE doc_id='doc-a'`: 1,
+		`SELECT COUNT(*) FROM rm_deleted_units`:              0,
+		`SELECT COUNT(*) FROM rm_episodic_index`:             1,
 	} {
 		var got int
 		if err := db.QueryRow(query).Scan(&got); err != nil || got != want {
@@ -563,7 +545,7 @@ func TestDeleteMemoryUnitsRollsBackWhenIndexCleanupFails(t *testing.T) {
 func TestDeleteMemoryUnitsSerializesConcurrentWriter(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "delete_concurrent.db")
 	seedVault(t, dbPath,
-		`INSERT INTO thin_vault_docs(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'original')`,
+		`INSERT INTO rm_units(doc_id, layer, raw_text) VALUES ('doc-a', 'episodic', 'original')`,
 		`CREATE TABLE rm_deleted_units(unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL DEFAULT 0)`,
 	)
 	deleting, err := openVaultWriteOnly(dbPath)
@@ -585,7 +567,7 @@ func TestDeleteMemoryUnitsSerializesConcurrentWriter(t *testing.T) {
 	}()
 	go func() {
 		<-start
-		_, err := writer.Exec(`INSERT OR IGNORE INTO thin_vault_docs(doc_id, layer, raw_text) SELECT 'doc-a', 'episodic', 'resurrected' WHERE NOT EXISTS (SELECT 1 FROM rm_deleted_units WHERE unit_id='doc-a')`)
+		_, err := writer.Exec(`INSERT OR IGNORE INTO rm_units(doc_id, layer, raw_text) SELECT 'doc-a', 'episodic', 'resurrected' WHERE NOT EXISTS (SELECT 1 FROM rm_deleted_units WHERE unit_id='doc-a')`)
 		finished <- err
 	}()
 	close(start)
@@ -600,7 +582,7 @@ func TestDeleteMemoryUnitsSerializesConcurrentWriter(t *testing.T) {
 		}
 	}
 	var docs, tombstones int
-	if err := writer.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id='doc-a'`).Scan(&docs); err != nil {
+	if err := writer.QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id='doc-a'`).Scan(&docs); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.QueryRow(`SELECT COUNT(*) FROM rm_deleted_units WHERE unit_id='doc-a'`).Scan(&tombstones); err != nil {
@@ -622,7 +604,7 @@ func TestLayersDeleteCleansLineageTombstonesAndActiveCitationLinks(t *testing.T)
 		`CREATE TABLE rm_episodic_sources(doc_id TEXT, ref_pointer TEXT)`,
 		`INSERT INTO rm_episodic_index VALUES ('ep_del_1', 'index')`,
 		`INSERT INTO rm_episodic_sources VALUES ('ep_del_1', 'ref')`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('ep_del_1', 'episodic', 1762380000, 'deleted episodic text', 'C6:L1:E001#00')`,
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('ep_del_1', 'episodic', 1762380000, 'deleted episodic text', 'C6:L1:E001#00')`,
 		`INSERT INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES ('@ref:zcode:s1:m1', 'ep_del_1', 1762380000)`,
 		`INSERT INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('d_del', '/tmp/dir-del', 1762380000)`,
 		`INSERT INTO rm_bg_files(abs_path, dir_id, rel_path, mtime_ns, file_size, chunk_count, unit_ids_json, chunk_hashes_json) VALUES ('/tmp/dir-del/f.md', 'd_del', 'f.md', 1762380000000000000, 512, 1, '["bg:del#0"]', '["h0"]')`,

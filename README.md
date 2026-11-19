@@ -23,8 +23,7 @@ In everyday use, that comes down to four practical things: **genuinely free, rea
   # Option 1: Wire only the pure MCP recall tool without any hooks or instruction blocks
   rolling-memory install --mcp-only
 
-  # Option 2: Keep the install, but turn off boot-context injection or hook ledger recording
-  rolling-memory config set hooks.boot_context false
+  # Option 2: Keep the install, but turn off hook ledger recording
   rolling-memory config set hooks.ledger false
   ```
 - **Built-in USB portable mode**: Because both the binary and the SQLite vault are self-contained files, we also included a USB portable mode (see [`docs/usb-portable.md`](docs/usb-portable.md)) so you can put the tool and your memory vault onto a thumb drive and carry them around. It is still experimental and not thoroughly tested yet, and it comes with a real prerequisite: **for project-specific memories to be useful on another machine, you have to be working on the same project there**. If you are curious and like tinkering, feel free to try it out and tell us what works and what does not.

@@ -1937,7 +1937,7 @@
                         <el-descriptions-item label="engine_transport">{{ probeProvenance.engine_transport || '—' }}</el-descriptions-item>
                         <el-descriptions-item label="engine_upstream">{{ probeProvenance.engine_upstream || '—' }}</el-descriptions-item>
                         <el-descriptions-item label="engine_scope">{{ probeProvenance.engine_scope || '—' }}</el-descriptions-item>
-                        <el-descriptions-item label="cloud_hits">{{ probeProvenance.cloud_hits ?? '—' }}</el-descriptions-item>
+                        <el-descriptions-item label="local_hits">{{ probeProvenance.local_hits ?? '—' }}</el-descriptions-item>
                         <el-descriptions-item label="local_fallback">
                             <span :class="{ 'is-blocked': probeProvenance.local_fallback !== false }">{{ probeProvenance.local_fallback === null ? 'unknown' : probeProvenance.local_fallback ? 'true (blocked)' : 'false' }}</span>
                         </el-descriptions-item>
@@ -2292,7 +2292,7 @@ interface RecallMeta {
     engine_scope?: string
     engine_upstream?: string
     local_fallback?: boolean
-    cloud_hits?: number
+    local_hits?: number
     transport?: string
     endpoint?: string
     scope?: string
@@ -2480,7 +2480,7 @@ interface EvalQuestionResultItem {
     answer_ms: number
     judge_ms: number
     total_ms: number
-    cloud_hits?: number
+    local_hits?: number
     engine_transport?: string
     engine_scope?: string
     engine_upstream?: string
@@ -3396,7 +3396,7 @@ const rootCauseOf = (it: any): EvalRootCauseKey => {
     if (verdict === 'unparsed' || verdict === 'error') return 'JUDGE_AMBIGUITY'
     if (verdict === 'wrong' && f1 >= JUDGE_EQUIVALENT_F1_THRESHOLD) return 'JUDGE_AMBIGUITY'
     if (it?.evidence_hit || it?.answer_in_context) return verdict === 'wrong' ? 'READER_GAP' : 'HIT'
-    if (Number(it?.best_evidence_recall || 0) > 0 || Number(it?.cloud_hits || 0) > 0 || Number(it?.raw || 0) > 0 || Number(it?.bands || 0) > 0 || Number(it?.nodes || 0) > 0) {
+    if (Number(it?.best_evidence_recall || 0) > 0 || Number(it?.local_hits || 0) > 0 || Number(it?.raw || 0) > 0 || Number(it?.bands || 0) > 0 || Number(it?.nodes || 0) > 0) {
         return 'RANK_CUTOFF'
     }
     return 'RECALL_MISS'
@@ -4660,7 +4660,7 @@ const isGoldUnitHit = (unitId?: string) => {
 }
 const formatEvidenceLines = (lines: string[]) => lines.join('\n')
 const probeCloudHitCount = computed(() => {
-    const direct = probeItem.value?.cloud_hits ?? probeRecall.value?.meta?.cloud_hits
+    const direct = probeItem.value?.local_hits ?? probeRecall.value?.meta?.local_hits
     if (typeof direct === 'number') return direct
     return recallEvidenceHits.value.length || Number(probeItem.value?.raw || 0) || probeEvidenceItems.value.length
 })
@@ -4673,7 +4673,7 @@ const probeProvenance = computed(() => {
         engine_scope: String(item?.engine_scope || meta.engine_scope || meta.scope || probeRecall.value?.scope || ''),
         engine_upstream: String(item?.engine_upstream || meta.engine_upstream || meta.endpoint || ''),
         local_fallback: typeof localFallback === 'boolean' ? localFallback : null,
-        cloud_hits: item?.cloud_hits ?? meta.cloud_hits ?? null,
+        local_hits: item?.local_hits ?? meta.local_hits ?? null,
         store_path: String(meta.store_path || ''),
         corpus_sha256: String(item?.corpus_sha256 || meta.corpus_sha256 || ''),
     }
@@ -4692,7 +4692,7 @@ const probeProvenanceJSON = computed(() => {
             engine_scope: item.engine_scope || null,
             engine_upstream: item.engine_upstream || null,
             local_fallback: item.local_fallback ?? null,
-            cloud_hits: item.cloud_hits ?? null,
+            local_hits: item.local_hits ?? null,
             retrieval_unit_ids: item.retrieval_unit_ids || [],
             corpus_sha256: item.corpus_sha256 || null,
         },

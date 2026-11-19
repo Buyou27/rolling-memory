@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
-func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
+func TestSyncStatusAndReconcileAllLayers(t *testing.T) {
 	env := newEnv(t)
 	dbPath := filepath.Join(env.base, "reconcile.db")
 
@@ -37,21 +39,18 @@ func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	if _, err := localvault.NewVault(db, []byte("reconcile-seed")); err != nil {
+		_ = db.Close()
+		t.Fatalf("bootstrap vault: %v", err)
+	}
 	_, err = db.Exec(`
-			CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL);
 			INSERT OR REPLACE INTO rm_meta(k, v) VALUES ('local_plain_scope', 'mem:test');
-			CREATE TABLE IF NOT EXISTS thin_vault_docs (
-			doc_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT 'episodic', occurred_at INTEGER NOT NULL DEFAULT 0,
-			raw_text TEXT NOT NULL, sentences_json TEXT NOT NULL DEFAULT '[]', address_uri TEXT NOT NULL DEFAULT '',
-			coord64 INTEGER NOT NULL DEFAULT 0, waveform_bar TEXT NOT NULL DEFAULT '', doc_macro_wave TEXT NOT NULL DEFAULT '',
-			kept_indices_json TEXT NOT NULL DEFAULT '[]'
-		);
 		CREATE TABLE IF NOT EXISTS rm_noetic (
 			noetic_id TEXT PRIMARY KEY, occurred_at INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active',
 			query_text TEXT NOT NULL, answer_text TEXT NOT NULL, cited_unit_ids_json TEXT NOT NULL DEFAULT '[]',
 			cited_sentences_json TEXT NOT NULL DEFAULT '[]'
 		);
-		INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text) VALUES ('bg_local_1', 'background', 1762380000, 'local background doc');
+		INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text) VALUES ('bg_local_1', 'background', 1762380000, 'local background doc');
 		INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json)
 		VALUES ('nt_local_1', 1762380100, 'active', 'what is RAME?', 'the memory engine', '["bg_local_1"]');
 	`)
@@ -153,7 +152,7 @@ func TestEpisodicRebuildDryRunThenApply(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT OR REPLACE INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, sentences_json)
+		INSERT OR REPLACE INTO rm_units(doc_id, layer, occurred_at, raw_text, sentences_json)
 		VALUES ('ep_legacy_turn', 'episodic', 1762398000, '[user] 请检查缓存失效。
 [assistant] 先确认断言。
 结论：缓存按 docID 失效。', '[]')`); err != nil {
@@ -176,7 +175,7 @@ func TestEpisodicRebuildDryRunThenApply(t *testing.T) {
 	}
 	db, _ = sql.Open("sqlite", "file:"+dbPath)
 	var legacyAfterDry int
-	_ = db.QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id = 'ep_legacy_turn'`).Scan(&legacyAfterDry)
+	_ = db.QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id = 'ep_legacy_turn'`).Scan(&legacyAfterDry)
 	_ = db.Close()
 	if legacyAfterDry != 1 {
 		t.Fatalf("dry-run must not delete anything, legacy row count = %d", legacyAfterDry)
@@ -190,7 +189,7 @@ func TestEpisodicRebuildDryRunThenApply(t *testing.T) {
 	db, _ = sql.Open("sqlite", "file:"+dbPath)
 	defer db.Close()
 	var legacyAfterApply int
-	if err := db.QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id = 'ep_legacy_turn'`).Scan(&legacyAfterApply); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id = 'ep_legacy_turn'`).Scan(&legacyAfterApply); err != nil {
 		t.Fatalf("count legacy: %v", err)
 	}
 	if legacyAfterApply != 1 {

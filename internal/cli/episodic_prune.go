@@ -27,7 +27,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // episodicPruneScanLimit bounds one prune pass over the vault's pointer rows.
@@ -106,7 +106,7 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 	if memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
 		scope = strings.TrimSpace(memory.Config.Scope)
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		return report, err
 	}
@@ -117,10 +117,11 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 	// Materialize the episodic rows before classifying: the classifier issues its own
 	// queries, and a live Rows iterator would hold the single vault connection.
 	rows, err := db.QueryContext(ctx, `
-		SELECT d.doc_id, d.raw_text, d.occurred_at
-		FROM thin_vault_docs d
+		SELECT d.unit_id, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text), d.occurred_at
+		FROM rm_docs d
+		LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
 		WHERE (d.layer = 'episodic' OR d.layer = '')
-		ORDER BY d.doc_id
+		ORDER BY d.unit_id
 		LIMIT ?`, limit)
 	if err != nil {
 		return report, err
@@ -157,7 +158,7 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 			break
 		}
 		switch status {
-		case thinclient.EpisodicContentAbsent:
+		case localvault.EpisodicContentAbsent:
 			// Deletion must prove the content is gone, not merely that its old coordinate
 			// stopped addressing it: a turn renumbering inside the same file makes a row
 			// classify absent while its sealed content is alive elsewhere in that file.
@@ -174,7 +175,7 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 			}
 			report.Absent++
 			absent = append(absent, item)
-		case thinclient.EpisodicContentRelocatable:
+		case localvault.EpisodicContentRelocatable:
 			report.Relocatable++
 			// A relocatable row still has its content, sealed under a digest, but its
 			// stored coordinate drifted (source enumeration changed between imports).
@@ -201,7 +202,7 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 			default:
 				report.Reanchorable++
 			}
-		case thinclient.EpisodicContentVerified:
+		case localvault.EpisodicContentVerified:
 			report.Verified++
 		default:
 			report.Unreadable++
@@ -267,6 +268,11 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 		report.Receipt = receiptPath
 	}
 	report.NoeticRemoved, report.LocusHealed = pruneOrphanNoeticAndHealLoci(ctx, db)
+	if report.Removed > 0 || report.NoeticRemoved > 0 {
+		if bumpErr := tc.Vault.BumpPurgeEpoch(ctx); bumpErr != nil {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("purge epoch: %v", bumpErr))
+		}
+	}
 	if memory.Config != nil && mcp.ShouldUseUnixDaemon(memory.Config.DB) {
 		mcp.InvalidateUnixDaemonCaches("")
 	}
@@ -328,7 +334,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 			}
 			unitAlive := false
 			var exists int
-			if qErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, cid).Scan(&exists); qErr != nil || exists != 0 {
+			if qErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM rm_docs WHERE unit_id = ?)`, cid).Scan(&exists); qErr != nil || exists != 0 {
 				unitAlive = true
 			} else if hasBgChunks > 0 {
 				if bgErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM rm_bg_chunks WHERE unit_id = ?)`, cid).Scan(&exists); bgErr != nil || exists != 0 {
@@ -405,7 +411,11 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 		resolved bool
 	}
 	jsonlLocusCache := make(map[string]locusResolution, 32)
-	dRows, err := db.QueryContext(ctx, `SELECT doc_id, raw_text, COALESCE(locus, '') FROM thin_vault_docs WHERE (layer = 'episodic' OR layer = '')`)
+	dRows, err := db.QueryContext(ctx, `
+		SELECT d.unit_id, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text), COALESCE(m.locus, '')
+		FROM rm_docs d
+		LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+		WHERE (d.layer = 'episodic' OR d.layer = '')`)
 	if err == nil {
 		for dRows.Next() {
 			var docID, rawText, curLocus string

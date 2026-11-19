@@ -59,7 +59,7 @@ func newImportScanMemory(t *testing.T, scope string) *facade.Memory {
 
 func episodicDocIDs(t *testing.T, memory *facade.Memory) []string {
 	t.Helper()
-	rows, err := memory.Store.DB().Query(`SELECT doc_id FROM thin_vault_docs WHERE layer = 'episodic' OR layer = '' ORDER BY doc_id`)
+	rows, err := memory.Store.DB().Query(`SELECT doc_id FROM rm_units WHERE layer = 'episodic' OR layer = '' ORDER BY doc_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func episodicDocIDs(t *testing.T, memory *facade.Memory) []string {
 func countEpisodicDocs(t *testing.T, memory *facade.Memory) int {
 	t.Helper()
 	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic' OR layer = ''`).Scan(&count); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic' OR layer = ''`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	return count
@@ -141,7 +141,7 @@ func TestImportScanCanonicalIdentityBothOrders(t *testing.T) {
 			}
 			for _, id := range got {
 				var pointer, assistant, session, locus string
-				if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, id).
+				if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, id).
 					Scan(&pointer, &assistant, &session, &locus); err != nil {
 					t.Fatal(err)
 				}
@@ -167,12 +167,12 @@ func TestImportScanTombstoneBlocksResurrection(t *testing.T) {
 		t.Fatal(err)
 	}
 	docID := episodicunit.DocID("mem:tombstone", "[user] 老张养了一只猫。")
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pointer string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&pointer); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&pointer); err != nil {
 		t.Fatal(err)
 	}
 	client.Vault.RecordDeletedUnits("episodic", docID)
@@ -217,7 +217,7 @@ func TestImportJSONLIncompleteTailSkippedAndCounted(t *testing.T) {
 		t.Fatalf("receipt = %#v", result)
 	}
 	var tail int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE raw_text LIKE '%尾轮%'`).Scan(&tail); err != nil || tail != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE raw_text LIKE '%尾轮%'`).Scan(&tail); err != nil || tail != 0 {
 		t.Fatalf("incomplete tail written: tail=%d err=%v", tail, err)
 	}
 	if got := countEpisodicDocs(t, memory); got != 2 {

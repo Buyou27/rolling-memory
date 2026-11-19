@@ -23,16 +23,12 @@ func (s *Store) Status(scope string) (map[string]any, error) {
 		}
 		schemaRaw, _ := db.GetMeta(s.conn, "schema_version", "1")
 		schemaVersion, _ := strconv.ParseInt(schemaRaw, 10, 64)
-		egress := "remote-allowed"
-		if s.Config.Mode == "local" {
-			egress = "loopback-only"
-		}
 		return map[string]any{
 			"scope":          scope,
 			"db":             s.Config.DB,
 			"db_size_bytes":  db.DBSize(s.Config.DB),
 			"mode":           s.Config.Mode,
-			"egress":         egress,
+			"egress":         "loopback-only",
 			"corpus":         corpus.Map(),
 			"schema_version": schemaVersion,
 		}, nil
@@ -85,10 +81,6 @@ func (s *Store) Status(scope string) (map[string]any, error) {
 		return nil, err
 	}
 	schemaVersion, _ := strconv.ParseInt(schemaRaw, 10, 64)
-	egress := "remote-allowed"
-	if s.Config.Mode == "local" {
-		egress = "loopback-only"
-	}
 	var lastReplay any
 	if replay != nil {
 		lastReplay = replay
@@ -98,7 +90,7 @@ func (s *Store) Status(scope string) (map[string]any, error) {
 		"db":                    s.Config.DB,
 		"db_size_bytes":         db.DBSize(s.Config.DB),
 		"mode":                  s.Config.Mode,
-		"egress":                egress,
+		"egress":                "loopback-only",
 		"counts":                counts,
 		"active_assertions":     active,
 		"private_assertions":    private,

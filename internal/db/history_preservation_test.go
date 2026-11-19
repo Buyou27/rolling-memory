@@ -20,7 +20,7 @@ func TestHistoricalOrphanTablesSurviveRepeatedMigration(t *testing.T) {
 		execSQL(t, connection, "INSERT INTO "+table+" VALUES ('historical')")
 	}
 	for i := 0; i < 2; i++ {
-		if err := EnsureMemcoreSchema(connection); err != nil {
+		if err := EnsureDeliverySchema(connection); err != nil {
 			t.Fatal(err)
 		}
 		for _, table := range []string{"assertion_ext", "participant", "restate", "node_ext", "node_vector", "episode_member", "episode", "memory_hot", "noetic"} {

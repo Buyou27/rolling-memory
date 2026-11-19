@@ -140,7 +140,7 @@ func (s *Store) PendingTraces(scope string, limit int, session *string) ([]Trace
 
 // PendingVaultTraces takes one finite database snapshot of the unmirrored traces
 // whose audience can be represented safely in the local vault. Keying off
-// thin_vault_docs existence rather than trace.processed decouples vault mirroring
+// rm_docs existence rather than trace.processed decouples vault mirroring
 // from assertion-graph replay and avoids re-scanning already-mirrored history.
 func (s *Store) PendingVaultTraces(scope string, session *string) ([]Trace, error) {
 	var hasVaultDocs int

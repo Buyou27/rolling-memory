@@ -3,8 +3,8 @@
     <div class="default-main plugin-rolling-memory">
         <!-- 顶部提示条（参照 plugins/ai/web/views/channel/index.vue 标准） -->
         <el-alert
-            class="rm-alert"
-            type="warning"
+            class="rm-alert rm-layer-alert is-layer-noetic"
+            type="info"
             :closable="false"
             show-icon
             :title="t('plugin.rolling-memory.noetic.pageTitle')"
@@ -26,16 +26,8 @@
                 <span class="stat-value">{{ stats.noetic_cited_links || 0 }}</span>
             </div>
             <div class="stat-item" :class="!alignmentKnown ? 'info' : noeAlign.aligned ? 'success' : 'warning'">
-                <span class="stat-label">{{
-                    isLocalMode
-                        ? t('plugin.rolling-memory.overview.localVaultLbl')
-                        : `${t('plugin.rolling-memory.overview.localVaultLbl')} ⇄ ${t('plugin.rolling-memory.overview.remoteCloudLbl')}`
-                }}</span>
-                <span v-if="isLocalMode" class="stat-value">{{ noeAlign.local_vault_count ?? stats.noetic_active_count ?? 0 }}</span>
-                <span v-else-if="!alignmentKnown" class="stat-value">{{ t('plugin.rolling-memory.overview.unknownStatus') }}</span>
-                <span v-else class="stat-value"
-                    >{{ noeAlign.local_vault_count }} / {{ noeAlign.remote_cloud_count }} ({{ noeAlign.alignment_pct }}%)</span
-                >
+                <span class="stat-label">{{ t('plugin.rolling-memory.overview.localVaultLbl') }}</span>
+                <span class="stat-value">{{ noeAlign.local_vault_count ?? stats.noetic_active_count ?? 0 }}</span>
             </div>
         </div>
 
@@ -135,7 +127,7 @@ let envSocket: MonitorSocket | null = null
 const noeAlign = computed(() => envHealth.value?.layers?.noetic || {})
 const isLocalMode = computed(() => envHealth.value?.mode !== 'cloud')
 const alignmentKnown = computed(() =>
-    Boolean(envHealth.value?.layers?.noetic && (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true)))
+    Boolean(envHealth.value?.layers?.noetic && isLocalMode.value)
 )
 
 const onStatsLoaded = (payload: any) => {
@@ -211,9 +203,7 @@ const handleReconcileNoetic = async () => {
         })
         const rep = res.data?.data
         if (rep) {
-            const summary = isLocalMode.value
-                ? t('plugin.rolling-memory.noetic.reconcileSuccessLocal')
-                : t('plugin.rolling-memory.noetic.reconcileResult', { noe: rep.noetic_pushed_to_remote ?? 0 })
+            const summary = t('plugin.rolling-memory.noetic.reconcileSuccessLocal')
             const actionableWarnings = (rep.warnings || []).filter(
                 (w: string) => !String(w).includes('episodic index backfill covers only the scanned harness window')
             )

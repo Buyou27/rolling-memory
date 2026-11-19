@@ -12,7 +12,7 @@
 //   - nothing depends on natural language: zero word lists, zero scripts, zero
 //     character-length caps, zero Shannon gating.
 //
-// The package has no internal dependencies so the thin client can reuse the exact
+// The package has no internal dependencies so the local vault client can reuse the exact
 // same rules as the ingest paths (one vocabulary, one behaviour).
 package speech
 

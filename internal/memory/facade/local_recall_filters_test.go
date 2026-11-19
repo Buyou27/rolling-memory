@@ -8,17 +8,17 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestLocalVaultRecallRejectsUnsupportedFilters(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	memory := newVaultOnlyMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("ep_filter", testNow, "filter witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("ep_filter", testNow, "filter witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
 
@@ -58,11 +58,11 @@ func TestLocalVaultRecallRejectsUnsupportedFilters(t *testing.T) {
 func TestLocalGraphSessionFilterDoesNotFallBackToVault(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("ep_filter_fallback", testNow, "fallback witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("ep_filter_fallback", testNow, "fallback witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
 	if !memory.Store.HasLegacyGraph() {

@@ -14,7 +14,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // TestHealDriftedEpisodicPointersReanchorsWithoutDeleting pins the regular-tick heal
@@ -39,9 +39,9 @@ func TestHealDriftedEpisodicPointersReanchorsWithoutDeleting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil || tc == nil || tc.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	turnRef := "@ref:jsonl:" + source + ":0"
 
@@ -52,7 +52,7 @@ func TestHealDriftedEpisodicPointersReanchorsWithoutDeleting(t *testing.T) {
 		{"", "@ref:jsonl:" + goneSource + ":0#0", ""},
 	}
 	for index := range units {
-		text, rErr := thinclient.ResolveEpisodicPointerLive(units[index].ref)
+		text, rErr := localvault.ResolveEpisodicPointerLive(units[index].ref)
 		if rErr != nil || strings.TrimSpace(text) == "" {
 			t.Fatalf("resolve %s: %q %v", units[index].ref, text, rErr)
 		}
@@ -83,12 +83,12 @@ func TestHealDriftedEpisodicPointersReanchorsWithoutDeleting(t *testing.T) {
 		t.Fatalf("heal pass = scanned %d repaired %d, want 3/1", scanned, repaired)
 	}
 	var healedPtr string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id=?`, driftedID).Scan(&healedPtr); err != nil || healedPtr != turnRef+"#1" {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id=?`, driftedID).Scan(&healedPtr); err != nil || healedPtr != turnRef+"#1" {
 		t.Fatalf("drifted pointer was not re-anchored in place: got %q err=%v", healedPtr, err)
 	}
 	var count int
 	for _, id := range []string{driftedID, absentID, unreadableID} {
-		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id=?`, id).Scan(&count); err != nil || count != 1 {
+		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id=?`, id).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("heal must never delete rows: %s count=%d err=%v", id, count, err)
 		}
 	}
@@ -125,9 +125,9 @@ func TestHealKeepsUnattributedAlternatesUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil || client == nil || client.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary.jsonl")
@@ -143,10 +143,10 @@ func TestHealKeepsUnattributedAlternatesUntouched(t *testing.T) {
 	text := "[user] quartz provenance witness"
 	docID := episodicunit.DocID(memory.Config.Scope, text)
 	packet, _ := client.Vault.PackBlindPacket(docID, text, 1)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, primaryTurn+"#0", primaryTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, primaryTurn+"#0", primaryTurn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 2, alternateTurn+"#0", alternateTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 2, alternateTurn+"#0", alternateTurn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(primary); err != nil {
@@ -161,7 +161,7 @@ func TestHealKeepsUnattributedAlternatesUntouched(t *testing.T) {
 		t.Fatalf("heal pass = scanned %d repaired %d, want 1/0 (cross-source alternate must stay untouched)", scanned, repaired)
 	}
 	var keptPtr string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != primaryTurn+"#0" {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != primaryTurn+"#0" {
 		t.Fatalf("row was re-pointed to an unattributed alternate: got %q err=%v", keptPtr, err)
 	}
 }
@@ -173,7 +173,7 @@ func discoverHealJSONLRef(t *testing.T, source, want string) string {
 	for turn := 0; turn < 4; turn++ {
 		for seg := 0; seg < 6; seg++ {
 			ref := fmt.Sprintf("@ref:jsonl:%s:%d#%d", source, turn, seg)
-			if text, err := thinclient.ResolveEpisodicPointerLive(ref); err == nil && strings.Contains(text, want) {
+			if text, err := localvault.ResolveEpisodicPointerLive(ref); err == nil && strings.Contains(text, want) {
 				return ref
 			}
 		}
@@ -218,22 +218,21 @@ func TestHealReanchorsSameFileTurnDriftAndRecallRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil || client == nil || client.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	originalRef := discoverHealJSONLRef(t, source, "quilted nebula checkpoint sealed")
-	text, err := thinclient.ResolveEpisodicPointerLive(originalRef)
+	text, err := localvault.ResolveEpisodicPointerLive(originalRef)
 	if err != nil || !strings.Contains(text, "sealed") {
 		t.Fatalf("resolve %s: %q %v", originalRef, text, err)
 	}
 	docID := episodicunit.DocID(memory.Config.Scope, text)
 	packet, _ := client.Vault.PackBlindPacket(docID, text, 1)
 	turnRef := originalRef[:strings.LastIndex(originalRef, "#")]
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, originalRef, turnRef, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, originalRef, turnRef, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 
 	req := facade.RecallRequest{Cue: "quilted nebula checkpoint", NoCrystallize: true}
 	fresh, err := memory.Recall(req)
@@ -255,13 +254,13 @@ func TestHealReanchorsSameFileTurnDriftAndRecallRecovers(t *testing.T) {
 		t.Fatalf("heal pass = scanned %d repaired %d err %v, want 1/1", scanned, repaired, err)
 	}
 	var healedRef string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&healedRef); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&healedRef); err != nil {
 		t.Fatal(err)
 	}
 	if healedRef == originalRef {
 		t.Fatalf("row was not re-anchored: %s", healedRef)
 	}
-	if got, _ := thinclient.ResolveEpisodicPointerLive(healedRef); !strings.Contains(got, "sealed") {
+	if got, _ := localvault.ResolveEpisodicPointerLive(healedRef); !strings.Contains(got, "sealed") {
 		t.Fatalf("healed pointer does not address the sealed content: %s -> %q", healedRef, got)
 	}
 	recovered, err := memory.Recall(req)
@@ -286,19 +285,19 @@ func TestHealSkipsTamperedIndexesWithoutTouchingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil || client == nil || client.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	ref := discoverHealJSONLRef(t, source, "sealed tamper witness answer")
-	text, err := thinclient.ResolveEpisodicPointerLive(ref)
+	text, err := localvault.ResolveEpisodicPointerLive(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
 	docID := episodicunit.DocID(memory.Config.Scope, text)
 	packet, _ := client.Vault.PackBlindPacket(docID, text, 1)
 	turnRef := ref[:strings.LastIndex(ref, "#")]
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, ref, turnRef, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, ref, turnRef, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.Store.DB().Exec(`UPDATE rm_episodic_index SET payload_mac = x'00' WHERE doc_id = ?`, docID); err != nil {
@@ -310,7 +309,7 @@ func TestHealSkipsTamperedIndexesWithoutTouchingRows(t *testing.T) {
 		t.Fatalf("heal pass = scanned %d repaired %d err %v, want 1/0", scanned, repaired, err)
 	}
 	var keptPtr string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != ref {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != ref {
 		t.Fatalf("tampered row was modified: %q err=%v", keptPtr, err)
 	}
 	var indexRows int
@@ -329,9 +328,9 @@ func TestHealSweepCursorWrapsAndEventuallyRevisits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil || client == nil || client.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	segmented := `{"type":"user","message":{"role":"user","content":"wrap probe %s"}}` + "\n" +
 		`{"type":"assistant","message":{"role":"assistant","content":"wrap keep alpha %s"}}` + "\n" +
@@ -344,7 +343,7 @@ func TestHealSweepCursorWrapsAndEventuallyRevisits(t *testing.T) {
 			t.Fatal(err)
 		}
 		ref := discoverHealJSONLRef(t, source, "wrap keep beta "+name)
-		text, rErr := thinclient.ResolveEpisodicPointerLive(ref)
+		text, rErr := localvault.ResolveEpisodicPointerLive(ref)
 		if rErr != nil {
 			t.Fatal(rErr)
 		}
@@ -354,7 +353,7 @@ func TestHealSweepCursorWrapsAndEventuallyRevisits(t *testing.T) {
 		}
 		packet, _ := client.Vault.PackBlindPacket(docID, text, 1)
 		turnRef := ref[:strings.LastIndex(ref, "#")]
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, ref, turnRef, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, ref, turnRef, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -381,10 +380,10 @@ func TestHealSweepCursorWrapsAndEventuallyRevisits(t *testing.T) {
 		t.Fatal("wrapped sweep never revisited the drifted row")
 	}
 	var healedRef string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, wrap1ID).Scan(&healedRef); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, wrap1ID).Scan(&healedRef); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := thinclient.ResolveEpisodicPointerLive(healedRef); !strings.Contains(got, "wrap keep beta") {
+	if got, _ := localvault.ResolveEpisodicPointerLive(healedRef); !strings.Contains(got, "wrap keep beta") {
 		t.Fatalf("wrapped sweep healed the wrong coordinate: %s -> %q", healedRef, got)
 	}
 }
@@ -430,19 +429,19 @@ func TestPruneReanchorsRenumberedUnitsInsteadOfDeletingThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil || client == nil || client.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	originalRef := discoverHealJSONLRef(t, source, "quilted nebula checkpoint sealed")
-	text, err := thinclient.ResolveEpisodicPointerLive(originalRef)
+	text, err := localvault.ResolveEpisodicPointerLive(originalRef)
 	if err != nil {
 		t.Fatal(err)
 	}
 	docID := episodicunit.DocID(memory.Config.Scope, text)
 	packet, _ := client.Vault.PackBlindPacket(docID, text, 1)
 	turnRef := originalRef[:strings.LastIndex(originalRef, "#")]
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, originalRef, turnRef, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, originalRef, turnRef, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	prepended := `{"type":"user","message":{"role":"user","content":"第零问：inserted"}}` + "\n" +
@@ -459,7 +458,7 @@ func TestPruneReanchorsRenumberedUnitsInsteadOfDeletingThem(t *testing.T) {
 		t.Fatalf("dry run = %+v, want the renumbered row re-anchorable and not a candidate", dry)
 	}
 	var dryCount int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&dryCount); err != nil || dryCount != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, docID).Scan(&dryCount); err != nil || dryCount != 1 {
 		t.Fatalf("dry run must not delete: count=%d err=%v", dryCount, err)
 	}
 
@@ -471,13 +470,13 @@ func TestPruneReanchorsRenumberedUnitsInsteadOfDeletingThem(t *testing.T) {
 		t.Fatalf("apply = %+v, want zero removals and one re-anchor", applied)
 	}
 	var keptRef string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&keptRef); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&keptRef); err != nil {
 		t.Fatalf("row was deleted: %v", err)
 	}
 	if keptRef == originalRef {
 		t.Fatalf("row was not re-anchored: %s", keptRef)
 	}
-	if got, _ := thinclient.ResolveEpisodicPointerLive(keptRef); !strings.Contains(got, "sealed") {
+	if got, _ := localvault.ResolveEpisodicPointerLive(keptRef); !strings.Contains(got, "sealed") {
 		t.Fatalf("re-anchored pointer does not address the sealed content: %s -> %q", keptRef, got)
 	}
 }
@@ -492,9 +491,9 @@ func TestPruneRefusesCrossSourceReanchorWithoutExplicitOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil || client == nil || client.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary.jsonl")
@@ -510,10 +509,10 @@ func TestPruneRefusesCrossSourceReanchorWithoutExplicitOptIn(t *testing.T) {
 	text := "[user] cross-source witness quartz"
 	docID := episodicunit.DocID(memory.Config.Scope, text)
 	packet, _ := client.Vault.PackBlindPacket(docID, text, 1)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, primaryTurn+"#0", primaryTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 1, primaryTurn+"#0", primaryTurn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 2, alternateTurn+"#0", alternateTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, 2, alternateTurn+"#0", alternateTurn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(primary); err != nil {
@@ -535,7 +534,7 @@ func TestPruneRefusesCrossSourceReanchorWithoutExplicitOptIn(t *testing.T) {
 		t.Fatalf("apply = %+v, want nothing re-anchored or removed by default", applied)
 	}
 	var keptPtr string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != primaryTurn+"#0" {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != primaryTurn+"#0" {
 		t.Fatalf("row was re-pointed to an unattributed alternate: %q err=%v", keptPtr, err)
 	}
 
@@ -550,7 +549,7 @@ func TestPruneRefusesCrossSourceReanchorWithoutExplicitOptIn(t *testing.T) {
 	if optIn.Reanchored != 1 || optIn.Removed != 0 || optIn.CrossSourceSkipped != 0 {
 		t.Fatalf("opt-in apply = %+v, want exactly one cross-source re-anchor", optIn)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != alternateTurn+"#0" {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&keptPtr); err != nil || keptPtr != alternateTurn+"#0" {
 		t.Fatalf("opt-in did not re-anchor onto the alternate: %q err=%v", keptPtr, err)
 	}
 }

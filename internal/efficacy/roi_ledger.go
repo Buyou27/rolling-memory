@@ -67,7 +67,7 @@ func ComputeDBFingerprint(db *sql.DB, scope string) string {
 		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM rm_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	}
 	if strings.TrimSpace(firstDocID) == "" {
-		// Vaults written before the thin-vault era anchor on their oldest trace or
+		// Vaults written by earlier builds anchor on their oldest trace or
 		// node. The queries fail harmlessly when those tables are absent.
 		_ = db.QueryRow(`SELECT coalesce(hash, '') FROM trace ORDER BY recorded_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 		if strings.TrimSpace(firstDocID) == "" {

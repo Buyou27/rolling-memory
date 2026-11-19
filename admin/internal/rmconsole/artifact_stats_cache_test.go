@@ -19,7 +19,7 @@ func seedVaultFixture(t *testing.T, dbPath string, docURIs, chunkURIs []string) 
 	}
 	defer func() { _ = db.Close() }()
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS thin_vault_docs (address_uri TEXT);`,
+		`CREATE TABLE IF NOT EXISTS rm_units (address_uri TEXT);`,
 		`CREATE TABLE IF NOT EXISTS rm_bg_chunks (address_uri TEXT);`,
 	}
 	for _, stmt := range stmts {
@@ -28,7 +28,7 @@ func seedVaultFixture(t *testing.T, dbPath string, docURIs, chunkURIs []string) 
 		}
 	}
 	for _, uri := range docURIs {
-		if _, err := db.Exec(`INSERT INTO thin_vault_docs (address_uri) VALUES (` + sqlString(uri) + `);`); err != nil {
+		if _, err := db.Exec(`INSERT INTO rm_units (address_uri) VALUES (` + sqlString(uri) + `);`); err != nil {
 			t.Fatalf("insert doc %q: %v", uri, err)
 		}
 	}
@@ -78,7 +78,7 @@ func TestCachedArtifactCellsReuseAndRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_docs (address_uri) VALUES (NULL);`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_units (address_uri) VALUES (NULL);`); err != nil {
 		t.Fatalf("insert null: %v", err)
 	}
 	_ = db.Close()
@@ -93,7 +93,7 @@ func TestCachedArtifactCellsReuseAndRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO thin_vault_docs (address_uri) VALUES ('cell-d#1');`); err != nil {
+	if _, err := db.Exec(`INSERT INTO rm_units (address_uri) VALUES ('cell-d#1');`); err != nil {
 		t.Fatalf("insert new doc: %v", err)
 	}
 	_ = db.Close()

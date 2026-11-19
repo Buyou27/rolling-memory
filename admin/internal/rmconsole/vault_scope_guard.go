@@ -114,11 +114,6 @@ func checkConsoleVaultScope(home string) error {
 		Core struct {
 			Scope string `toml:"scope"`
 		} `toml:"core"`
-		Cloud struct {
-			Sync struct {
-				ScopeFromWorkspace bool `toml:"scope_from_workspace"`
-			} `toml:"sync"`
-		} `toml:"cloud"`
 	}
 	path := config.RollingConfigPath()
 	raw, err := os.ReadFile(path)
@@ -136,9 +131,6 @@ func checkConsoleVaultScope(home string) error {
 	}
 	if scope == "" {
 		scope = UserScope
-	}
-	if cfg.Cloud.Sync.ScopeFromWorkspace && (scope == UserScope || scope == LegacyUserScope) {
-		return fmt.Errorf("workspace-derived scope is not supported by the console")
 	}
 	// The console serves the user's own vault in either supported binding
 	// (default, or the legacy mem:self that existing installs carry); the

@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 )
 
 func TestShannonProductionSecurityAndRobustnessProbes(t *testing.T) {
 	// Probe P1: Space/hyphen-separated periodic flood ("ha ha ha ha ha", "a-a-a-a a-a-a-a") must collapse < 8.0b
 	p1a := EffectiveShannonBits("a-a-a-a a-a-a-a")
 	p1b := EffectiveShannonBits("ha ha ha ha ha ha")
-	if p1a >= memcore.AtomicConceptEntropyBits || p1b >= memcore.AtomicConceptEntropyBits {
+	if p1a >= delivery.AtomicConceptEntropyBits || p1b >= delivery.AtomicConceptEntropyBits {
 		t.Fatalf("[Probe P1] space/hyphen-separated flood leaked: p1a=%.2fb, p1b=%.2fb (want < 8.0b)", p1a, p1b)
 	}
 

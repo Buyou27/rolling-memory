@@ -14,7 +14,6 @@ func TestParseRollingConfig(t *testing.T) {
 name = "local"
 
 [hooks]
-boot_context = false
 
 [cloud.sync]
 enabled = false
@@ -26,7 +25,6 @@ auto_watch = manual
 	cfg := ParseRollingConfig(path)
 	want := map[string]string{
 		"mode.name":             "local",
-		"hooks.boot_context":    "false",
 		"cloud.sync.enabled":    "false",
 		"cloud.sync.auto_watch": "manual",
 	}

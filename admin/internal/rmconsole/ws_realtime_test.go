@@ -26,7 +26,7 @@ func TestWSRealtimeRoomJoinAndPush(t *testing.T) {
 	dbPath := filepath.Join(home, "ws_test.db")
 	t.Setenv("ROLLING_MEMORY_DB", dbPath)
 	seedVault(t, dbPath,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('ws-doc-1', 'episodic', 1793270000, 'ws realtime test doc', 'C6:L1:LOCAL#ws-doc-1')`)
 
 	prevExec := executeAdminSyncCLI
@@ -138,7 +138,7 @@ func TestAuthorizeRMWSRoomAndToggleDeleteMemoryGuards(t *testing.T) {
 	seedVault(t, dbPath,
 		`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 		 INSERT INTO rm_meta(k, v) VALUES ('local_plain_scope', 'default');
-		 INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		 INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		 VALUES ('doc-guard-1', 'episodic', 1793270000, 'secret text', 'C6:L1:LOCAL#doc-guard-1');
 		 INSERT INTO rm_noetic(noetic_id, occurred_at, query_text, answer_text, cited_unit_ids_json, status)
 		 VALUES ('nt-guard-1', 1793270010, 'q', 'a', '["doc-guard-1"]', 'active');`)

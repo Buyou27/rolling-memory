@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 )
 
 func TestThinDeliveryRawCapAfterBandSelection(t *testing.T) {
@@ -62,9 +62,9 @@ func TestDedupeResolvedHitsByContentPreservesDistinctFactsAndSources(t *testing.
 		{"identical independent sources", prefix, prefix},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			hits := []thinclient.LocalResolvedHit{
-				{QueryHit: thinclient.QueryHit{UnitID: "a"}, RawPlaintext: tc.first},
-				{QueryHit: thinclient.QueryHit{UnitID: "b"}, RawPlaintext: tc.second},
+			hits := []localvault.LocalResolvedHit{
+				{QueryHit: localvault.QueryHit{UnitID: "a"}, RawPlaintext: tc.first},
+				{QueryHit: localvault.QueryHit{UnitID: "b"}, RawPlaintext: tc.second},
 			}
 			got, dropped := dedupeResolvedHitsByContent(hits)
 			if dropped != 0 || len(got) != 2 || got[0].UnitID != "a" || got[1].UnitID != "b" {
@@ -75,9 +75,9 @@ func TestDedupeResolvedHitsByContentPreservesDistinctFactsAndSources(t *testing.
 }
 
 func TestDedupeResolvedHitsByContentKeepsShortRepeatedPrompts(t *testing.T) {
-	hits := []thinclient.LocalResolvedHit{
-		{QueryHit: thinclient.QueryHit{UnitID: "a"}, RawPlaintext: "[user] 继续"},
-		{QueryHit: thinclient.QueryHit{UnitID: "b"}, RawPlaintext: "[user] 继续"},
+	hits := []localvault.LocalResolvedHit{
+		{QueryHit: localvault.QueryHit{UnitID: "a"}, RawPlaintext: "[user] 继续"},
+		{QueryHit: localvault.QueryHit{UnitID: "b"}, RawPlaintext: "[user] 继续"},
 	}
 	got, dropped := dedupeResolvedHitsByContent(hits)
 	if dropped != 0 || len(got) != 2 {

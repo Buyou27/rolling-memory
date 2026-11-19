@@ -118,22 +118,96 @@ type BackgroundSyncResult struct {
 	InvalidatedNoeticIDs []string                `json:"invalidated_noetic_ids"`
 }
 
-// vaultCoreSchemaDDL 只保证引擎的三层 `thin_vault_*` 核心表存在：全程 CREATE TABLE IF NOT EXISTS，
+// vaultCoreSchemaDDL bootstraps the canonical corpus tables and the rm_units read model for an empty database. 全程 CREATE TABLE IF NOT EXISTS，
 // 幂等且不破坏任何既有数据。金库 schema 的唯一正本永远是记忆引擎本身。
 const vaultCoreSchemaDDL = `
-	CREATE TABLE IF NOT EXISTS thin_vault_docs (
-		doc_id TEXT PRIMARY KEY,
-		layer TEXT NOT NULL DEFAULT 'episodic',
+	CREATE TABLE IF NOT EXISTS rm_docs (
+		unit_id TEXT PRIMARY KEY,
 		occurred_at INTEGER NOT NULL DEFAULT 0,
-		raw_text TEXT NOT NULL,
+		narrated_at INTEGER NOT NULL DEFAULT 0,
+		ingested_at INTEGER NOT NULL DEFAULT 0,
+		author_hash INTEGER NOT NULL DEFAULT 0,
+		doc_hash INTEGER NOT NULL DEFAULT 0,
+		block_hash INTEGER NOT NULL DEFAULT 0,
+		line_start INTEGER NOT NULL DEFAULT 0,
+		line_end INTEGER NOT NULL DEFAULT 0,
+		layer TEXT NOT NULL DEFAULT '',
+		term_count INTEGER NOT NULL DEFAULT 0,
+		raw_text TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE IF NOT EXISTS rm_unit_meta (
+		unit_id TEXT PRIMARY KEY,
+		layer TEXT NOT NULL DEFAULT '',
+		ref_pointer TEXT NOT NULL DEFAULT '',
 		sentences_json TEXT NOT NULL DEFAULT '[]',
+		kept_indices_json TEXT NOT NULL DEFAULT '[]',
 		address_uri TEXT NOT NULL DEFAULT '',
 		coord64 INTEGER NOT NULL DEFAULT 0,
-		kept_indices_json TEXT NOT NULL DEFAULT '[]',
+		waveform_bar TEXT NOT NULL DEFAULT '',
+		doc_macro_wave TEXT NOT NULL DEFAULT '',
 		assistant_id TEXT NOT NULL DEFAULT '',
 		incarnation_id TEXT NOT NULL DEFAULT '',
-		locus TEXT NOT NULL DEFAULT ''
+		locus TEXT NOT NULL DEFAULT '',
+		inserted_at INTEGER NOT NULL DEFAULT 0,
+		meta_rev INTEGER NOT NULL DEFAULT 0
 	);
+	CREATE VIEW IF NOT EXISTS rm_units AS
+	SELECT d.unit_id AS doc_id,
+	       d.layer AS layer,
+	       d.occurred_at AS occurred_at,
+	       COALESCE(NULLIF(m.inserted_at, 0), d.ingested_at, d.occurred_at) AS inserted_at,
+	       COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) AS raw_text,
+	       COALESCE(m.sentences_json, '[]') AS sentences_json,
+	       COALESCE(m.address_uri, '') AS address_uri,
+	       COALESCE(m.coord64, 0) AS coord64,
+	       COALESCE(m.waveform_bar, '') AS waveform_bar,
+	       COALESCE(m.doc_macro_wave, '') AS doc_macro_wave,
+	       COALESCE(m.kept_indices_json, '[]') AS kept_indices_json,
+	       COALESCE(m.assistant_id, '') AS assistant_id,
+	       COALESCE(m.incarnation_id, '') AS incarnation_id,
+	       COALESCE(m.locus, '') AS locus
+	  FROM rm_docs d
+	  LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id;
+	CREATE TRIGGER IF NOT EXISTS rm_units_insert INSTEAD OF INSERT ON rm_units
+	BEGIN
+	  INSERT INTO rm_docs(unit_id, layer, occurred_at, raw_text)
+	  VALUES (NEW.doc_id, COALESCE(NULLIF(NEW.layer, ''), 'episodic'), COALESCE(NEW.occurred_at, 0),
+	          CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN '' ELSE COALESCE(NEW.raw_text, '') END)
+	  ON CONFLICT(unit_id) DO UPDATE SET layer = excluded.layer, occurred_at = CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE rm_docs.occurred_at END, raw_text = excluded.raw_text;
+	  INSERT INTO rm_unit_meta(unit_id, layer, ref_pointer, sentences_json, kept_indices_json, address_uri, coord64, waveform_bar, doc_macro_wave, assistant_id, incarnation_id, locus, inserted_at, meta_rev)
+	  VALUES (NEW.doc_id, COALESCE(NULLIF(NEW.layer, ''), 'episodic'),
+	          CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN NEW.raw_text ELSE '' END,
+	          COALESCE(NEW.sentences_json, '[]'), COALESCE(NEW.kept_indices_json, '[]'),
+	          COALESCE(NEW.address_uri, ''), COALESCE(NEW.coord64, 0), COALESCE(NEW.waveform_bar, ''), COALESCE(NEW.doc_macro_wave, ''),
+	          COALESCE(NEW.assistant_id, ''), COALESCE(NEW.incarnation_id, ''), COALESCE(NEW.locus, ''),
+	          COALESCE(NULLIF(NEW.inserted_at, 0), NEW.occurred_at, 0), 1)
+	  ON CONFLICT(unit_id) DO UPDATE SET layer = excluded.layer, ref_pointer = excluded.ref_pointer,
+	          sentences_json = excluded.sentences_json, kept_indices_json = excluded.kept_indices_json,
+	          address_uri = excluded.address_uri, coord64 = excluded.coord64, waveform_bar = excluded.waveform_bar,
+	          doc_macro_wave = excluded.doc_macro_wave, assistant_id = excluded.assistant_id,
+	          incarnation_id = excluded.incarnation_id, locus = excluded.locus, inserted_at = excluded.inserted_at,
+	          meta_rev = rm_unit_meta.meta_rev + 1;
+	END;
+	CREATE TRIGGER IF NOT EXISTS rm_units_update INSTEAD OF UPDATE ON rm_units
+	BEGIN
+	  UPDATE rm_docs SET layer = COALESCE(NULLIF(NEW.layer, ''), layer), occurred_at = COALESCE(NEW.occurred_at, occurred_at),
+	          raw_text = CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN '' ELSE COALESCE(NEW.raw_text, raw_text) END
+	    WHERE unit_id = OLD.doc_id;
+	  UPDATE rm_unit_meta SET layer = COALESCE(NULLIF(NEW.layer, ''), layer),
+	          ref_pointer = CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN NEW.raw_text ELSE '' END,
+	          sentences_json = COALESCE(NEW.sentences_json, sentences_json),
+	          kept_indices_json = COALESCE(NEW.kept_indices_json, kept_indices_json),
+	          address_uri = COALESCE(NEW.address_uri, address_uri), coord64 = COALESCE(NEW.coord64, coord64),
+	          waveform_bar = COALESCE(NEW.waveform_bar, waveform_bar), doc_macro_wave = COALESCE(NEW.doc_macro_wave, doc_macro_wave),
+	          assistant_id = COALESCE(NEW.assistant_id, assistant_id), incarnation_id = COALESCE(NEW.incarnation_id, incarnation_id),
+	          locus = COALESCE(NEW.locus, locus), inserted_at = COALESCE(NULLIF(NEW.inserted_at, 0), inserted_at),
+	          meta_rev = meta_rev + 1
+	    WHERE unit_id = OLD.doc_id;
+	END;
+	CREATE TRIGGER IF NOT EXISTS rm_units_delete INSTEAD OF DELETE ON rm_units
+	BEGIN
+	  DELETE FROM rm_docs WHERE unit_id = OLD.doc_id;
+	END;
 	CREATE TABLE IF NOT EXISTS rm_noetic (
 		noetic_id TEXT PRIMARY KEY,
 		occurred_at INTEGER NOT NULL DEFAULT 0,
@@ -147,12 +221,12 @@ const vaultCoreSchemaDDL = `
 		assistant_id TEXT NOT NULL DEFAULT '',
 		incarnation_id TEXT NOT NULL DEFAULT ''
 	);
-		CREATE TABLE IF NOT EXISTS rm_bg_dirs (
-			dir_id TEXT PRIMARY KEY,
-			root_path TEXT NOT NULL UNIQUE,
-			added_at INTEGER NOT NULL DEFAULT 0,
-			include_exts_json TEXT NOT NULL DEFAULT '[]'
-		);
+	CREATE TABLE IF NOT EXISTS rm_bg_dirs (
+		dir_id TEXT PRIMARY KEY,
+		root_path TEXT NOT NULL UNIQUE,
+		added_at INTEGER NOT NULL DEFAULT 0,
+		include_exts_json TEXT NOT NULL DEFAULT '[]'
+	);
 	CREATE TABLE IF NOT EXISTS rm_bg_files (
 		abs_path TEXT PRIMARY KEY,
 		dir_id TEXT NOT NULL,
@@ -195,10 +269,10 @@ func openVaultWriteOnly(dbPath string) (*sql.DB, error) {
 	if err := db.QueryRow(`
 		SELECT COUNT(*) FROM sqlite_master
 		WHERE type = 'table' AND name IN (
-			'rm_meta', 'thin_vault_docs', 'rm_noetic',
+			'rm_meta', 'rm_docs', 'rm_unit_meta', 'rm_noetic',
 			'rm_bg_dirs', 'rm_bg_files', 'rm_bg_chunks'
 		)
-	`).Scan(&existingTables); err == nil && existingTables == 6 {
+	`).Scan(&existingTables); err == nil && existingTables == 7 {
 		return db, nil
 	}
 	if _, err := db.Exec(vaultCoreSchemaDDL); err != nil {
@@ -210,7 +284,7 @@ func openVaultWriteOnly(dbPath string) (*sql.DB, error) {
 
 // openPlainSQLite 打开任意本地 SQLite 文件的可写连接，但**不创建 / 不迁移任何记忆表**。
 // 供 ROI 台账（memory.db.efficacy.sqlite）等自带 schema 的辅助库使用：它们绝不该被套上
-// thin_vault_* 表皮，否则辅助库会被误写成半个记忆金库。
+// 记忆表皮，否则辅助库会被误写成半个记忆金库。
 func openPlainSQLite(dbPath string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, err
@@ -223,39 +297,7 @@ func openPlainSQLite(dbPath string) (*sql.DB, error) {
 // **仅限测试与作者显式维护使用**：它会对金库执行 ALTER/DROP，因此绝不允许出现在任何请求路径上
 // （读路径用 memoryRODB 只读连接，写路径用 openVaultWriteOnly）。
 func openWritableVaultDB(dbPath string) (*sql.DB, error) {
-	db, err := openVaultWriteOnly(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	for _, stmt := range []string{
-		`ALTER TABLE thin_vault_docs ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_docs ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_docs ADD COLUMN locus TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE rm_noetic ADD COLUMN address_uri TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE rm_noetic ADD COLUMN coord64 INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE rm_noetic ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE rm_noetic ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE rm_bg_dirs ADD COLUMN include_exts_json TEXT NOT NULL DEFAULT '[]'`,
-		`ALTER TABLE rm_bg_files ADD COLUMN chunk_hashes_json TEXT NOT NULL DEFAULT '[]'`,
-	} {
-		_, _ = db.Exec(stmt)
-	}
-	// 彻底移除旧版遗留表，保持数据库干净，仅保留唯一的 RAME `thin_vault_*` 引擎表。
-	_, _ = db.Exec(`PRAGMA foreign_keys = OFF`)
-	for _, legacyTbl := range []string{
-		"assertion_ext", "participant", "restate", "node_ext",
-		"node_vector", "episode_member", "episode", "memory_hot", "noetic",
-		"recall_decision_cache", "activation", "sync_state", "replay_state",
-		"vector", "event", "meta_edge", "meta_edge_v2", "mention",
-		"assertion", "node_alias", "node_fts", "node", "trace_fts", "trace",
-		// 本地 FTS5 词法索引与其 rowid 映射：检索已 100% 由双簇内核承担，
-		// 这两张派生表不再被任何读写路径引用，开写即回收其占用。
-		"thin_vault_docs_fts", "thin_vault_fts_map",
-	} {
-		_, _ = db.Exec(`DROP TABLE IF EXISTS ` + legacyTbl)
-	}
-	_, _ = db.Exec(`PRAGMA foreign_keys = ON`)
-	return db, nil
+	return openVaultWriteOnly(dbPath)
 }
 
 // bindJSON 解析请求体：空体视为「缺省请求」（BuildAdmin 表格刷新会发 `{}`，部分调用方发空体），
@@ -410,10 +452,10 @@ func layersGetHandler(c *gin.Context) {
 		return
 	}
 
-	// 1. Check thin_vault_docs
+	// 1. Check rm_units
 	var did, lyr, rawTxt, addr string
 	var occ int64
-	if db.QueryRow(`SELECT doc_id, layer, occurred_at, raw_text, address_uri FROM thin_vault_docs WHERE doc_id = ?`, pk).
+	if db.QueryRow(`SELECT doc_id, layer, occurred_at, raw_text, address_uri FROM rm_units WHERE doc_id = ?`, pk).
 		Scan(&did, &lyr, &occ, &rawTxt, &addr) == nil {
 		lyr = strings.ToLower(strings.TrimSpace(lyr))
 		if lyr != "background" && lyr != "noetic" {
@@ -602,14 +644,14 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 		}
 		seenPKs[pk] = true
 		var docLayer string
-		if scanErr := tx.QueryRow(`SELECT COALESCE(layer, 'episodic') FROM thin_vault_docs WHERE doc_id = ?`, pk).Scan(&docLayer); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		if scanErr := tx.QueryRow(`SELECT COALESCE(layer, 'episodic') FROM rm_units WHERE doc_id = ?`, pk).Scan(&docLayer); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 			return 0, 0, nil, fmt.Errorf("读取记忆文档失败: %w", scanErr)
 		}
 		var exists int
-		if scanErr := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, pk).Scan(&exists); scanErr != nil {
+		if scanErr := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_units WHERE doc_id = ?)`, pk).Scan(&exists); scanErr != nil {
 			return 0, 0, nil, fmt.Errorf("读取记忆文档失败: %w", scanErr)
 		}
-		res, execErr := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, pk)
+		res, execErr := tx.Exec(`DELETE FROM rm_units WHERE doc_id = ?`, pk)
 		if execErr != nil {
 			return 0, 0, nil, fmt.Errorf("删除记忆文档失败: %w", execErr)
 		}
@@ -1117,7 +1159,7 @@ func runAdminBackgroundDirRemove(ctx context.Context, dbPath, rootPath string) (
 	return result.RemovedUnitIDs, nil
 }
 
-// runAdminBackgroundCLI 复用根仓 thinclient，避免在独立 Admin 模块复制记忆算法。
+// runAdminBackgroundCLI 复用根仓 localvault，避免在独立 Admin 模块复制记忆算法。
 func runAdminBackgroundCLI(ctx context.Context, action, dbPath, rootPath string) ([]byte, error) {
 	home, _ := os.UserHomeDir()
 	bin := resolveBinary(home)

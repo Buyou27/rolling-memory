@@ -165,9 +165,7 @@
                             <code>{{ infoRow.id }}</code>
                         </el-descriptions-item>
                         <el-descriptions-item :label="t('plugin.rolling-memory.filters.colLayer')">
-                            <el-tag :type="layerType(infoRow.layer)" size="small" effect="dark">
-                                {{ infoRow.layer?.toUpperCase() }}
-                            </el-tag>
+                            <MemoryLayerBadge :layer="infoRow.layer" />
                         </el-descriptions-item>
                         <el-descriptions-item :label="t('plugin.rolling-memory.browser.colStatus')">
                             <el-tag :type="infoRow.status === 'active' ? 'success' : 'info'" size="small">
@@ -273,6 +271,7 @@
 
 <script setup lang="ts">
 import { TableManagerAPI } from '@/api/table'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
 import TableHeader from '@/components/table/header/index.vue'
 import Table from '@/components/table/index.vue'
 import { useTableManager } from '@/hooks/useTableManager'
@@ -280,7 +279,7 @@ import { auth } from '@/utils/common'
 import { useLoadingProgressText } from '@/utils/loadingProgress'
 import request from '@/utils/request'
 import { ElMessage } from 'element-plus'
-import { computed, onActivated, onDeactivated, onMounted, ref, useTemplateRef, watch } from 'vue'
+import { computed, markRaw, onActivated, onDeactivated, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import MarkdownPreview from './MarkdownPreview.vue'
@@ -417,29 +416,11 @@ const openUnit = async (id: string): Promise<boolean> => {
     }
 }
 
-const layerType = (layer: string) => {
-    switch (layer) {
-        case 'background':
-            return 'primary'
-        case 'episodic':
-            return 'success'
-        case 'noetic':
-            return 'warning'
-        default:
-            return 'info'
-    }
-}
-
 // 正文面统一走 MarkdownPreview 的自动格式化（结构化内容自动包代码围栏），不再区分默认展示面。
 const layerDict: Record<string, string> = {
     background: t('plugin.rolling-memory.layers.background'),
     episodic: t('plugin.rolling-memory.layers.episodic'),
     noetic: t('plugin.rolling-memory.layers.noetic'),
-}
-const layerCustom: Record<string, string> = {
-    background: 'primary',
-    episodic: 'success',
-    noetic: 'warning',
 }
 
 const statusDict: Record<string, string> = {
@@ -520,11 +501,11 @@ const tableManager = useTableManager({
                 prop: 'layer',
                 align: 'center',
                 width: 125,
-                render: 'tag',
+                render: 'customRender',
+                customRender: markRaw(MemoryLayerBadge),
                 operator: props.layer === 'all' ? 'eq' : false,
                 comSearchRender: 'select',
                 dict: layerDict,
-                custom: layerCustom,
                 sortable: 'custom',
                 show: props.layer === 'all',
             },

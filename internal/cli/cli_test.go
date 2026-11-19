@@ -259,7 +259,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("thin database must not create the assertion table")
 	}
 	if err := db.QueryRow(
-		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM rm_noetic WHERE status = 'active')`,
+		`SELECT (SELECT COUNT(*) FROM rm_units) + (SELECT COUNT(*) FROM rm_noetic WHERE status = 'active')`,
 	).Scan(&vaultUnits); err != nil {
 		t.Fatalf("count vault units: %v", err)
 	}

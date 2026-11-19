@@ -196,8 +196,7 @@ $$\text{要想净赚（}\mathbb{E}[\Delta \text{Tokens}] > 0\text{），必须�
 # 方式 1：重新挂载为纯 MCP 工具模式（只保留 recall 工具，移除所有 Hook 与指令提示）
 rolling-memory install --mcp-only
 
-# 方式 2：保留安装，单独关闭开场注入或 Hook 账本记录
-rolling-memory config set hooks.boot_context false
+# 方式 2：保留安装，单独关闭 Hook 账本记录
 rolling-memory config set hooks.ledger false
 ```
 

@@ -45,7 +45,7 @@ func TestImportJSONLCompressedSourceUsesFrozenParse(t *testing.T) {
 	} {
 		docID := episodicunit.DocID("mem:test", "["+fixture.role+"] "+fixture.text)
 		var pointer string
-		if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&pointer); err != nil {
+		if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, docID).Scan(&pointer); err != nil {
 			t.Fatalf("document %s: %v", docID, err)
 		}
 		if !strings.HasPrefix(pointer, "@ref:jsonl:"+path+":0#") {
@@ -74,7 +74,7 @@ func TestImportJSONLSourceChangedDuringImportIsReported(t *testing.T) {
 		deadline := time.Now().Add(20 * time.Second)
 		for time.Now().Before(deadline) {
 			var count int
-			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err == nil && count > 0 {
+			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&count); err == nil && count > 0 {
 				break
 			}
 			time.Sleep(2 * time.Millisecond)
@@ -92,7 +92,7 @@ func TestImportJSONLSourceChangedDuringImportIsReported(t *testing.T) {
 		t.Fatalf("import of a changing source err = %v receipt = %#v", err, result)
 	}
 	var written int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&written); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&written); err != nil {
 		t.Fatal(err)
 	}
 	if written != turns*2 {
@@ -128,7 +128,7 @@ func TestImportJSONLCorruptCompressedSourceFailsClosed(t *testing.T) {
 		t.Fatal("corrupt compressed source imported without an error")
 	}
 	var docs int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs`).Scan(&docs); err != nil || docs != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units`).Scan(&docs); err != nil || docs != 0 {
 		t.Fatalf("corrupt import wrote %d documents: %v", docs, err)
 	}
 }

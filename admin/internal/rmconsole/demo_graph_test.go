@@ -93,7 +93,7 @@ func TestSyntheticDemoRoutesIgnorePrivateSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE thin_vault_docs (doc_id TEXT, raw_text TEXT); INSERT INTO thin_vault_docs VALUES ('private-id', 'sqlite-private-marker')`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE rm_units (doc_id TEXT, raw_text TEXT); INSERT INTO rm_units VALUES ('private-id', 'sqlite-private-marker')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

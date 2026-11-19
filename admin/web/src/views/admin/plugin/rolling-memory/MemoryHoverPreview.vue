@@ -27,9 +27,7 @@
         <div v-if="everOpened" class="rm-hover-card" data-testid="memory-hover-card">
             <div class="rm-hover-hdr">
                 <div class="rm-hover-meta">
-                    <el-tag v-if="layerBadge" size="small" :type="layerTagType" effect="dark" class="rm-hover-layer">
-                        {{ layerBadge }}
-                    </el-tag>
+                    <MemoryLayerBadge v-if="layerBadge" :layer="props.hint?.layer" :label="layerBadge" class="rm-hover-layer" />
                     <code v-if="props.title" class="rm-hover-title">{{ props.title }}</code>
                     <span v-if="props.subtitle" class="rm-hover-sub">{{ props.subtitle }}</span>
                 </div>
@@ -53,6 +51,8 @@
 
 <script setup lang="ts">
 import { copy } from '@/utils/common'
+import { memoryLayerShortLabel } from '@/utils/memoryLayers'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
 import { ElMessage } from 'element-plus'
 import type { Placement } from 'element-plus'
 import { computed, ref } from 'vue'
@@ -98,18 +98,8 @@ const hasContent = computed(() => Boolean(resolvedBodyText.value || String(props
 
 const layerBadge = computed(() => {
     const raw = String(props.hint?.layer || '').toLowerCase()
-    if (raw === 'background' || raw === 'l1') return 'L1'
-    if (raw === 'episodic' || raw === 'l2') return 'L2'
-    if (raw === 'noetic' || raw === 'l3') return 'L3'
-    return raw ? raw.toUpperCase() : ''
-})
-
-const layerTagType = computed(() => {
-    const raw = String(props.hint?.layer || '').toLowerCase()
-    if (raw === 'background' || raw === 'l1') return 'primary'
-    if (raw === 'episodic' || raw === 'l2') return 'success'
-    if (raw === 'noetic' || raw === 'l3') return 'warning'
-    return 'info'
+    const short = memoryLayerShortLabel(raw)
+    return short || (raw ? raw.toUpperCase() : '')
 })
 
 const copyPayload = computed(() => {
@@ -159,10 +149,6 @@ const copyRaw = async () => {
 
 .rm-hover-layer {
     flex-shrink: 0;
-    height: 18px;
-    padding: 0 5px;
-    font-size: 10px;
-    font-weight: 700;
 }
 
 .rm-hover-title {

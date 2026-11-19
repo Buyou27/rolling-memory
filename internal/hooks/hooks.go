@@ -32,8 +32,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/transcript"
@@ -42,7 +40,6 @@ import (
 const (
 	maxHookInput  = 2 * 1024 * 1024
 	maxLogBytes   = 2 * 1024 * 1024
-	maxCloseTrace = 120
 	maxImportLine = 200
 )
 
@@ -68,331 +65,12 @@ func runHook(cfg *config.Config, event string, payload map[string]any, o Options
 		return "", err
 	}
 	defer memory.Close()
-	switch event {
-	case "start", "close":
-		return importReplayEvent(memory, cfg, event, payload, o)
-	case "recall":
+	if event == "recall" {
 		return recallHook(memory, cfg, payload, o)
 	}
 	return "", fmt.Errorf("unknown hook event '%s'", event)
 }
 
-// importReplayEvent runs the start/close sweep: import transcript turns, replay
-// the pending traces, log the receipt, and (for start) render the boot line.
-func importReplayEvent(
-	memory *facade.Memory, cfg *config.Config, event string, payload map[string]any, o Options,
-) (string, error) {
-	presence := workspacePresence(payload)
-	project := workspaceProject(payload)
-	session := "default"
-	if value := firstTruthy(payload["session_id"], payload["sessionId"]); value != nil {
-		session = pyStr(value)
-	}
-	if presence != nil {
-		saveActiveWorkspacePresence(*presence, session)
-	}
-	imported := map[string]any{"messages": 0, "inserted": 0}
-	units, _, sourceErr := currentTurnUnitsChecked(cfg.Scope, session, payload)
-	if sourceErr != nil {
-		logHook(cfg, event, map[string]any{"source_error": ids.Redact(sourceErr.Error())})
-	}
-	if len(units) > 0 {
-		tc, err := memory.ThinClient()
-		if err != nil {
-			logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
-			return "", nil
-		}
-		vault := tc.Vault.CloneWithSharedSlotCache()
-		vault.SetIdentity(thinclient.VaultIdentity{})
-		inserted := 0
-		for _, unit := range units {
-			var exists int
-			if err := memory.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_docs WHERE unit_id = ?)`, unit.DocID).Scan(&exists); err != nil {
-				logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
-				return "", nil
-			}
-			packet, _ := vault.PackBlindPacket(unit.DocID, unit.Text, unit.OccurredAt)
-			if err := vault.SaveLocalEpisodicPointerIndexed(unit.DocID, unit.OccurredAt, unit.RefPointer, unit.TurnRef, unit.Text, packet, thinclient.IngestResponse{}); err != nil {
-				if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
-					continue
-				}
-				logHook(cfg, event, map[string]any{"vault_write_error": ids.Redact(err.Error())})
-				return "", nil
-			}
-			if exists == 0 {
-				inserted++
-			}
-		}
-		imported["messages"] = len(units)
-		imported["inserted"] = inserted
-	}
-	replayedCount := 0
-	if event == "close" || asIntDefault(imported["inserted"], 0) > 0 {
-		maxTraces := maxCloseTrace
-		if event == "start" {
-			maxTraces = cfg.Hooks.MaxTraces
-		}
-		if traces, tErr := memory.Store.PendingTraces(cfg.Scope, maxTraces, nil); tErr == nil {
-			for _, tr := range traces {
-				_ = memory.Store.MarkProcessed(tr.Hash)
-				_ = memory.Store.UpdateReplayState(cfg.Scope, tr.RecordedAt, tr.Hash)
-				_ = memory.Store.UpdateSessionCursor(cfg.Scope, tr.Session, tr.Turn)
-			}
-			replayedCount = len(traces)
-		}
-	}
-	data := map[string]any{
-		"imported": asIntDefault(imported["inserted"], 0),
-		"messages": asIntDefault(imported["messages"], 0),
-		"replayed": replayedCount,
-		"written":  0,
-	}
-	logHook(cfg, event, data)
-	if event == "start" && (cfg.Hooks.BootContext || project != "") {
-		return bootContext(memory, cfg, payload, o)
-	}
-	return "", nil
-}
-
-// bootContext renders the SessionStart pulse:
-//   - In standalone / golden-test mode (project == ""), it renders the classic
-//     status line plus up to 3 recent assertions for 100% golden contract parity.
-//   - In live coding workspace mode (project != ""), it strips the legacy
-//     heavy blind memory dump (zero blind Recall(project), zero unrequested hot bands,
-//     zero redundant git subprocess forks) and emits ONLY a <60-token lightweight
-//     pulse: 1 status line + 1-line episodic tail ("What Just Happened") + 1-line
-//     anti-hallucination rule, deferring all specific memory retrieval to on-demand
-//     UserPromptSubmit (`recallHook`).
-func bootContext(memory *facade.Memory, cfg *config.Config, payload map[string]any, o Options) (string, error) {
-	status, err := memory.Status(cfg.Scope)
-	if err != nil {
-		return "", err
-	}
-	corpus, canonical := status["corpus"].(map[string]int)
-	memories, episodic, background, crystallized := corpus["memories"], corpus["episodic"], corpus["background"], corpus["crystallized"]
-	if !canonical {
-		// Legacy assertion-graph databases (test fixtures, historical vaults)
-		// report their active units under the old counter; the shipped product
-		// always takes the canonical branch.
-		memories = asIntDefault(status["active_assertions"], 0)
-	}
-	text := fmt.Sprintf(
-		"Rolling-Memory (%s): %d memory units · %d episodic · %d background · %d crystallized · scope %s",
-		cfg.Mode, memories, episodic, background, crystallized, cfg.Scope,
-	)
-	project := workspaceProject(payload)
-	if project == "" {
-		recent, err := memory.Recent(nil, nil, 3)
-		if err != nil {
-			return "", err
-		}
-		if len(recent) > 0 {
-			rendered := make([]string, 0, len(recent))
-			for _, item := range recent {
-				rendered = append(rendered, pyStr(item["content"]))
-			}
-			text += "\n最近: " + strings.Join(rendered, "；")
-		}
-		return additionalContext(text, o.JSONOutput, "SessionStart")
-	}
-
-	session := "default"
-	if value := firstTruthy(payload["session_id"], payload["sessionId"]); value != nil {
-		session = pyStr(value)
-	}
-	if skel := buildLiveWorkspaceSkeleton(payload); skel != "" {
-		text += "\n[活体目录骨骼 · 实时磁盘 (免盲目 ls/find)] " + skel
-	}
-	if atlas := queryDiskVerifiedWorkspaceAtlas(memory, cfg.Scope, project, payload, 5); atlas != "" {
-		text += "\n[已验活体路标 · os.Stat 实时核验]:\n" + atlas
-	}
-	if tailLine := queryWorkspaceEpisodicTail(memory, cfg.Scope, project, session); tailLine != "" {
-		text += "\n[刚干了什么 · 历史会话留痕（仅作背景，不代表当前任务已完成）] " + tailLine
-	}
-	text += "\n[记忆代理四问闭环与防幻觉准则] 1. 历史记忆≠本轮已做（寻址直达但动作必亲为：上方路标与过往记忆仅为历史基线，绝不代表当前会话已完成本轮任务；代码实现以实时 Read/git status 为准，凡本轮要求开发/优化/核验必须在本会话亲手执行，严禁拿历史记忆或存量代码当本轮完工交差）；2. 遇阻主动 recall；3. 终态验证后写入（严禁在任务中途或未验证前抢跑 remember；须等全部动作与测试/实测验证完成后，在收尾最后一步写入）；4. 五记五不记与过时必自愈：仅沉淀「①非显然意图→入口寻址路标、②跨模块联动契约、③带坐标的反直觉深坑与实战经验、④团队共识/认知倾向/用户偏好与架构边界、⑤外部环境配方」，严禁记完工战报/完成态谓词（如「落地并验证于/…闭环」）/瞬时卷号读数/行级代码细节；主语 s 必为无日期持久概念名——当共识/倾向/认知变化或发现所读记忆（坐标/参数/结论）显而易见过时，收尾必须复用同一 (s, x) 调 remember(closes_prior:true) 补记最新并使旧记忆自动 superseded 退场（Hook 读侧自动剥离 superseded，彻底杜绝新旧冲突污染）。"
-	return additionalContext(text, o.JSONOutput, "SessionStart")
-}
-
-// buildLiveWorkspaceSkeleton scans the current workspace directory on live disk
-// (<0.3ms via os.ReadDir, 0 subprocesses) and returns a compact 1-line module
-// skeleton (e.g. "cmd/{rolling-memory} internal/{api,cli,hooks,...} skills/{...}")
-// so a newly opened session never needs blind `ls` / `find` exploration while
-// being 100% immune to stale memory.
-func buildLiveWorkspaceSkeleton(payload map[string]any) string {
-	raw := firstTruthy(payload["cwd"], payload["workspace"], os.Getenv("ROLLING_MEMORY_WORKSPACE"))
-	if raw == nil {
-		return ""
-	}
-	dir := filepath.Clean(config.ExpandUserPath(pyStrip(pyStr(raw))))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	skipDir := func(name string) bool {
-		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
-			return true
-		}
-		switch name {
-		case "node_modules", "vendor", "dist", "build", "target", "bin", "out", "coverage", "tmp", "logs", "testdata":
-			return true
-		}
-		return false
-	}
-	var parts []string
-	for _, e := range entries {
-		if !e.IsDir() || skipDir(e.Name()) {
-			continue
-		}
-		topName := e.Name()
-		subEntries, subErr := os.ReadDir(filepath.Join(dir, topName))
-		if subErr != nil {
-			parts = append(parts, topName+"/")
-			continue
-		}
-		var subs []string
-		for _, se := range subEntries {
-			if se.IsDir() && !skipDir(se.Name()) {
-				subs = append(subs, se.Name())
-				if len(subs) >= 28 {
-					break
-				}
-			}
-		}
-		if len(subs) > 0 && len(subs) <= 28 {
-			parts = append(parts, topName+"/{"+strings.Join(subs, ",")+"}")
-		} else {
-			parts = append(parts, topName+"/")
-		}
-		if len(parts) >= 10 {
-			break
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// queryDiskVerifiedWorkspaceAtlas queries active assertions for this workspace,
-// extracts any module file paths, and verifies each path on the LIVE filesystem
-// via os.Stat(filepath.Join(cwd, path)). Only assertions whose referenced file
-// paths 100% exist on disk right now are emitted as compact 1-line landmarks!
-func queryDiskVerifiedWorkspaceAtlas(memory *facade.Memory, scope, project string, payload map[string]any, maxItems int) string {
-	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || project == "" || maxItems <= 0 {
-		return ""
-	}
-	raw := firstTruthy(payload["cwd"], payload["workspace"], os.Getenv("ROLLING_MEMORY_WORKSPACE"))
-	if raw == nil {
-		return ""
-	}
-	cwd := filepath.Clean(config.ExpandUserPath(pyStrip(pyStr(raw))))
-	if info, err := os.Stat(cwd); err != nil || info == nil || !info.IsDir() {
-		return ""
-	}
-	rows, err := memory.Store.DB().Query(
-		`SELECT COALESCE(sn.label, a.subject_literal, '') AS s,
-		        COALESCE(rn.label, '') AS x,
-		        COALESCE(onode.label, a.object_literal, '') AS o
-		 FROM assertion a
-		 LEFT JOIN node sn ON a.subject_id = sn.id
-		 LEFT JOIN node rn ON a.rel_id = rn.id
-		 LEFT JOIN node onode ON a.object_id = onode.id
-		 WHERE a.scope = ? AND a.status = 'active' AND a.bare = 0 AND a.confidence >= 0.75
-		   AND (a.locus LIKE ? OR COALESCE(sn.label, a.subject_literal, '') LIKE ?)
-		 ORDER BY (a.warrant = 'performative') DESC, a.created_at DESC LIMIT 36`,
-		scope, "%"+project+"%", "%"+project+"%",
-	)
-	if err != nil {
-		return ""
-	}
-	defer rows.Close()
-
-	var lines []string
-	seenSubj := map[string]bool{}
-	for rows.Next() {
-		var s, x, o string
-		if rows.Scan(&s, &x, &o) != nil {
-			continue
-		}
-		s = strings.TrimSpace(s)
-		if s == "" || seenSubj[s] {
-			continue
-		}
-		candPaths := recall.ExtractStructuralPaths(s+" "+o, 16)
-		var verifiedPaths []string
-		for _, p := range candPaths {
-			if !strings.Contains(p, "/") || strings.Contains(p, "*") || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
-				continue
-			}
-			cleanRel := filepath.Clean(strings.TrimPrefix(p, "./"))
-			if strings.HasPrefix(cleanRel, "..") {
-				continue
-			}
-			fullPath := filepath.Join(cwd, cleanRel)
-			if _, statErr := os.Stat(fullPath); statErr == nil {
-				verifiedPaths = append(verifiedPaths, cleanRel)
-			}
-		}
-		if len(verifiedPaths) == 0 {
-			continue
-		}
-		seenSubj[s] = true
-		lines = append(lines, "  • "+s+" ("+x+") → "+strings.Join(verifiedPaths, " , "))
-		if len(lines) >= maxItems {
-			break
-		}
-	}
-	if len(lines) == 0 {
-		nRows, nErr := memory.Store.DB().Query(
-			`SELECT COALESCE(query_text, ''), COALESCE(answer_text, '')
-				 FROM rm_noetic
-				 WHERE status = 'active'
-				 ORDER BY occurred_at DESC LIMIT 36`,
-		)
-		if nErr == nil {
-			defer nRows.Close()
-			for nRows.Next() {
-				var qText, aText string
-				if nRows.Scan(&qText, &aText) != nil {
-					continue
-				}
-				qText = strings.TrimSpace(strings.ReplaceAll(qText, "\n", " "))
-				if qText == "" || seenSubj[qText] {
-					continue
-				}
-				candPaths := recall.ExtractStructuralPaths(qText+" "+aText, 16)
-				var verifiedPaths []string
-				for _, p := range candPaths {
-					if !strings.Contains(p, "/") || strings.Contains(p, "*") || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
-						continue
-					}
-					cleanRel := filepath.Clean(strings.TrimPrefix(p, "./"))
-					if strings.HasPrefix(cleanRel, "..") {
-						continue
-					}
-					if _, statErr := os.Stat(filepath.Join(cwd, cleanRel)); statErr == nil {
-						verifiedPaths = append(verifiedPaths, cleanRel)
-					}
-				}
-				if len(verifiedPaths) == 0 {
-					continue
-				}
-				seenSubj[qText] = true
-				lines = append(lines, "  • "+qText+" → "+strings.Join(verifiedPaths, " , "))
-				if len(lines) >= maxItems {
-					break
-				}
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// recallHook implements the UserPromptSubmit surface. Memory retrieval is 100%
-// agent-driven through the MCP `recall` tool: this hook never runs automatic
-// recall on the user's raw prompt and never injects recalled material, so a
-// prompt can neither self-echo as a hit nor crystallize a question the agent
-// did not ask for. What remains is purely structural, language-agnostic and
-// zero closed-set keyword tables: the capture side (Presence coordinates,
-// background-dir sync, raw prompt into `trace`) and, on the four-turn cadence,
-// a one-line reminder that `recall` exists.
 func recallHook(memory *facade.Memory, cfg *config.Config, payload map[string]any, o Options) (string, error) {
 	prompt := ""
 	if value := firstTruthy(payload["prompt"], payload["user_prompt"]); value != nil {
@@ -415,7 +93,6 @@ func recallHook(memory *facade.Memory, cfg *config.Config, payload map[string]an
 	if presence != nil {
 		saveActiveWorkspacePresence(*presence, session)
 	}
-	maybeSyncBackgroundOnHook(memory)
 	if project != "" {
 		// Capture only: the raw prompt enters `trace` for episodic history and
 		// anchor verification, never as an extracted fact.
@@ -601,7 +278,7 @@ func HookMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		value := remaining[0]
 		remaining = remaining[1:]
 		switch value {
-		case "start", "close", "recall":
+		case "recall":
 			event = value
 		case "--json":
 			options.JSONOutput = true
@@ -1240,12 +917,12 @@ func queryVaultWorkspaceEpisodicTail(memory *facade.Memory, project string) stri
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || strings.TrimSpace(project) == "" {
 		return ""
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil || tc == nil || tc.Vault == nil {
 		return ""
 	}
 	rows, err := memory.Store.DB().Query(
-		`SELECT doc_id FROM thin_vault_docs
+		`SELECT doc_id FROM rm_units
 		 WHERE (layer = 'episodic' OR layer = '')
 		   AND lower(trim(COALESCE(locus, ''))) = lower(trim(?))
 		 ORDER BY occurred_at DESC LIMIT 8`,

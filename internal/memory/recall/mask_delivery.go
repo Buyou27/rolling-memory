@@ -11,7 +11,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
@@ -33,7 +33,7 @@ func applyDeliverableMask(memory *store.Store, cfg *config.Config, scope string,
 	if opts.Reader == "owner" {
 		return
 	}
-	_ = db.EnsureMemcoreSchema(memory.DB())
+	_ = db.EnsureDeliverySchema(memory.DB())
 
 	exemptNodeID := ""
 	if rs := strings.TrimSpace(opts.ReaderSubject); rs != "" {
@@ -61,7 +61,7 @@ func applyDeliverableMask(memory *store.Store, cfg *config.Config, scope string,
 	var pairs []maskPair
 	addSurface := func(nodeID, surface string) {
 		sf := strings.TrimSpace(surface)
-		if sf == "" || memcore.StringShannonBits(sf) < 4.0 {
+		if sf == "" || delivery.StringShannonBits(sf) < 4.0 {
 			return
 		}
 		lo := strings.ToLower(sf)
@@ -102,7 +102,7 @@ func applyDeliverableMask(memory *store.Store, cfg *config.Config, scope string,
 
 	// Highest information mass surface first to prevent partial prefix corruption
 	sort.SliceStable(pairs, func(i, j int) bool {
-		bi, bj := memcore.StringShannonBits(pairs[i].surface), memcore.StringShannonBits(pairs[j].surface)
+		bi, bj := delivery.StringShannonBits(pairs[i].surface), delivery.StringShannonBits(pairs[j].surface)
 		if bi != bj {
 			return bi > bj
 		}

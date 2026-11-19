@@ -112,15 +112,15 @@
                 </div>
                 <div class="pipe-chips">
                     <el-tooltip :content="layerHints.l1" placement="top" :show-after="250" :enterable="false" :hide-after="0">
-                        <span class="pipe-chip is-on">{{ isEn ? 'L1 Background (Docs & Code)' : 'L1 文档与代码' }}</span>
+                        <MemoryLayerBadge layer="background" :label="isEn ? 'L1 Background (Docs & Code)' : 'L1 文档与代码'" size="default" />
                     </el-tooltip>
                     <span class="pipe-plus">×</span>
                     <el-tooltip :content="layerHints.l2" placement="top" :show-after="250" :enterable="false" :hide-after="0">
-                        <span class="pipe-chip is-on">{{ isEn ? 'L2 Sessions (Episodic)' : 'L2 会话记录' }}</span>
+                        <MemoryLayerBadge layer="episodic" :label="isEn ? 'L2 Sessions (Episodic)' : 'L2 会话记录'" size="default" />
                     </el-tooltip>
                     <span class="pipe-plus">×</span>
                     <el-tooltip :content="layerHints.l3" placement="top" :show-after="250" :enterable="false" :hide-after="0">
-                        <span class="pipe-chip is-on">{{ isEn ? 'L3 Recall Trail (Noetic)' : 'L3 检索沉淀' }}</span>
+                        <MemoryLayerBadge layer="noetic" :label="isEn ? 'L3 Recall Trail (Noetic)' : 'L3 检索沉淀'" size="default" />
                     </el-tooltip>
                 </div>
             </div>
@@ -167,18 +167,6 @@
                     </el-tag>
                 </div>
                 <div class="ortho-right">
-                    <span class="switch-item">
-                        <el-checkbox
-                            :model-value="Boolean(status.switches?.boot_context)"
-                            :disabled="togglingKey !== ''"
-                            @change="(val: string | number | boolean) => toggle('boot_context', String(Boolean(val)))"
-                        >
-                            {{ isEn ? 'Session-start pulse (boot_context)' : '开场自动注入 (boot_context)' }}
-                        </el-checkbox>
-                        <el-tooltip :content="switchHints.boot_context" placement="top" :show-after="250" :enterable="false" :hide-after="0">
-                            <span class="term-hint">?</span>
-                        </el-tooltip>
-                    </span>
                     <span class="switch-item">
                         <el-checkbox
                             :model-value="Boolean(status.switches?.ledger)"
@@ -228,14 +216,14 @@
                                     <span class="term-hint">?</span>
                                 </el-tooltip>
                             </span>
-                            <el-tag size="small" type="success">L1 + L2</el-tag>
+                            <el-tag size="small" type="info">L1 + L2</el-tag>
                         </div>
                         <div class="stat-big">
-                            {{ status.artifacts?.thin_vault_docs ?? 0 }} <small>{{ isEn ? 'units' : '条单元' }}</small>
+                            {{ status.artifacts?.vault_docs ?? 0 }} <small>{{ isEn ? 'units' : '条单元' }}</small>
                         </div>
                         <div class="stat-foot">
                             <span
-                                >{{ isEn ? 'Addresses' : '记忆地址' }}: <b>{{ status.artifacts?.thin_vault_cells ?? 0 }}</b>
+                                >{{ isEn ? 'Addresses' : '记忆地址' }}: <b>{{ status.artifacts?.vault_cells ?? 0 }}</b>
                                 <el-tooltip :content="cardHints.cells" placement="top" :show-after="250" :enterable="false" :hide-after="0">
                                     <span class="term-hint">?</span>
                                 </el-tooltip>
@@ -253,12 +241,13 @@
                                     <span class="term-hint">?</span>
                                 </el-tooltip>
                             </span>
-                            <el-tag size="small" type="primary"
-                                >{{ status.artifacts?.thin_vault_noetic ?? 0 }} {{ isEn ? 'active' : '条生效' }}</el-tag
-                            >
+                            <MemoryLayerBadge
+                                layer="noetic"
+                                :label="`${status.artifacts?.vault_noetic ?? 0} ${isEn ? 'active' : '条生效'}`"
+                            />
                         </div>
                         <div class="stat-big">
-                            {{ status.artifacts?.thin_vault_noetic ?? 0 }} <small>{{ isEn ? 'entries' : '条沉淀条目' }}</small>
+                            {{ status.artifacts?.vault_noetic ?? 0 }} <small>{{ isEn ? 'entries' : '条沉淀条目' }}</small>
                         </div>
                         <div class="stat-foot">
                             <span>{{ isEn ? 'Query + Cited sentences + Answer' : '提问 Q + 引证原句 + 回答 A' }}</span>
@@ -275,20 +264,20 @@
                                     <span class="term-hint">?</span>
                                 </el-tooltip>
                             </span>
-                            <el-tag size="small" type="success">{{ status.artifacts?.eligible_nodes ?? 0 }} {{ isEn ? 'nodes' : '个节点' }}</el-tag>
+                            <el-tag size="small" type="info">{{ status.artifacts?.eligible_nodes ?? 0 }} {{ isEn ? 'nodes' : '个节点' }}</el-tag>
                         </div>
                         <div class="stat-big">
                             {{ status.artifacts?.active_assertions ?? 0 }} <small>{{ isEn ? 'total memory units' : '条有效记忆单元' }}</small>
                         </div>
                         <div class="stat-foot">
                             <span
-                                >{{ isEn ? 'Addresses' : '记忆地址' }}: <b>{{ status.artifacts?.thin_vault_cells ?? 0 }}</b></span
+                                >{{ isEn ? 'Addresses' : '记忆地址' }}: <b>{{ status.artifacts?.vault_cells ?? 0 }}</b></span
                             >
                             <span
-                                >{{ isEn ? 'L1+L2' : '文档/情景' }}: <b>{{ status.artifacts?.thin_vault_docs ?? 0 }}</b></span
+                                >{{ isEn ? 'L1+L2' : '文档/情景' }}: <b>{{ status.artifacts?.vault_docs ?? 0 }}</b></span
                             >
                             <span
-                                >{{ isEn ? 'L3 Noetic' : '检索沉淀' }}: <b>{{ status.artifacts?.thin_vault_noetic ?? 0 }}</b></span
+                                >{{ isEn ? 'L3 Noetic' : '检索沉淀' }}: <b>{{ status.artifacts?.vault_noetic ?? 0 }}</b></span
                             >
                         </div>
                     </div>
@@ -419,6 +408,7 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref }
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAdminInfo } from '@/stores/adminInfo'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
 import { MonitorSocket } from '@/utils/monitorSocket'
 import request from '@/utils/request'
 import MemoryHoverPreview from '../plugin/rolling-memory/MemoryHoverPreview.vue'
@@ -510,15 +500,11 @@ const sectionOneHint = computed(() =>
 const switchHints = computed(() =>
     isEn.value
         ? {
-              boot_context:
-                  'When on, hosts wired to a session-start hook receive a lightweight memory pulse (store size + recent writes + anti-fabrication note) when a session opens. The default install only wires per-prompt recall today, so this switch is reserved for such hosts.',
               ledger: 'Writes key readings of every recall call (hit / dedup-skip / empty, delivery and write outcome) into a local ledger. The ROI monitor is computed entirely from this ledger.',
               raw_when_sparse:
                   'When structured hits are too sparse (<2 or none), fall back to searching raw conversation records so recalls rarely come back empty. Turn off for strict mode (empty results are acceptable).',
           }
         : {
-              boot_context:
-                  '开启后：支持「会话启动」钩子的宿主在新建会话时会自动注入一行轻量记忆脉搏（记忆规模 + 最近写入 + 防编造提醒）。当前默认安装只接「每轮提问检索」钩子，此项为面向此类宿主的保留能力。',
               ledger: '把每次 recall 调用的关键读数（是否命中 / 去重跳过 / 空检索、交付与写入结果）记入本机账本；ROI 监控屏的全部统计都来自这本账。',
               raw_when_sparse:
                   '当结构化记忆命中过少（少于 2 条或没有）时，改从原始对话记录直接兜底检索，避免召回为空；关闭后更严格，宁可返回空结果。',
@@ -822,20 +808,6 @@ onBeforeUnmount(() => {
         align-items: center;
         gap: 6px;
         flex-wrap: wrap;
-    }
-
-    .pipe-chip {
-        font-size: 12px;
-        padding: 2px 8px;
-        border-radius: 4px;
-        background: var(--el-fill-color);
-        color: var(--el-text-color-secondary);
-
-        &.is-on {
-            background: var(--el-color-primary);
-            color: #fff;
-            font-weight: 600;
-        }
     }
 
     .pipe-plus {

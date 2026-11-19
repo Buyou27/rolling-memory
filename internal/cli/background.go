@@ -11,13 +11,13 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/mcp"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // backgroundSkipNote renders the exclusion tail of a human summary line: how many files were
 // skipped and why (aggregated by reason), plus unreadable directories. A sync that finished
 // with skips must never read like a silent clean success; the full per-file list stays in `--json`.
-func backgroundSkipNote(report thinclient.BackgroundSyncReport) string {
+func backgroundSkipNote(report localvault.BackgroundSyncReport) string {
 	var parts []string
 	if len(report.SkippedFiles) > 0 {
 		reasons := map[string]int{}
@@ -58,10 +58,10 @@ func backgroundSkipNote(report thinclient.BackgroundSyncReport) string {
 	return " · " + strings.Join(parts, " · ")
 }
 
-// runBackground exposes the canonical thinclient Background mount pipeline to
-// hosts that cannot import internal/thinclient directly.
+// runBackground exposes the canonical localvault Background mount pipeline to
+// hosts that cannot import internal/localvault directly.
 func (a *application) runBackground(memory *facade.Memory) (int, error) {
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		return 1, err
 	}
@@ -70,7 +70,7 @@ func (a *application) runBackground(memory *facade.Memory) (int, error) {
 	switch a.args.Subcommand() {
 	case "add":
 		var (
-			mount thinclient.BackgroundDirMount
+			mount localvault.BackgroundDirMount
 			err   error
 		)
 		extRaw := strings.TrimSpace(a.args.String("ext"))

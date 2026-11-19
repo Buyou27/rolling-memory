@@ -45,7 +45,7 @@ func TestCLISmoke(t *testing.T) {
 		t.Fatalf("import = %s", imported.stdout)
 	}
 
-	// 本地明文：import 把 trace 镜像进 thin vault，recall 从本地返回夹具内容。
+	// 本地明文：import 把 trace 镜像进 local vault，recall 从本地返回夹具内容。
 	const fixture = "我喜欢猫。我的猫叫小白。"
 	recall := sb.run("recall", "--q", "小白 猫", "--no-raw", "--json")
 	assertExit(t, recall, 0, "recall --no-raw")
@@ -116,7 +116,7 @@ func TestCLISmoke(t *testing.T) {
 	defer connection.Close()
 	var vaultUnits int
 	if err := connection.QueryRow(
-		`SELECT (SELECT COUNT(*) FROM thin_vault_docs) + (SELECT COUNT(*) FROM rm_noetic WHERE status = 'active')`,
+		`SELECT (SELECT COUNT(*) FROM rm_units) + (SELECT COUNT(*) FROM rm_noetic WHERE status = 'active')`,
 	).Scan(&vaultUnits); err != nil {
 		t.Fatalf("count vault units: %v", err)
 	}

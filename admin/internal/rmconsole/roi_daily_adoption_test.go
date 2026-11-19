@@ -29,7 +29,7 @@ func TestROIFactsDailySeriesCarryAdoption(t *testing.T) {
 	yDate := yNoon.Format("2006-01-02")
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -44,7 +44,7 @@ func TestROIFactsDailySeriesCarryAdoption(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`
-		INSERT INTO thin_vault_docs VALUES
+		INSERT INTO rm_units VALUES
 			('ep_src_1', 'episodic', ?, 'Fix located in admin/internal/rmconsole/roi_facts.go and ComputeDBFingerprint.', '[]', 'C6:L3:B001#01', '', '[]', 'Rolling-Memory'),
 			('ep_src_2', 'episodic', ?, 'Base zero-shot score is 0.362 on ModernBERT-large.', '[]', 'C6:L3:B002#01', '', '[]', 'Rolling-Memory'),
 			('ep_follow_tool', 'episodic', ?, '[tool] {"file_path":"/workspace/Rolling-Memory/admin/internal/rmconsole/roi_facts.go"}', '[]', 'C6:L3:B001#06', '', '[]', 'Rolling-Memory'),

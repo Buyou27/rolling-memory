@@ -19,7 +19,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/mcp"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // engine信道测试：`rolling-memory engine <op> --json` 只允许经已核验本机守护连接
@@ -88,7 +88,7 @@ func engineStartVerifiedDaemon(t *testing.T) *facade.Memory {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = memory.Close() })
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +98,11 @@ func engineStartVerifiedDaemon(t *testing.T) *facade.Memory {
 		{"ep_engine_answer", engineTestTurn + "#1", "[assistant] fixture reply body"},
 	} {
 		packet, _ := tc.Vault.PackBlindPacket(fixture.id, fixture.text, occurredAt)
-		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, occurredAt, fixture.ref, engineTestTurn, fixture.text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, occurredAt, fixture.ref, engineTestTurn, fixture.text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 			t.Fatalf("seed indexed pointer: %v", err)
 		}
 	}
-	if err := tc.Vault.SaveLocalPlaintext("doc-engine-inline", occurredAt, "inline engine document body", []string{"inline engine document body"}, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := tc.Vault.SaveLocalPlaintext("doc-engine-inline", occurredAt, "inline engine document body", []string{"inline engine document body"}, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatalf("seed inline document: %v", err)
 	}
 

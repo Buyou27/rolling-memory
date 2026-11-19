@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	_ "modernc.org/sqlite"
 )
 
@@ -62,7 +62,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 	seedZCodeTurnFixture(t, home)
 
 	memory := newMemory(t)
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 		{"ep_answer", turn + "#1", "[assistant] fixture reply body"},
 	} {
 		packet, _ := tc.Vault.PackBlindPacket(fixture.id, fixture.text, testNow)
-		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, testNow, fixture.ref, turn, fixture.text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := tc.Vault.SaveLocalEpisodicPointerIndexed(fixture.id, testNow, fixture.ref, turn, fixture.text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 			t.Fatalf("seed indexed pointer: %v", err)
 		}
 	}
@@ -159,7 +159,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 	}
 	alternateTurn := "@ref:jsonl:" + alternatePath + ":0"
 	packet, _ := tc.Vault.PackBlindPacket("ep_question", "[user] fixture question", testNow)
-	if err := tc.Vault.SaveLocalEpisodicPointerIndexed("ep_question", testNow, alternateTurn+"#0", alternateTurn, "[user] fixture question", packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := tc.Vault.SaveLocalEpisodicPointerIndexed("ep_question", testNow, alternateTurn+"#0", alternateTurn, "[user] fixture question", packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	status, out = post(UnixHydratePayload{Items: []UnixHydrateItem{{DocID: "ep_question", Ref: alternateTurn + "#0"}}})

@@ -10,7 +10,7 @@ import (
 )
 
 // TestShannonPrimitivesContract pins the canonical Shannon-bit values of the
-// single primitive home. memcore now delegates here, so these numbers are the
+// single primitive home. delivery now delegates here, so these numbers are the
 // repo-wide contract for recall ranking, hook gating, and eval scoring.
 func TestShannonPrimitivesContract(t *testing.T) {
 	if got := RuneShannonBits('a'); got != 2.0 {

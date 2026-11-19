@@ -236,7 +236,7 @@ func newEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePath st
 	host, _ := os.Hostname()
 	stamp := now.UTC().Format(time.RFC3339)
 	// 本地评测世代恒用本地金库身份（零云端端点解析）。
-	endpoint := "local://thin-vault"
+	endpoint := "local://vault"
 	ownerTok, _ := NewEvalGenerationID(now)
 	return EvalGeneration{
 		Scope:       ScopeForModeGeneration(suite, userID, pulseMode, generationID),
@@ -265,7 +265,7 @@ func SaveEvalGeneration(gen EvalGeneration) error {
 
 // recordGenerationCorpus 把语料身份写进世代租约（心跳 + 摘要 + 条数 + 金库路径）。无租约时按其身份补建一条，
 // 让历史固定 scope 的语料也进入可枚举、可回收的世代体系。
-func recordGenerationCorpus(scope, storePath string, manifest CloudManifest) {
+func recordGenerationCorpus(scope, storePath string, manifest EvalManifest) {
 	suite, ok := EvalScopeSuite(scope)
 	if !ok {
 		return
@@ -382,7 +382,7 @@ func AllocateEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePa
 	now := time.Now()
 	pulseMode = NormalizePulseMode(pulseMode)
 	// 本地评测世代恒用本地金库身份（零云端端点解析）。
-	endpoint := "local://thin-vault"
+	endpoint := "local://vault"
 	userID := evalUserID()
 	if busy, ok := liveWriterOnStore(storePath, endpoint, userID, now); ok {
 		return EvalGeneration{}, fmt.Errorf(
@@ -416,7 +416,7 @@ func (e *LocalEngine) startNewGeneration(ctx context.Context, logf func(string, 
 		logf = func(string, ...any) {}
 	}
 	if e.cfg == nil {
-		return errors.New("cloud evaluation engine is not initialized with a config")
+		return errors.New("evaluation engine is not initialized with a config")
 	}
 	gen, err := AllocateEvalGenerationForMode(e.cfg, e.Suite, e.PulseMode, e.StorePath)
 	if err != nil {
@@ -461,7 +461,7 @@ func (e *LocalEngine) CloseGeneration(ctx context.Context, logf func(string, ...
 // adoptStoredGeneration 采纳本 store 上既有 manifest 的世代：manifest 是「这个 store 当前是谁」
 // 的唯一真源；仅当套件与模式（local_plain）一致时才采纳。
 func (e *LocalEngine) adoptStoredGeneration() (EvalGeneration, bool) {
-	manifest, err := ReadCloudManifest(e.StorePath)
+	manifest, err := ReadEvalManifest(e.StorePath)
 	if err != nil || manifest.Suite != e.Suite || e.validateManifestPulseMode(manifest) != nil {
 		return EvalGeneration{}, false
 	}

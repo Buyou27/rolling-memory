@@ -13,7 +13,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
 
@@ -145,10 +145,10 @@ func (s *Store) Candidates(seedIDs []string, o CandidateOptions) ([]Candidate, m
 			for _, qt := range qTerms {
 				st := ids.StemToken(qt)
 				tok := st
-				if memcore.StringShannonBits(tok) < 6.0 {
+				if delivery.StringShannonBits(tok) < 6.0 {
 					tok = qt
 				}
-				if memcore.StringShannonBits(tok) < 6.0 {
+				if delivery.StringShannonBits(tok) < 6.0 {
 					continue
 				}
 				pat := "%" + ids.EscapeLike(strings.ToLower(tok)) + "%"
@@ -606,7 +606,7 @@ func (s *Store) applyCausalDerivationAndPauliResonance(
 		return candidates
 	}
 
-	fetchCausalEdges := func(cur []uint64, limit int) ([]memcore.CausalDerivationEdge, error) {
+	fetchCausalEdges := func(cur []uint64, limit int) ([]delivery.CausalDerivationEdge, error) {
 		if len(cur) == 0 {
 			return nil, nil
 		}
@@ -642,14 +642,14 @@ func (s *Store) applyCausalDerivationAndPauliResonance(
 		if err != nil {
 			return nil, err
 		}
-		out := make([]memcore.CausalDerivationEdge, 0, len(edgeRows))
+		out := make([]delivery.CausalDerivationEdge, 0, len(edgeRows))
 		for _, er := range edgeRows {
 			lhs := internID(mapString(er, "lhs_id"))
 			rhs := internID(mapString(er, "rhs_id"))
 			mk := strings.ReplaceAll(mapString(er, "meta_kind"), "-", "_")
 			ev := mapString(er, "evidence")
 			if lhs > 0 && rhs > 0 {
-				out = append(out, memcore.CausalDerivationEdge{
+				out = append(out, delivery.CausalDerivationEdge{
 					LHS:      lhs,
 					RHS:      rhs,
 					MetaKind: mk,
@@ -660,7 +660,7 @@ func (s *Store) applyCausalDerivationAndPauliResonance(
 		return out, nil
 	}
 
-	expanded, hopByNode, rootSeedOf, err := memcore.ExpandCausalDerivationGraph(highSeeds, 2, 16, 48, fetchCausalEdges)
+	expanded, hopByNode, rootSeedOf, err := delivery.ExpandCausalDerivationGraph(highSeeds, 2, 16, 48, fetchCausalEdges)
 	if err == nil && len(expanded) > 0 {
 		var missingIDs []string
 		for _, dstUID := range expanded {
@@ -790,20 +790,20 @@ func (s *Store) applyCausalDerivationAndPauliResonance(
 				   AND (lhs_id IN (`+ph+`) OR rhs_id IN (`+ph+`))
 				 LIMIT ?`, nArgs...)
 			if nErr == nil && len(negRows) > 0 {
-				negEdges := make([]memcore.CausalDerivationEdge, 0, len(negRows))
+				negEdges := make([]delivery.CausalDerivationEdge, 0, len(negRows))
 				for _, nr := range negRows {
 					lhs := internID(mapString(nr, "lhs_id"))
 					rhs := internID(mapString(nr, "rhs_id"))
 					mk := strings.ReplaceAll(mapString(nr, "meta_kind"), "-", "_")
 					if lhs > 0 && rhs > 0 {
-						negEdges = append(negEdges, memcore.CausalDerivationEdge{
+						negEdges = append(negEdges, delivery.CausalDerivationEdge{
 							LHS:      lhs,
 							RHS:      rhs,
 							MetaKind: mk,
 						})
 					}
 				}
-				excluded := memcore.ComputeStrongNegativeExcludedSet(primaryActiveUIDs, negEdges)
+				excluded := delivery.ComputeStrongNegativeExcludedSet(primaryActiveUIDs, negEdges)
 				if len(excluded) > 0 {
 					for i := range candidates {
 						uid := strToUint[candidates[i].Data.NodeID]
@@ -988,7 +988,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 		tokenizedCue = ids.TokenizeAll(cue)
 	}
 	for _, term := range tokenizedCue {
-		if memcore.StringShannonBits(term) >= 4.0 {
+		if delivery.StringShannonBits(term) >= 4.0 {
 			rawTokens = append(rawTokens, term)
 		}
 	}
@@ -999,7 +999,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 	}
 	for _, extra := range o.ExtraTerms {
 		clean := pyStrip(extra)
-		if memcore.StringShannonBits(clean) < 4.0 || memcore.CountTokens(clean) > memcore.TokenTier8 {
+		if delivery.StringShannonBits(clean) < 4.0 || delivery.CountTokens(clean) > delivery.TokenTier8 {
 			continue
 		}
 		norm := ids.NormalizeLabel(clean)
@@ -1017,8 +1017,8 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 	} else if !isGoldenRaw && len(terms) > 12 {
 		head := append([]string{}, terms[:12]...)
 		tail := terms[12:]
-		if len(tail) > memcore.TokenTier128 {
-			tail = tail[:memcore.TokenTier128]
+		if len(tail) > delivery.TokenTier128 {
+			tail = tail[:delivery.TokenTier128]
 		}
 		// 当分词器因 CJK N-gram 组合展开突破 48 槽位上限 (len(tokenizedCue) > 48) 时，
 		// 前 12 个 N-gram 仅能覆盖前 6~7 个汉字；此时对尾部词元计算真实后验 IDF，
@@ -1041,7 +1041,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 	}
 	compoundParts := []string{}
 	for _, term := range terms {
-		if ids.HasCJK(term) || memcore.StringShannonBits(term) < 1.75*memcore.AtomicConceptEntropyBits {
+		if ids.HasCJK(term) || delivery.StringShannonBits(term) < 1.75*delivery.AtomicConceptEntropyBits {
 			continue
 		}
 		subwords := tokenzr.SplitSubwords(" " + term)
@@ -1053,8 +1053,8 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 			continue
 		}
 		p1 := term[len(p0):]
-		if memcore.StringShannonBits(p0) < memcore.AtomicConceptEntropyBits ||
-			memcore.StringShannonBits(p1) < memcore.AtomicConceptEntropyBits ||
+		if delivery.StringShannonBits(p0) < delivery.AtomicConceptEntropyBits ||
+			delivery.StringShannonBits(p1) < delivery.AtomicConceptEntropyBits ||
 			tokenzr.Count(" "+p1) != 1 ||
 			tokenzr.BPEInflectionValence(p0) < 1 || tokenzr.BPEInflectionValence(p1) < 1 {
 			continue
@@ -1100,7 +1100,7 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 				}
 			}
 			stem := ids.StemToken(term)
-			if stem != term && memcore.StringShannonBits(stem) >= 6.0 {
+			if stem != term && delivery.StringShannonBits(stem) >= 6.0 {
 				if _, ok := seenFTS[stem]; !ok {
 					seenFTS[stem] = struct{}{}
 					ftsTerms = append(ftsTerms, stem)
@@ -1504,7 +1504,7 @@ func highIDFCoreTerms(weights []termWeight, limit int) []string {
 		if entry.stem != "" && entry.stemWeight > w*0.7 {
 			tok = entry.stem
 		}
-		if memcore.StringShannonBits(tok) >= 6.0 && w >= 3.5 {
+		if delivery.StringShannonBits(tok) >= 6.0 && w >= 3.5 {
 			cands = append(cands, pair{tok: tok, w: w})
 		}
 	}
@@ -1635,7 +1635,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 	}
 	// fullMatch (below, after matchFactor) memoizes the raw-trace-text leg per
 	// (distinct trace text, query token): many candidate assertions share one anchored turn and
-	// the unspaced-ideograph branch of memcore.MatchTokenOrStemWithStem rescans every occurrence
+	// the unspaced-ideograph branch of delivery.MatchTokenOrStemWithStem rescans every occurrence
 	// inside the (up to hundreds-of-KB) turn text, so the same pair was previously re-matched
 	// dozens of times per recall.
 	slotMatchCache := make(map[[2]string]float64, 512)
@@ -1644,7 +1644,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 			return 0
 		}
 		if !isGolden {
-			if sc := memcore.MatchTokenOrStemWithStem(hay, tok, st, false); sc > 0 {
+			if sc := delivery.MatchTokenOrStemWithStem(hay, tok, st, false); sc > 0 {
 				return sc
 			}
 			isShortASCII := func(s string) bool {
@@ -1727,7 +1727,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 	if !isGolden {
 		var zeroDFIdx []int
 		for idx, tok := range tokens {
-			if df[tok] == 0 && memcore.StringShannonBits(tok) >= 12.0 {
+			if df[tok] == 0 && delivery.StringShannonBits(tok) >= 12.0 {
 				zeroDFIdx = append(zeroDFIdx, idx)
 			}
 		}
@@ -1735,13 +1735,13 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 			vocab := map[string]int{}
 			for i := range fieldsCache {
 				for _, w := range ids.Tokenize(fieldsCache[i].rel + " " + fieldsCache[i].obj) {
-					if memcore.StringShannonBits(w) >= 12.0 {
+					if delivery.StringShannonBits(w) >= 12.0 {
 						vocab[w]++
 					}
 				}
 			}
 			isAdjacentTransposition := func(a, b string) bool {
-				if math.Abs(memcore.StringShannonBits(a)-memcore.StringShannonBits(b)) > 1e-6 {
+				if math.Abs(delivery.StringShannonBits(a)-delivery.StringShannonBits(b)) > 1e-6 {
 					return false
 				}
 				ra, rb := []rune(a), []rune(b)
@@ -1822,9 +1822,9 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 				continue
 			}
 			lb := subjLabelMap[sid]
-			if lb != "" && memcore.CountTokens(lb) <= memcore.TokenTier4 {
+			if lb != "" && delivery.CountTokens(lb) <= delivery.TokenTier4 {
 				coSubjToks[lb] = true
-				if qPrimaryToks[lb] || memcore.MatchTokenOrStem(query, lb) >= 0.85 {
+				if qPrimaryToks[lb] || delivery.MatchTokenOrStem(query, lb) >= 0.85 {
 					coSubjIDs[sid] = true
 				}
 			}
@@ -1874,7 +1874,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 				if relStem == "" {
 					relStem = rt
 				}
-				if memcore.StringShannonBits(relStem) >= 4.0 {
+				if delivery.StringShannonBits(relStem) >= 4.0 {
 					rk := objRelKey{obj: oid, stem: relStem}
 					if prev, ok := objRelSubjMap[rk]; !ok {
 						objRelSubjMap[rk] = *d.SubjectID
@@ -1919,7 +1919,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 				directHit = true
 			}
 			if !isGolden && hasNonSubjQueryTok && coSubjToks[tok] {
-				if d.ObjectID != nil && *d.ObjectID != "" && !strings.HasPrefix(*d.ObjectID, "a_") && !coSubjIDs[*d.ObjectID] && memcore.CountTokens(obj) <= memcore.TokenTier4 && hasWordPrefixOrExact(obj, tok, true) {
+				if d.ObjectID != nil && *d.ObjectID != "" && !strings.HasPrefix(*d.ObjectID, "a_") && !coSubjIDs[*d.ObjectID] && delivery.CountTokens(obj) <= delivery.TokenTier4 && hasWordPrefixOrExact(obj, tok, true) {
 					sc += 4.5
 				} else if strings.Contains(obj, tok) || strings.Contains(fullTextOf(d), tok) {
 					sc += 1.0
@@ -1929,8 +1929,8 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 			if f := matchFactor(obj, tok, st); f > 0 {
 				sc += 2.5 * w * f
 				if !isGolden {
-					tokBits := memcore.StringShannonBits(tok)
-					objBits := memcore.StringShannonBits(obj)
+					tokBits := delivery.StringShannonBits(tok)
+					objBits := delivery.StringShannonBits(obj)
 					if objBits > 0 && tokBits > 0 {
 						density := tokBits / objBits
 						if density > 1.0 {
@@ -1964,7 +1964,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 				continue
 			}
 			if f := fullMatch(d, tok, st); f > 0 {
-				if !isGolden && !nonSubjHit && memcore.CountTokens(obj) >= memcore.TokenTier8 {
+				if !isGolden && !nonSubjHit && delivery.CountTokens(obj) >= delivery.TokenTier8 {
 					sc += 0.45 * w * f
 				} else {
 					sc += 1.1 * w * f
@@ -2017,7 +2017,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 				if candidates[i].LexScore > activeShared[*d.ObjectID] {
 					activeShared[*d.ObjectID] = candidates[i].LexScore
 				}
-				if activeShared[*d.ObjectID] < 6.5 && memcore.CountTokens(d.OLabel) <= memcore.TokenTier8 {
+				if activeShared[*d.ObjectID] < 6.5 && delivery.CountTokens(d.OLabel) <= delivery.TokenTier8 {
 					activeShared[*d.ObjectID] = 6.5
 				}
 			}
@@ -2028,7 +2028,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 				if peerLex, ok := activeShared[*d.ObjectID]; ok {
 					bonus := 6.5
 					floor := peerLex * 0.85
-					if symSharedObjs[*d.ObjectID] && memcore.CountTokens(d.OLabel) <= memcore.TokenTier8 {
+					if symSharedObjs[*d.ObjectID] && delivery.CountTokens(d.OLabel) <= delivery.TokenTier8 {
 						bonus = 14.0
 						if floor < 16.0 {
 							floor = 16.0
@@ -2127,7 +2127,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 					break
 				}
 				stBT := ids.StemToken(bt)
-				if memcore.StringShannonBits(stBT) < 6.0 || qTokSet[bt] || qTokSet[stBT] || coSubjToks[bt] || coSubjToks[stBT] {
+				if delivery.StringShannonBits(stBT) < 6.0 || qTokSet[bt] || qTokSet[stBT] || coSubjToks[bt] || coSubjToks[stBT] {
 					continue
 				}
 				if bridgeBySubj[sc.subjID] == nil {
@@ -2152,7 +2152,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 						break
 					}
 					stBT := ids.StemToken(bt)
-					if memcore.StringShannonBits(bt) < memcore.AtomicConceptEntropyBits || qTokSet[bt] || qTokSet[stBT] || coSubjToks[bt] || coSubjToks[stBT] {
+					if delivery.StringShannonBits(bt) < delivery.AtomicConceptEntropyBits || qTokSet[bt] || qTokSet[stBT] || coSubjToks[bt] || coSubjToks[stBT] {
 						continue
 					}
 					if traceBridgeBySubj[sc.subjID] == nil {
@@ -2253,7 +2253,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 						turnBonus += 1.2
 					}
 				}
-				if sameSubjTurnHits >= 2 && memcore.CountTokens(candidates[i].Data.OLabel) <= memcore.TokenTier4 {
+				if sameSubjTurnHits >= 2 && delivery.CountTokens(candidates[i].Data.OLabel) <= delivery.TokenTier4 {
 					turnBonus += 9.5
 				}
 				if surfBonus > 12.0 {
@@ -2290,7 +2290,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 			}
 			k := sxPair{subj: *d.SubjectID, rel: d.RelID}
 			sxFanout[k]++
-			if candidates[i].LexScore >= 12.0 && memcore.CountTokens(d.OLabel) <= memcore.TokenTier8 {
+			if candidates[i].LexScore >= 12.0 && delivery.CountTokens(d.OLabel) <= delivery.TokenTier8 {
 				if candidates[i].LexScore > sxMaxLex[k] {
 					sxMaxLex[k] = candidates[i].LexScore
 				}
@@ -2301,7 +2301,7 @@ func scoreCandidatesLexical(candidates []Candidate, query string) {
 			if d.SubjectID == nil || *d.SubjectID == "" || d.RelID == "" || (d.Status != "" && d.Status != "active") {
 				continue
 			}
-			if memcore.CountTokens(d.OLabel) > memcore.TokenTier8 {
+			if delivery.CountTokens(d.OLabel) > delivery.TokenTier8 {
 				continue
 			}
 			k := sxPair{subj: *d.SubjectID, rel: d.RelID}
@@ -2429,7 +2429,7 @@ func (s *Store) termWeights(scope string, terms []string) []termWeight {
 		}
 		plain[index].weight = w
 		stem := ids.StemToken(term)
-		if stem != term && memcore.StringShannonBits(stem) >= 6.0 {
+		if stem != term && delivery.StringShannonBits(stem) >= 6.0 {
 			if sw, ok := dfWeight(stem); ok {
 				plain[index].stem = stem
 				plain[index].stemWeight = sw * 0.92
@@ -2583,7 +2583,7 @@ func sessionCoverageOrderWithTime(rows []map[string]any, weights []termWeight, q
 					}
 					// 2. Closet / Header-Zone density resonance: hits in the leading 16*tau_atom (128-bit) structural summary zone
 					// avoid dilution by multi-kilobyte trailing boilerplate while keeping short media items on equal footing (0 byte magic numbers).
-					if firstPos >= 0 && memcore.StringShannonBits(text[:firstPos]) < 16.0*memcore.AtomicConceptEntropyBits {
+					if firstPos >= 0 && delivery.StringShannonBits(text[:firstPos]) < 16.0*delivery.AtomicConceptEntropyBits {
 						w *= 1.18
 					}
 				}
@@ -2591,13 +2591,13 @@ func sessionCoverageOrderWithTime(rows []map[string]any, weights []termWeight, q
 			} else if entry.stem != "" {
 				if tf, firstPos := countWordPrefixOrExact(text, strings.ToLower(entry.stem), false); tf > 0 {
 					w = entry.stemWeight
-					if len(rows) >= 16 && len(allScopeAuthors) == 0 && firstPos >= 0 && memcore.StringShannonBits(text[:firstPos]) < 16.0*memcore.AtomicConceptEntropyBits {
+					if len(rows) >= 16 && len(allScopeAuthors) == 0 && firstPos >= 0 && delivery.StringShannonBits(text[:firstPos]) < 16.0*delivery.AtomicConceptEntropyBits {
 						w *= 1.12
 					}
 					contentHit = true
 				}
-			} else if memcore.StringShannonBits(needle) >= memcore.AtomicConceptEntropyBits {
-				if tf, _ := countWordPrefixOrExact(text, needle, false); tf > 0 && memcore.MatchTokenOrStem(text, needle) >= 0.85 {
+			} else if delivery.StringShannonBits(needle) >= delivery.AtomicConceptEntropyBits {
+				if tf, _ := countWordPrefixOrExact(text, needle, false); tf > 0 && delivery.MatchTokenOrStem(text, needle) >= 0.85 {
 					w = entry.weight * 0.88
 					contentHit = true
 				}

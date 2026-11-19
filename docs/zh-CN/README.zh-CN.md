@@ -23,8 +23,7 @@
   # 方式 1：只挂载纯 MCP recall 工具，不安装任何 Hook 与指令提示
   rolling-memory install --mcp-only
 
-  # 方式 2：保留安装，关闭开场上下文注入或 Hook 账本记录
-  rolling-memory config set hooks.boot_context false
+  # 方式 2：保留安装，关闭 Hook 账本记录
   rolling-memory config set hooks.ledger false
   ```
 - **预置了 U 盘随身模式**：因为程序和记忆库都是独立的本地文件，我们还预置了一个 U 盘便携模式（见 [`usb-portable.md`](usb-portable.md)），可以把记忆工具和记忆库一起塞进 U 盘随身带走。这个模式还比较新、我们没做充分测试，它也有个很现实的前提：**你得在不同的电脑上跑同一个项目，原来的项目记忆才会有用**。欢迎感兴趣的朋友一起尝试，好用不好用都欢迎告诉我们。

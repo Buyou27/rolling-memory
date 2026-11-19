@@ -98,10 +98,18 @@ type WordParticle struct {
 }
 
 // PhraseFragment is a two-term phrase projection attached to a unit node.
+// LeftDF/RightDF are the member document frequencies, Containment is
+// DF/min(LeftDF, RightDF) and Lift is DF*N/(LeftDF*RightDF): together they
+// separate a genuine collocation from a pair that merely co-occurs because
+// both members are rare or because one text run was projected twice.
 type PhraseFragment struct {
 	Left               string  `json:"left"`
 	Right              string  `json:"right"`
 	DF                 int     `json:"df"`
+	LeftDF             int     `json:"left_df,omitempty"`
+	RightDF            int     `json:"right_df,omitempty"`
+	Containment        float64 `json:"containment,omitempty"`
+	Lift               float64 `json:"lift,omitempty"`
 	JointSurprisalNats float64 `json:"joint_surprisal_nats"`
 	BindingEnergyNats  float64 `json:"binding_energy_nats"`
 	UnitSpan           int     `json:"unit_span,omitempty"`

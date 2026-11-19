@@ -62,7 +62,7 @@ func TestImportJSONLCanonicalReceiptShape(t *testing.T) {
 	} {
 		docID := episodicunit.DocID("mem:test", "["+fixture.role+"] "+fixture.text)
 		var pointer, assistant, incarnation, locus string
-		if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, docID).
+		if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, docID).
 			Scan(&pointer, &assistant, &incarnation, &locus); err != nil {
 			t.Fatalf("document %s: %v", docID, err)
 		}

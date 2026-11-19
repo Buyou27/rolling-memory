@@ -11,26 +11,26 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/transcript"
 )
 
-// A RAME database keeps only the `thin_vault_*` schema (PurgeLegacyTables retired the
+// A RAME database keeps only the canonical `rm_*` schema (the retired
 // assertion graph), so local-mode recall must be served from the plaintext vault instead
 // of the legacy graph reader that would fail with "no such table: node".
-func TestLocalModeRecallServesThinVaultOnlyDatabase(t *testing.T) {
+func TestLocalModeRecallServesVaultOnlyDatabase(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
 	if err := client.Vault.SaveLocalPlaintext(
 		"ep_local_recall_anchor",
 		testNow,
 		"控制台开箱默认账号由宿主 bootstrap 播种，登录页一键填入预置账号。",
 		nil,
-		thinclient.IngestResponse{Layer: "episodic"},
+		localvault.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestLocalModeRecallServesThinVaultOnlyDatabase(t *testing.T) {
 
 	result, err := memory.Recall(facade.RecallRequest{Cue: "登录页 预置账号"})
 	if err != nil {
-		t.Fatalf("Recall on a thin-vault database: %v", err)
+		t.Fatalf("Recall on a local-vault database: %v", err)
 	}
 	if len(result.RawHits) == 0 && len(result.Bands) == 0 {
 		t.Fatalf("expected vault delivery, got bands=%d raw=%d", len(result.Bands), len(result.RawHits))
@@ -49,13 +49,13 @@ func TestLocalModeRecallServesThinVaultOnlyDatabase(t *testing.T) {
 	// The vault path cannot reconstruct time filters: an explicit as-of must fail loudly
 	// instead of silently returning unfiltered rows.
 	if _, err := memory.Recall(facade.RecallRequest{Cue: "登录页", AsOf: "2026-01-01"}); err == nil {
-		t.Fatal("as-of recall on a thin-vault database must report that time filters are unsupported")
+		t.Fatal("as-of recall on a local-vault database must report that time filters are unsupported")
 	}
 }
 
 func TestLocalRecallReportsUnavailableEpisodicSource(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,13 +66,12 @@ func TestLocalRecallReportsUnavailableEpisodicSource(t *testing.T) {
 	}
 	ref := "@ref:jsonl:" + path + ":0#0"
 	packet, _ := client.Vault.PackBlindPacket("ep_missing", text, testNow)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_missing", testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_missing", testNow, ref, "", text, packet, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	result, err := memory.Recall(facade.RecallRequest{Cue: "quartz unavailable source evidence", NoCrystallize: true})
 	if err != nil {
 		t.Fatal(err)
@@ -93,16 +92,15 @@ func TestLocalRecallReportsUnavailableEpisodicSource(t *testing.T) {
 
 func TestLocalRecallDeliveryCapsAndOffset(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"caps-a", "caps-b", "caps-c"} {
-		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), "quartz evidence "+id, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalPlaintext(id, testNow+int64(i), "quartz evidence "+id, nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	one, zero := 1, 0
 	for _, mode := range []string{"full", "recent"} {
 		t.Run(mode, func(t *testing.T) {
@@ -132,14 +130,13 @@ func TestLocalRecallDeliveryCapsAndOffset(t *testing.T) {
 // An explicit different scope must not relabel unscoped local vault rows as its own.
 func TestLocalVaultRecallRejectsDifferentScope(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz scope isolation witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz scope isolation witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 
 	otherScope := "mem:other"
 	for _, mode := range []string{"full", "probe", "recent"} {
@@ -160,11 +157,11 @@ func TestLocalVaultRecallRejectsDifferentScope(t *testing.T) {
 // the same database is reopened with a different scope.
 func TestLocalVaultReopenedWithDifferentScopeDoesNotExposeOldRows(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz reopen isolation witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("scope-a-doc", testNow, "quartz reopen isolation witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,15 +194,15 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 			if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 				t.Fatal(err)
 			}
-			client, err := thinclient.NewVault(memory.Store.DB(), nil)
+			client, err := localvault.NewVault(memory.Store.DB(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			switch source {
 			case "docs":
-				err = client.SaveLocalPlaintext("unbound-doc", testNow, "unbound secret witness", nil, thinclient.IngestResponse{Layer: "episodic"})
+				err = client.SaveLocalPlaintext("unbound-doc", testNow, "unbound secret witness", nil, localvault.IngestResponse{Layer: "episodic"})
 			case "noetic":
-				err = client.SaveLocalNoetic(thinclient.LocalNoeticRecord{NoeticID: "unbound-noetic", QueryText: "unbound secret witness", AnswerText: "unbound secret answer"})
+				err = client.SaveLocalNoetic(localvault.LocalNoeticRecord{NoeticID: "unbound-noetic", QueryText: "unbound secret witness", AnswerText: "unbound secret answer"})
 			case "background":
 				_, err = memory.Store.DB().Exec(`INSERT OR REPLACE INTO rm_bg_dirs(dir_id, root_path, added_at) VALUES ('unbound-background', '/tmp/unbound-background', 1)`)
 			}
@@ -230,7 +227,7 @@ func TestLocalVaultScopeBindingFailsClosed(t *testing.T) {
 			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_meta WHERE k = 'local_plain_scope'`).Scan(&bindingCount); err != nil || bindingCount != 0 {
 				t.Fatalf("unbound vault was claimed: count=%d err=%v", bindingCount, err)
 			}
-			table := map[string]string{"docs": "thin_vault_docs", "noetic": "rm_noetic", "background": "rm_bg_dirs"}[source]
+			table := map[string]string{"docs": "rm_units", "noetic": "rm_noetic", "background": "rm_bg_dirs"}[source]
 			var count int
 			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 1 {
 				t.Fatalf("unbound data changed: count=%d err=%v", count, err)
@@ -248,7 +245,7 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 	if err != nil || bound != "" || populated {
 		t.Fatalf("empty vault preflight = %q, %v, %v", bound, populated, err)
 	}
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +253,10 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 	if err != nil || bound != memory.Config.Scope || populated {
 		t.Fatalf("bound vault preflight = %q, %v, %v", bound, populated, err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("bound-doc", testNow, "quartz bound scope secret", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("bound-doc", testNow, "quartz bound scope secret", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalNoetic(thinclient.LocalNoeticRecord{NoeticID: "bound-noetic", QueryText: "quartz bound scope secret", AnswerText: "quartz derived secret", CitedUnitIDs: []string{"bound-doc"}}); err != nil {
+	if err := client.Vault.SaveLocalNoetic(localvault.LocalNoeticRecord{NoeticID: "bound-noetic", QueryText: "quartz bound scope secret", AnswerText: "quartz derived secret", CitedUnitIDs: []string{"bound-doc"}}); err != nil {
 		t.Fatal(err)
 	}
 	otherScope := "mem:other"
@@ -280,7 +277,7 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 	other, err := facade.New(&cfg)
 	if err == nil {
 		defer other.Close()
-		if _, err := other.ThinClient(); err == nil {
+		if _, err := other.LocalVault(); err == nil {
 			t.Fatal("reopened vault accepted a different scope")
 		}
 	}
@@ -289,7 +286,7 @@ func TestLocalVaultBoundScopeGuardsNoeticAndRaw(t *testing.T) {
 		t.Fatalf("scope binding changed: %q, %v", binding, err)
 	}
 	var docs, noetic int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM thin_vault_docs), (SELECT COUNT(*) FROM rm_noetic)`).Scan(&docs, &noetic); err != nil || docs != 1 || noetic != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM rm_units), (SELECT COUNT(*) FROM rm_noetic)`).Scan(&docs, &noetic); err != nil || docs != 1 || noetic != 1 {
 		t.Fatalf("vault rows changed: docs=%d noetic=%d err=%v", docs, noetic, err)
 	}
 }
@@ -302,14 +299,14 @@ func TestLocalVaultImportRejectsScopeBeforeWrites(t *testing.T) {
 				if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
 					t.Fatal(err)
 				}
-				vault, err := thinclient.NewVault(memory.Store.DB(), nil)
+				vault, err := localvault.NewVault(memory.Store.DB(), nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := vault.SaveLocalPlaintext("unbound-doc", testNow, "unbound witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+				if err := vault.SaveLocalPlaintext("unbound-doc", testNow, "unbound witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 					t.Fatal(err)
 				}
-			} else if _, err := memory.ThinClient(); err != nil {
+			} else if _, err := memory.LocalVault(); err != nil {
 				t.Fatal(err)
 			}
 			var scope *string
@@ -350,7 +347,7 @@ func TestLocalVaultRememberNoeticRejectsDifferentScope(t *testing.T) {
 		t.Run(map[bool]string{false: "uninitialized", true: "initialized"}[initialized], func(t *testing.T) {
 			memory := newMemory(t)
 			if initialized {
-				if _, err := memory.ThinClient(); err != nil {
+				if _, err := memory.LocalVault(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -398,7 +395,7 @@ func TestLocalVaultConcurrentScopeBinding(t *testing.T) {
 		go func(i int, candidate *facade.Memory) {
 			defer wg.Done()
 			<-start
-			_, results[i] = candidate.ThinClient()
+			_, results[i] = candidate.LocalVault()
 		}(i, candidate)
 	}
 	close(start)
@@ -416,14 +413,14 @@ func TestLocalVaultConcurrentScopeBinding(t *testing.T) {
 	} else {
 		winner = other
 	}
-	if _, err := winner.ThinClient(); err != nil {
+	if _, err := winner.LocalVault(); err != nil {
 		t.Fatalf("winning scope rejected: %v", err)
 	}
 }
 
 func TestLocalRecallMixedSourceUnifiedRankingWithLocusAnchor(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,11 +433,11 @@ func TestLocalRecallMixedSourceUnifiedRankingWithLocusAnchor(t *testing.T) {
 	turnText := "[user] quartz mixed ranking weak turn witness"
 	packet, _ := client.Vault.PackBlindPacket("ep_turn_low", turnText, testNow)
 	client.SetIdentity("default", "", "Rolling-Memory")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_turn_low", testNow, ref, "@ref:jsonl:"+path+":0", turnText, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_turn_low", testNow, ref, "@ref:jsonl:"+path+":0", turnText, packet, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	standaloneText := "quartz mixed ranking strong standalone witness crystalline prism"
-	if err := client.Vault.SaveLocalPlaintext("doc_standalone_high", testNow+10, standaloneText, nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("doc_standalone_high", testNow+10, standaloneText, nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	one := 1
@@ -463,23 +460,22 @@ func TestLocalRecallMixedSourceUnifiedRankingWithLocusAnchor(t *testing.T) {
 // 其余候选原序压后且不删除（fail-open）；无锚交付不携带锚注记。
 func TestLocalModeRecallLocusAnchorPromotesSameWorkspace(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
 	seed := func(docID, locus, text string) {
 		t.Helper()
 		client.SetIdentity("default", "", locus)
 		if err := client.Vault.SaveLocalPlaintext(
 			docID, testNow, text, nil,
-			thinclient.IngestResponse{Layer: "episodic"},
+			localvault.IngestResponse{Layer: "episodic"},
 		); err != nil {
 			t.Fatalf("seed %s: %v", docID, err)
 		}
 	}
 	seed("ep_locus_same", "Rolling-Memory", "首次进入控制台卡住要强刷新才能进入的守卫记录。")
 	seed("ep_locus_other", "Other-Workspace", "首次进入控制台卡住要强刷新才能进入的审计报告。")
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 
 	leadLocus := func(result *recall.Result) string {
 		if len(result.Bands) == 0 {
@@ -519,20 +515,20 @@ func TestLocalModeRecallLocusAnchorPromotesSameWorkspace(t *testing.T) {
 // 窗口被 L3 派生 handle 占满时，用最新源层条目替换最旧派生槽（纯时序不变）。
 func TestRecentVaultItemsKeepsSourceVisibleInDerivedWindow(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
 	if err := client.Vault.SaveLocalPlaintext(
 		"ep_recent_source", testNow,
 		"控制台守卫记录：首次进入需强刷新才能进入。",
 		nil,
-		thinclient.IngestResponse{Layer: "episodic"},
+		localvault.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed source: %v", err)
 	}
 	for i, id := range []string{"nt_recent_a", "nt_recent_b", "nt_recent_c"} {
-		if err := client.Vault.SaveLocalNoetic(thinclient.LocalNoeticRecord{
+		if err := client.Vault.SaveLocalNoetic(localvault.LocalNoeticRecord{
 			NoeticID:     id,
 			OccurredAt:   testNow + int64(10*(i+1)),
 			QueryText:    "q:" + id,
@@ -542,7 +538,6 @@ func TestRecentVaultItemsKeepsSourceVisibleInDerivedWindow(t *testing.T) {
 			t.Fatalf("seed noetic %s: %v", id, err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 
 	items, err := memory.Recent(nil, nil, 3)
 	if err != nil {
@@ -564,16 +559,16 @@ func TestRecentVaultItemsKeepsSourceVisibleInDerivedWindow(t *testing.T) {
 
 func TestRecentVaultRecallHonorsWorkspaceLocusAnchor(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
 	client.SetIdentity("a", "i", "TargetRepo")
 	if err := client.Vault.SaveLocalPlaintext(
 		"ep_target_old", testNow,
 		"TargetRepo earlier milestone record.",
 		nil,
-		thinclient.IngestResponse{Layer: "episodic"},
+		localvault.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
@@ -583,7 +578,7 @@ func TestRecentVaultRecallHonorsWorkspaceLocusAnchor(t *testing.T) {
 			"ep_other_"+string(rune('a'+i)), testNow+int64(10*(i+1)),
 			"OtherRepo newer chatter.",
 			nil,
-			thinclient.IngestResponse{Layer: "episodic"},
+			localvault.IngestResponse{Layer: "episodic"},
 		); err != nil {
 			t.Fatalf("seed other %d: %v", i, err)
 		}
@@ -611,16 +606,16 @@ func TestRecentVaultRecallHonorsWorkspaceLocusAnchor(t *testing.T) {
 
 func TestRecentVaultRecallFoldsRedundantNoeticDerivativesBehindSourceMemories(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thinclient: %v", err)
+		t.Fatalf("localvault: %v", err)
 	}
 	client.SetIdentity("a", "i", "Rolling-Memory")
 	if err := client.Vault.SaveLocalPlaintext(
 		"ep_src_1", testNow,
 		"First genuine source conversation turn.",
 		nil,
-		thinclient.IngestResponse{Layer: "episodic"},
+		localvault.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed ep_src_1: %v", err)
 	}
@@ -628,12 +623,12 @@ func TestRecentVaultRecallFoldsRedundantNoeticDerivativesBehindSourceMemories(t 
 		"ep_src_2", testNow+10,
 		"Second genuine source conversation turn.",
 		nil,
-		thinclient.IngestResponse{Layer: "episodic"},
+		localvault.IngestResponse{Layer: "episodic"},
 	); err != nil {
 		t.Fatalf("seed ep_src_2: %v", err)
 	}
 	for i, id := range []string{"nt_dup_1", "nt_dup_2"} {
-		if err := client.Vault.SaveLocalNoetic(thinclient.LocalNoeticRecord{
+		if err := client.Vault.SaveLocalNoetic(localvault.LocalNoeticRecord{
 			NoeticID:     id,
 			OccurredAt:   testNow + int64(20+i*10),
 			QueryText:    "[Rolling-Memory] query " + id,
@@ -667,11 +662,11 @@ func TestRecentVaultRecallFoldsRedundantNoeticDerivativesBehindSourceMemories(t 
 
 func TestLocalRecallLargeOffsetDoesNotOverflowOrPanic(t *testing.T) {
 	memory := newVaultOnlyMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("offset-doc", testNow, "quartz large offset overflow witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("offset-doc", testNow, "quartz large offset overflow witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	maxInt := int(^uint(0) >> 1)

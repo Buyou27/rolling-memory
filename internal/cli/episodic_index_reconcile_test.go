@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
 
@@ -64,8 +64,8 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 		}
 		rep := jsonObject(t, res.stdout)
 		for _, key := range []string{"episodic_pushed_to_remote", "background_pushed_to_remote", "noetic_pushed_to_remote"} {
-			if rep[key] != float64(0) {
-				t.Fatalf("local_plain %s = %v", key, rep[key])
+			if _, ok := rep[key]; ok {
+				t.Fatalf("local_plain reconcile still reports %s", key)
 			}
 		}
 		return rep
@@ -80,15 +80,15 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 		t.Fatalf("open vault: %v", err)
 	}
 	defer db.Close()
-	vault, err := thinclient.NewVault(db, nil)
+	vault, err := localvault.NewVault(db, nil)
 	if err != nil {
-		t.Fatalf("open thinclient vault: %v", err)
+		t.Fatalf("open localvault vault: %v", err)
 	}
 	vault.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{
 		EnableStructuredDates: true,
 		Expander:              plain.CanonicalCompanionTags,
 	})
-	vault.SetSegmenterOptions(thinclient.SegmenterPackOptions{HarmonicOverlay: true})
+	vault.SetSegmenterOptions(localvault.SegmenterPackOptions{HarmonicOverlay: true})
 	assertSearch := func(query string) string {
 		t.Helper()
 		hits, err := vault.SearchClientSDKDefault(query, 10)
@@ -113,8 +113,8 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 	// generation wins per document. An SDK or language-pack bump must never
 	// orphan previously indexed speech. The secret remains the access boundary —
 	// rows whose MAC fails under this vault's key stay invisible (covered by
-	// thinclient codec-isolation tests).
-	unconfigured, err := thinclient.NewVault(db, nil)
+	// localvault codec-isolation tests).
+	unconfigured, err := localvault.NewVault(db, nil)
 	if err != nil {
 		t.Fatalf("open unconfigured vault: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 		t.Fatalf("index status = %+v", indexStatus)
 	}
 	var pointer string
-	if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, userID).Scan(&pointer); err != nil {
+	if err := db.QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, userID).Scan(&pointer); err != nil {
 		t.Fatalf("read pointer: %v", err)
 	}
 	if !strings.HasPrefix(pointer, "@ref:jsonl:") {
@@ -154,7 +154,7 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 		t.Fatalf("backfilled unit = %q, want %q", got, userID)
 	}
 	var after string
-	if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, userID).Scan(&after); err != nil || after != pointer {
+	if err := db.QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, userID).Scan(&after); err != nil || after != pointer {
 		t.Fatalf("backfill changed pointer: before=%q after=%q err=%v", pointer, after, err)
 	}
 	third := reconcile()
@@ -167,12 +167,12 @@ func TestEpisodicPointerIndexReconcile(t *testing.T) {
 	// A pre-existing inline document must remain inline, even when its content
 	// matches a scanned source pointer.
 	inline := "[assistant] amber greenhouse seedlings"
-	if _, err := db.Exec(`UPDATE thin_vault_docs SET raw_text = ?, sentences_json = ? WHERE doc_id = ?`, inline, `["preserve"]`, assistantID); err != nil {
+	if _, err := db.Exec(`UPDATE rm_units SET raw_text = ?, sentences_json = ? WHERE doc_id = ?`, inline, `["preserve"]`, assistantID); err != nil {
 		t.Fatalf("seed inline document: %v", err)
 	}
 	reconcile()
 	var storedInline, sentences string
-	if err := db.QueryRow(`SELECT raw_text, sentences_json FROM thin_vault_docs WHERE doc_id = ?`, assistantID).Scan(&storedInline, &sentences); err != nil || storedInline != inline || sentences != `["preserve"]` {
+	if err := db.QueryRow(`SELECT raw_text, sentences_json FROM rm_units WHERE doc_id = ?`, assistantID).Scan(&storedInline, &sentences); err != nil || storedInline != inline || sentences != `["preserve"]` {
 		t.Fatalf("inline document changed: text=%q sentences=%q err=%v", storedInline, sentences, err)
 	}
 	if got := atomic.LoadInt32(&requests); got != 0 {
@@ -206,9 +206,9 @@ func TestEpisodicIndexReconcilePreservesUnverifiedSources(t *testing.T) {
 		t.Fatalf("open vault: %v", err)
 	}
 	defer db.Close()
-	vault, err := thinclient.NewVault(db, nil)
+	vault, err := localvault.NewVault(db, nil)
 	if err != nil {
-		t.Fatalf("open thinclient vault: %v", err)
+		t.Fatalf("open localvault vault: %v", err)
 	}
 	oldID := episodicunit.DocID("mem:test", "[user] original source contents")
 	matchingID := episodicunit.DocID("mem:test", "[assistant] matching source contents")
@@ -219,7 +219,7 @@ func TestEpisodicIndexReconcilePreservesUnverifiedSources(t *testing.T) {
 		{matchingID, missingPointer},
 		{"ep_unknown_old_id", missingPointer},
 	} {
-		if err := vault.SaveLocalEpisodicPointer(row.id, 1767668400, row.pointer, "", thinclient.IngestResponse{}); err != nil {
+		if err := vault.SaveLocalEpisodicPointer(row.id, 1767668400, row.pointer, "", localvault.IngestResponse{}); err != nil {
 			t.Fatalf("seed pointer %s: %v", row.id, err)
 		}
 	}
@@ -240,7 +240,7 @@ func TestEpisodicIndexReconcilePreservesUnverifiedSources(t *testing.T) {
 		{"ep_unknown_old_id", missingPointer},
 	} {
 		var got string
-		if err := db.QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, row.id).Scan(&got); err != nil || got != row.pointer {
+		if err := db.QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, row.id).Scan(&got); err != nil || got != row.pointer {
 			t.Fatalf("source %s changed: %q, err=%v", row.id, got, err)
 		}
 		var count int

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
@@ -45,7 +45,7 @@ func TestSecurityRestrictedFileImportFailsBeforeWrites(t *testing.T) {
 		}
 	}
 	var traces, cursors, vaultTables int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor), (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='thin_vault_docs')`).Scan(&traces, &cursors, &vaultTables); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor), (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rm_units')`).Scan(&traces, &cursors, &vaultTables); err != nil {
 		t.Fatal(err)
 	}
 	if traces != 0 || cursors != 0 || vaultTables != 0 {
@@ -55,14 +55,14 @@ func TestSecurityRestrictedFileImportFailsBeforeWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	var beforeTrace, beforeDocs, beforeCursors int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&beforeTrace, &beforeDocs, &beforeCursors); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM rm_units), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&beforeTrace, &beforeDocs, &beforeCursors); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.ImportFile(path, nil, nil, "private", false); err == nil {
 		t.Fatal("private import accepted an existing shared source")
 	}
 	var afterTrace, afterDocs, afterCursors int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&afterTrace, &afterDocs, &afterCursors); err != nil || beforeTrace != afterTrace || beforeDocs != afterDocs || beforeCursors != afterCursors || beforeDocs != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM rm_units), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&afterTrace, &afterDocs, &afterCursors); err != nil || beforeTrace != afterTrace || beforeDocs != afterDocs || beforeCursors != afterCursors || beforeDocs != 1 {
 		t.Fatalf("private rejection altered existing data: before=%d/%d/%d after=%d/%d/%d err=%v", beforeTrace, beforeDocs, beforeCursors, afterTrace, afterDocs, afterCursors, err)
 	}
 }
@@ -89,7 +89,7 @@ func TestSecurityImportedTracesDoNotInheritCurrentPersona(t *testing.T) {
 	} {
 		var session, assistant, incarnation, locus string
 		err := memory.Store.DB().QueryRow(`SELECT t.session, d.assistant_id, d.incarnation_id, d.locus
-			FROM trace t JOIN thin_vault_docs d ON d.doc_id = 'ep_' || t.hash WHERE t.text = ?`, fixture.text).
+			FROM trace t JOIN rm_units d ON d.doc_id = 'ep_' || t.hash WHERE t.text = ?`, fixture.text).
 			Scan(&session, &assistant, &incarnation, &locus)
 		if err != nil || session != fixture.session || assistant != "" || incarnation != "" || locus != "" {
 			t.Fatalf("import identity for %q: session=%q assistant=%q incarnation=%q locus=%q err=%v", fixture.text, session, assistant, incarnation, locus, err)
@@ -103,7 +103,7 @@ func TestSecurityImportedTracesDoNotInheritCurrentPersona(t *testing.T) {
 		t.Fatal(err)
 	}
 	var privateCount int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, "ep_"+privateHash).Scan(&privateCount); err != nil || privateCount != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, "ep_"+privateHash).Scan(&privateCount); err != nil || privateCount != 0 {
 		t.Fatalf("private trace mirrored: count=%d err=%v", privateCount, err)
 	}
 	untrustedHash, created, err := memory.Store.AddTrace(memory.Config.Scope, "untrusted locus witness", store.TraceOptions{
@@ -118,7 +118,7 @@ func TestSecurityImportedTracesDoNotInheritCurrentPersona(t *testing.T) {
 		t.Fatal(err)
 	}
 	var untrustedLocus string
-	if err := memory.Store.DB().QueryRow(`SELECT locus FROM thin_vault_docs WHERE doc_id = ?`, "ep_"+untrustedHash).Scan(&untrustedLocus); err != nil || untrustedLocus != "" {
+	if err := memory.Store.DB().QueryRow(`SELECT locus FROM rm_units WHERE doc_id = ?`, "ep_"+untrustedHash).Scan(&untrustedLocus); err != nil || untrustedLocus != "" {
 		t.Fatalf("untrusted locus attributed: %q %v", untrustedLocus, err)
 	}
 	for _, fixture := range []struct {
@@ -139,11 +139,11 @@ func TestSecurityImportedTracesDoNotInheritCurrentPersona(t *testing.T) {
 			t.Fatal(err)
 		}
 		var assistant, incarnation, locus string
-		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, "ep_"+hash).Scan(&assistant, &incarnation, &locus); err != nil || assistant != "" || incarnation != "" || locus != fixture.locus {
+		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, "ep_"+hash).Scan(&assistant, &incarnation, &locus); err != nil || assistant != "" || incarnation != "" || locus != fixture.locus {
 			t.Fatalf("hook source identity: assistant=%q incarnation=%q locus=%q err=%v", assistant, incarnation, locus, err)
 		}
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestSecurityImportedTracesDoNotInheritCurrentPersona(t *testing.T) {
 
 func TestSecurityWholeTurnPointerIsNotDelivered(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,15 +164,14 @@ func TestSecurityWholeTurnPointerIsNotDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := "@ref:jsonl:" + path + ":0"
-	text, err := thinclient.ResolveEpisodicPointerLive(ref)
+	text, err := localvault.ResolveEpisodicPointerLive(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
 	packet, _ := client.Vault.PackBlindPacket("ep_whole", text, testNow)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_whole", testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_whole", testNow, ref, "", text, packet, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	for _, mode := range []string{"full", "probe", "recent"} {
 		result, err := memory.Recall(facade.RecallRequest{Cue: "quartz whole turn", Mode: mode, NoCrystallize: true})
 		if err != nil {
@@ -190,7 +189,7 @@ func TestSecurityWholeTurnPointerIsNotDelivered(t *testing.T) {
 
 func TestSecurityAlternateSourceRequiresProvenance(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,14 +208,13 @@ func TestSecurityAlternateSourceRequiresProvenance(t *testing.T) {
 	const docID = "ep_provenance"
 	packet, _ := client.Vault.PackBlindPacket(docID, text, testNow)
 	client.SetIdentity("primary-assistant", "primary-session", "primary-locus")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, primaryTurn+"#0", primaryTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, primaryTurn+"#0", primaryTurn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
 	client.SetIdentity("alternate-assistant", "alternate-session", "alternate-locus")
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow+100, alternateTurn+"#0", alternateTurn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow+100, alternateTurn+"#0", alternateTurn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	req := facade.RecallRequest{Cue: "quartz provenance witness", NoCrystallize: true}
 	result, err := memory.Recall(req)
 	if err != nil || !strings.Contains(result.Render(10000), text) {
@@ -243,7 +241,7 @@ func TestSecurityAlternateSourceRequiresProvenance(t *testing.T) {
 
 func TestSecuritySameTurnRelocationUsesActualSegment(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +254,9 @@ func TestSecuritySameTurnRelocationUsesActualSegment(t *testing.T) {
 	text := "[user] quartz relocation witness"
 	const docID = "ep_relocation"
 	packet, _ := client.Vault.PackBlindPacket(docID, text, testNow)
-	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, turn+"#0", turn, text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalEpisodicPointerIndexed(docID, testNow, turn+"#0", turn, text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	changed := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"unindexed secret"},{"type":"text","text":"quartz relocation witness"}]}}` + "\n"
 	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
 		t.Fatal(err)
@@ -283,7 +280,7 @@ func TestSecuritySameTurnRelocationUsesActualSegment(t *testing.T) {
 
 func TestSecurityLineageDoesNotAuthorizeAdjacentHit(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,11 +295,10 @@ func TestSecurityLineageDoesNotAuthorizeAdjacentHit(t *testing.T) {
 		{"ep_secret", turn + "#1", "[assistant] unrelated confidential sibling"},
 	} {
 		packet, _ := client.Vault.PackBlindPacket(row.id, row.text, testNow)
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(row.id, testNow, row.ref, turn, row.text, packet, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(row.id, testNow, row.ref, turn, row.text, packet, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	result, err := memory.Recall(facade.RecallRequest{Cue: "quartz nebula evidence", NoCrystallize: true})
 	if err != nil {
 		t.Fatal(err)

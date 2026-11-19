@@ -126,6 +126,28 @@
                         >
                             {{ isEn ? 'Free' : '游离' }} {{ graph?.stats?.free_unit_total || roleCounts.free }}
                         </button>
+                        <el-tooltip
+                            :content="
+                                isEn
+                                    ? 'Isolated word/phrase fragments that appear only once (df=1). Hidden by default; toggle to include them.'
+                                    : '只出现一次的孤立词/短语碎片（df=1）。默认隐藏，开启后一并显示。'
+                            "
+                            placement="bottom"
+                            :enterable="false"
+                            :hide-after="0"
+                            :show-after="300"
+                        >
+                            <button
+                                type="button"
+                                class="fs-layer-chip is-frag"
+                                :class="{ 'is-active': showDfOneFragments }"
+                                :disabled="inDrill || fragmentCount === 0"
+                                @click="toggleDfOneFragments"
+                            >
+                                <span class="frag-dot" />
+                                {{ isEn ? 'df=1' : 'df=1 碎片' }} {{ fragmentCount }}
+                            </button>
+                        </el-tooltip>
                     </div>
 
                     <span class="fs-divider" />
@@ -566,7 +588,7 @@
                             :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'phrase' }"
                             @click="roleFilter = roleFilter === 'phrase' ? 'all' : 'phrase'"
                         >
-                            <i class="geo-glyph" style="background: #a855f7" />
+                            <i class="geo-glyph geo-glyph--molecule" />
                             {{ isEn ? `Phrases (${roleCounts.phrase})` : `短语 (${roleCounts.phrase})` }}
                         </span>
                         <span
@@ -574,7 +596,7 @@
                             :class="{ 'graph-legend-item--off': roleFilter !== 'all' && roleFilter !== 'free' }"
                             @click="roleFilter = roleFilter === 'free' ? 'all' : 'free'"
                         >
-                            <i class="geo-glyph" style="background: #94a3b8" />
+                            <i class="geo-glyph geo-glyph--free" />
                             {{ isEn ? `Free units (${roleCounts.free})` : `游离单元 (${roleCounts.free})` }}
                         </span>
                     </template>
@@ -673,19 +695,16 @@
                         <template #label>
                             <span>{{ isEn ? 'Cognitive Layer' : '所属认知层' }}</span>
                         </template>
-                        <el-tag
-                            size="small"
-                            :type="currentNode.layer === 'noetic' ? 'danger' : currentNode.layer === 'background' ? 'primary' : 'success'"
-                            effect="plain"
-                        >
-                            {{
+                        <MemoryLayerBadge
+                            :layer="currentNode.layer"
+                            :label="
                                 currentNode.layer === 'noetic'
                                     ? 'L3 Noetic (知性印迹)'
                                     : currentNode.layer === 'background'
                                       ? 'L1 Background (背景文档)'
                                       : 'L2 Episodic (情景对话)'
-                            }}
-                        </el-tag>
+                            "
+                        />
                     </el-descriptions-item>
                     <el-descriptions-item>
                         <template #label>
@@ -789,7 +808,9 @@
                         <div v-for="p in currentNode.phrases" :key="`${p.left}|${p.right}`" class="particle-mol-card">
                             <div class="pm-top">
                                 <span class="pm-key">{{ p.left }} · {{ p.right }}</span>
-                                <span class="pm-stat">B={{ p.binding_energy_nats.toFixed(2) }} nats · DF={{ p.df }}</span>
+                                <span class="pm-stat">
+                                    B={{ p.binding_energy_nats.toFixed(2) }} nats · DF={{ p.df }}<template v-if="p.left_df || p.right_df"> · df {{ p.left_df }}:{{ p.right_df }}</template><template v-if="p.lift !== undefined && p.lift !== null"> · lift {{ p.lift.toFixed(2) }}</template><template v-if="p.containment !== undefined && p.containment !== null"> · cover {{ p.containment.toFixed(2) }}</template>
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -951,6 +972,7 @@ import { computeEgoLayout, computeLayout, type LayoutEdge, type LayoutNode, type
 import { Hypergraph3DEngine, type Graph3DNode, type Graph3DSpaceMode } from '@/components/graph/engine'
 import { CLUSTER_TYPE_META, KIND_META, clusterTypeLabel, isContainerKind, isPhraseKind, isWordKind, kindLabel, nodeAccentColor } from '@/components/graph/kinds'
 import GraphDrillOverlay from '@/components/graph/GraphDrillOverlay.vue'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
 import LayoutWorker from '@/components/graph/layout.worker?worker'
 
 defineOptions({
@@ -995,6 +1017,10 @@ interface GraphPhraseFragment {
     left: string
     right: string
     df: number
+    left_df?: number
+    right_df?: number
+    containment?: number
+    lift?: number
     joint_surprisal_nats: number
     binding_energy_nats: number
     unit_span?: number
@@ -1179,8 +1205,37 @@ const roleCounts = computed(() => {
     return out
 })
 
-function edgeRelationLabel(rel: string): string {
-    if (rel === 'member_of') return isEn.value ? 'member_of (Container)' : 'member_of (归属簇容器)'
+// ==================== df=1 孤立碎片独立开关 ====================
+// 只出现 1 次的词/短语碎片在真实金库里数量很大（本机实测约 48% 的词法节点），
+// 默认隐藏以免淹没主干结构；需要完整词表时单独开启，不与其他角色/层级过滤器互相覆盖。
+const DF1_KEY = 'rm-graph-show-df1'
+const showDfOneFragments = ref(Local.get(DF1_KEY) === 'on')
+
+function particleDf(n: GraphNode): number | null {
+    if (isWordKind(n.kind)) {
+        const word = n.words?.[0] ?? n.atoms?.[0]
+        return typeof word?.df === 'number' ? word.df : null
+    }
+    if (isPhraseKind(n.kind)) {
+        const phrase = n.phrases?.[0] ?? n.molecules?.[0]
+        return typeof phrase?.df === 'number' ? phrase.df : null
+    }
+    return null
+}
+
+function isDfOneFragment(n: GraphNode): boolean {
+    const df = particleDf(n)
+    return df !== null && df <= 1
+}
+
+const fragmentCount = computed(() => (graph.value?.nodes ?? []).filter(isDfOneFragment).length)
+
+function toggleDfOneFragments(): void {
+    showDfOneFragments.value = !showDfOneFragments.value
+    Local.set(DF1_KEY, showDfOneFragments.value ? 'on' : 'off')
+}
+
+function edgeRelationLabel(rel: string): string {    if (rel === 'member_of') return isEn.value ? 'member_of (Container)' : 'member_of (归属簇容器)'
     if (rel === 'cites') return isEn.value ? 'cites (Evidence)' : 'cites (引证证据)'
     if (rel === 'co_cites') return isEn.value ? 'co_cites (Resonance)' : 'co_cites (跨簇共振)'
     if (rel === 'word_of') return isEn.value ? 'word_of (Word)' : 'word_of (词族)'
@@ -1206,7 +1261,7 @@ function parseNoeticQA(node: GraphNode): { q: string; a: string } {
 function nodeGlyphClass(n: { kind: string; layer?: string; cluster_type?: string }): string {
     if (isContainerKind(n.kind)) return 'geo-glyph--cell'
     if (isWordKind(n.kind)) return 'geo-glyph--focus'
-    if (isPhraseKind(n.kind)) return 'geo-glyph--noetic'
+    if (isPhraseKind(n.kind)) return 'geo-glyph--molecule'
     if (n.kind === 'free_unit' || (n as { free?: boolean }).free) return 'geo-glyph--free'
     if (n.layer === 'noetic') return 'geo-glyph--noetic'
     if (n.layer === 'background') return 'geo-glyph--bg'
@@ -1363,8 +1418,12 @@ function applyFilters(
     const kw = keyword.value.trim().toLowerCase()
     const hasNodeFilter = rf !== 'all' || kw !== ''
 
+    // df=1 孤立碎片默认隐藏；显式搜索（关键词非空）时无论如何都保留命中项。
+    const rawPool = showDfOneFragments.value || kw !== '' ? rawNodes : rawNodes.filter((n) => !isDfOneFragment(n))
+    const poolIds = new Set(rawPool.map((n) => n.id))
+
     const seedMatched = new Set<number>()
-    for (const n of rawNodes) {
+    for (const n of rawPool) {
         if (rf !== 'all') {
             if (rf === 'cluster' || rf === 'cell') {
                 if (!isContainerKind(n.kind)) continue
@@ -1390,8 +1449,8 @@ function applyFilters(
     const keptIds = new Set<number>(seedMatched)
     if (hasNodeFilter && keepOneHopContext.value && seedMatched.size > 0) {
         for (const e of candidateEdges) {
-            if (seedMatched.has(e.from)) keptIds.add(e.to)
-            if (seedMatched.has(e.to)) keptIds.add(e.from)
+            if (seedMatched.has(e.from) && poolIds.has(e.to)) keptIds.add(e.to)
+            if (seedMatched.has(e.to) && poolIds.has(e.from)) keptIds.add(e.from)
         }
     }
 
@@ -1403,7 +1462,7 @@ function applyFilters(
     }
 
     const nodes: ViewNode[] = []
-    for (const n of rawNodes) {
+    for (const n of rawPool) {
         if (!keptIds.has(n.id)) continue
         const viewDegree = deg.get(n.id) ?? 0
         if (relSet && viewDegree === 0 && !hasNodeFilter) continue
@@ -1929,7 +1988,7 @@ const AUTO_RELOAD_MIN_INTERVAL_MS = 10000
 /** 金库变更指纹：L1/L2 明文文档 + 记忆地址 + L3 知性印迹 + 图谱节点总数，任一变化即触发软刷新。 */
 function liveDigestOf(status: Record<string, any>): string {
     const art = (status?.artifacts ?? {}) as Record<string, any>
-    return [art.thin_vault_docs ?? 0, art.thin_vault_cells ?? 0, art.thin_vault_noetic ?? 0, status?.total_nodes ?? 0].join('|')
+    return [art.vault_docs ?? 0, art.vault_cells ?? 0, art.vault_noetic ?? 0, status?.total_nodes ?? 0].join('|')
 }
 
 const isLocomoPreview = computed(() => {
@@ -2620,18 +2679,25 @@ onBeforeUnmount(() => {
         }
 
         &--bg {
-            background: #3b82f6;
+            background: var(--rm-layer-background);
         }
 
         &--ep {
-            background: #10b981;
+            background: var(--rm-layer-episodic);
         }
 
         &--noetic {
             width: 10px;
             height: 10px;
-            background: #ec4899;
-            box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.28);
+            background: var(--rm-layer-noetic);
+            box-shadow: 0 0 0 2px rgba(var(--rm-layer-noetic-rgb), 0.28);
+        }
+
+        &--molecule {
+            width: 10px;
+            height: 10px;
+            background: #a855f7;
+            box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.28);
         }
 
         &--focus {
@@ -3020,18 +3086,18 @@ onBeforeUnmount(() => {
             }
 
             &.is-bg.is-active {
-                background: rgba(59, 130, 246, 0.28);
-                border-color: #3b82f6;
+                background: rgba(var(--rm-layer-background-rgb), 0.28);
+                border-color: var(--rm-layer-background);
             }
 
             &.is-ep.is-active {
-                background: rgba(16, 185, 129, 0.26);
-                border-color: #10b981;
+                background: rgba(var(--rm-layer-episodic-rgb), 0.26);
+                border-color: var(--rm-layer-episodic);
             }
 
             &.is-noetic.is-active {
-                background: rgba(236, 72, 153, 0.28);
-                border-color: #ec4899;
+                background: rgba(var(--rm-layer-noetic-rgb), 0.28);
+                border-color: var(--rm-layer-noetic);
             }
 
             &.is-atom.is-active {
@@ -3047,6 +3113,39 @@ onBeforeUnmount(() => {
             &.is-free.is-active {
                 background: rgba(148, 163, 184, 0.22);
                 border-color: #94a3b8;
+            }
+
+            &.is-frag {
+                border-style: dashed;
+                color: #94a3b8;
+
+                .frag-dot {
+                    display: inline-block;
+                    width: 5px;
+                    height: 5px;
+                    margin-right: 4px;
+                    border-radius: 50%;
+                    background: #f59e0b;
+                    opacity: 0.55;
+                    vertical-align: 1px;
+                }
+
+                &.is-active {
+                    background: rgba(245, 158, 11, 0.2);
+                    border-color: #f59e0b;
+                    border-style: solid;
+                    color: #fde68a;
+
+                    .frag-dot {
+                        opacity: 1;
+                        box-shadow: 0 0 7px rgba(245, 158, 11, 0.85);
+                    }
+                }
+
+                &:disabled {
+                    opacity: 0.42;
+                    cursor: not-allowed;
+                }
             }
         }
 

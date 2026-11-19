@@ -6,7 +6,7 @@ package recall
 import (
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
@@ -169,7 +169,7 @@ func supplementFollowupAndBridgeRawHits(memory *store.Store, scope, query string
 			}
 			ol := strings.TrimSpace(c.Data.OLabel)
 			olLow := strings.ToLower(ol)
-			if memcore.StringShannonBits(ol) >= 6.0 && memcore.CountTokens(ol) <= memcore.TokenTier4 && !seenObj[olLow] && !strings.Contains(qLower, olLow) {
+			if delivery.StringShannonBits(ol) >= 6.0 && delivery.CountTokens(ol) <= delivery.TokenTier4 && !seenObj[olLow] && !strings.Contains(qLower, olLow) {
 				seenObj[olLow] = true
 				bridgeObjects = append(bridgeObjects, ol)
 				if len(bridgeObjects) >= 5 {

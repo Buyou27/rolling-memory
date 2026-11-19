@@ -14,11 +14,11 @@ import (
 
 // TestLegacyGraphLivenessOnFreshDatabase pins how a brand-new database opened
 // through the production open path (store.Open -> db.Migrate) initializes.
-// Fresh databases bootstrap thin (schema_thin.sql): the vault tables plus the
-// shared bookkeeping tables only, so HasLegacyGraph() reports false and every
-// caller takes the thin-only fast path — recall serves from the local
-// plaintext vault, and no legacy assertion graph, FTS shadow table or legacy
-// extension table is created or maintained.
+// Fresh databases bootstrap the vault schema (schema_vault.sql): the canonical
+// corpus plus the shared bookkeeping tables only, so HasLegacyGraph() reports
+// false and every caller takes the canonical fast path — recall serves from the
+// local plaintext vault, and no legacy assertion graph, FTS shadow table or
+// legacy extension table is created or maintained.
 //
 // The determination exists so any regression that reintroduces the legacy
 // graph on fresh databases flips this test loudly and forces the recall
@@ -76,7 +76,7 @@ func TestLegacyGraphLivenessOnFreshDatabase(t *testing.T) {
 	// The released user database is pinned to this exact minimal bootstrap
 	// shape: the store open must not create anything beyond the bookkeeping
 	// tables. The vault/core tables appear lazily on first vault use (pinned by
-	// thinclient.TestNewVaultBootstrapTableSet). Extra tables here mean the
+	// localvault.TestNewVaultBootstrapTableSet). Extra tables here mean the
 	// "简洁" contract regressed.
 	want := []string{
 		"db_meta",

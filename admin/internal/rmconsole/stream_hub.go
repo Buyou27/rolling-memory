@@ -810,7 +810,6 @@ func buildWidgetSnapshot(ctx context.Context, home string, st StatusResponse) Wi
 		LastEventTS:       lastEvTS,
 		EventCount:        len(st.HookEvents),
 		LastRecallMS:      recallMS,
-		BootContext:       st.Switches.BootContext,
 		Ledger:            st.Switches.Ledger,
 		BgTask:            bgStr,
 		SampledAtUnixMS:   time.Now().UnixMilli(),

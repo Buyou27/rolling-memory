@@ -56,16 +56,6 @@ func (a *application) printSummary(label string, result map[string]any) {
 
 // ------------------------------------------------------------------- streams
 
-func (a *application) printReplay(result map[string]any) {
-	a.printf("replay: %s traces · %s written · %s skipped · anchor_failed=%s · llm_calls=%s\n",
-		pyStr(getOr(result, "processed", 0)), pyStr(getOr(result, "written", 0)),
-		pyStr(getOr(result, "skipped", 0)), pyStr(getOr(result, "anchor_failed", 0)),
-		pyStr(getOr(result, "llm_calls", 0)))
-	for _, warning := range limitSlice(anyList(result["warnings"]), 5) {
-		a.printf("  warning: %s\n", pyStr(warning))
-	}
-}
-
 func (a *application) printImport(result map[string]any) {
 	if _, canonicalJSONL := result["skipped_incomplete_tail"]; canonicalJSONL {
 		// The canonical JSONL pipeline writes content-addressed vault units, not
@@ -82,9 +72,6 @@ func (a *application) printImport(result map[string]any) {
 			pyStr(getOr(result, "messages", 0)), pyStr(getOr(result, "inserted", 0)),
 			pyStr(result["session"]), pyStr(getOr(result, "offset", 0)),
 			pyStr(getOr(result, "total_lines", 0)))
-	}
-	if replay, ok := result["replay"].(map[string]any); ok {
-		a.printReplay(replay)
 	}
 }
 

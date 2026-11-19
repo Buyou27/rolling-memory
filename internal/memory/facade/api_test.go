@@ -14,7 +14,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -111,7 +111,7 @@ func TestStatusAndDoctor(t *testing.T) {
 	for _, check := range checks {
 		names = append(names, check.(map[string]any)["name"].(string))
 	}
-	want := []string{"db_exists", "db_writable", "config", "json1", "corpus"}
+	want := []string{"db_exists", "db_writable", "config", "json1", "corpus", "snapshot_cluster", "snapshot_change_gap"}
 	if len(names) != len(want) {
 		t.Fatalf("checks = %#v", names)
 	}
@@ -228,16 +228,16 @@ func TestLocalImportIngestsCanonicalUnitsIntoVaultRecall(t *testing.T) {
 // TestLocalModeNeverUsesCloudTransport locks the no-egress invariant: stored
 // credentials (BRAIN_KEY) must not override `mode=local` when no explicit
 // BRAIN_URL is set. Explicit BRAIN_URL precedence is covered by
-// TestThinClientBrainURLEnvPrecedence.
+// TestLocalVaultBrainURLEnvPrecedence.
 func TestLocalModeNeverUsesCloudTransport(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	t.Setenv("ROLLING_MEMORY_BRAIN_KEY", "mem2.test.local-only")
 	memory := newMemory(t)
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
-	if _, ok := tc.Transport.(*thinclient.LocalVaultTransport); !ok {
+	if _, ok := tc.Transport.(*localvault.LocalVaultTransport); !ok {
 		t.Fatalf("local mode must use LocalVaultTransport, got %T", tc.Transport)
 	}
 }

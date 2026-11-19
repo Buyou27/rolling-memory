@@ -767,12 +767,14 @@ func BuildParser() *Parser {
 		flagOption([]string{"--json"}, "json", false, ""),
 		stringOption([]string{"--job"}, "job", nil,
 			"evaluation job id (default for ingest/run/grade/status: latest job of the suite/store)"),
-		choiceOption([]string{"--suite"}, "suite", []string{"locomo", "atm"}, "locomo",
-			"benchmark suite (locomo | atm)"),
-		choiceOption([]string{"--tier"}, "tier", []string{"1540", "adversarial-446", "hard", "1013"}, "1540",
-			"question tier (LoCoMo: 1540 = official cat1-4 set, adversarial-446 = official cat5 adversarial set; ATM-Bench: hard/1013; the retired LoCoMo convenience tiers 100/200 are no longer offered)"),
+		choiceOption([]string{"--suite"}, "suite", []string{"locomo", "atm", "atm-probes"}, "locomo",
+			"benchmark suite (locomo | atm | atm-probes)"),
+		choiceOption([]string{"--tier"}, "tier", []string{"1540", "adversarial-446", "hard", "1013", "absence", "conflict"}, "1540",
+			"question tier (LoCoMo: 1540 = official cat1-4 set, adversarial-446 = official cat5 adversarial set; ATM-Bench: hard/1013; atm-probes: absence/conflict; the retired LoCoMo convenience tiers 100/200 are no longer offered)"),
 		stringOption([]string{"--eval-data"}, "eval_data", nil,
 			"evaluation data directory (default: evaldata next to the binary)"),
+		stringOption([]string{"--probes"}, "probes", nil,
+			"adversarial probe directory (MANIFEST.json + absence/conflict JSONL; used with --suite atm-probes)"),
 		stringOption([]string{"--fetch"}, "fetch", nil,
 			"download upstream benchmark data before running (atm = ATM-Bench from Hugging Face, ~35 MB, rebuilt locally into the pinned form; locomo = LoCoMo10 annotations from the upstream repository, ~2.8 MB, rebuilt into the official cat1-4 question set)"),
 		flagOption([]string{"--fetch-only"}, "fetch_only", false,
@@ -807,7 +809,7 @@ func BuildParser() *Parser {
 		intOption([]string{"--progress-every"}, "progress_every", 20, "progress line interval"),
 		flagOption([]string{"--rebuild"}, "rebuild", false, "reset the isolated evaluation scope (purge every remembered unit), then re-ingest the corpus"),
 		flagOption([]string{"--reuse-prepare"}, "reuse_prepare", false, "reuse an identical isolated corpus only after exact manifest-set verification"),
-		flagOption([]string{"--verify-prepare"}, "verify_prepare", false, "verify exact manifest/corpus/remote-unit equality without ingesting or scoring"),
+		flagOption([]string{"--verify-prepare"}, "verify_prepare", false, "verify exact manifest/corpus-unit equality without ingesting or scoring"),
 		choiceOption([]string{"--pulse-tokenizer"}, "pulse_tokenizer", []string{"product", "standard", "trigram"}, "product",
 			"evaluation tokenizer arm: product = default max-capability product tokenizer (128k BPE substring pieces + companion-word expansion + unit/date beacons; default) | standard = SDK native surface+subword (diagnostic) | trigram = trigram-window segmenter (diagnostic)"),
 		choiceOption([]string{"--pulse-mode"}, "pulse_mode", []string{"local_plain"}, "local_plain",
@@ -841,7 +843,6 @@ func BuildParser() *Parser {
 			stringOption([]string{"--session"}, "session", nil, ""),
 			choiceOption([]string{"--audience"}, "audience",
 				[]string{"shared", "public"}, "shared", "本地金库为单人本地，仅支持 shared/public；受限受众在写入前拒绝"),
-			flagOption([]string{"--replay"}, "replay", false, ""),
 		),
 		Positionals: []*positional{{Name: "path", Required: true}},
 	}
@@ -913,6 +914,29 @@ func BuildParser() *Parser {
 				"streamable HTTP endpoint path (default /mcp)")),
 	}
 
+	buildCmd := &command{
+		Name: "build", Path: []string{"build"},
+		Help:    "build the local retrieval snapshot (.zcsr) for the current vault",
+		Options: commonOptions(),
+	}
+
+	ingestdCmd := &command{
+		Name: "ingestd", Path: []string{"ingestd"},
+		Help:    "internal: background ingest worker (scan, heal, snapshot supervisor)",
+		Options: commonOptions(),
+	}
+
+	scanCmd := &command{
+		Name: "scan", Path: []string{"scan"},
+		Help:    "control the background scan worker (pause, resume, status)",
+		Options: commonOptions(), SubDest: "scan_action", DefaultSub: "status",
+	}
+	scanCmd.Subcommands = []*command{
+		{Name: "pause", Path: []string{"scan", "pause"}, Options: commonOptions()},
+		{Name: "resume", Path: []string{"scan", "resume"}, Options: commonOptions()},
+		{Name: "status", Path: []string{"scan", "status"}, Options: commonOptions()},
+	}
+
 	hookCmd := &command{
 		Name: "hook", Path: []string{"hook"}, Help: "run a harness hook (fail-open)",
 		Options: []*Option{
@@ -921,7 +945,7 @@ func BuildParser() *Parser {
 			stringOption([]string{"--config"}, "config", nil, ""),
 		},
 		Positionals: []*positional{{
-			Name: "event", Choices: []string{"start", "recall", "close"}, Required: true,
+			Name: "event", Choices: []string{"recall"}, Required: true,
 		}},
 	}
 
@@ -1126,7 +1150,7 @@ func BuildParser() *Parser {
 
 	root.Subcommands = []*command{
 		initCmd, modeCmd, configCmd, recallCmd, recentCmd,
-		importCmd, syncCmd, backgroundCmd, mcpCmd, hookCmd,
+		importCmd, syncCmd, backgroundCmd, mcpCmd, buildCmd, ingestdCmd, scanCmd, hookCmd,
 		statusCmd, doctorCmd, checkCmd, installCmd, evalCmd,
 		ejectCmd, efficacyCmd, waveCmd, panelCmd, updateCmd,
 		maintainCmd, daemonCmd, engineCmd,

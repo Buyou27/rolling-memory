@@ -160,9 +160,9 @@ func TestROIFactsVerifiedIdentityHTTP(t *testing.T) {
 	}
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, occurred_at INTEGER);
+		CREATE TABLE rm_units (doc_id TEXT PRIMARY KEY, occurred_at INTEGER);
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
-		INSERT INTO thin_vault_docs VALUES ('doc_root_1', 1793350001);
+		INSERT INTO rm_units VALUES ('doc_root_1', 1793350001);
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -203,13 +203,13 @@ func TestROIFactsRecallWindowsAndVault(t *testing.T) {
 	}
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, occurred_at INTEGER, raw_text TEXT);
+		CREATE TABLE rm_units (doc_id TEXT PRIMARY KEY, occurred_at INTEGER, raw_text TEXT);
 		CREATE TABLE rm_noetic (noetic_id TEXT PRIMARY KEY, status TEXT, cited_unit_ids_json TEXT);
 		CREATE TABLE injection_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER);
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
-		INSERT INTO thin_vault_docs VALUES ('doc_root_1', 1793350001, 'real text');
-		INSERT INTO thin_vault_docs VALUES ('doc_ref_1', 1793350002, '@ref:zcode:sess:msg');
-		INSERT INTO thin_vault_docs VALUES ('doc_ref_2', 1793350003, '@ref:zcode:sess:msg2');
+		INSERT INTO rm_units VALUES ('doc_root_1', 1793350001, 'real text');
+		INSERT INTO rm_units VALUES ('doc_ref_1', 1793350002, '@ref:zcode:sess:msg');
+		INSERT INTO rm_units VALUES ('doc_ref_2', 1793350003, '@ref:zcode:sess:msg2');
 		INSERT INTO rm_noetic VALUES ('no_1', 'active', '["unit:1"]');
 		INSERT INTO rm_noetic VALUES ('no_2', 'active', '[]');
 		INSERT INTO rm_noetic VALUES ('no_3', 'retracted', '["unit:2"]');
@@ -252,7 +252,7 @@ func TestROIFactsRecallWindowsAndVault(t *testing.T) {
 	if windows["24h"].Total != 1 || windows["7d"].Total != 2 || windows["30d"].Total != 2 {
 		t.Fatalf("rolling windows: %+v", windows)
 	}
-	if got.Vault == nil || got.Vault.SchemaEra != "thin_vault" || got.Vault.EpisodicDocs != 3 || got.Vault.EpisodicPointers != 2 || got.Vault.EpisodicText != 1 || got.Vault.NoeticUnits != 2 || got.Vault.NoeticWithCitations != 1 || got.Vault.InjectionLedgerRows != 1 {
+	if got.Vault == nil || got.Vault.SchemaEra != "canonical" || got.Vault.EpisodicDocs != 3 || got.Vault.EpisodicPointers != 2 || got.Vault.EpisodicText != 1 || got.Vault.NoeticUnits != 2 || got.Vault.NoeticWithCitations != 1 || got.Vault.InjectionLedgerRows != 1 {
 		t.Fatalf("vault facts: %+v", got.Vault)
 	}
 	if len(got.RecentEvents) != 3 || got.RecentEvents[0].Action != "recall" || got.RecentEvents[0].TextBytes == nil || *got.RecentEvents[0].TextBytes != 120 {
@@ -272,7 +272,7 @@ func TestROIEngineeringMetricsReuseAndLocusMatrix(t *testing.T) {
 	nowUnix := time.Now().Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -283,8 +283,8 @@ func TestROIEngineeringMetricsReuseAndLocusMatrix(t *testing.T) {
 			assistant_id TEXT, incarnation_id TEXT
 		);
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
-		INSERT INTO thin_vault_docs VALUES ('ep_hot_1', 'episodic', ?, '@ref:zcode:s1:m1', '[]', 'C6:L3:B001#01', '', '[]', 'Rolling-Memory');
-		INSERT INTO thin_vault_docs VALUES ('ep_hot_2', 'episodic', ?, 'inline sentence one. inline sentence two.', '["inline sentence one.","inline sentence two."]', 'C6:L3:B002#01', '', '[0]', 'workspace-b');
+		INSERT INTO rm_units VALUES ('ep_hot_1', 'episodic', ?, '@ref:zcode:s1:m1', '[]', 'C6:L3:B001#01', '', '[]', 'Rolling-Memory');
+		INSERT INTO rm_units VALUES ('ep_hot_2', 'episodic', ?, 'inline sentence one. inline sentence two.', '["inline sentence one.","inline sentence two."]', 'C6:L3:B002#01', '', '[0]', 'workspace-b');
 		INSERT INTO rm_noetic VALUES ('nt_1', ?, 'active', 'query alpha', 'ans alpha', '["ep_hot_1","ep_hot_2"]', '["distilled alpha"]', 'C6:L3:B001#05', '', 'zcode', 'inc1');
 		INSERT INTO rm_noetic VALUES ('nt_2', ?, 'active', 'query beta', 'ans beta', '["ep_hot_1"]', '["distilled beta"]', 'C6:L3:B001#06', '', 'zcode', 'inc1');
 	`, nowUnix-60, nowUnix-120, nowUnix-30, nowUnix-10); err != nil {
@@ -319,7 +319,7 @@ func TestROIAdoptionIntersectionAudit(t *testing.T) {
 	nowUnix := time.Now().Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -334,7 +334,7 @@ func TestROIAdoptionIntersectionAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`
-		INSERT INTO thin_vault_docs VALUES
+		INSERT INTO rm_units VALUES
 			('ep_src_1', 'episodic', ?, 'Fix located in admin/internal/rmconsole/roi_facts.go and ComputeDBFingerprint.', '[]', 'C6:L3:B001#01', '', '[]', 'Rolling-Memory'),
 			('ep_src_2', 'episodic', ?, 'Base zero-shot score is 0.362 on ModernBERT-large.', '[]', 'C6:L3:B002#01', '', '[]', 'Rolling-Memory'),
 				('ep_follow_tool', 'episodic', ?, '[tool] {"file_path":"/workspace/Rolling-Memory/admin/internal/rmconsole/roi_facts.go"}', '[]', 'C6:L3:B001#06', '', '[]', 'Rolling-Memory'),
@@ -457,7 +457,7 @@ func TestROIAdoptionMultiHarnessJSONL(t *testing.T) {
 	}
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -472,7 +472,7 @@ func TestROIAdoptionMultiHarnessJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`
-		INSERT INTO thin_vault_docs VALUES
+		INSERT INTO rm_units VALUES
 			('ep_cc_1', 'episodic', 1794445200, ?, '[]', 'C6:L1:LOCAL#1', '', '[]', 'Rolling-Memory'),
 			('ep_cx_1', 'episodic', 1794445260, ?, '[]', 'C6:L1:LOCAL#2', '', '[]', 'Rolling-Memory'),
 			('ep_wb_1', 'episodic', 1794445320, ?, '[]', 'C6:L1:LOCAL#3', '', '[]', 'Rolling-Memory');
@@ -529,7 +529,7 @@ func TestROIFactsDeduplicatesTwinRecallLedgerRows(t *testing.T) {
 	}
 	if _, err := memDB.Exec(`
 			CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-			CREATE TABLE thin_vault_docs (doc_id TEXT PRIMARY KEY, occurred_at INTEGER, raw_text TEXT);
+			CREATE TABLE rm_units (doc_id TEXT PRIMARY KEY, occurred_at INTEGER, raw_text TEXT);
 			CREATE TABLE rm_noetic (noetic_id TEXT PRIMARY KEY, status TEXT, cited_unit_ids_json TEXT);
 			INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
 		`); err != nil {
@@ -580,7 +580,7 @@ func TestROIFactsWindowsUseIngestTime(t *testing.T) {
 	nowUnix := now.Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -591,7 +591,7 @@ func TestROIFactsWindowsUseIngestTime(t *testing.T) {
 			assistant_id TEXT, incarnation_id TEXT
 		);
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
-		INSERT INTO thin_vault_docs VALUES
+		INSERT INTO rm_units VALUES
 			('ep_old_content_fresh_ingest', 'episodic', ?, ?, 'older corpus text', '[]', 'C6:L1:LOCAL#01', '', '[]', 'Rolling-Memory'),
 			('ep_fresh_content_old_ingest', 'episodic', ?, ?, 'fresh corpus text', '[]', 'C6:L1:LOCAL#02', '', '[]', 'Rolling-Memory'),
 			('ep_old_content_fresh_ingest_2', 'episodic', ?, ?, 'older corpus text two', '[]', 'C6:L1:LOCAL#03', '', '[]', 'Rolling-Memory');
@@ -666,7 +666,7 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 	nowUnix := now.Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -682,9 +682,9 @@ func TestROIFactsLayerAttribution(t *testing.T) {
 			address_uri TEXT DEFAULT '', coord64 INTEGER DEFAULT 0, kept_indices_json TEXT DEFAULT '[]', slots_json TEXT DEFAULT '[]'
 		);
 		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
-		INSERT INTO thin_vault_docs VALUES ('ep_1', 'episodic', ?, ?, '@ref:zcode:sess:msg', '[]', 'C6:L1:LOCAL#01', '', '[]', 'Rolling-Memory');
-		INSERT INTO thin_vault_docs VALUES ('ep_2', 'episodic', ?, ?, 'inline text', '[]', 'C6:L1:LOCAL#02', '', '[]', 'Rolling-Memory');
-		INSERT INTO thin_vault_docs VALUES ('U10-JSON-DOC-1', 'background', ?, ?, 'demo background doc', '[]', 'C7:L1:LOCAL#01', '', '[]', 'Rolling-Memory');
+		INSERT INTO rm_units VALUES ('ep_1', 'episodic', ?, ?, '@ref:zcode:sess:msg', '[]', 'C6:L1:LOCAL#01', '', '[]', 'Rolling-Memory');
+		INSERT INTO rm_units VALUES ('ep_2', 'episodic', ?, ?, 'inline text', '[]', 'C6:L1:LOCAL#02', '', '[]', 'Rolling-Memory');
+		INSERT INTO rm_units VALUES ('U10-JSON-DOC-1', 'background', ?, ?, 'demo background doc', '[]', 'C7:L1:LOCAL#01', '', '[]', 'Rolling-Memory');
 		INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, occurred_at, inserted_at) VALUES
 			('bg:aa#1', '/repo/a.md', 'a.md', ?, ?), ('bg:aa#2', '/repo/a.md', 'a.md', ?, ?);
 		INSERT INTO rm_noetic VALUES ('nt_1', ?, ?, 'active', 'q', 'a', '["ep_1"]', '[]', 'C6:L1:LOCAL#04', '', 'zcode', 'inc1');
@@ -741,7 +741,7 @@ func TestROIFactsTopCitedUnitsIncludesReusedNoeticL3(t *testing.T) {
 	nowUnix := time.Now().Unix()
 	if _, err := memDB.Exec(`
 		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
-		CREATE TABLE thin_vault_docs (
+		CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY, layer TEXT, occurred_at INTEGER, inserted_at INTEGER, raw_text TEXT,
 			sentences_json TEXT, address_uri TEXT, waveform_bar TEXT, kept_indices_json TEXT, locus TEXT
 		);
@@ -755,7 +755,7 @@ func TestROIFactsTopCitedUnitsIncludesReusedNoeticL3(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memDB.Exec(`INSERT INTO thin_vault_docs VALUES ('ep_leaf_1', 'episodic', ?, ?, 'leaf evidence text', '["leaf evidence text"]', 'C6:L1:LOCAL#01', '', '[0]', 'Rolling-Memory')`, nowUnix-300, nowUnix-300); err != nil {
+	if _, err := memDB.Exec(`INSERT INTO rm_units VALUES ('ep_leaf_1', 'episodic', ?, ?, 'leaf evidence text', '["leaf evidence text"]', 'C6:L1:LOCAL#01', '', '[0]', 'Rolling-Memory')`, nowUnix-300, nowUnix-300); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memDB.Exec(`INSERT INTO rm_noetic VALUES ('nt_gold_1', ?, ?, 'active', 'first recall cue', 'crystallized answer one', '["ep_leaf_1"]', '["leaf evidence text"]', 'C6:L1:LOCAL#nt1', '', 'zcode', 'inc1')`, nowUnix-60, nowUnix-180); err != nil {

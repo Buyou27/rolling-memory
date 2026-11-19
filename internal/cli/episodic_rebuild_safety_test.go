@@ -46,7 +46,7 @@ func TestEpisodicRebuildRefusesUnverifiedSourcesWithoutDeletion(t *testing.T) {
 		{"ep_unscanned", "historical content not present in the scanned sources"},
 		{"ep_missing", "@ref:jsonl:/missing/transcript.jsonl:0#0"},
 	} {
-		if _, err := db.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, sentences_json) VALUES (?, 'episodic', 123, ?, '["original"]')`, row.id, row.text); err != nil {
+		if _, err := db.Exec(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, sentences_json) VALUES (?, 'episodic', 123, ?, '["original"]')`, row.id, row.text); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := db.Exec(`INSERT INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES ('original-turn', ?, 123)`, row.id); err != nil {
@@ -61,7 +61,7 @@ func TestEpisodicRebuildRefusesUnverifiedSourcesWithoutDeletion(t *testing.T) {
 		} {
 			var text, sentences string
 			var occurred int64
-			if err := db.QueryRow(`SELECT raw_text, sentences_json, occurred_at FROM thin_vault_docs WHERE doc_id = ?`, row.id).Scan(&text, &sentences, &occurred); err != nil || text != row.text || sentences != `["original"]` || occurred != 123 {
+			if err := db.QueryRow(`SELECT raw_text, sentences_json, occurred_at FROM rm_units WHERE doc_id = ?`, row.id).Scan(&text, &sentences, &occurred); err != nil || text != row.text || sentences != `["original"]` || occurred != 123 {
 				t.Fatalf("document %s changed: text=%q sentences=%q occurred=%d err=%v", row.id, text, sentences, occurred, err)
 			}
 			var count int

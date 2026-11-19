@@ -19,7 +19,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
-	"github.com/rocareer/rolling-memory/internal/hooks"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	_ "modernc.org/sqlite"
 )
@@ -57,7 +56,7 @@ func TestEpisodicSourceCompletionIdentityAndUnknownTime(t *testing.T) {
 	count := func() int {
 		t.Helper()
 		var n int
-		if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&n); err != nil {
+		if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
@@ -87,7 +86,7 @@ func TestEpisodicSourceCompletionIdentityAndUnknownTime(t *testing.T) {
 		var assistant, session, locus string
 		var occurred int64
 		id := episodicunit.DocID("mem:completion", text)
-		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus, occurred_at FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&assistant, &session, &locus, &occurred); err != nil {
+		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus, occurred_at FROM rm_units WHERE doc_id = ?`, id).Scan(&assistant, &session, &locus, &occurred); err != nil {
 			t.Fatal(err)
 		}
 		if assistant != "claude-code" || session != "session" || locus != "ActualRepo" || occurred != 0 {
@@ -134,20 +133,20 @@ func TestEpisodicSourceIdentityRepairAndIsolation(t *testing.T) {
 	}
 	id := episodicunit.DocID("mem:identity", "[user] shared speech")
 	var pointer, assistant, session, locus string
-	if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&pointer, &assistant, &session, &locus); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, id).Scan(&pointer, &assistant, &session, &locus); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(pointer, first) || assistant != "claude-code" || session != "first" || locus != "" {
 		t.Fatalf("cross-source identity: pointer=%q identity=(%q,%q,%q)", pointer, assistant, session, locus)
 	}
-	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_docs SET assistant_id='default', incarnation_id='', locus='wrong', occurred_at=42 WHERE doc_id=?`, id); err != nil {
+	if _, err := memory.Store.DB().Exec(`UPDATE rm_units SET assistant_id='default', incarnation_id='', locus='wrong', occurred_at=42 WHERE doc_id=?`, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err != nil {
 		t.Fatal(err)
 	}
 	var occurred int64
-	if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus, occurred_at FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&assistant, &session, &locus, &occurred); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus, occurred_at FROM rm_units WHERE doc_id = ?`, id).Scan(&assistant, &session, &locus, &occurred); err != nil {
 		t.Fatal(err)
 	}
 	if assistant != "claude-code" || session != "first" || locus != "wrong" || occurred != 0 {
@@ -165,7 +164,7 @@ func TestEpisodicSourceIdentityRepairAndIsolation(t *testing.T) {
 	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT locus FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&locus); err != nil || locus != "" {
+	if err := memory.Store.DB().QueryRow(`SELECT locus FROM rm_units WHERE doc_id = ?`, id).Scan(&locus); err != nil || locus != "" {
 		t.Fatalf("known non-repository locus=%q err=%v", locus, err)
 	}
 	var lineage int
@@ -224,7 +223,7 @@ func TestEpisodicSourceConcurrentHostsKeepIdentity(t *testing.T) {
 		{"[user] work unique", "workbuddy", "work-session", "WorkRepo"},
 	} {
 		var host, session, locus string
-		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, episodicunit.DocID("mem:concurrent", want.text)).Scan(&host, &session, &locus); err != nil {
+		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, episodicunit.DocID("mem:concurrent", want.text)).Scan(&host, &session, &locus); err != nil {
 			t.Fatal(err)
 		}
 		if host != want.host || session != want.session || locus != want.locus {
@@ -324,7 +323,7 @@ func TestEpisodicReconcileHostScopeAndDeletion(t *testing.T) {
 	}
 	defer memory.Close()
 	deleted := episodicunit.DocID("mem:scope", "[user] work scope")
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,14 +333,14 @@ func TestEpisodicReconcileHostScopeAndDeletion(t *testing.T) {
 		t.Fatalf("single host report=%+v err=%v", rep, err)
 	}
 	var n int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, episodicunit.DocID("mem:scope", "[assistant] work scope answer")).Scan(&n); err != nil || n != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, episodicunit.DocID("mem:scope", "[assistant] work scope answer")).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("single-host imported another host: count=%d err=%v", n, err)
 	}
 	rep, err = executeReconcileSync(context.Background(), memory, "episodic", "all", 100)
 	if err != nil || rep.EpisodicImportedFromHar != 1 {
 		t.Fatalf("all-host report=%+v err=%v", rep, err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, deleted).Scan(&n); err != nil || n != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, deleted).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("deleted unit resurrected: count=%d err=%v", n, err)
 	}
 	rep, err = executeReconcileSync(context.Background(), memory, "episodic", "all", 100)
@@ -397,14 +396,14 @@ func TestEpisodicDSHCompressedDiscoveryAndHydration(t *testing.T) {
 	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err != nil {
 		t.Fatal(err)
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{"[user] DSH question", "[assistant] DSH answer"} {
 		id := episodicunit.DocID("mem:dsh", text)
 		var pointer, host, session, locus string
-		if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&pointer, &host, &session, &locus); err != nil {
+		if err := memory.Store.DB().QueryRow(`SELECT raw_text, assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, id).Scan(&pointer, &host, &session, &locus); err != nil {
 			t.Fatal(err)
 		}
 		resolved, err := tc.Vault.LoadVerifiedEpisodicPointer(id, pointer)
@@ -451,13 +450,13 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	if _, err := memory.ThinClient(); err != nil {
+	if _, err := memory.LocalVault(); err != nil {
 		t.Fatal(err)
 	}
 	id := episodicunit.DocID("mem:legacy", "[user] legacy shared")
 	missing := filepath.Join(dir, "missing.jsonl")
 	pointer := "@ref:jsonl:" + missing + ":0#0"
-	if _, err := memory.Store.DB().Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, sentences_json) VALUES (?, 'episodic', 0, ?, '[]')`, id, pointer); err != nil {
+	if _, err := memory.Store.DB().Exec(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, sentences_json) VALUES (?, 'episodic', 0, ?, '[]')`, id, pointer); err != nil {
 		t.Fatal(err)
 	}
 	for page := 0; page < 3; page++ {
@@ -468,7 +467,7 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 	}
 	var n int
 	sameSourceID := episodicunit.DocID("mem:legacy", "[user] same source healthy")
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, sameSourceID).Scan(&n); err != nil || n != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, sameSourceID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("healthy item in failed source starved: count=%d err=%v", n, err)
 	}
 	var itemErrors int
@@ -480,7 +479,7 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 		t.Fatalf("source error reported aligned: status=%+v err=%v", status.Layers["episodic"], err)
 	}
 	lastID := episodicunit.DocID("mem:legacy", fmt.Sprintf("[assistant] healthy answer %d", reconcileDefaultLimit+4))
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, lastID).Scan(&n); err != nil || n != 1 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, lastID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("healthy source starved: count=%d err=%v", n, err)
 	}
 	if err := os.WriteFile(missing, []byte(body), 0o600); err != nil {
@@ -491,7 +490,7 @@ func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 			t.Fatalf("recovered scan page %d: %v", page, err)
 		}
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +555,7 @@ func TestEpisodicSourceScanWriteAcrossScales(t *testing.T) {
 				}
 				pages++
 				var n int
-				if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, episodicunit.DocID("mem:scale", "[assistant] later answer")).Scan(&n); err != nil {
+				if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, episodicunit.DocID("mem:scale", "[assistant] later answer")).Scan(&n); err != nil {
 					t.Fatal(err)
 				} else if n == 1 {
 					break
@@ -566,16 +565,16 @@ func TestEpisodicSourceScanWriteAcrossScales(t *testing.T) {
 				}
 			}
 			var docs int
-			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&docs); err != nil || docs != 2*count+2 {
+			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&docs); err != nil || docs != 2*count+2 {
 				t.Fatalf("docs=%d err=%v", docs, err)
 			}
-			tc, err := memory.ThinClient()
+			tc, err := memory.LocalVault()
 			if err != nil {
 				t.Fatal(err)
 			}
 			var pointer string
 			id := episodicunit.DocID("mem:scale", "[assistant] later answer")
-			if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&pointer); err != nil {
+			if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM rm_units WHERE doc_id = ?`, id).Scan(&pointer); err != nil {
 				t.Fatal(err)
 			}
 			if text, err := tc.Vault.LoadVerifiedEpisodicPointer(id, pointer); err != nil || text != "[assistant] later answer" {
@@ -687,7 +686,7 @@ func TestEpisodicReconcileCancellationDoesNotImport(t *testing.T) {
 		t.Fatalf("reconcile cancellation err=%v", err)
 	}
 	var n int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&n); err != nil || n != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("cancelled reconcile wrote %d documents: %v", n, err)
 	}
 }
@@ -701,7 +700,7 @@ func TestEpisodicStatusRejectsMalformedCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	if _, err := memory.ThinClient(); err != nil {
+	if _, err := memory.LocalVault(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.Store.DB().Exec(`INSERT INTO rm_meta(k, v) VALUES (?, ?)`, "episodic_source_scan_cursor:mem:checkpoint", []byte("invalid")); err != nil {
@@ -797,92 +796,6 @@ func TestEpisodicZCodeStreamKeepsSnapshotDuringWrite(t *testing.T) {
 	}
 }
 
-func TestEpisodicHookThenScanKeepsIdentityTimestampsAndDeletion(t *testing.T) {
-	home := t.TempDir()
-	dbPath := filepath.Join(home, "memory.db")
-	for key, value := range map[string]string{
-		"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "config"),
-		"XDG_DATA_HOME": filepath.Join(home, "data"), "XDG_STATE_HOME": filepath.Join(home, "state"),
-		"DSH_HOME": filepath.Join(home, ".dsh"), "ROLLING_MEMORY_CONFIG": filepath.Join(home, "config.toml"),
-		"ROLLING_MEMORY_DB": dbPath, "ROLLING_MEMORY_LOG": filepath.Join(home, "hook.log"),
-		"ROLLING_MEMORY_SCOPE": "mem:hook-scan", "ROLLING_MEMORY_MODE": "local",
-		"ROLLING_MEMORY_BRAIN_URL": "", "ROLLING_MEMORY_BRAIN_KEY": "", "ROLLING_MEMORY_SYNC_BASE_URL": "",
-		"CLAUDE_PROJECT_DIR": "", "ZCODE_PROJECT_DIR": "", "ROLLING_MEMORY_HARNESS": "",
-	} {
-		t.Setenv(key, value)
-	}
-	repo := filepath.Join(home, "HookRepo")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".claude", "projects", "demo", "session.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := fmt.Sprintf(`{"cwd":%q,"type":"user","timestamp":"2020-01-01T00:00:00Z","message":{"role":"user","content":"hook question"}}`+"\n"+
-		`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":"hook answer"}}`+"\n", repo)
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := hooks.RunHook("close", map[string]any{"session_id": "session", "transcript_path": path}, hooks.Options{}); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.Load(config.LoadOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	memory, err := facade.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer memory.Close()
-	assert := func(wantIdentity bool) {
-		t.Helper()
-		var count int
-		if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err != nil || count != 2 {
-			t.Fatalf("documents=%d err=%v", count, err)
-		}
-		for _, want := range []struct {
-			text string
-			ts   int64
-		}{{"[user] hook question", 1577836800}, {"[assistant] hook answer", 1767225600}} {
-			var pointer, host, session, locus string
-			var ts int64
-			id := episodicunit.DocID("mem:hook-scan", want.text)
-			if err := memory.Store.DB().QueryRow(`SELECT raw_text, COALESCE(assistant_id,''), COALESCE(incarnation_id,''), COALESCE(locus,''), occurred_at FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&pointer, &host, &session, &locus, &ts); err != nil {
-				t.Fatal(err)
-			}
-			if !strings.HasPrefix(pointer, "@ref:jsonl:") || ts != want.ts {
-				t.Fatalf("%q pointer=%q time=%d want=%d", want.text, pointer, ts, want.ts)
-			}
-			if wantIdentity && (host != "claude-code" || session != "session" || locus != "HookRepo") {
-				t.Fatalf("%q identity=(%q,%q,%q)", want.text, host, session, locus)
-			}
-		}
-	}
-	assert(false)
-	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err != nil {
-		t.Fatal(err)
-	}
-	assert(true)
-	tc, err := memory.ThinClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := episodicunit.DocID("mem:hook-scan", "[user] hook question")
-	tc.Vault.RecordDeletedUnits("episodic", id)
-	if _, err := memory.Store.DB().Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id); err != nil {
-		t.Fatal(err)
-	}
-	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err != nil {
-		t.Fatal(err)
-	}
-	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("deleted unit resurrected: count=%d err=%v", count, err)
-	}
-}
-
 func TestEpisodicSourceDeletionAfterSnapshotIsSkipped(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -897,7 +810,7 @@ func TestEpisodicSourceDeletionAfterSnapshotIsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -921,10 +834,10 @@ func TestEpisodicSourceDeletionAfterSnapshotIsSkipped(t *testing.T) {
 		t.Fatalf("deleted item treated as scan failure: cursor=%+v more=%v err=%v", cursor, more, err)
 	}
 	var deleted, remaining int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, turns[0].DocID).Scan(&deleted); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, turns[0].DocID).Scan(&deleted); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE doc_id = ?`, turns[1].DocID).Scan(&remaining); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, turns[1].DocID).Scan(&remaining); err != nil {
 		t.Fatal(err)
 	}
 	if deleted != 0 || remaining != 1 {
@@ -1039,7 +952,7 @@ func TestEpisodicSourceScanTickRestartFailureAndFairness(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err != nil || count != reconcileDefaultLimit {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&count); err != nil || count != reconcileDefaultLimit {
 		t.Fatalf("first page count=%d err=%v", count, err)
 	}
 	if err := memory.Close(); err != nil {
@@ -1057,7 +970,7 @@ func TestEpisodicSourceScanTickRestartFailureAndFairness(t *testing.T) {
 	if err := runEpisodicSourceScanTick(context.Background(), memory, home); err == nil {
 		t.Fatal("expected index failure")
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?`, failedID).Scan(&count); err != nil || count != 0 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id = ?`, failedID).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed write persisted document count=%d err=%v", count, err)
 	}
 	if _, err := memory.Store.DB().Exec(`DROP TRIGGER scan_test_failure`); err != nil {
@@ -1090,7 +1003,7 @@ func TestEpisodicSourceScanTickRestartFailureAndFairness(t *testing.T) {
 	}
 	for _, text := range []string{fmt.Sprintf("[user] entry %d", reconcileDefaultLimit), "[user] other session", "[user] new entry 2"} {
 		id := episodicunit.DocID(cfg.Scope, text)
-		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&count); err != nil || count != 1 {
+		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE doc_id = ?`, id).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("missing %q count=%d err=%v", text, count, err)
 		}
 	}
@@ -1130,7 +1043,7 @@ func TestEpisodicSourceScanIndependentScopesAndSources(t *testing.T) {
 			}
 		}
 		var count int
-		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err != nil || count != 105 {
+		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&count); err != nil || count != 105 {
 			t.Fatalf("scope %s: count=%d err=%v", scope, count, err)
 		}
 		_ = memory.Close()
@@ -1157,7 +1070,7 @@ func TestEpisodicSourceScanRetainsDuplicateLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 	var documents, lineage int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&documents); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&documents); err != nil {
 		t.Fatal(err)
 	}
 	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_episodic_lineage`).Scan(&lineage); err != nil {

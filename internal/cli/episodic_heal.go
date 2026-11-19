@@ -11,7 +11,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 const (
@@ -81,7 +81,7 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, lim
 	if memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
 		scope = strings.TrimSpace(memory.Config.Scope)
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -104,11 +104,12 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, lim
 	}
 	var rows []healRow
 	result, err := db.QueryContext(ctx, `
-		SELECT doc_id, raw_text, occurred_at
-		FROM thin_vault_docs
-		WHERE (layer = 'episodic' OR layer = '')
-		  AND doc_id > ?
-		ORDER BY doc_id
+		SELECT d.unit_id, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text), d.occurred_at
+		FROM rm_docs d
+		LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+		WHERE (d.layer = 'episodic' OR d.layer = '')
+		  AND d.unit_id > ?
+		ORDER BY d.unit_id
 		LIMIT ?`, cursor, limit)
 	if err != nil {
 		return 0, 0, err
@@ -156,8 +157,8 @@ func healDriftedEpisodicPointers(ctx context.Context, memory *facade.Memory, lim
 		if ctx.Err() != nil {
 			break
 		}
-		if status != thinclient.EpisodicContentVerified {
-			if status == thinclient.EpisodicContentRelocatable {
+		if status != localvault.EpisodicContentVerified {
+			if status == localvault.EpisodicContentRelocatable {
 				// 只做同源重锚：备用坐标必须落在与行内指针同一个源（jsonl = 同一文件、
 				// zcode = 同一会话）。跨源备用内容属于交付侧明确拒绝的「未归属替代」，
 				// 自动巡检不得软化该裁定——这类行保持来源缺口，留待人工处理。

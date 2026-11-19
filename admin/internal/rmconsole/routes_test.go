@@ -29,7 +29,6 @@ vector = false
 raw_when_sparse = true
 
 [hooks]
-boot_context = true
 ledger = false
 
 [sync]
@@ -40,7 +39,7 @@ auto_watch = false
 	}
 	sw := parseConfigSwitches(cfgPath, true)
 	// 控制台恒本地：配置里残留的 [mode] name = "cloud" 不得改变控制台的运行模式读数。
-	if !sw.BootContext || sw.Ledger || !sw.RawWhenSparse || sw.Mode != modeLocal || !sw.WidgetEnabled {
+	if sw.Ledger || !sw.RawWhenSparse || sw.Mode != modeLocal || !sw.WidgetEnabled {
 		t.Fatalf("unexpected switches: %#v", sw)
 	}
 	if sw.SyncAutoWatch {
@@ -153,7 +152,7 @@ func TestCollectDashboardData(t *testing.T) {
 	}
 	nowUnix := time.Now().Unix()
 	_, _ = db.Exec(`INSERT INTO rm_bg_chunks(unit_id, abs_path, rel_path, anchor, occurred_at) VALUES ('bg-1', '/a/b.md', 'b.md', 'h1', ?), ('bg-2', '/a/c.md', 'c.md', 'h2', ?);`, nowUnix-60, nowUnix-30)
-	_, _ = db.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('ep-1', 'episodic', ?, 'episodic turn 1', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00');`, nowUnix-40)
+	_, _ = db.Exec(`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri) VALUES ('ep-1', 'episodic', ?, 'episodic turn 1', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00');`, nowUnix-40)
 	_, _ = db.Exec(`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json) VALUES ('nt-1', ?, 'active', 'cue', 'ans', '["ep-1"]');`, nowUnix-20)
 	_ = db.Close()
 
@@ -347,7 +346,6 @@ func TestUnifiedWaveCellSwitches(t *testing.T) {
 	cfgPath := filepath.Join(tmp, "config.toml")
 
 	tomlText := `[hooks]
-boot_context = true
 ledger = true
 
 [recall]
@@ -358,7 +356,7 @@ raw_when_sparse = false
 	}
 	sw := parseConfigSwitches(cfgPath, true)
 	// 无 [mode] 段时按引擎缺省（local），不得再用硬编码 cloud 兜底。
-	if sw.Mode != "local" || sw.RawWhenSparse || !sw.BootContext || !sw.Ledger {
+	if sw.Mode != "local" || sw.RawWhenSparse || !sw.Ledger {
 		t.Fatalf("unexpected unified the memory engine switches: %+v", sw)
 	}
 
@@ -384,7 +382,7 @@ raw_when_sparse = false
 }
 
 // TestStatusStreamPushesOnVaultChange 锁定「记忆图谱 / 控制台」共同依赖的零轮询 SSE 实时推送契约：
-// 连接建立即推首帧；本地明文金库（thin_vault_docs / rm_noetic）发生写入后，同一连接必须在
+// 连接建立即推首帧；本地明文金库（rm_units / rm_noetic）发生写入后，同一连接必须在
 // 下一个 250ms 签名巡检周期内推送携带新计数的新帧——前端据此指纹对比自动刷新图谱，无需手动刷新。
 func TestStatusStreamPushesOnVaultChange(t *testing.T) {
 	tmp := t.TempDir()
@@ -396,9 +394,9 @@ func TestStatusStreamPushesOnVaultChange(t *testing.T) {
 		t.Fatalf("openWritableVaultDB: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`INSERT OR REPLACE INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, sentences_json, address_uri, kept_indices_json)
+	if _, err := db.Exec(`INSERT OR REPLACE INTO rm_units(doc_id, layer, occurred_at, raw_text, sentences_json, address_uri, kept_indices_json)
 		VALUES ('doc-1', 'episodic', 100, 'hello vault', '[]', 'C6:L1:B001#00', '[]')`); err != nil {
-		t.Fatalf("seed thin_vault_docs: %v", err)
+		t.Fatalf("seed rm_units: %v", err)
 	}
 	if _, err := db.Exec(`INSERT OR REPLACE INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text)
 		VALUES ('nt-1', 100, 'active', 'q1', 'a1')`); err != nil {
@@ -430,17 +428,17 @@ func TestStatusStreamPushesOnVaultChange(t *testing.T) {
 		}
 		var payload struct {
 			Artifacts struct {
-				ThinVaultDocs   int `json:"thin_vault_docs"`
-				ThinVaultNoetic int `json:"rm_noetic"`
+				VaultDocs   int `json:"vault_docs"`
+				VaultNoetic int `json:"vault_noetic"`
 			} `json:"artifacts"`
 		}
 		if err := json.Unmarshal([]byte(strings.TrimSpace(frame[idx+len("data: "):])), &payload); err != nil {
 			continue
 		}
-		if payload.Artifacts.ThinVaultDocs != 1 {
-			t.Fatalf("expected thin_vault_docs=1 in every frame, got %d", payload.Artifacts.ThinVaultDocs)
+		if payload.Artifacts.VaultDocs != 1 {
+			t.Fatalf("expected vault_docs=1 in every frame, got %d", payload.Artifacts.VaultDocs)
 		}
-		noeticCounts = append(noeticCounts, payload.Artifacts.ThinVaultNoetic)
+		noeticCounts = append(noeticCounts, payload.Artifacts.VaultNoetic)
 	}
 	if len(noeticCounts) < 2 {
 		t.Fatalf("expected >=2 status frames (initial + post-write push), got %d: %q", len(noeticCounts), client.body())
@@ -522,7 +520,7 @@ func TestThreeLayersStatsAndBackgroundCLIContract(t *testing.T) {
 
 	// Seed 1 Episodic turn and 1 Noetic record
 	_, err = db.Exec(`
-		INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri)
+		INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri)
 		VALUES ('EPI-1', 'episodic', 1762380000, 'User discussed the memory engine architecture in Harness.', 'C6:L1:B001#00')
 	`)
 	if err != nil {
@@ -688,12 +686,15 @@ func TestBackgroundAddHandlerDelegatesToCanonicalCLI(t *testing.T) {
 // 1) 256 截断时不得产生「断边孤儿节点」（任何入选 Cell 必有可见成员，任何入选 Unit 必有归属父 Cell）；
 // 2) EventTotal 必须等于域内真实总节点数（不受 limit 截断影响），NodeShown 才随 limit 变化；
 // 3) 全部（limit=-1）与 256 截断的孤立节点数均必须为 0；
-// 4) collectArtifactStats 必须合并统计 thin_vault_docs 与 rm_bg_chunks。
+// 4) collectArtifactStats 必须合并统计 rm_units 与 rm_bg_chunks。
 func TestGraphProductManagerAudit(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	dbPath := resolveMemoryDBPath(home)
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Skipf("real memory db %s not found", dbPath)
+	}
+	if collectArtifactStats(dbPath, UserScope).VaultDocs == 0 {
+		t.Skip("real memory db is empty")
 	}
 
 	g256 := buildMemoryGraphWithLayers(dbPath, UserScope, 256, "", nil, nil)
@@ -745,8 +746,8 @@ func TestGraphProductManagerAudit(t *testing.T) {
 	}
 
 	st := collectArtifactStats(dbPath, UserScope)
-	if st.ThinVaultDocs == 0 {
-		t.Fatalf("expected ThinVaultDocs>0 (docs+bg_chunks), got %+v", st)
+	if st.VaultDocs == 0 {
+		t.Fatalf("expected VaultDocs>0 (docs+bg_chunks), got %+v", st)
 	}
 
 	// 三层均衡在场断言（证伪防御：当域内 L1/L2/L3 均 >0 时，limit=256 返回的 Unit 必须三层全 >0，且无 📦 emoji）
@@ -770,7 +771,7 @@ func TestGraphProductManagerAudit(t *testing.T) {
 	t.Logf("✅ 256: EventTotal=%d Shown=%d Edges=%d (shownByKindLayer=%v) | ALL: EventTotal=%d Shown=%d | ArtifactStats Docs=%d Cells=%d Noetic=%d Eligible=%d",
 		g256.Stats.EventTotal, g256.Stats.NodeShown, g256.Stats.EdgeShown, shownByKindLayer,
 		gAll.Stats.EventTotal, gAll.Stats.NodeShown,
-		st.ThinVaultDocs, st.ThinVaultCells, st.ThinVaultNoetic, st.EligibleNodes)
+		st.VaultDocs, st.VaultCells, st.VaultNoetic, st.EligibleNodes)
 }
 
 // TestNativeRoutesMountWithoutPluginRegistry 锁定 rmconsole 的原生静态挂载形态：

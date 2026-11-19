@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // TestRecallDeliverySecurity exercises the real MCP dispatch and verifies that
@@ -33,7 +33,7 @@ func TestRecallDeliverySecurity(t *testing.T) {
 						lazy = NewLazyMemory()
 						lazy.memory = memory
 					}
-					client, err := memory.ThinClient()
+					client, err := memory.LocalVault()
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -47,7 +47,7 @@ func TestRecallDeliverySecurity(t *testing.T) {
 					}
 					text := "[user] quartz nebula evidence"
 					packet, _ := client.Vault.PackBlindPacket("ep_security", text, testNow)
-					if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_security", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+					if err := client.Vault.SaveLocalEpisodicPointerIndexed("ep_security", testNow, "@ref:jsonl:"+path+":0#0", "", text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 						t.Fatal(err)
 					}
 					if scenario == "unavailable" {
@@ -60,7 +60,6 @@ func TestRecallDeliverySecurity(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					thinclient.PurgeLegacyTables(memory.Store.DB())
 					request := toolCallMessage(1, "recall", map[string]any{"cue": "quartz nebula evidence", "mode": mode, "reader": "deliverable"})
 					var response any
 					if live {
@@ -101,15 +100,14 @@ func TestRecallDeliverySecurity(t *testing.T) {
 func TestRecallDeliveryReportsUpstreamTextTruncation(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := "quartz nebula evidence " + strings.Repeat("filler ", 1000)
-	if err := client.Vault.SaveLocalPlaintext("ep_long", testNow, text, nil, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("ep_long", testNow, text, nil, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	responses := runSession(t, memory, toolCallMessage(1, "recall", map[string]any{"cue": "quartz nebula evidence", "mode": "full", "caps": map[string]any{"chars": 1000}}))
 	if len(responses) != 1 || isError(t, responses[0]) {
 		t.Fatalf("unexpected response: %#v", responses)

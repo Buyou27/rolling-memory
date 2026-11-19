@@ -62,7 +62,7 @@ func TestBuildMemoryGraphWaveCellAndLayers(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	stmts := []string{
-		`CREATE TABLE thin_vault_docs (
+		`CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY,
 			layer TEXT NOT NULL DEFAULT 'episodic',
 			occurred_at INTEGER NOT NULL DEFAULT 0,
@@ -82,8 +82,8 @@ func TestBuildMemoryGraphWaveCellAndLayers(t *testing.T) {
 			cited_sentences_json TEXT NOT NULL DEFAULT '[]',
 			address_uri TEXT NOT NULL DEFAULT ''
 		);`,
-		`INSERT INTO thin_vault_docs VALUES ('doc-1', 'episodic', 1730800100, 'the memory engine episodic unit 1', '["the memory engine episodic unit 1"]', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00', 1001, '[0]');`,
-		`INSERT INTO thin_vault_docs VALUES ('doc-2', 'background', 1730800200, 'Background architecture spec', '["Background architecture spec"]', 'C6:L3:B001/C6:L2:B002/C6:L1:B002#00', 1002, '[0]');`,
+		`INSERT INTO rm_units VALUES ('doc-1', 'episodic', 1730800100, 'the memory engine episodic unit 1', '["the memory engine episodic unit 1"]', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00', 1001, '[0]');`,
+		`INSERT INTO rm_units VALUES ('doc-2', 'background', 1730800200, 'Background architecture spec', '["Background architecture spec"]', 'C6:L3:B001/C6:L2:B002/C6:L1:B002#00', 1002, '[0]');`,
 		`INSERT INTO rm_noetic VALUES ('noetic-1', 1730800300, 'active', 'How does the memory engine work?', 'Via blind pulses and dynamic cells.', '["doc-1"]', '["the memory engine episodic unit 1"]', '');`,
 	}
 	for _, stmt := range stmts {
@@ -138,7 +138,7 @@ func TestQueryMemoriesFromDBFormKindAndCategories(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	stmts := []string{
-		`CREATE TABLE thin_vault_docs (
+		`CREATE TABLE rm_units (
 			doc_id TEXT PRIMARY KEY,
 			layer TEXT NOT NULL DEFAULT 'episodic',
 			occurred_at INTEGER NOT NULL DEFAULT 0,
@@ -158,7 +158,7 @@ func TestQueryMemoriesFromDBFormKindAndCategories(t *testing.T) {
 			cited_sentences_json TEXT NOT NULL DEFAULT '[]',
 			address_uri TEXT NOT NULL DEFAULT ''
 		);`,
-		`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, address_uri) VALUES
+		`INSERT INTO rm_units(doc_id, layer, occurred_at, raw_text, address_uri) VALUES
 			('doc-bg-1', 'background', 1003, 'Albert leads Rolling-Memory architecture.', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#00'),
 			('doc-ep-1', 'episodic',   1002, 'We discussed the three-layer memory model.', 'C6:L3:B001/C6:L2:B001/C6:L1:B001#01');`,
 		`INSERT INTO rm_noetic(noetic_id, occurred_at, status, query_text, answer_text, cited_unit_ids_json) VALUES

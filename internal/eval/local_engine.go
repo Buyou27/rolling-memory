@@ -21,7 +21,7 @@ import (
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/evalns"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	local "github.com/rocareer/rolling-memory/sdk/go/local"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 	_ "modernc.org/sqlite"
@@ -90,8 +90,8 @@ const (
 
 // 本地明文索引/召回面：
 //   - product：唯一默认面，与用户日常使用的产品金库完全同源（闭集谐波/单位/地理表全开、
-//     RB 原生伴随词展开 plain.CanonicalCompanionTags、thinclient.RememberEpisodic 摄入与
-//     thinclient.RecallWithOptions 召回）；
+//     RB 原生伴随词展开 plain.CanonicalCompanionTags、localvault.RememberEpisodic 摄入与
+//     localvault.RecallWithOptions 召回）；
 //   - eval：仅用于显式 `--pulse-tokenizer standard|trigram` 的对照切词实验。
 const (
 	LocalIndexSurfaceProduct = "product"
@@ -181,18 +181,18 @@ func applyPulseTokenizer(store *local.JSONFileStore, mode string, secret []byte)
 	}
 }
 
-// CloudDocument is one source-faithful benchmark unit.
+// EvalDocument is one source-faithful benchmark unit.
 //
 // Beyond the four mandatory fields it may carry plaintext-free spatial/structural
 // metadata (speaker, tri-temporal, 4D spatial coordinates) plus high-resolution free-block
 // slices. All optional fields are omitempty: a document without them digests and
 // packs exactly as before, so historical manifests keep their meaning.
 //
-// 一个 CloudDocument 恒定对应本地金库恰好一个 UnitID：高分辨率子块（SubUnits /
+// 一个 EvalDocument 恒定对应本地金库恰好一个 UnitID：高分辨率子块（SubUnits /
 // FileParse）在打包父单元时并入其句帧，绝不另开子 UnitID——这样 store 权威全集
 // 与 corpus 一一相等（VerifyPrepared 精确通过、零 foreign unit），且 top_k 名额
 // 不会被同一文档的子块重复挤占。
-type CloudDocument struct {
+type EvalDocument struct {
 	ID         string `json:"id"`
 	Text       string `json:"text"`
 	OccurredAt int64  `json:"occurred_at"`
@@ -216,9 +216,9 @@ type CloudDocument struct {
 	SubUnits []local.SubUnit `json:"sub_units,omitempty"`
 }
 
-// UnitMeta 把 CloudDocument 的可选元数据转换为 SDK 的 UnitMeta。
+// UnitMeta 把 EvalDocument 的可选元数据转换为 SDK 的 UnitMeta。
 // 空值保持为零值，只有真正提供的字段才会改变脉冲包（与历史行为逐位兼容）。
-func (d CloudDocument) UnitMeta() local.UnitMeta {
+func (d EvalDocument) UnitMeta() local.UnitMeta {
 	fileURL := strings.TrimSpace(d.FileURL)
 	if fileURL == "" {
 		fileURL = strings.TrimSpace(d.DocKey)
@@ -244,7 +244,7 @@ func (d CloudDocument) UnitMeta() local.UnitMeta {
 
 // HasStructuredMeta reports whether the document carries any optional spatial,
 // speaker, tri-temporal or free-block metadata beyond the four mandatory fields.
-func (d CloudDocument) HasStructuredMeta() bool {
+func (d EvalDocument) HasStructuredMeta() bool {
 	if strings.TrimSpace(d.Author) != "" || d.NarratedAt > 0 || d.LineStart > 0 || d.LineEnd > 0 ||
 		strings.TrimSpace(d.FileParse) != "" || len(d.SubUnits) > 0 {
 		return true
@@ -255,7 +255,7 @@ func (d CloudDocument) HasStructuredMeta() bool {
 
 // PackedText 返回真正进入父单元脉冲的文本：源文本 + 解析附件 + 高分辨率自由块。
 // 去重判据是纯字符串包含（不含任何语义词表），已出现在正文/前序块中的片段不重复追加。
-func (d CloudDocument) PackedText() string {
+func (d EvalDocument) PackedText() string {
 	base := strings.TrimSpace(d.Text)
 	blocks := make([]string, 0, len(d.SubUnits)+2)
 	blocks = append(blocks, base)
@@ -314,10 +314,10 @@ func (d CloudDocument) PackedText() string {
 	return strings.Join(blocks, "\n")
 }
 
-// CloudManifest proves which plaintext vault, tenant scope and corpus generation a run used.
+// EvalManifest proves which plaintext vault, tenant scope and corpus generation a run used.
 // 结构体名与 JSON 键名（transport / endpoint / tenant_id / user_id / ...）为跨版本数据兼容
 // 保持不变；endpoint 现恒为本地金库标识，不再指向任何远端。
-type CloudManifest struct {
+type EvalManifest struct {
 	Transport     string `json:"transport"`
 	Endpoint      string `json:"endpoint"`
 	TenantID      string `json:"tenant_id"`
@@ -381,7 +381,7 @@ type LocalEngine struct {
 
 	localVaultMu      sync.Mutex
 	localVaultDB      *sql.DB
-	localVault        *thinclient.Vault
+	localVault        *localvault.Vault
 	localVaultCount   int
 	coreQueryMu       sync.Mutex
 	coreEngine        *core.Engine
@@ -559,7 +559,7 @@ func NewLocalEngine(cfg *config.Config, suite, storePath string, options ...Loca
 		return nil, errors.New("evaluation requires an isolated plaintext store path")
 	}
 	userID := evalUserID()
-	endpoint := "local://thin-vault"
+	endpoint := "local://vault"
 	tenantID := "user"
 	// 本地金库的盲化 pepper 取确定性本地值（与历史本地臂逐字节一致），
 	// 既有明文金库换版本后继续可读，不发生派生键漂移。
@@ -684,8 +684,8 @@ func (e *LocalEngine) Metadata() map[string]any {
 		switch surface {
 		case "core.engine.query":
 			indexSurfaces["core-rm"] = true
-		case "thinclient.recall-with-options", "vault.search-client-sdk-default":
-			indexSurfaces["thinclient-vault"] = true
+		case "localvault.recall-with-options", "vault.search-client-sdk-default":
+			indexSurfaces["localvault-vault"] = true
 		default:
 			indexSurfaces["unknown"] = true
 		}
@@ -699,7 +699,7 @@ func (e *LocalEngine) Metadata() map[string]any {
 		meta["local_index_surface"] = "mixed"
 	}
 	meta["local_recall_surface"] = "unknown"
-	// The thinclient layer does not cover the complete Memory.Recall delivery pipeline.
+	// The localvault layer does not cover the complete Memory.Recall delivery pipeline.
 	meta["product_path_equivalent"] = false
 	if len(surfaces) == 1 {
 		meta["local_recall_surface"] = surfaces[0]
@@ -739,8 +739,8 @@ func (e *LocalEngine) recordLocalRecallSurface(surface string, err error) {
 	e.localRecallSurfaces[surface] = true
 }
 
-// CloudCorpusDigest returns the canonical digest of source-faithful corpus documents.
-func CloudCorpusDigest(documents []CloudDocument) (string, error) {
+// EvalCorpusDigest returns the canonical digest of source-faithful corpus documents.
+func EvalCorpusDigest(documents []EvalDocument) (string, error) {
 	corpusJSON, err := json.Marshal(documents)
 	if err != nil {
 		return "", fmt.Errorf("evaluation corpus digest failed: %w", err)
@@ -758,7 +758,7 @@ func evalManifestIdentityError(format string, args ...any) error {
 	}
 }
 
-func (e *LocalEngine) validateManifestPulseMode(manifest CloudManifest) error {
+func (e *LocalEngine) validateManifestPulseMode(manifest EvalManifest) error {
 	if strings.TrimSpace(manifest.PulseMode) == "" || !IsValidPulseMode(manifest.PulseMode) || manifest.PulseMode != e.PulseMode {
 		return fmt.Errorf("evaluation manifest pulse mode %q does not match the active client %q (rebuild required)",
 			manifest.PulseMode, e.PulseMode)
@@ -767,8 +767,8 @@ func (e *LocalEngine) validateManifestPulseMode(manifest CloudManifest) error {
 }
 
 // VerifyPrepared proves exact manifest, corpus and stored-unit-set equality.
-func (e *LocalEngine) VerifyPrepared(ctx context.Context, documents []CloudDocument) (CloudManifest, error) {
-	manifest, err := ReadCloudManifest(e.StorePath)
+func (e *LocalEngine) VerifyPrepared(ctx context.Context, documents []EvalDocument) (EvalManifest, error) {
+	manifest, err := ReadEvalManifest(e.StorePath)
 	if err != nil {
 		return manifest, err
 	}
@@ -778,7 +778,7 @@ func (e *LocalEngine) VerifyPrepared(ctx context.Context, documents []CloudDocum
 	if e.Generation == "" && manifest.Scope != "" && manifest.Suite == e.Suite {
 		_, _ = e.adoptStoredGeneration()
 	}
-	digest, err := CloudCorpusDigest(documents)
+	digest, err := EvalCorpusDigest(documents)
 	if err != nil {
 		return manifest, err
 	}
@@ -847,16 +847,16 @@ func (e *LocalEngine) VerifyPrepared(ctx context.Context, documents []CloudDocum
 //   - 显式 reuse 时按 manifest + 语料摘要 + 金库文档全集三者精确相等复用；不相等一律 fail-closed，
 //     绝不盲灌；
 //   - rebuild 永远新开世代：不动任何在用世代，过期世代按心跳周期自动回收。
-func (e *LocalEngine) Prepare(ctx context.Context, documents []CloudDocument, rebuild, reuse bool, workers int, logf func(string, ...any)) (CloudManifest, error) {
+func (e *LocalEngine) Prepare(ctx context.Context, documents []EvalDocument, rebuild, reuse bool, workers int, logf func(string, ...any)) (EvalManifest, error) {
 	e.resetLocalRecallProvenance()
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	if len(documents) == 0 {
-		return CloudManifest{}, errors.New("evaluation requires at least one source document")
+		return EvalManifest{}, errors.New("evaluation requires at least one source document")
 	}
 	if !rebuild {
-		manifest, err := ReadCloudManifest(e.StorePath)
+		manifest, err := ReadEvalManifest(e.StorePath)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return manifest, err
 		}
@@ -868,7 +868,7 @@ func (e *LocalEngine) Prepare(ctx context.Context, documents []CloudDocument, re
 		if adopted, ok := e.adoptStoredGeneration(); ok {
 			empty, err := e.scopeEmpty(ctx)
 			if err != nil {
-				return CloudManifest{}, fmt.Errorf("评测世代探测失败（不盲灌、不复用）: %w", err)
+				return EvalManifest{}, fmt.Errorf("评测世代探测失败（不盲灌、不复用）: %w", err)
 			}
 			if !empty {
 				// 世代在用：读者心跳续期，保证并发回收不会把正在读的世代清掉。
@@ -887,7 +887,7 @@ func (e *LocalEngine) Prepare(ctx context.Context, documents []CloudDocument, re
 				// 这里按语料逐单元校验正文，被替换的单元删除后交回正常续灌重灌（写入侧同一
 				// SDK 拼装函数，重灌即自愈）；语料外的孤儿单元 fail-closed 要求 --rebuild。
 				if err := e.repairLocalPlainStoreBodies(documents, logf); err != nil {
-					return CloudManifest{}, err
+					return EvalManifest{}, err
 				}
 				return e.Ingest(ctx, documents, false, workers, logf)
 			}
@@ -895,7 +895,7 @@ func (e *LocalEngine) Prepare(ctx context.Context, documents []CloudDocument, re
 		}
 	}
 	if err := e.startNewGeneration(ctx, logf); err != nil {
-		return CloudManifest{}, err
+		return EvalManifest{}, err
 	}
 	manifest, err := e.Ingest(ctx, documents, true, workers, logf)
 	if err != nil {
@@ -904,14 +904,14 @@ func (e *LocalEngine) Prepare(ctx context.Context, documents []CloudDocument, re
 	return manifest, err
 }
 
-// rememberDocument 把一个 CloudDocument 就地编码进本地明文金库（本地评测臂唯一的写路径）：
+// rememberDocument 把一个 EvalDocument 就地编码进本地明文金库（本地评测臂唯一的写路径）：
 //   - 无结构化元数据 ⇒ 正文即 PackedText，走 PackBlindPacket（与历史本地臂逐位一致）；
 //   - 有结构化元数据 ⇒ 正文先经 FormatPlaintextWithMeta 拼装日期/作者/块前缀，再把说话人、
 //     三时态、四维空间坐标（doc_h / block_h / line_start / line_end）编入同一脉冲包。
 //
 // 回执与历史本地臂一致：只含 UnitID / Layer / PulseMode，不含 AddressURI / Coord64 /
 // KeptSentenceIndices（本地离线检索不产出这些云端字段）。
-func (e *LocalEngine) rememberDocument(doc CloudDocument) error {
+func (e *LocalEngine) rememberDocument(doc EvalDocument) error {
 	layer := strings.TrimSpace(doc.Layer)
 	if layer == "" {
 		layer = local.LayerEpisodic
@@ -997,7 +997,7 @@ func (e *LocalEngine) PurgeScopeUnits(_ context.Context, logf func(string, ...an
 // 这本评测自己的库就不成立（更可能是用户自建的 SDK 金库），fail-closed 拒绝清库——
 // 防「--eval-store 指向用户既有 store 被静默清空」。断点续灌（库内只有本语料文档）与
 // 有封条的正常评测库不受影响。
-func (e *LocalEngine) guardLocalPlainRebuildPurge(documents []CloudDocument) error {
+func (e *LocalEngine) guardLocalPlainRebuildPurge(documents []EvalDocument) error {
 	unitIDs := readLocalStoreUnitIDs(e.StorePath)
 	if len(unitIDs) == 0 {
 		return nil
@@ -1058,8 +1058,8 @@ func writeEvalResumeState(storePath string, state evalResumeState) {
 
 // Ingest writes source-faithful units through the SDK, optionally replacing only
 // the explicit unit IDs belonging to this corpus and isolated scope.
-func (e *LocalEngine) Ingest(ctx context.Context, documents []CloudDocument, rebuild bool, workers int, logf func(string, ...any)) (CloudManifest, error) {
-	manifest := CloudManifest{
+func (e *LocalEngine) Ingest(ctx context.Context, documents []EvalDocument, rebuild bool, workers int, logf func(string, ...any)) (EvalManifest, error) {
+	manifest := EvalManifest{
 		Transport: TransportForPulseMode(e.PulseMode), Endpoint: e.Endpoint, UserID: e.UserID,
 		Scope: e.Scope, Suite: e.Suite, Documents: len(documents), LocalFallback: false,
 		Generation: e.Generation, RetiredScopes: e.retired,
@@ -1069,7 +1069,7 @@ func (e *LocalEngine) Ingest(ctx context.Context, documents []CloudDocument, reb
 	if len(documents) == 0 {
 		return manifest, errors.New("evaluation requires at least one source document")
 	}
-	corpusDigest, err := CloudCorpusDigest(documents)
+	corpusDigest, err := EvalCorpusDigest(documents)
 	if err != nil {
 		return manifest, err
 	}
@@ -1126,7 +1126,7 @@ func (e *LocalEngine) Ingest(ctx context.Context, documents []CloudDocument, reb
 	}
 	targets := documents
 	if resumable {
-		pending := make([]CloudDocument, 0, len(documents))
+		pending := make([]EvalDocument, 0, len(documents))
 		for _, doc := range documents {
 			if _, _, _, lookupErr := e.Store.LoadLocalDocument(doc.ID); lookupErr == nil {
 				continue
@@ -1209,7 +1209,7 @@ func readLocalStoreUnitIDs(storePath string) []string {
 // ID 集合相等会接受「ID 不变、正文被替换」的 store，而 ensureLocalPlainVault 正是
 // 用 store 正文重建 SQLite 索引；期望正文按写入时同一 SDK 拼装函数
 // （FormatPlaintextWithMeta(PackedText, UnitMeta)）重建，避免另造一套变换。
-func (e *LocalEngine) verifyLocalPlainStoreBodies(documents []CloudDocument) error {
+func (e *LocalEngine) verifyLocalPlainStoreBodies(documents []EvalDocument) error {
 	raw, err := os.ReadFile(e.StorePath)
 	if err != nil {
 		return fmt.Errorf("evaluation local store unreadable: %w", err)
@@ -1260,7 +1260,7 @@ func (e *LocalEngine) verifyLocalPlainStoreBodies(documents []CloudDocument) err
 // 历史语料残留），续灌会静默用错语料检索。这里按语料逐单元校验正文：被替换的单元从 store
 // 删除并交回正常续灌重灌（写回侧是同一 SDK 拼装函数，重灌即自愈）；缺单元属断点续灌常态，
 // 照常放行；语料外的孤儿单元不属于本语料，fail-closed 要求 --rebuild，绝不静默带入索引。
-func (e *LocalEngine) repairLocalPlainStoreBodies(documents []CloudDocument, logf func(string, ...any)) error {
+func (e *LocalEngine) repairLocalPlainStoreBodies(documents []EvalDocument, logf func(string, ...any)) error {
 	raw, err := os.ReadFile(e.StorePath)
 	if err != nil {
 		return fmt.Errorf("evaluation local store unreadable: %w", err)
@@ -1367,7 +1367,7 @@ func (e *LocalEngine) localVaultMetaFor(storeSHA string, documents int) localVau
 }
 
 // configureLocalVault applies the index configuration of the selected surface.
-func (e *LocalEngine) configureLocalVault(v *thinclient.Vault) error {
+func (e *LocalEngine) configureLocalVault(v *localvault.Vault) error {
 	if e.localIndexSurface() == LocalIndexSurfaceProduct {
 		if strings.EqualFold(evalHarmonicsName(), "off") {
 			v.SetCanonicalHarmonics(plain.CanonicalHarmonicOptions{})
@@ -1401,7 +1401,7 @@ func (e *LocalEngine) configureLocalVault(v *thinclient.Vault) error {
 	return nil
 }
 
-func (e *LocalEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
+func (e *LocalEngine) ensureLocalPlainVault() (*localvault.Vault, error) {
 	e.localVaultMu.Lock()
 	defer e.localVaultMu.Unlock()
 
@@ -1446,8 +1446,8 @@ func (e *LocalEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 				db.SetMaxIdleConns(1)
 				_, _ = db.Exec(`PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY;`)
 				var count int
-				countErr := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs`).Scan(&count)
-				v, vere := thinclient.NewVault(db, secret)
+				countErr := db.QueryRow(`SELECT COUNT(*) FROM rm_docs WHERE layer = 'episodic' OR layer = ''`).Scan(&count)
+				v, vere := localvault.NewVault(db, secret)
 				if countErr == nil && count == len(docs) && vere == nil && e.configureLocalVault(v) == nil {
 					e.localVaultDB = db
 					e.localVault = v
@@ -1469,7 +1469,7 @@ func (e *LocalEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	_, _ = db.Exec(`PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY;`)
-	v, err := thinclient.NewVault(db, secret)
+	v, err := localvault.NewVault(db, secret)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1484,10 +1484,10 @@ func (e *LocalEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 	}
 	sort.Strings(ids)
 	if e.localIndexSurface() == LocalIndexSurfaceProduct {
-		// 产品面必须走产品摄入链（thinclient.RememberEpisodic）：写入句子帧与 kept 索引，
+		// 产品面必须走产品摄入链（localvault.RememberEpisodic）：写入句子帧与 kept 索引，
 		// 与 MCP/CLI 保存记忆同一路径。裸插入会丢句子帧，使本地排序的
 		// 事件链/句窗能力失效，等于又把产品能力阉掉一半。
-		tc := thinclient.NewClient(v, nil)
+		tc := localvault.NewClient(v, nil)
 		for _, id := range ids {
 			rec := docs[id]
 			if _, err := tc.RememberEpisodic(context.Background(), id, rec.RawText, rec.OccurredAt); err != nil {
@@ -1501,15 +1501,22 @@ func (e *LocalEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 			_ = db.Close()
 			return nil, err
 		}
-		stmtDoc, _ := tx.Prepare(`INSERT OR REPLACE INTO thin_vault_docs(doc_id, layer, occurred_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, '[]', ?, ?, '', '', '[]', 'default', '', '')`)
+		stmtDoc, _ := tx.Prepare(`INSERT OR REPLACE INTO rm_docs(unit_id, layer, occurred_at, raw_text) VALUES (?, 'episodic', ?, ?)`)
+		stmtMeta, _ := tx.Prepare(`INSERT OR REPLACE INTO rm_unit_meta(unit_id, layer, sentences_json, kept_indices_json, address_uri, coord64, assistant_id, inserted_at, meta_rev) VALUES (?, 'episodic', '[]', '[]', ?, ?, 'default', ?, 1)`)
 		for _, id := range ids {
 			rec := docs[id]
 			if stmtDoc != nil {
-				_, _ = stmtDoc.Exec(id, rec.OccurredAt, rec.RawText, rec.AddressURI, int64(rec.Coord64))
+				_, _ = stmtDoc.Exec(id, rec.OccurredAt, rec.RawText)
+			}
+			if stmtMeta != nil {
+				_, _ = stmtMeta.Exec(id, rec.AddressURI, int64(rec.Coord64), rec.OccurredAt)
 			}
 		}
 		if stmtDoc != nil {
 			_ = stmtDoc.Close()
+		}
+		if stmtMeta != nil {
+			_ = stmtMeta.Close()
 		}
 		if err := tx.Commit(); err != nil {
 			_ = db.Close()
@@ -1530,7 +1537,7 @@ func (e *LocalEngine) ensureLocalPlainVault() (*thinclient.Vault, error) {
 }
 
 // evalVaultDSN 给派生评测金库补齐与产品侧同款的锁耐心：产品面摄入链
-// （thinclient.RememberEpisodic）内部含并行索引维护写入，零 busy_timeout 会把
+// （localvault.RememberEpisodic）内部含并行索引维护写入，零 busy_timeout 会把
 // 普通写-写争用直接变成 SQLITE_BUSY（15000ms 与 db 存储 profile 默认值一致）。
 // journal 保持 MEMORY（评测速度），连接池由调用方限制为单连接，并发写入排队而非竞争。
 func evalVaultDSN(path string) string {
@@ -1541,12 +1548,12 @@ func evalVaultDSN(path string) string {
 	return dsnPath + "?_pragma=busy_timeout(15000)"
 }
 
-// recallLocalProduct uses the thinclient recall layer without the full Memory.Recall delivery pipeline.
-func (e *LocalEngine) recallLocalProduct(ctx context.Context, v *thinclient.Vault, query string, topK int) ([]local.ResolvedHit, error) {
-	tc := thinclient.NewLocalClient(v)
+// recallLocalProduct uses the localvault recall layer without the full Memory.Recall delivery pipeline.
+func (e *LocalEngine) recallLocalProduct(ctx context.Context, v *localvault.Vault, query string, topK int) ([]local.ResolvedHit, error) {
+	tc := localvault.NewLocalClient(v)
 	// 评测查询不注入墙钟 TimeRef：产品 API 默认用 now，但该读数不可复现；Hard-31 对照
 	// TimeRef=0 与 now 同分，故固定 0（相对日期题如需 now 需显式登记）。
-	hits, err := tc.RecallWithOptions(ctx, query, thinclient.BlindQueryOptions{TopK: topK})
+	hits, err := tc.RecallWithOptions(ctx, query, localvault.BlindQueryOptions{TopK: topK})
 	if err != nil {
 		return nil, err
 	}
@@ -1739,7 +1746,7 @@ func (e *LocalEngine) recallLocalPlaintext(ctx context.Context, query string, to
 	}
 	if e.localIndexSurface() == LocalIndexSurfaceProduct {
 		hits, err := e.recallLocalProduct(ctx, v, query, topK)
-		e.recordLocalRecallSurface("thinclient.recall-with-options", err)
+		e.recordLocalRecallSurface("localvault.recall-with-options", err)
 		return hits, err
 	}
 	hits, err := v.SearchClientSDKDefault(query, topK)
@@ -1786,9 +1793,9 @@ func (e *LocalEngine) Recall(ctx context.Context, query string, topK int) ([]loc
 	return e.recallLocalPlaintext(ctx, query, topK)
 }
 
-// ReadCloudManifest reads the isolated preparation receipt used by Admin readiness checks.
-func ReadCloudManifest(storePath string) (CloudManifest, error) {
-	var manifest CloudManifest
+// ReadEvalManifest reads the isolated preparation receipt used by Admin readiness checks.
+func ReadEvalManifest(storePath string) (EvalManifest, error) {
+	var manifest EvalManifest
 	raw, err := os.ReadFile(storePath + ".manifest.json")
 	if err != nil {
 		return manifest, err

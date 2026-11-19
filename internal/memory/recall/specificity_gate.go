@@ -11,7 +11,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 )
 
 // SubjectCandidate represents an active subject band in the graph with pre-tokenized
@@ -108,7 +108,7 @@ func EffectiveShannonBits(s string) float64 {
 			prevRune = lowR
 			runLen = 1
 		}
-		rb := memcore.RuneShannonBits(r)
+		rb := delivery.RuneShannonBits(r)
 		if runLen >= 3 {
 			rb *= math.Pow(0.25, float64(runLen-2))
 		}
@@ -155,7 +155,7 @@ func FastLongestVerbatimSubspan(turnText, anchor string) string {
 		}
 		cand := strings.TrimSpace(string(ar[i:maxEnd]))
 		bits := EffectiveShannonBits(cand)
-		if bits >= memcore.AtomicConceptEntropyBits && bits > bestBits {
+		if bits >= delivery.AtomicConceptEntropyBits && bits > bestBits {
 			best = cand
 			bestBits = bits
 		}
@@ -193,7 +193,7 @@ func StripTitleParenthetical(s string) string {
 		}
 	}
 	res := strings.TrimSpace(string(out))
-	if EffectiveShannonBits(res) < 0.70*memcore.AtomicConceptEntropyBits {
+	if EffectiveShannonBits(res) < 0.70*delivery.AtomicConceptEntropyBits {
 		return s
 	}
 	return res
@@ -218,14 +218,14 @@ func CompactCueSubjectLabel(s, workspace string) string {
 				break
 			}
 		}
-		if nonASCII && memcore.StringShannonBits(w) > 12.5*memcore.AtomicConceptEntropyBits {
+		if nonASCII && delivery.StringShannonBits(w) > 12.5*delivery.AtomicConceptEntropyBits {
 			var acc float64
 			suffixStart := 0
 			for idx := len(w); idx > 0; {
 				r, size := utf8DecodeLastRune(w[:idx])
 				idx -= size
-				acc += memcore.RuneShannonBits(r)
-				if acc >= 5.0*memcore.AtomicConceptEntropyBits {
+				acc += delivery.RuneShannonBits(r)
+				if acc >= 5.0*delivery.AtomicConceptEntropyBits {
 					suffixStart = idx
 					break
 				}
@@ -347,7 +347,7 @@ func ExpandScriptSubtokens(prompt string) []string {
 	for _, tok := range strings.FieldsFunc(prompt, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune("()（）[]【】<>\"'`:,，；;。!?！？/\\", r)
 	}) {
-		if memcore.StringShannonBits(tok) < 4.5 {
+		if delivery.StringShannonBits(tok) < 4.5 {
 			continue
 		}
 		runes := []rune(tok)
@@ -415,7 +415,7 @@ func stripWorkspaceTokens(text, workspace string) string {
 	return strings.TrimSpace(lower)
 }
 
-// extractLexicalFeatures extracts the 4-channel features used by memcore.FeatureHashVec:
+// extractLexicalFeatures extracts the 4-channel features used by delivery.FeatureHashVec:
 //   - "id:<alnum>" for alphanumeric identifiers containing digits (e.g. "g5", "f0", "v2")
 //   - "w3:<word>" for 3-letter ASCII words (e.g. "roi", "mcp", "sql", "api")
 //   - "w:<word>" for >=4-letter ASCII words (plus stem)
@@ -486,7 +486,7 @@ func extractLexicalFeatures(text string) []string {
 
 // computeBipartiteMaskTopology projects matched features onto BOTH the candidate title `cleanTitle`
 // and the query `cleanQuery`, enforcing Bipartite Shannon Self-Information Conservation (zero character-count rules):
-//   - effCovBits   = min(covBits_T, covBits_Q)   (measured in Shannon bits via memcore.RuneShannonBits)
+//   - effCovBits   = min(covBits_T, covBits_Q)   (measured in Shannon bits via delivery.RuneShannonBits)
 //   - totalBits    = totBits_T
 //   - effSpanCount = min(spanCount_T, spanCount_Q)
 //   - ideoCovBits, ideoTotalBits, ideoSpanCount: Shannon bit coverage on the continuous non-ASCII stem.
@@ -504,7 +504,7 @@ func computeBipartiteMaskTopology(qSet map[string]bool, cleanQuery, cleanTitle s
 	if len(matchedSet) == 0 {
 		for _, r := range cleanTitle {
 			if unicode.IsLetter(r) || unicode.IsNumber(r) {
-				rb := memcore.RuneShannonBits(r)
+				rb := delivery.RuneShannonBits(r)
 				totalBits += rb
 				if r > 127 {
 					ideoTotalBits += rb
@@ -580,7 +580,7 @@ func computeBipartiteMaskTopology(qSet map[string]bool, cleanQuery, cleanTitle s
 				inIdeo = false
 				continue
 			}
-			rb := memcore.RuneShannonBits(r)
+			rb := delivery.RuneShannonBits(r)
 			totAll += rb
 			if covered[i] {
 				covAll += rb
@@ -750,7 +750,7 @@ func ProbeSubjectsBySpecificity(subjects []SubjectCandidate, prompt, workspace s
 	}
 	cleanQ := stripWorkspaceTokens(prompt, workspace)
 	qBits := EffectiveShannonBits(cleanQ)
-	if qBits < 0.70*memcore.AtomicConceptEntropyBits {
+	if qBits < 0.70*delivery.AtomicConceptEntropyBits {
 		return nil
 	}
 	qFeats := extractLexicalFeatures(cleanQ)
@@ -887,7 +887,7 @@ func ProbeSubjectsBySpecificity(subjects []SubjectCandidate, prompt, workspace s
 		}
 
 		cleanSubj := stripWorkspaceTokens(subj.Core, workspace)
-		if memcore.StringShannonBits(cleanSubj) < 0.70*memcore.AtomicConceptEntropyBits {
+		if delivery.StringShannonBits(cleanSubj) < 0.70*delivery.AtomicConceptEntropyBits {
 			cleanSubj = stripWorkspaceTokens(subj.Clean, workspace)
 		}
 		covBits, totBits, spanCount, bitCov, ideoCovBits, ideoTotBits, ideoSpans, ideoBitCov := computeBipartiteMaskTopology(qSet, cleanQ, cleanSubj)
@@ -938,7 +938,7 @@ func ProbeSubjectsBySpecificity(subjects []SubjectCandidate, prompt, workspace s
 			(matchedASCII >= 1 && unmatchedASCII == 0 && (!hasTitleNonASCII || matchedNonASCII) && specRecall >= 0.26 && (spanCount >= 2 || bitCov >= 0.36))
 
 		if passes {
-			sc := matchedW*1.6 + specRecall*3.0 + float64(rareMatches)*1.8 + float64(spanCount)*0.8 + (covBits/memcore.AtomicConceptEntropyBits)*0.35 + float64(matchedASCII)*0.8
+			sc := matchedW*1.6 + specRecall*3.0 + float64(rareMatches)*1.8 + float64(spanCount)*0.8 + (covBits/delivery.AtomicConceptEntropyBits)*0.35 + float64(matchedASCII)*0.8
 			matches = append(matches, hit{label: subj.Label, score: sc})
 		}
 	}
@@ -1005,15 +1005,15 @@ func iterBandNodes(b map[string]any, fn func(map[string]any)) {
 }
 
 // FilterBandsBySpecificity scores, filters, and ranks candidate recall bands using
-// deterministic feature hashing (memcore.FeatureHashVec), Shannon self-information
-// coverage conservation, and spatial locus isolation (memcore.HierarchicalLCPScore).
+// deterministic feature hashing (delivery.FeatureHashVec), Shannon self-information
+// coverage conservation, and spatial locus isolation (delivery.HierarchicalLCPScore).
 func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands []map[string]any) []map[string]any {
 	cleanPrompt := stripWorkspaceTokens(rawPrompt, workspace)
 	promptBits := EffectiveShannonBits(cleanPrompt)
-	if promptBits < 0.70*memcore.AtomicConceptEntropyBits || len(bands) == 0 {
+	if promptBits < 0.70*delivery.AtomicConceptEntropyBits || len(bands) == 0 {
 		return nil
 	}
-	qVec := memcore.FeatureHashVec(cleanPrompt, memcore.DefaultHashDim)
+	qVec := delivery.FeatureHashVec(cleanPrompt, delivery.DefaultHashDim)
 	if len(qVec) == 0 {
 		return nil
 	}
@@ -1085,7 +1085,7 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 			effWS = strings.TrimSpace(workspace + " " + bRepo)
 		}
 		cleanTitle := stripWorkspaceTokens(title, effWS)
-		if memcore.StringShannonBits(cleanTitle) < 0.25*memcore.AtomicConceptEntropyBits {
+		if delivery.StringShannonBits(cleanTitle) < 0.25*delivery.AtomicConceptEntropyBits {
 			continue
 		}
 		coreTitle := stripWorkspaceTokens(StripTitleParenthetical(title), effWS)
@@ -1101,7 +1101,7 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 			}
 		}
 
-		// 1. Spatial Locus Isolation (memcore.HierarchicalLCPScore)
+		// 1. Spatial Locus Isolation (delivery.HierarchicalLCPScore)
 		inActiveLocus := bandMatchesLocus(rawPrompt, workspace, b)
 
 		// 2. Compute feature specificity coverage & dual-script coherence on Title and CoreTitle
@@ -1181,7 +1181,7 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 		}
 
 		evalTarget := coreTitle
-		if memcore.StringShannonBits(evalTarget) < 0.70*memcore.AtomicConceptEntropyBits {
+		if delivery.StringShannonBits(evalTarget) < 0.70*delivery.AtomicConceptEntropyBits {
 			evalTarget = cleanTitle
 		}
 		specRecall, matchedTri, matchedBi, matchedASCII, unmatchedASCII, _, minMatchedDF, rareMatches, hasNonASCII, hitNonASCII, titleIDHit := evalTitleFeats(evalTarget)
@@ -1203,7 +1203,7 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 		}
 
 		// 3. Evaluate FeatureHashVec Cosine Similarity & Body Lexical Coverage
-		tVec := memcore.FeatureHashVec(cleanTitle, memcore.DefaultHashDim)
+		tVec := delivery.FeatureHashVec(cleanTitle, delivery.DefaultHashDim)
 		var bandBodyBuilder strings.Builder
 		for _, n := range activeNodes {
 			bandBodyBuilder.WriteString(" ")
@@ -1211,7 +1211,7 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 			bandBodyBuilder.WriteString(" ")
 			bandBodyBuilder.WriteString(asString(n["content"]))
 		}
-		geoTitleSim := memcore.DotUnit(qVec, tVec)
+		geoTitleSim := delivery.DotUnit(qVec, tVec)
 
 		bodyClean := stripWorkspaceTokens(bandBodyBuilder.String(), effWS)
 		bodyFeats := extractLexicalFeatures(bodyClean)
@@ -1295,7 +1295,7 @@ func FilterBandsBySpecificity(rawPrompt, effectiveCue, workspace string, bands [
 			continue
 		}
 
-		specScore := specRecall*3.5 + bitCov*2.5 + geoTitleSim*2.5 + float64(rareMatches)*1.8 + float64(spanCount)*0.9 + (covBits/memcore.AtomicConceptEntropyBits)*0.35 + float64(matchedASCII)*0.85 + float64(bodyMatchedTri)*0.35 + float64(bodyMatchedBi)*0.12
+		specScore := specRecall*3.5 + bitCov*2.5 + geoTitleSim*2.5 + float64(rareMatches)*1.8 + float64(spanCount)*0.9 + (covBits/delivery.AtomicConceptEntropyBits)*0.35 + float64(matchedASCII)*0.85 + float64(bodyMatchedTri)*0.35 + float64(bodyMatchedBi)*0.12
 		finalScore := specScore
 		if coordMatched && finalScore < 4.8 {
 			finalScore = 4.8
@@ -1475,7 +1475,7 @@ func bandMatchesLocus(prompt, workspace string, band map[string]any) bool {
 	title := strings.ToLower(asString(band["title"]))
 	bandRepo := extractBandRepo(band, workspace)
 	if bandRepo != "" && bandRepo != lowerProj {
-		lcp := memcore.HierarchicalLCPScore("rocareer/"+lowerProj, "rocareer/"+bandRepo)
+		lcp := delivery.HierarchicalLCPScore("rocareer/"+lowerProj, "rocareer/"+bandRepo)
 		if lcp < 0.99 && !strings.Contains(lowerPrompt, bandRepo) && !strings.Contains(title, lowerProj) {
 			return false
 		}
@@ -1505,7 +1505,7 @@ func peakBandRawScore(band map[string]any) float64 {
 // partial lexical signal before being filtered by the specificity gate.
 func DetectTopGateFilteredBand(rawPrompt, workspace string, bands []map[string]any) string {
 	cleanPrompt := stripWorkspaceTokens(rawPrompt, workspace)
-	if EffectiveShannonBits(cleanPrompt) < 0.70*memcore.AtomicConceptEntropyBits || len(bands) == 0 {
+	if EffectiveShannonBits(cleanPrompt) < 0.70*delivery.AtomicConceptEntropyBits || len(bands) == 0 {
 		return ""
 	}
 	qFeats := extractLexicalFeatures(cleanPrompt)

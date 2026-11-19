@@ -6,7 +6,7 @@ package speech
 import "testing"
 
 // TestStripProtocolEnvelopes pins the conversation denoise used by every episodic
-// ingest path and by the thin client: only line-anchored protocol envelopes leave
+// ingest path and by the local vault client: only line-anchored protocol envelopes leave
 // the text, every remaining byte stays where the speaker put it.
 func TestStripProtocolEnvelopes(t *testing.T) {
 	cases := []struct {

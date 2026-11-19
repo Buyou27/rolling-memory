@@ -104,7 +104,7 @@ func TestImportFilePreservesOccurrenceAndRecordingTimes(t *testing.T) {
 	} {
 		var vaultOccurred int64
 		docID := episodicunit.DocID("mem:test", "["+fixture.role+"] "+fixture.text)
-		err := memory.Store.DB().QueryRow(`SELECT occurred_at FROM thin_vault_docs WHERE doc_id = ?`, docID).Scan(&vaultOccurred)
+		err := memory.Store.DB().QueryRow(`SELECT occurred_at FROM rm_units WHERE doc_id = ?`, docID).Scan(&vaultOccurred)
 		if err != nil || vaultOccurred != fixture.occurred {
 			t.Fatalf("%q occurrence = %d, doc=%q err=%v", fixture.text, vaultOccurred, docID, err)
 		}
@@ -177,18 +177,18 @@ func TestImportFilePreservesOccurrenceAndRecordingTimes(t *testing.T) {
 	}
 	const existingTime = int64(123456789)
 	quartzID := episodicunit.DocID("mem:test", "[user] quartz unknown time evidence")
-	if _, err := memory.Store.DB().Exec(`UPDATE thin_vault_docs SET occurred_at = ?, inserted_at = ? WHERE doc_id = ?`, existingTime, existingTime, quartzID); err != nil {
+	if _, err := memory.Store.DB().Exec(`UPDATE rm_units SET occurred_at = ?, inserted_at = ? WHERE doc_id = ?`, existingTime, existingTime, quartzID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
 		t.Fatal(err)
 	}
 	var traces, docs int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs)`).Scan(&traces, &docs); err != nil || traces != 0 || docs != 4 {
+	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM rm_units)`).Scan(&traces, &docs); err != nil || traces != 0 || docs != 4 {
 		t.Fatalf("repeat import: traces=%d docs=%d err=%v", traces, docs, err)
 	}
 	var occurred, inserted int64
-	if err := memory.Store.DB().QueryRow(`SELECT occurred_at, inserted_at FROM thin_vault_docs WHERE doc_id = ?`, quartzID).Scan(&occurred, &inserted); err != nil || occurred != existingTime || inserted != existingTime {
+	if err := memory.Store.DB().QueryRow(`SELECT occurred_at, inserted_at FROM rm_units WHERE doc_id = ?`, quartzID).Scan(&occurred, &inserted); err != nil || occurred != existingTime || inserted != existingTime {
 		t.Fatalf("repeat import changed existing vault row: occurred=%d inserted=%d err=%v", occurred, inserted, err)
 	}
 }

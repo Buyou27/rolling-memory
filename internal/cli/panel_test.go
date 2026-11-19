@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestConsoleReleaseBaseSemantics pins the release-channel switch shared with
@@ -229,5 +230,73 @@ func TestPanelPortResolution(t *testing.T) {
 	}
 	if got := panelPort(nil, "RM_PANEL_WEB_PORT", 8008); got != 8008 {
 		t.Fatalf("default web port = %d", got)
+	}
+}
+
+// TestConsoleSourceStaleness pins the rebuild trigger: an installed artifact is
+// stale only when a source file is newer, and build output or dependency trees
+// never count as source changes.
+func TestConsoleSourceStaleness(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(p string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	setTime := func(p string, when time.Time) {
+		if err := os.Chtimes(p, when, when); err != nil {
+			t.Fatalf("chtimes %s: %v", p, err)
+		}
+	}
+
+	sourceRoot := filepath.Join(dir, "admin")
+	mainGo := filepath.Join(sourceRoot, "cmd", "main.go")
+	mustWrite(mainGo)
+	binPath := filepath.Join(dir, "bin", "rolling-admin")
+	mustWrite(binPath)
+
+	older := time.Now().Add(-2 * time.Hour)
+	newer := time.Now()
+	setTime(mainGo, older)
+	setTime(binPath, newer)
+	if consoleBinaryStale(sourceRoot, binPath) {
+		t.Fatal("binary newer than the module source must not be stale")
+	}
+
+	// Build output and dependencies are skipped even when they are newer.
+	for _, p := range []string{
+		filepath.Join(sourceRoot, "web", "dist", "index.html"),
+		filepath.Join(sourceRoot, "web", "node_modules", "pkg", "index.js"),
+		filepath.Join(sourceRoot, "testdata", "fixture.go"),
+	} {
+		mustWrite(p)
+		setTime(p, newer.Add(time.Hour))
+	}
+	if consoleBinaryStale(sourceRoot, binPath) {
+		t.Fatal("build output must not mark the binary stale")
+	}
+
+	setTime(mainGo, newer.Add(2*time.Hour))
+	if !consoleBinaryStale(sourceRoot, binPath) {
+		t.Fatal("a source edit newer than the binary must mark it stale")
+	}
+
+	webRoot := filepath.Join(dir, "web")
+	view := filepath.Join(webRoot, "src", "views", "dashboard.vue")
+	mustWrite(view)
+	distIndex := filepath.Join(dir, "web-dist", "index.html")
+	mustWrite(distIndex)
+
+	setTime(view, older)
+	setTime(distIndex, newer)
+	if consoleWebDistStale(webRoot, distIndex) {
+		t.Fatal("bundle newer than the frontend source must not be stale")
+	}
+	setTime(view, newer.Add(2*time.Hour))
+	if !consoleWebDistStale(webRoot, distIndex) {
+		t.Fatal("a frontend edit newer than the bundle must mark it stale")
 	}
 }

@@ -28,8 +28,8 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/transcript"
@@ -41,18 +41,21 @@ type Memory struct {
 	Config *config.Config
 	Store  *store.Store
 
-	thinVaultOnce sync.Once
-	thinVault     *thinclient.Vault
-	thinVaultErr  error
+	localVaultOnce sync.Once
+	localVault     *localvault.Vault
+	localVaultErr  error
 	// coldBuildMemoryLimit is the soft memory limit the local vault may apply
 	// while a cold full-corpus build runs (0 keeps the runtime limit as is).
 	coldBuildMemoryLimit atomic.Int64
+	// snapshotOnly marks a long-lived recall surface: it may open a published
+	// disk cluster but must never run the full-corpus build on the query path.
+	snapshotOnly atomic.Bool
 }
 
 // SetColdBuildMemoryLimit forwards the caller's cold-build memory window to the
 // local vault, so a missing .zcsr disk cluster cannot degrade a daemon start
 // into GC thrash under its steady-state cap. It must run before the vault is
-// first opened (the daemon sets it before serving); ThinClient applies the
+// first opened (the daemon sets it before serving); LocalVault applies the
 // stored window when it constructs the vault.
 func (m *Memory) SetColdBuildMemoryLimit(bytes int64) {
 	if m == nil {
@@ -62,6 +65,24 @@ func (m *Memory) SetColdBuildMemoryLimit(bytes int64) {
 		bytes = 0
 	}
 	m.coldBuildMemoryLimit.Store(bytes)
+}
+
+// SetSnapshotOnly marks this memory as a read-only recall surface. It must be
+// applied before LocalVault opens the vault so the build policy is in place
+// for the first query.
+func (m *Memory) SetSnapshotOnly(only bool) {
+	if m == nil {
+		return
+	}
+	m.snapshotOnly.Store(only)
+}
+
+// SnapshotOnly reports whether this memory refuses on-demand full builds.
+func (m *Memory) SnapshotOnly() bool {
+	if m == nil {
+		return false
+	}
+	return m.snapshotOnly.Load()
 }
 
 // New opens the database and builds the optional extractor.
@@ -140,10 +161,10 @@ func (req RememberRequest) effectivePresence() *text.PresenceCoordinates {
 	return nil
 }
 
-// Remember runs a thinclient remember on vault-only stores or seeds structured test assertions on legacy graph stores.
+// Remember runs a localvault remember on vault-only stores or seeds structured test assertions on legacy graph stores.
 func (m *Memory) Remember(req RememberRequest) (map[string]any, error) {
 	if m.Store == nil || !m.Store.HasLegacyGraph() {
-		return m.thinClientRemember(req)
+		return m.localVaultRemember(req)
 	}
 	return m.seedStructuredAssertion(req)
 }
@@ -440,7 +461,7 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 	// runs and the local-mode fallback further down stays the load-bearing path
 	// for empty graphs.
 	if m.Store != nil && !m.Store.HasLegacyGraph() {
-		return m.thinClientRecall(req)
+		return m.localVaultRecall(req)
 	}
 	now := clock.Unix()
 	// The legacy graph's cue hints came from a model-driven query rewrite; the
@@ -483,12 +504,12 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 	}
 	// Local mode: the legacy assertion graph may be empty for transcript imports,
 	// while the thin plaintext vault has the indexed source text. Fall back to the
-	// local thinclient recall (the dual-cluster retrieval kernel) instead of returning
+	// local localvault recall (the dual-cluster retrieval kernel) instead of returning
 	// empty — but never for explicit session or time filters, which the vault path
 	// does not reconstruct.
 	noFilters := req.Session == nil && req.AsOf == nil && req.WindowStart == nil && req.WindowEnd == nil
 	if noFilters && m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") && len(result.Bands) == 0 {
-		local, localErr := m.thinClientRecall(req)
+		local, localErr := m.localVaultRecall(req)
 		if localErr != nil {
 			return nil, localErr
 		}
@@ -539,7 +560,77 @@ func (m *Memory) Status(scope string) (map[string]any, error) {
 	}
 	result["version"] = version.Version
 	result["config"] = m.Config.PublicDict()
+	result["snapshot"] = m.snapshotStatus()
 	return result, nil
+}
+
+// snapshotStatus reports the published cluster and the build gap without
+// opening a vault, so a status probe never materialises the corpus.
+func (m *Memory) snapshotStatus() map[string]any {
+	status := map[string]any{
+		"ready":             false,
+		"docs_rev":          int64(0),
+		"docs_cnt":          int64(0),
+		"change_seq":        int64(0),
+		"purge_epoch":       int64(0),
+		"built_docs_rev":    int64(0),
+		"built_change_seq":  int64(0),
+		"built_purge_epoch": int64(0),
+		"gap":               int64(0),
+		"gap_known":         false,
+		"change_gap":        int64(0),
+		"change_gap_known":  false,
+		"purge_blocked":     false,
+	}
+	if m == nil || m.Store == nil || m.Store.DB() == nil {
+		return status
+	}
+	var docsRev, docsCnt, changeSeq, purgeEpoch int64
+	if err := m.Store.DB().QueryRow(`SELECT docs_rev, docs_cnt, change_seq, purge_epoch FROM rm_revision WHERE id = 1`).Scan(&docsRev, &docsCnt, &changeSeq, &purgeEpoch); err == nil {
+		status["docs_rev"] = docsRev
+		status["docs_cnt"] = docsCnt
+		status["change_seq"] = changeSeq
+		status["purge_epoch"] = purgeEpoch
+	}
+	builtPurgeEpoch := int64(0)
+	builtPurgeKnown := false
+	var raw []byte
+	if err := m.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, "snapshot_built_purge_epoch").Scan(&raw); err == nil {
+		if built, parseErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); parseErr == nil {
+			builtPurgeEpoch = built
+			builtPurgeKnown = true
+		}
+	}
+	status["built_purge_epoch"] = builtPurgeEpoch
+	status["purge_blocked"] = purgeEpoch > 0 && (!builtPurgeKnown || builtPurgeEpoch != purgeEpoch)
+	if err := m.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, "snapshot_built_docs_rev").Scan(&raw); err == nil {
+		if built, parseErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); parseErr == nil {
+			status["built_docs_rev"] = built
+			status["gap_known"] = true
+			gap := docsRev - built
+			if gap < 0 {
+				gap = 0
+			}
+			status["gap"] = gap
+		}
+	}
+	if err := m.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, "snapshot_built_change_seq").Scan(&raw); err == nil {
+		if built, parseErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); parseErr == nil {
+			status["built_change_seq"] = built
+			status["change_gap_known"] = true
+			gap := changeSeq - built
+			if gap < 0 {
+				gap = 0
+			}
+			status["change_gap"] = gap
+		}
+	}
+	if docsCnt == 0 {
+		status["ready"] = true
+		return status
+	}
+	status["ready"] = localvault.PublishedSnapshotExists(m.Config.DB)
+	return status
 }
 
 // Doctor runs the fixed environment and integrity report.
@@ -564,6 +655,33 @@ func (m *Memory) Doctor() (map[string]any, error) {
 		return nil, err
 	}
 	check("corpus", true, fmt.Sprintf("%d memory units · %d term postings", corpus.MemoryUnits(), terms))
+	var docsCnt, changeSeq int64
+	_ = m.Store.DB().QueryRow(`SELECT docs_cnt, change_seq FROM rm_revision WHERE id = 1`).Scan(&docsCnt, &changeSeq)
+	snapshotOK := docsCnt == 0 || localvault.PublishedSnapshotExists(m.Config.DB)
+	check("snapshot_cluster", snapshotOK, m.Config.DB+".snapshots")
+	if docsCnt > 0 {
+		if docsPath, ok := localvault.PublishedSnapshotDocsPath(m.Config.DB); ok {
+			if _, statErr := os.Stat(docsPath); statErr != nil {
+				warnings = append(warnings, "snapshot docs sidecar missing; recall falls back to the canonical scan")
+			}
+		} else {
+			warnings = append(warnings, "no published snapshot cluster; recall serves warming until the builder runs")
+		}
+	}
+	var changeGap int64
+	changeGapKnown := false
+	var rawGap []byte
+	if err := m.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, "snapshot_built_change_seq").Scan(&rawGap); err == nil {
+		if built, parseErr := strconv.ParseInt(strings.TrimSpace(string(rawGap)), 10, 64); parseErr == nil {
+			changeGap = changeSeq - built
+			if changeGap < 0 {
+				changeGap = 0
+			}
+			changeGapKnown = true
+		}
+	}
+	changeOK := docsCnt == 0 || (changeGapKnown && changeGap < 512)
+	check("snapshot_change_gap", changeOK, fmt.Sprintf("change_seq=%d gap=%d known=%v", changeSeq, changeGap, changeGapKnown))
 	// The deployment face only speaks when it has something to say: the fixed check
 	// list is a published contract, while an image/deployment mismatch is an alarm.
 	if deployOK, deployDetail := deploymentConsistency(); !deployOK {
@@ -785,7 +903,7 @@ func countJSONLLines(path string) (int, error) {
 // reader unchanged; a source that changes while the import runs is reported at the
 // end, with the units written so far (one transaction per unit) left in place.
 func (m *Memory) importCanonicalJSONL(target, scope string, session *string, replay bool) (map[string]any, error) {
-	tc, err := m.ThinClient()
+	tc, err := m.LocalVault()
 	if err != nil {
 		return nil, err
 	}
@@ -793,7 +911,7 @@ func (m *Memory) importCanonicalJSONL(target, scope string, session *string, rep
 		return nil, fmt.Errorf("jsonl import requires a local vault")
 	}
 	vault := tc.Vault
-	vault.SetIdentity(thinclient.VaultIdentity{})
+	vault.SetIdentity(localvault.VaultIdentity{})
 	snapshot, snapshotErr := episodic.NewSourceSnapshotContext(context.Background(), target)
 	if snapshotErr != nil {
 		snapshot = nil
@@ -818,8 +936,8 @@ func (m *Memory) importCanonicalJSONL(target, scope string, session *string, rep
 				if err := m.Store.DB().QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_docs WHERE unit_id = ?)`, unit.DocID).Scan(&exists); err != nil {
 					return err
 				}
-				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, unit.DocID, occurredAt, unit.RefPointer, unit.TurnRef, unit.Text, thinclient.IngestResponse{}); err != nil {
-					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, unit.DocID, occurredAt, unit.RefPointer, unit.TurnRef, unit.Text, localvault.IngestResponse{}); err != nil {
+					if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 						// A tombstoned unit was deleted by user intent: a manual
 						// import must not resurrect it.
 						continue

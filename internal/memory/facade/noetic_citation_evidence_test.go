@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // TestNoeticCitationEvidenceDropsBareNarrationMarker 钉住结晶引证的清洗契约：交付渲染
@@ -15,7 +15,7 @@ import (
 // 不得单独充当引证句——ZCode 把推理流进 text 通道的回答步会以这类标记行开头，若不清洗，
 // L3 引证就坍缩成一枚零信息标签行（ROI 面板 A 列只显示该标记的成因）。
 func TestNoeticCitationEvidenceDropsBareNarrationMarker(t *testing.T) {
-	h := thinclient.LocalResolvedHit{
+	h := localvault.LocalResolvedHit{
 		DistilledPlaintext: "[assistant] 思考过程：\n\n1. **理解用户的终极核心意图**：\n    *   用户明确指出：rm 能力应与 rb 同。",
 	}
 	got := noeticCitationEvidence(h)
@@ -25,11 +25,11 @@ func TestNoeticCitationEvidenceDropsBareNarrationMarker(t *testing.T) {
 	if !strings.Contains(got, "rm 能力应与 rb 同") {
 		t.Fatalf("citation evidence lost the real content: %q", got)
 	}
-	only := noeticCitationEvidence(thinclient.LocalResolvedHit{DistilledPlaintext: "[assistant] 思考过程："})
+	only := noeticCitationEvidence(localvault.LocalResolvedHit{DistilledPlaintext: "[assistant] 思考过程："})
 	if strings.TrimSpace(only) != "" {
 		t.Fatalf("marker-only evidence must collapse to empty, got %q", only)
 	}
-	raw := noeticCitationEvidence(thinclient.LocalResolvedHit{RawPlaintext: "[assistant] Thinking Process:\nPlatform X settled at 42 nodes."})
+	raw := noeticCitationEvidence(localvault.LocalResolvedHit{RawPlaintext: "[assistant] Thinking Process:\nPlatform X settled at 42 nodes."})
 	if strings.Contains(raw, "Thinking Process:") || !strings.Contains(raw, "42 nodes") {
 		t.Fatalf("raw fallback not cleaned: %q", raw)
 	}

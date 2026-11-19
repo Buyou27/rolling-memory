@@ -8,14 +8,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 // dedupeResolvedHitsByContent preserves every source. Even byte-identical text
 // can be independent evidence, and similarity cannot establish fact equivalence.
-func dedupeResolvedHitsByContent(hits []thinclient.LocalResolvedHit) ([]thinclient.LocalResolvedHit, int) {
+func dedupeResolvedHitsByContent(hits []localvault.LocalResolvedHit) ([]localvault.LocalResolvedHit, int) {
 	return hits, 0
 }
 
@@ -415,7 +415,7 @@ func isDeliveryClosingPunctForClause(clause string, r rune) bool {
 }
 
 func uniqueLowerWords(text string) []string {
-	words := thinclient.SplitWords(strings.ToLower(strings.TrimSpace(text)))
+	words := localvault.SplitWords(strings.ToLower(strings.TrimSpace(text)))
 	seen := make(map[string]bool, len(words))
 	out := make([]string, 0, len(words))
 	for _, word := range words {

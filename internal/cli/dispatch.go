@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/rocareer/rolling-memory/internal/config"
@@ -68,6 +69,11 @@ type application struct {
 	stderr   io.Writer
 	args     *Args
 	writeErr error
+	// snapshotBuilder is the single-flight guard for the background full-corpus
+	// builder spawned by a long-lived recall surface.
+	snapshotBuildRunning  atomic.Bool
+	snapshotBuildLastNS   atomic.Int64
+	snapshotBuildFailures atomic.Int32
 }
 
 func (a *application) printf(format string, values ...any) {
@@ -153,6 +159,12 @@ func (a *application) dispatch() int {
 	switch a.args.Command() {
 	case "mcp":
 		return a.runMCP()
+	case "build":
+		return a.runBuild()
+	case "ingestd":
+		return a.runIngestd()
+	case "scan":
+		return a.runScan()
 	case "hook":
 		return a.runHook()
 	case "init":
@@ -228,7 +240,7 @@ func (a *application) runWithMemory(memory *facade.Memory) (int, error) {
 		return 0, a.emit(result, func() { a.printRecent(result) })
 	case "import":
 		result, err := memory.ImportFile(a.args.String("path"), nil, a.args.StringPtr("session"),
-			a.args.String("audience"), a.args.Flag("replay"))
+			a.args.String("audience"), false)
 		if err != nil {
 			return 1, err
 		}
@@ -601,7 +613,7 @@ func (a *application) runInit() int {
 	}
 	// 初始化即物化端侧金库 schema（含与 RB 存储同构的 rm_docs / rm_terms 规范表）：
 	// 交付面的数据库标准在 init 当刻即确定，不推迟到首次真正使用（import/recall）才创建。
-	if _, err := memory.ThinClient(); err != nil {
+	if _, err := memory.LocalVault(); err != nil {
 		return a.fail(err)
 	}
 	status, statusErr := memory.Status(cfg.Scope)
@@ -651,13 +663,9 @@ func (a *application) runMode() int {
 			return a.fail(err)
 		}
 	}
-	egress := "loopback-only"
-	if cfg.Mode != "local" {
-		egress = "remote-allowed"
-	}
-	result := map[string]any{"ok": true, "mode": cfg.Mode, "egress": egress, "config": cfg.Path}
+	result := map[string]any{"ok": true, "mode": cfg.Mode, "egress": "loopback-only", "config": cfg.Path}
 	if err := a.emit(result, func() {
-		a.printf("mode: %s (%s)\n", cfg.Mode, egress)
+		a.printf("mode: %s (loopback-only)\n", cfg.Mode)
 	}); err != nil {
 		return a.fail(err)
 	}
@@ -710,8 +718,10 @@ func (a *application) runMCP() int {
 			return a.fail(err)
 		}
 		defer func() { _ = mem.Close() }()
+		mem.SetSnapshotOnly(true)
 		if err := mcp.ServeUnix(mcp.DefaultUnixSocketPath(), mem, func(ctx context.Context) {
-			a.backgroundMCPAutoWatchWithMemory(ctx, mem)
+			go a.backgroundSnapshotWarmup(ctx, mem)
+			a.superviseIngestWorker(ctx, mem)
 		}); err != nil {
 			a.errorf("error: %s\n", ids.Redact(err.Error()))
 			return 1

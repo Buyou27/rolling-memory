@@ -69,7 +69,7 @@ var cjkRanges = [][2]rune{
 	{0xAC00, 0xD7AF},
 }
 
-// isTokenFilteredByMemcore reports whether tok carries only closed-class glue
+// isTokenFilteredByDelivery reports whether tok carries only closed-class glue
 // information. The judgement is purely mathematical (128k BPE merge-tree prior ×
 // Shannon self-information gain), with zero static word lists:
 //   - Latin/Digit tokens are glue unless they reach the primary gain tier;
@@ -78,7 +78,7 @@ var cjkRanges = [][2]rune{
 //
 // Single-character CJK date units are rescued by TokenizeAll's numeral-adjacency
 // rule instead of any vocabulary.
-func isTokenFilteredByMemcore(tok string) bool {
+func isTokenFilteredByDelivery(tok string) bool {
 	if tok == "" {
 		return true
 	}
@@ -293,31 +293,31 @@ func TokenizeAll(text string) []string {
 		if HasCJK(token) {
 			length := utf8.RuneCountInString(token)
 			if length == 1 {
-				if !isTokenFilteredByMemcore(token) || adjacentToNumeral(matches, idx) {
+				if !isTokenFilteredByDelivery(token) || adjacentToNumeral(matches, idx) {
 					terms = append(terms, token)
 				}
 				continue
 			}
-			if !isTokenFilteredByMemcore(token) && length <= 12 {
+			if !isTokenFilteredByDelivery(token) && length <= 12 {
 				terms = append(terms, token)
 			}
 			runes := []rune(token)
 			for index := 0; index < len(runes)-1; index++ {
 				bigram := string(runes[index : index+2])
-				if !isTokenFilteredByMemcore(bigram) {
+				if !isTokenFilteredByDelivery(bigram) {
 					terms = append(terms, bigram)
 				}
 			}
 			if length > 3 {
 				for index := 0; index < len(runes)-2; index++ {
 					trigram := string(runes[index : index+3])
-					if !isTokenFilteredByMemcore(trigram) {
+					if !isTokenFilteredByDelivery(trigram) {
 						terms = append(terms, trigram)
 					}
 				}
 			}
 		} else if utf8.RuneCountInString(token) >= 2 {
-			if !isTokenFilteredByMemcore(token) {
+			if !isTokenFilteredByDelivery(token) {
 				terms = append(terms, token)
 			}
 		}
@@ -886,7 +886,7 @@ func RenderAssertion(subject, relation, object string) string {
 
 // StripInjected removes harness-injected context blocks and non-speech protocol
 // envelopes from transcript text. The rules live in `internal/speech` (form-only
-// protocol vocabulary, zero word lists) so ingest paths and the thin client strip
+// protocol vocabulary, zero word lists) so ingest paths and the local vault client strip
 // conversation turns identically.
 func StripInjected(text string) string {
 	return speech.StripConversationNoise(text)
@@ -997,17 +997,17 @@ func UniqueOrdered(values []string) []string {
 	return result
 }
 
-// FilterQueryTerms removes grammatical glue tokens via the memcore BPE-Shannon
+// FilterQueryTerms removes grammatical glue tokens via the delivery BPE-Shannon
 // mathematical discriminator while keeping a fallback to the original list if all
 // tokens would be removed. Tokens are dropped only inside the joint low-information
-// band (see isTokenFilteredByMemcore), so no static stopword table is involved.
+// band (see isTokenFilteredByDelivery), so no static stopword table is involved.
 func FilterQueryTerms(tokens []string) []string {
 	if len(tokens) == 0 {
 		return tokens
 	}
 	filtered := make([]string, 0, len(tokens))
 	for _, tok := range tokens {
-		if !isTokenFilteredByMemcore(tok) {
+		if !isTokenFilteredByDelivery(tok) {
 			filtered = append(filtered, tok)
 		}
 	}

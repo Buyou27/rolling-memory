@@ -54,7 +54,7 @@ func TestEpisodicWatchDrainsUnchangedJSONLBacklog(t *testing.T) {
 				t.Fatal(err)
 			}
 			var firstCount int
-			err = firstDB.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&firstCount)
+			err = firstDB.QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&firstCount)
 			_ = firstDB.Close()
 			if err != nil || firstCount == 0 {
 				t.Fatalf("first watch pass did not import the fixture: count=%d err=%v", firstCount, err)
@@ -67,7 +67,7 @@ func TestEpisodicWatchDrainsUnchangedJSONLBacklog(t *testing.T) {
 	}
 	defer db.Close()
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 81 {

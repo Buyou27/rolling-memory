@@ -37,7 +37,7 @@ func (s *Store) Resolve(scope, op, target string, limit int) (map[string]any, er
 	if target == "" {
 		return nil, fmt.Errorf("resolve: op=%s requires a non-empty target", op)
 	}
-	_ = db.EnsureMemcoreSchema(s.conn)
+	_ = db.EnsureDeliverySchema(s.conn)
 
 	resolveTargetNodeID := func(raw string) (string, string, error) {
 		if n, found, err := s.Node(raw); err != nil {

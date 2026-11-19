@@ -493,7 +493,7 @@ type localDocumentBody struct {
 }
 
 // documentsViaDaemon 经产品二进制 `engine documents` 的已核验通道批量解析本地文档正文
-// （`/v1/documents` → 产品正典 `Vault.LoadLocalDocument`）。控制台禁止导入 thinclient，
+// （`/v1/documents` → 产品正典 `Vault.LoadLocalDocument`）。控制台禁止导入 localvault，
 // 也不允许自研第二套文件分块副本——L1 分块的正文只能由内核现场重读重切，展示层不得
 // 用路径坐标冒充正文；控制台亦不自带 socket 客户端，未核验 socket 一律失败关闭；
 // handled=false 表示守护进程不可用，调用方按「正文暂不可读」降级。
@@ -1092,7 +1092,7 @@ func computeAdminDBFingerprint(memoryPath, scope string) string {
 	var createdAt, engine, firstDocID string
 	_ = db.QueryRow(`SELECT coalesce(value, '') FROM db_meta WHERE key = 'created_at'`).Scan(&createdAt)
 	_ = db.QueryRow(`SELECT coalesce(value, '') FROM db_meta WHERE key = 'engine'`).Scan(&engine)
-	_ = db.QueryRow(`SELECT coalesce(doc_id, '') FROM thin_vault_docs ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
+	_ = db.QueryRow(`SELECT coalesce(doc_id, '') FROM rm_units ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	if strings.TrimSpace(firstDocID) == "" {
 		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM rm_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	}
@@ -1114,7 +1114,7 @@ func computeAdminDBFingerprint(memoryPath, scope string) string {
 	return hex.EncodeToString(sum[:])[:24]
 }
 
-// vaultDroppedLegacyAnalytics reports a live thin-vault database that no longer
+// vaultDroppedLegacyAnalytics reports a live local vault that no longer
 // carries the retired trace/assertion tables the per-turn settlement engine
 // reads. A database that cannot be opened is not judged here.
 func vaultDroppedLegacyAnalytics(memoryPath string) bool {
@@ -1124,7 +1124,7 @@ func vaultDroppedLegacyAnalytics(memoryPath string) bool {
 	}
 	defer release()
 	var vaultTables int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_docs'`).Scan(&vaultTables); err != nil || vaultTables == 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_units'`).Scan(&vaultTables); err != nil || vaultTables == 0 {
 		return false
 	}
 	var legacyTables int
@@ -1331,7 +1331,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var hasVault int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thin_vault_docs'`).Scan(&hasVault); err != nil || hasVault == 0 {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_units'`).Scan(&hasVault); err != nil || hasVault == 0 {
 		return out, sig
 	}
 
@@ -1346,7 +1346,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	// 「今日/窗口新增」与「记忆吞吐趋势」同口径：按首次入库时间（inserted_at，
 	// 未迁移的只读旧夹具缺列时平滑回退内容时间 occurred_at）聚合，避免编辑
 	// 旧文件把存量分块刷进近期新增的账实不一致。
-	docTsExpr := vaultIngestTimeExpr(memoryPath, "thin_vault_docs")
+	docTsExpr := vaultIngestTimeExpr(memoryPath, "rm_units")
 	bgTsExpr := vaultIngestTimeExpr(memoryPath, "rm_bg_chunks")
 	ntTsExpr := vaultIngestTimeExpr(memoryPath, "rm_noetic")
 
@@ -1355,11 +1355,11 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	// 旧夹具缺 layer 列时退回不分层（全部按 L2 计）。
 	bgDocCond := "0"
 	var layerCols int
-	if lErr := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('thin_vault_docs') WHERE name = 'layer'`).Scan(&layerCols); lErr == nil && layerCols > 0 {
+	if lErr := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('rm_units') WHERE name = 'layer'`).Scan(&layerCols); lErr == nil && layerCols > 0 {
 		bgDocCond = "lower(trim(COALESCE(layer, ''))) = 'background'"
 	}
 
-	vault := &roiFactsVault{SchemaEra: "thin_vault"}
+	vault := &roiFactsVault{SchemaEra: "canonical"}
 	var ep1h, ep24h, ep7d, ep30d, epAll int64
 	_ = db.QueryRowContext(ctx, fmt.Sprintf(`
 			SELECT COUNT(*),
@@ -1370,7 +1370,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			       COALESCE(SUM(CASE WHEN %s >= ? THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN %s >= ? THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN %s >= 0 THEN 1 ELSE 0 END), 0)
-			FROM thin_vault_docs WHERE NOT (%s)`, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, bgDocCond),
+			FROM rm_units WHERE NOT (%s)`, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, bgDocCond),
 		todayStart, floor1h, floor24h, floor7d, floor30d,
 	).Scan(&vault.EpisodicDocs, &vault.EpisodicPointers, &vault.TodayEpisodic, &ep1h, &ep24h, &ep7d, &ep30d, &epAll)
 	// 背景层文档（layer=='background'）的窗口计数单取，随后并入 L1 背景计数。
@@ -1382,10 +1382,10 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 			       COALESCE(SUM(CASE WHEN %s >= ? THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN %s >= ? THEN 1 ELSE 0 END), 0),
 			       COALESCE(SUM(CASE WHEN %s >= 0 THEN 1 ELSE 0 END), 0)
-			FROM thin_vault_docs WHERE %s`, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, bgDocCond),
+			FROM rm_units WHERE %s`, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, docTsExpr, bgDocCond),
 		todayStart, floor1h, floor24h, floor7d, floor30d,
 	).Scan(&bgDocToday, &bgDoc1h, &bgDoc24h, &bgDoc7d, &bgDoc30d, &bgDocAll)
-	_ = db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(DISTINCT CASE WHEN instr(address_uri, '#') > 0 THEN substr(address_uri, 1, instr(address_uri, '#') - 1) ELSE address_uri END) FROM thin_vault_docs WHERE address_uri != '' AND NOT (%s)`, bgDocCond)).Scan(&vault.EpisodicCells)
+	_ = db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(DISTINCT CASE WHEN instr(address_uri, '#') > 0 THEN substr(address_uri, 1, instr(address_uri, '#') - 1) ELSE address_uri END) FROM rm_units WHERE address_uri != '' AND NOT (%s)`, bgDocCond)).Scan(&vault.EpisodicCells)
 	vault.EpisodicText = vault.EpisodicDocs - vault.EpisodicPointers
 	if vault.EpisodicDocs > 0 {
 		vault.EpisodicPointerRatioPct = roundFloat(float64(vault.EpisodicPointers)*100.0/float64(vault.EpisodicDocs), 1)
@@ -1757,7 +1757,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	// Measure inline distillation compression ratio (raw sentences vs the memory engine kept_indices).
 	distRows, err := db.QueryContext(ctx, `
 		SELECT raw_text, sentences_json, kept_indices_json
-		FROM thin_vault_docs
+		FROM rm_units
 		WHERE raw_text NOT LIKE '@ref:%' AND raw_text != ''
 		LIMIT 500
 	`)
@@ -1805,7 +1805,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		SELECT date(%s, 'unixepoch', 'localtime') AS d,
 		       COALESCE(SUM(CASE WHEN %s THEN 1 ELSE 0 END), 0) AS bg_doc_cnt,
 		       COALESCE(SUM(CASE WHEN NOT (%s) THEN 1 ELSE 0 END), 0) AS ep_cnt
-		FROM thin_vault_docs
+		FROM rm_units
 		WHERE %s >= ?
 		GROUP BY d
 	`, docTsExpr, bgDocCond, bgDocCond, docTsExpr), floor14d)
@@ -1877,7 +1877,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		if dRows, dErr := db.QueryContext(ctx, `
 				SELECT doc_id, coalesce(layer, 'episodic'), coalesce(locus, ''), coalesce(address_uri, ''),
 				       coalesce(waveform_bar, ''), occurred_at, raw_text
-				FROM thin_vault_docs WHERE doc_id IN (`+ph+`)
+				FROM rm_units WHERE doc_id IN (`+ph+`)
 			`, args...); dErr == nil {
 			for dRows.Next() {
 				var id string
@@ -2228,7 +2228,7 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	}
 	locRows, err := db.QueryContext(ctx, `
 		SELECT coalesce(layer, 'episodic'), coalesce(locus, ''), COUNT(*), COALESCE(MAX(occurred_at), 0)
-		FROM thin_vault_docs
+		FROM rm_units
 		GROUP BY 1, 2
 	`)
 	if err == nil {

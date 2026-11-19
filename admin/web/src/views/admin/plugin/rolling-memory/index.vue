@@ -337,7 +337,7 @@
                     @keydown.space.prevent="goLayer('background')"
                 >
                     <div class="layer-head">
-                        <span class="layer-badge bg">{{ t('plugin.rolling-memory.background.badge') }}</span>
+                        <MemoryLayerBadge layer="background" :label="t('plugin.rolling-memory.background.badge')" size="default" />
                         <el-tag size="small" :type="layerTagType('background')" effect="plain">
                             {{ layerStatus('background') }}
                         </el-tag>
@@ -351,10 +351,6 @@
                         <span
                             >{{ t('plugin.rolling-memory.overview.localVaultLbl') }}:
                             <b>{{ layerAlign('background').local_vault_count ?? stats.background_count ?? '—' }}</b></span
-                        >
-                        <span v-if="!isLocalMode"
-                            >{{ t('plugin.rolling-memory.overview.remoteCloudLbl') }}:
-                            <b>{{ alignmentKnown('background') ? layerAlign('background').remote_cloud_count : '—' }}</b></span
                         >
                     </div>
                     <div class="layer-foot">
@@ -385,7 +381,7 @@
                     @keydown.space.prevent="goLayer('episodic')"
                 >
                     <div class="layer-head">
-                        <span class="layer-badge epi">{{ t('plugin.rolling-memory.episodic.badge') }}</span>
+                        <MemoryLayerBadge layer="episodic" :label="t('plugin.rolling-memory.episodic.badge')" size="default" />
                         <el-tag size="small" :type="layerTagType('episodic')" effect="plain">
                             {{ layerStatus('episodic') }}
                         </el-tag>
@@ -395,10 +391,6 @@
                         <span
                             >{{ t('plugin.rolling-memory.overview.localVaultLbl') }}:
                             <b>{{ layerAlign('episodic').local_vault_count ?? stats.episodic_count ?? '—' }}</b></span
-                        >
-                        <span v-if="!isLocalMode"
-                            >{{ t('plugin.rolling-memory.overview.remoteCloudLbl') }}:
-                            <b>{{ alignmentKnown('episodic') ? layerAlign('episodic').remote_cloud_count : '—' }}</b></span
                         >
                         <span v-if="layerAlign('episodic').harness_unsynced_turns > 0" class="pending-num">
                             {{ t('plugin.rolling-memory.overview.harnessUnsyncedLbl') }}: <b>{{ layerAlign('episodic').harness_unsynced_turns }}</b>
@@ -457,7 +449,7 @@
                     @keydown.space.prevent="goLayer('noetic')"
                 >
                     <div class="layer-head">
-                        <span class="layer-badge noe">{{ t('plugin.rolling-memory.noetic.badge') }}</span>
+                        <MemoryLayerBadge layer="noetic" :label="t('plugin.rolling-memory.noetic.badge')" size="default" />
                         <el-tag size="small" :type="layerTagType('noetic')" effect="plain">
                             {{ layerStatus('noetic') }}
                         </el-tag>
@@ -467,10 +459,6 @@
                         <span
                             >{{ t('plugin.rolling-memory.overview.localVaultLbl') }}:
                             <b>{{ layerAlign('noetic').local_vault_count ?? stats.noetic_active_count ?? '—' }}</b></span
-                        >
-                        <span v-if="!isLocalMode"
-                            >{{ t('plugin.rolling-memory.overview.remoteCloudLbl') }}:
-                            <b>{{ alignmentKnown('noetic') ? layerAlign('noetic').remote_cloud_count : '—' }}</b></span
                         >
                         <span
                             >{{ t('plugin.rolling-memory.noetic.staleLabel') }}<b>{{ stats.noetic_stale_count }}</b
@@ -517,6 +505,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAdminInfo } from '@/stores/adminInfo'
+import MemoryLayerBadge from '@/components/memory/MemoryLayerBadge.vue'
 import { useLoadingProgressText } from '@/utils/loadingProgress'
 import { MonitorSocket } from '@/utils/monitorSocket'
 import request from '@/utils/request'
@@ -584,7 +573,7 @@ const showsTurns = (h: any) => h.turns_scan_supported === true
 const healthKnown = computed(
     () =>
         typeof envHealth.value.health_score === 'number' &&
-        (envHealth.value.mode === 'local' || (envHealth.value.mode === 'cloud' && envHealth.value.cloud_online === true))
+        envHealth.value.mode === 'local'
 )
 
 const handleToggleAutoSync = async (val: string | number | boolean) => {
@@ -593,7 +582,7 @@ const handleToggleAutoSync = async (val: string | number | boolean) => {
         await request<any>({
             url: '/admin/plugin/rolling-memory/toggle',
             method: 'POST',
-            data: { key: 'cloud_auto_sync', value: enabled ? 'true' : 'false' },
+            data: { key: 'sync_auto_watch', value: enabled ? 'true' : 'false' },
         })
         envHealth.value.auto_sync_enabled = enabled
         envHealth.value.sync_mode = enabled ? 'auto' : 'manual'
@@ -621,14 +610,14 @@ const handleToggleDeliveryWindow = async (val: string) => {
 }
 
 const layerAlign = (layer: string) => envHealth.value?.layers?.[layer] || {}
-// 运行模式口径与后端 isLocalModeForHome 一致：只有显式 cloud 才算云端，缺省/未加载/未知一律按本地处置。
+// The product is local-only: a missing, unloaded or unknown mode is local.
 // 否则环境面板（单次约 9s）尚在途中时，本地模式的页面会先闪出一条「远端云端: —」。
 const isLocalMode = computed(() => envHealth.value?.mode !== 'cloud')
 const alignmentKnown = (layer: string) =>
     Boolean(
         envHealth.value?.layers?.[layer] &&
         (layer !== 'episodic' || envHealth.value.layers.episodic.alignment_known === true) &&
-        (isLocalMode.value || (envHealth.value?.mode === 'cloud' && envHealth.value?.cloud_online === true))
+        isLocalMode.value
     )
 const layerTagType = (layer: string) => (!alignmentKnown(layer) ? 'info' : layerAlign(layer).aligned ? 'success' : 'warning')
 const layerStatus = (layer: string) => {
@@ -1083,14 +1072,6 @@ const handleReconcile = async (layer: 'all' | 'episodic' | 'background' | 'noeti
                         score: rep.status?.health_score ?? envHealth.value?.health_score ?? 100,
                     })
                 }
-            } else {
-                summary = t('plugin.rolling-memory.overview.reconcileResult', {
-                    har: rep.episodic_imported_from_harness ?? 0,
-                    files: rep.background_synced_files ?? 0,
-                    epi: rep.episodic_pushed_to_remote ?? 0,
-                    bg: rep.background_pushed_to_remote ?? 0,
-                    noe: rep.noetic_pushed_to_remote ?? 0,
-                })
             }
             const actionableWarnings = (rep.warnings || []).filter(
                 (w: string) => !String(w).includes('episodic index backfill covers only the scanned harness window')
@@ -1494,23 +1475,52 @@ onBeforeUnmount(() => {
 }
 .layer-card {
     cursor: pointer;
+    border-top: 2px solid transparent;
     transition:
         border-color 0.2s,
         transform 0.2s;
+
+    &.layer-bg {
+        border-top-color: var(--rm-layer-background);
+
+        .stat-val {
+            color: var(--rm-layer-background);
+        }
+    }
+
+    &.layer-epi {
+        border-top-color: var(--rm-layer-episodic);
+
+        .stat-val {
+            color: var(--rm-layer-episodic);
+        }
+    }
+
+    &.layer-noe {
+        border-top-color: var(--rm-layer-noetic);
+
+        .stat-val {
+            color: var(--rm-layer-noetic);
+        }
+    }
 }
 .layer-card:hover {
-    border-color: var(--el-color-primary);
     transform: translateY(-1px);
+}
+.layer-card.layer-bg:hover {
+    border-color: var(--rm-layer-background);
+}
+.layer-card.layer-epi:hover {
+    border-color: var(--rm-layer-episodic);
+}
+.layer-card.layer-noe:hover {
+    border-color: var(--rm-layer-noetic);
 }
 .layer-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
-}
-.layer-badge {
-    font-size: 13px;
-    font-weight: 600;
 }
 .stat-val {
     font-size: 28px;

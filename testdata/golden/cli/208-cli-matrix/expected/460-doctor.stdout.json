@@ -24,6 +24,16 @@
       "detail": "2 memory units · 23 term postings",
       "name": "corpus",
       "ok": true
+    },
+    {
+      "detail": "<DB>.snapshots",
+      "name": "snapshot_cluster",
+      "ok": false
+    },
+    {
+      "detail": "change_seq=4 gap=0 known=false",
+      "name": "snapshot_change_gap",
+      "ok": false
     }
   ],
   "config": {
@@ -70,5 +80,7 @@
   "python": "<RUNTIME>",
   "sqlite": "<SQLITE>",
   "version": "0.0.1",
-  "warnings": []
+  "warnings": [
+    "no published snapshot cluster; recall serves warming until the builder runs"
+  ]
 }

@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,6 +63,19 @@ socketserver.UnixStreamServer(sock,Handler).serve_forever()`
 				}
 				if time.Now().After(deadline) {
 					t.Fatal("fake daemon did not bind")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// The socket file appears before the server accepts; wait for a real
+			// dial so the shutdown probe cannot race the listen backlog.
+			for {
+				conn, dialErr := net.DialTimeout("unix", sock, 50*time.Millisecond)
+				if dialErr == nil {
+					_ = conn.Close()
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("fake daemon did not accept: %v", dialErr)
 				}
 				time.Sleep(10 * time.Millisecond)
 			}

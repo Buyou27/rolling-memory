@@ -11,12 +11,12 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestLocalPointerStarvationCorruptIndex(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,12 +32,12 @@ func TestLocalPointerStarvationCorruptIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 		ref := "@ref:jsonl:" + path + ":0#0"
-		text, err := thinclient.ResolveEpisodicPointerLive(ref)
+		text, err := localvault.ResolveEpisodicPointerLive(ref)
 		if err != nil {
 			t.Fatal(err)
 		}
 		packet, _ := client.Vault.PackBlindPacket(id, text, testNow)
-		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+		if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 			t.Fatal(err)
 		}
 		if i < 30 {
@@ -49,7 +49,6 @@ func TestLocalPointerStarvationCorruptIndex(t *testing.T) {
 	if _, err := memory.Store.DB().Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id IN ('a030', 'a031')`); err != nil {
 		t.Fatal(err)
 	}
-	thinclient.PurgeLegacyTables(memory.Store.DB())
 	result, err := memory.Recall(facade.RecallRequest{Cue: cue, NoCrystallize: true})
 	if err != nil || !strings.Contains(result.Render(10000), cue) || result.Gaps["source_unavailable"] != 32 || result.Gaps["index_incomplete"] != 2 {
 		t.Fatalf("corrupt index isolation: %+v %v", result, err)
@@ -61,7 +60,7 @@ func TestLocalPointerStarvation(t *testing.T) {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 			memory := newMemory(t)
-			client, err := memory.ThinClient()
+			client, err := memory.LocalVault()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,12 +76,12 @@ func TestLocalPointerStarvation(t *testing.T) {
 					t.Fatal(err)
 				}
 				ref := "@ref:jsonl:" + path + ":0#0"
-				text, err := thinclient.ResolveEpisodicPointerLive(ref)
+				text, err := localvault.ResolveEpisodicPointerLive(ref)
 				if err != nil {
 					t.Fatal(err)
 				}
 				packet, _ := client.Vault.PackBlindPacket(id, text, testNow)
-				if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, thinclient.IngestResponse{Layer: thinclient.LayerEpisodic}); err != nil {
+				if err := client.Vault.SaveLocalEpisodicPointerIndexed(id, testNow, ref, "", text, packet, localvault.IngestResponse{Layer: localvault.LayerEpisodic}); err != nil {
 					t.Fatal(err)
 				}
 				if i < n {
@@ -91,9 +90,8 @@ func TestLocalPointerStarvation(t *testing.T) {
 					}
 				}
 			}
-			thinclient.PurgeLegacyTables(memory.Store.DB())
 			q, _ := client.Vault.PackBlindPacket("q", cue, 0)
-			all, err := thinclient.NewLocalVaultTransport(client.Vault).QueryBlindManifold(t.Context(), q, n+1)
+			all, err := localvault.NewLocalVaultTransport(client.Vault).QueryBlindManifold(t.Context(), q, n+1)
 			if err != nil || len(all) != n+1 || all[len(all)-1].UnitID != "zhealthy" {
 				t.Fatalf("full ranking=%+v err=%v", all, err)
 			}

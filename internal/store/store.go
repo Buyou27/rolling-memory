@@ -29,7 +29,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/internal/speech"
 )
 
@@ -368,7 +368,7 @@ type CandidateOptions struct {
 	Session      *string
 	ClosureKinds []string
 	Query        string
-	Presence     *memcore.PresenceCoordinates
+	Presence     *delivery.PresenceCoordinates
 }
 
 // AnchorOptions carries assertions_by_anchor keyword arguments.
@@ -795,7 +795,7 @@ func sliceRunes(value string, start, end int) string {
 // the candidate scoring loops. Out-of-range ends yield "" (strict), matching the original
 // inline range check instead of sliceRunes' clamp.
 func sliceRunesBounded(value string, start, end int) string {
-	return memcore.SliceRunesBounded(value, start, end)
+	return delivery.SliceRunesBounded(value, start, end)
 }
 
 func anchorRef(traceHash string, start, end int64) string {

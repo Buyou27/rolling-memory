@@ -14,7 +14,7 @@ import (
 //
 // 锚只在**本机侧**被消费：盲态引擎看不到任何字面标记（脉冲已数字化），
 // 因此锚不是给云端看的指令，而是交付装配时的候选排序偏好：
-// 命中锚（= 本地明文金库 thin_vault_docs.locus，入库时按仓库目录名打标）的候选
+// 命中锚（= 本地金库 rm_unit_meta.locus，入库时按仓库目录名打标）的候选
 // 稳定置前、其它候选原序压后，**不删除任何候选**（fail-open）。
 // 未写锚、锚无人命中、或全部命中时，候选序与不带锚完全一致（既有金标零影响）。
 var locusAnchorPattern = regexp.MustCompile(`^\s*\[([^\[\]\r\n]{1,64})\]\s*`)
@@ -94,7 +94,7 @@ func promoteBandsByLocusAnchor(result *Result, cue string) {
 }
 
 // LocusAnchor 提取 cue 首部的工作区锚（`[<workspace>]`，未写锚返回空串）。导出给薄客户端
-// 交付管线（internal/memory/facade thinClientRecall）共用同一提取口径，两种管线的锚语义只有一个正本。
+// 交付管线（internal/memory/facade localVaultRecall）共用同一提取口径，两种管线的锚语义只有一个正本。
 func LocusAnchor(cue string) string { return locusAnchor(cue) }
 
 // StripLocusAnchor 剥离 cue 首部的工作区锚（`[<workspace>]`），使检索内核仅对纯正文线索求值；

@@ -14,7 +14,7 @@ import (
 
 // TestRealEndToEndRecallBreakdown times Memory.Recall end-to-end on a real
 // vault copy (RM_LATENCY_DB), the exact path the MCP tool serves, so the gap
-// between thinclient-internal time and the user-facing elapsed_ms becomes
+// between localvault-internal time and the user-facing elapsed_ms becomes
 // attributable. Manual probe: skipped without the env var.
 func TestRealEndToEndRecallBreakdown(t *testing.T) {
 	dbPath := os.Getenv("RM_LATENCY_DB")

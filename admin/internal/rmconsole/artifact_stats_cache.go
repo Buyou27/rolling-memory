@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 控制台读数中的全库去重统计（thin_vault_docs ∪ rm_bg_chunks 的 cell_uri 去重）
+// 控制台读数中的全库去重统计（rm_units ∪ rm_bg_chunks 的 cell_uri 去重）
 // 是整个控制台最贵的单条 SQL：全表 substr/instr + UNION + COUNT(DISTINCT) 排序聚合，
 // 本机 8.4 万行实测 0.25–0.65s/次。该读数只用于展示（referent/eligible nodes），
 // 不需要秒级新鲜度——否则浮标 1Hz 采样与状态帧会随金库每次写入把它整条重跑，
@@ -71,7 +71,7 @@ func cachedArtifactCells(dbPath string) int {
 	rows, err := sqliteQueryJSON(dbPath, `
 		SELECT COUNT(DISTINCT cell_uri) AS cells_cnt
 		FROM (
-			SELECT substr(address_uri, 1, instr(address_uri || '#', '#') - 1) AS cell_uri FROM thin_vault_docs WHERE address_uri != ''
+			SELECT substr(address_uri, 1, instr(address_uri || '#', '#') - 1) AS cell_uri FROM rm_units WHERE address_uri != ''
 			UNION
 			SELECT substr(address_uri, 1, instr(address_uri || '#', '#') - 1) AS cell_uri FROM rm_bg_chunks WHERE address_uri != ''
 		);

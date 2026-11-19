@@ -19,6 +19,8 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three-stdlib'
 import { isContainerKind, isWordKind, isPhraseKind, nodeAccentColor } from './kinds'
+import { MEMORY_LAYER_COLORS, hexToRgba, normalizeMemoryLayer } from '@/utils/memoryLayers'
+import { fibonacciSpherePoint } from './layout'
 
 export interface Graph3DNode {
     id: number
@@ -44,7 +46,7 @@ export interface Graph3DNode {
     atoms?: { token: string; potential: number; weight: number }[]
     molecules?: { text: string; mass_nats: number; gamma: number }[]
     words?: { token: string; group_hex?: string; df: number; mass_nats: number; weight: number; unit_span?: number }[]
-    phrases?: { left: string; right: string; df: number; binding_energy_nats: number; joint_surprisal_nats: number; unit_span?: number }[]
+    phrases?: { left: string; right: string; df: number; left_df?: number; right_df?: number; containment?: number; lift?: number; binding_energy_nats: number; joint_surprisal_nats: number; unit_span?: number }[]
 }
 
 export interface Graph3DEdge {
@@ -248,8 +250,7 @@ const PULSE_PHOTON_FRAGMENT_SHADER = /* glsl */ `
 
 // ==================== 径向高斯星云光晕纹理生成器 ====================
 
-function createRadialGlowTexture(innerHex: string, midHex: string, outerRgba = 'rgba(0,0,0,0)'): THREE.CanvasTexture {
-    const size = 128
+function createRadialGlowTexture(innerHex: string, midHex: string, outerRgba = 'rgba(0,0,0,0)', size = 128): THREE.CanvasTexture {
     const canvas = document.createElement('canvas')
     canvas.width = size
     canvas.height = size
@@ -263,6 +264,20 @@ function createRadialGlowTexture(innerHex: string, midHex: string, outerRgba = '
     grad.addColorStop(1.0, outerRgba)
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
+    // 大尺寸星云贴图在低 alpha 下会被 8-bit 量化成同心色带（碟形“彩虹年轮”）。
+    // 对 512 级贴图叠加确定性微抖动，把长色带打散成不可见颗粒。
+    if (size >= 256) {
+        const image = ctx.getImageData(0, 0, size, size)
+        const data = image.data
+        for (let i = 0; i < data.length; i += 4) {
+            const dither = (deterministicUnitRandom(i * 0.61803398875 + 17.13) - 0.5) * 7
+            data[i] = Math.max(0, Math.min(255, data[i] + dither))
+            data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + dither))
+            data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + dither))
+            data[i + 3] = Math.max(0, Math.min(255, data[i + 3] + dither))
+        }
+        ctx.putImageData(image, 0, 0)
+    }
     const tex = new THREE.CanvasTexture(canvas)
     tex.needsUpdate = true
     return tex
@@ -403,6 +418,13 @@ function computeAxonControlPoint(
     return outMid
 }
 
+/** 词/短语粒子相对宿主微粒的刚性跟随偏移 */
+interface ParticleAnchorState {
+    nodeId: number
+    hostId: number
+    offset: THREE.Vector3
+}
+
 /** 容器内记忆囊泡的三维开普勒环流轨道参数 */
 interface IntracellularOrbit {
     nodeId: number
@@ -533,6 +555,7 @@ export class Hypergraph3DEngine {
     private prevPos3DByKey = new Map<string, THREE.Vector3>()
     private nodeTransitions = new Map<number, NodeTransitionState>()
     private currentIsSphere = true
+    private hasFittedData = false
     private cellRadiusById = new Map<number, number>()
     private somaMaterials = new Map<number, THREE.ShaderMaterial>()
     private nodeCoreMeshes = new Map<number, THREE.Mesh>()
@@ -552,6 +575,15 @@ export class Hypergraph3DEngine {
     private intracellularOrbits: IntracellularOrbit[] = []
     private atomicSatellites: AtomicSatelliteOrbit[] = []
     private adjacencyMap = new Map<number, { peerId: number; relation: string }[]>()
+    /** 每帧公转的容器内微粒（其入射轴突需要按公转位置持续重算） */
+    private movingNodeIds = new Set<number>()
+    private lastOrbitAxonSyncAt = 0
+    /** 词/短语跟随宿主微粒的刚性偏移（宿主公转时词族整体同步移动，避免词与宿主脱开） */
+    private particleAnchors: ParticleAnchorState[] = []
+    /** 节点铭牌 Sprite（公转微粒铭牌需跟随球内轨道移动） */
+    private nodeLabelSprites = new Map<number, { sprite: THREE.Sprite; lift: number }>()
+    /** 本次 setData 创建的 CanvasTexture 铭牌纹理（clearGroup 时逐张释放，避免刷新泄漏） */
+    private ownedTextures = new Set<THREE.Texture>()
 
     private lightningBolts: LightningBolt[] = []
     private shockwaves: ShockwaveRing[] = []
@@ -655,15 +687,20 @@ export class Hypergraph3DEngine {
         this.rootGroup.add(this.axonGroup, this.somaGroup, this.nodeGroup, this.fxGroup, this.labelGroup)
         this.scene.add(this.nebulaCloudGroup, this.polarGridGroup, this.rootGroup)
 
-        // 预生成四类柔和径向高斯光斑纹理（色相与三层认知调色板严格一致）
+        // 预生成柔和径向高斯光斑纹理（色相与三层认知调色板严格一致）
+        const layerGlow = (layer: 'background' | 'episodic' | 'noetic', coreAlpha: number, midAlpha: number) => {
+            const palette = MEMORY_LAYER_COLORS[layer]
+            return createRadialGlowTexture(hexToRgba(palette.hex, coreAlpha), hexToRgba(palette.deep, midAlpha), hexToRgba(palette.deep, 0))
+        }
         this.glowTextures = {
             cell: createRadialGlowTexture('rgba(34,211,238,0.95)', 'rgba(8,145,178,0.38)', 'rgba(8,145,178,0)'),
-            background: createRadialGlowTexture('rgba(59,130,246,0.95)', 'rgba(29,78,216,0.36)', 'rgba(29,78,216,0)'),
-            episodic: createRadialGlowTexture('rgba(16,185,129,0.95)', 'rgba(4,120,87,0.36)', 'rgba(4,120,87,0)'),
-            noetic: createRadialGlowTexture('rgba(236,72,153,0.98)', 'rgba(190,24,93,0.42)', 'rgba(190,24,93,0)'),
+            background: layerGlow('background', 0.95, 0.36),
+            episodic: layerGlow('episodic', 0.95, 0.36),
+            noetic: layerGlow('noetic', 0.98, 0.42),
+            molecule: createRadialGlowTexture('rgba(168,85,247,0.98)', 'rgba(126,34,206,0.42)', 'rgba(126,34,206,0)'),
             focus: createRadialGlowTexture('rgba(251,191,36,0.98)', 'rgba(245,158,11,0.45)', 'rgba(245,158,11,0)'),
-            nebulaBlue: createRadialGlowTexture('rgba(37,99,235,0.22)', 'rgba(14,116,144,0.08)', 'rgba(0,0,0,0)'),
-            nebulaViolet: createRadialGlowTexture('rgba(147,51,234,0.18)', 'rgba(219,39,119,0.06)', 'rgba(0,0,0,0)'),
+            nebulaBlue: createRadialGlowTexture('rgba(37,99,235,0.22)', 'rgba(14,116,144,0.08)', 'rgba(0,0,0,0)', 512),
+            nebulaViolet: createRadialGlowTexture('rgba(147,51,234,0.18)', 'rgba(219,39,119,0.06)', 'rgba(0,0,0,0)', 512),
         }
         this.shockwaveTexture = createShockwaveRingTexture()
 
@@ -719,27 +756,9 @@ export class Hypergraph3DEngine {
         this.scene.add(this.ambientStars)
 
         // 构建深渊级多色相星云气体云团（烘托深空银河氛围）
-        const cloudLayout: { x: number; y: number; z: number; scale: number; tex: string; opacity: number }[] = [
-            { x: -280, y: 160, z: -180, scale: 640, tex: 'nebulaBlue', opacity: 0.22 },
-            { x: 310, y: -170, z: -160, scale: 580, tex: 'nebulaViolet', opacity: 0.2 },
-            { x: 30, y: 260, z: -220, scale: 690, tex: 'nebulaBlue', opacity: 0.16 },
-            { x: -220, y: -230, z: -170, scale: 540, tex: 'nebulaViolet', opacity: 0.18 },
-            { x: 0, y: 0, z: 0, scale: 520, tex: 'nebulaViolet', opacity: 0.14 },
-        ]
-        for (const cl of cloudLayout) {
-            const cMat = new THREE.SpriteMaterial({
-                map: this.glowTextures[cl.tex],
-                transparent: true,
-                opacity: cl.opacity,
-                depthWrite: false,
-                blending: THREE.AdditiveBlending,
-            })
-            const sp = new THREE.Sprite(cMat)
-            sp.position.set(cl.x, cl.y, cl.z)
-            sp.scale.setScalar(cl.scale)
-            sp.renderOrder = 0
-            this.nebulaCloudGroup.add(sp)
-        }
+        // 背景星云气体不再使用超大径向渐变 Sprite：低 alpha 的 8-bit 渐变在星盘俯视下会形成
+        // 明显的同心色带（“彩虹年轮”），且多个加法混合大圆盘会遮挡主体拓扑。
+        // 深空氛围由 ambientStars 星尘 + somaGroup 内的双层 FBM 体积星云壳承担。
     }
 
     private bindInteractionEvents(): void {
@@ -823,12 +842,29 @@ export class Hypergraph3DEngine {
         })
     }
 
+    /** 释放单个材质：仅释放本引擎自建的铭牌纹理，共享光晕/冲击波纹理保持复用。 */
+    private disposeMaterial(material: THREE.Material | THREE.Material[]): void {
+        const list = Array.isArray(material) ? material : [material]
+        for (const mat of list) {
+            const map = (mat as THREE.Material & { map?: THREE.Texture | null }).map
+            if (map && this.ownedTextures.has(map)) {
+                this.ownedTextures.delete(map)
+                map.dispose()
+            }
+            mat.dispose()
+        }
+    }
+
     private clearGroup(g: THREE.Group): void {
         while (g.children.length > 0) {
-            const ch = g.children[0]!
-            g.remove(ch)
-            const mesh = ch as THREE.Mesh
-            if (mesh.geometry) mesh.geometry.dispose()
+            const root = g.children[0]!
+            g.remove(root)
+            root.traverse((child) => {
+                const object = child as THREE.Mesh
+                if (object.geometry) object.geometry.dispose()
+                const material = object.material
+                if (material) this.disposeMaterial(material)
+            })
         }
     }
 
@@ -845,8 +881,11 @@ export class Hypergraph3DEngine {
         if (this.pulsePoints) {
             this.rootGroup.remove(this.pulsePoints)
             this.pulsePoints.geometry.dispose()
+            this.disposeMaterial(this.pulsePoints.material as THREE.Material)
             this.pulsePoints = null
         }
+        for (const tex of this.ownedTextures) tex.dispose()
+        this.ownedTextures.clear()
 
         const prevSnapshot = new Map<string, THREE.Vector3>()
         for (const [k, v] of this.prevPos3DByKey.entries()) {
@@ -875,6 +914,10 @@ export class Hypergraph3DEngine {
         this.shockwaves = []
         this.gyroRings = []
         this.nodeSurgeUntil.clear()
+        this.movingNodeIds.clear()
+        this.particleAnchors = []
+        this.nodeLabelSprites.clear()
+        this.lastOrbitAxonSyncAt = 0
 
         const { nodes, edges, coords2D, inDrill, focusId, hopMap, showEdgeLabels, isDark } = input
         const isSphere = (input.spaceMode ?? 'sphere') === 'sphere'
@@ -907,7 +950,10 @@ export class Hypergraph3DEngine {
                 if (!unitParentCell.has(e.from) || fromNode?.primary_cluster_key === e.to_key) {
                     unitParentCell.set(e.from, e.to)
                 }
-            } else if ((e.relation === 'atom_of' || e.relation === 'molecule_of' || e.relation === 'word_of' || e.relation === 'phrase_of') && !particleHostNode.has(e.from)) {
+            } else if (
+                (e.relation === 'atom_of' || e.relation === 'molecule_of' || e.relation === 'word_of' || e.relation === 'phrase_of') &&
+                !particleHostNode.has(e.from)
+            ) {
                 particleHostNode.set(e.from, e.to)
             }
         }
@@ -921,15 +967,53 @@ export class Hypergraph3DEngine {
         //      • 焦点位于 (0, 0, 0)，1/2/3 跳邻居分布在三维立体同心轨道壳上。
         const goldenAngle = Math.PI * (3 - Math.sqrt(5))
 
-        // 黄金球面斐波那契采样器：将第 idx / total 个节点均匀放置在半径 R 的真三维球面上（X² + Y² + Z² = R²）
-        const fibonacciSpherePoint = (idx: number, total: number, radius: number, phaseSeed = 0): THREE.Vector3 => {
-            if (total <= 1) {
-                return new THREE.Vector3(0, 0, radius * 0.35)
+        // 黄金球面斐波那契采样器：把第 idx / total 个节点均匀放在半径 R 的三维球面上。
+        // 采样本体在 layout.ts 中保持纯函数，并对索引取模、对 y 夹紧，任何分母失真都不会离开球面。
+        const spherePoint = (idx: number, total: number, radius: number, phaseSeed = 0): THREE.Vector3 => {
+            const [x, y, z] = fibonacciSpherePoint(idx, total, radius, phaseSeed)
+            return new THREE.Vector3(x, y, z)
+        }
+
+        // 容器/神经节在球面上的落位顺序按二维布局的方位角排序，避免数组顺序把相邻簇打散到球面两端。
+        const angularOrder = (list: Graph3DNode[]): Graph3DNode[] =>
+            [...list].sort((a, b) => {
+                const pa = coords2D[a.id]
+                const pb = coords2D[b.id]
+                const aa = pa ? Math.atan2(pa[1], pa[0]) : 0
+                const ab = pb ? Math.atan2(pb[1], pb[0]) : 0
+                return aa - ab || a.id - b.id
+            })
+
+        // 2D → 星盘坐标（等向校准 + 外围离群点软压缩）。两种空间模式共用同一套归一化，
+        // 避免游离单元/无宿主粒子直接吃原始力导向坐标而把视口撑出成百上千单位。
+        const absX: number[] = []
+        const absY: number[] = []
+        for (const n of nodes) {
+            const p2 = coords2D[n.id]
+            if (!p2) continue
+            if (Math.abs(p2[0]) > 1) absX.push(Math.abs(p2[0]))
+            if (Math.abs(p2[1]) > 1) absY.push(Math.abs(p2[1]))
+        }
+        absX.sort((a, b) => a - b)
+        absY.sort((a, b) => a - b)
+        const spanX90 = absX.length > 4 ? absX[Math.floor(absX.length * 0.9)]! : 320
+        const spanY90 = absY.length > 4 ? absY[Math.floor(absY.length * 0.9)]! : 320
+        const TARGET_DISC_R = 460
+        const scaleX = inDrill ? 1.0 : TARGET_DISC_R / Math.max(120, spanX90)
+        const scaleY = inDrill ? 1.0 : TARGET_DISC_R / Math.max(120, spanY90)
+        const mapDiscXY = (rawX: number, rawY: number, mul = 1.0): [number, number] => {
+            if (inDrill) return [rawX, rawY]
+            let x = rawX * scaleX * mul
+            let y = rawY * scaleY * mul
+            const r = Math.hypot(x, y)
+            const softCap = 540 * mul
+            if (r > softCap) {
+                const compressedR = softCap + Math.tanh((r - softCap) / 260) * 95
+                const ratio = compressedR / r
+                x *= ratio
+                y *= ratio
             }
-            const y = 1 - ((idx + 0.5) / total) * 2
-            const rAtY = Math.sqrt(Math.max(0.02, 1 - y * y))
-            const theta = idx * goldenAngle + phaseSeed
-            return new THREE.Vector3(Math.cos(theta) * rAtY * radius, Math.sin(theta) * rAtY * radius, y * radius)
+            return [x, y]
         }
 
         if (isSphere) {
@@ -951,7 +1035,7 @@ export class Hypergraph3DEngine {
                 for (const [hop, list] of hopBuckets.entries()) {
                     const shellR = hop === 1 ? 145 : hop === 2 ? 265 : 375
                     list.forEach((n, i) => {
-                        this.pos3DById.set(n.id, fibonacciSpherePoint(i, list.length, shellR, hop * 1.7))
+                        this.pos3DById.set(n.id, spherePoint(i, list.length, shellR, hop * 1.7))
                     })
                 }
             } else {
@@ -959,27 +1043,27 @@ export class Hypergraph3DEngine {
                 // • 内核恒星层（R ∈ [55, 135]）：L3 Noetic 知性神经节悬浮于球体核心；
                 // • 中层情景球壳（R ∈ [195, 295]）：L2 Episodic 情景 Cell 星云团分布在三维中层球面上；
                 // • 外层背景球壳（R ∈ [315, 415]）：L1 Background 背景 Cell 星云团分布在三维外层球面上。
-                const noeticList = nodes.filter((n) => n.kind !== 'cell' && n.layer === 'noetic')
-                const epCells = nodes.filter((n) => isContainerKind(n.kind) && n.layer !== 'background')
-                const bgCells = nodes.filter((n) => isContainerKind(n.kind) && n.layer === 'background')
+                const noeticList = angularOrder(nodes.filter((n) => !isContainerKind(n.kind) && n.layer === 'noetic'))
+                const epCells = angularOrder(nodes.filter((n) => isContainerKind(n.kind) && n.layer !== 'background'))
+                const bgCells = angularOrder(nodes.filter((n) => isContainerKind(n.kind) && n.layer === 'background'))
 
                 noeticList.forEach((n, i) => {
                     const r = 62 + (i % 4) * 22
-                    this.pos3DById.set(n.id, fibonacciSpherePoint(i, Math.max(1, noeticList.length), r, 0.4))
+                    this.pos3DById.set(n.id, spherePoint(i, Math.max(1, noeticList.length), r, 0.4))
                 })
                 epCells.forEach((n, i) => {
                     const memberIds = cellMembersMap.get(n.id) ?? []
                     const somaRad = Math.min(54, 18 + Math.sqrt(memberIds.length) * 8.2)
                     this.cellRadiusById.set(n.id, somaRad)
                     const r = 210 + ((n.id % 5) - 2) * 18
-                    this.pos3DById.set(n.id, fibonacciSpherePoint(i, Math.max(1, epCells.length), r, 1.3))
+                    this.pos3DById.set(n.id, spherePoint(i, Math.max(1, epCells.length), r, 1.3))
                 })
                 bgCells.forEach((n, i) => {
                     const memberIds = cellMembersMap.get(n.id) ?? []
                     const somaRad = Math.min(54, 18 + Math.sqrt(memberIds.length) * 8.2)
                     this.cellRadiusById.set(n.id, somaRad)
                     const r = 345 + ((n.id % 5) - 2) * 16
-                    this.pos3DById.set(n.id, fibonacciSpherePoint(i, Math.max(1, bgCells.length), r, 2.6))
+                    this.pos3DById.set(n.id, spherePoint(i, Math.max(1, bgCells.length), r, 2.6))
                 })
 
                 // 构建真球形宇宙「双层 3D FBM 分形体积星云包络场（Volumetric Cosmic Nebula Core & Envelope）」+ 900 颗球面旋臂星尘流（零机械铁丝圈！）
@@ -991,7 +1075,7 @@ export class Hypergraph3DEngine {
                         uPulsePhase: { value: 1.2 },
                         uColor: { value: new THREE.Color('#701a75') },
                         uRimColor: { value: new THREE.Color('#ec4899') },
-                        uOpacity: { value: 0.12 },
+                        uOpacity: { value: 0.08 },
                         uHighlight: { value: 0.0 },
                     },
                     transparent: true,
@@ -1005,28 +1089,8 @@ export class Hypergraph3DEngine {
                 this.somaGroup.add(nebulaCoreMesh)
                 this.somaMaterials.set(-9001, nebulaCoreMat)
 
-                const nebulaOuterMat = new THREE.ShaderMaterial({
-                    vertexShader: SOMA_MEMBRANE_VERTEX_SHADER,
-                    fragmentShader: SOMA_MEMBRANE_FRAGMENT_SHADER,
-                    uniforms: {
-                        uTime: { value: 0 },
-                        uPulsePhase: { value: 3.7 },
-                        uColor: { value: new THREE.Color('#0c4a6e') },
-                        uRimColor: { value: new THREE.Color('#06b6d4') },
-                        uOpacity: { value: 0.09 },
-                        uHighlight: { value: 0.0 },
-                    },
-                    transparent: true,
-                    depthWrite: false,
-                    side: THREE.DoubleSide,
-                    blending: THREE.AdditiveBlending,
-                })
-                const nebulaOuterMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 36, 28), nebulaOuterMat)
-                nebulaOuterMesh.scale.setScalar(425)
-                nebulaOuterMesh.renderOrder = 1
-                this.somaGroup.add(nebulaOuterMesh)
-                this.somaMaterials.set(-9002, nebulaOuterMat)
-
+                // 外层 425 半径 FBM 球壳会从相机后方包住整个视口，形成“蓝色行星”遮挡主体拓扑；
+                // 深空边界改由旋臂星尘与星野承担，保留 155 内核星云作为中心辉光。
                 // 900 颗沿三维球面螺旋旋臂流淌的吸积星尘群（采用确定性伪随机序列，消除刷新跳变）
                 const armCount = 900
                 const armPos = new Float32Array(armCount * 3)
@@ -1115,39 +1179,6 @@ export class Hypergraph3DEngine {
             discPoints.renderOrder = 1
             this.somaGroup.add(discPoints)
 
-            // 消除 2D 布局因宽屏 aspect (x * √aspect, y / √aspect) 造成的 Y 轴压扁椭圆变形：
-            // 分别统计 X 与 Y 的 P90 半轴跨度，还原为等向同性的正圆星盘（X 跨度 ≈ Y 跨度），并柔和收敛外围离群远点
-            const absX: number[] = []
-            const absY: number[] = []
-            for (const n of nodes) {
-                const p2 = coords2D[n.id]
-                if (!p2) continue
-                if (Math.abs(p2[0]) > 1) absX.push(Math.abs(p2[0]))
-                if (Math.abs(p2[1]) > 1) absY.push(Math.abs(p2[1]))
-            }
-            absX.sort((a, b) => a - b)
-            absY.sort((a, b) => a - b)
-            const spanX90 = absX.length > 4 ? absX[Math.floor(absX.length * 0.9)]! : 320
-            const spanY90 = absY.length > 4 ? absY[Math.floor(absY.length * 0.9)]! : 320
-            const TARGET_DISC_R = 460
-            const scaleX = inDrill ? 1.0 : TARGET_DISC_R / Math.max(120, spanX90)
-            const scaleY = inDrill ? 1.0 : TARGET_DISC_R / Math.max(120, spanY90)
-
-            const mapDiscXY = (rawX: number, rawY: number, mul = 1.0): [number, number] => {
-                if (inDrill) return [rawX, rawY]
-                let x = rawX * scaleX * mul
-                let y = rawY * scaleY * mul
-                const r = Math.hypot(x, y)
-                const softCap = 540 * mul
-                if (r > softCap) {
-                    const compressedR = softCap + Math.tanh((r - softCap) / 260) * 95
-                    const ratio = compressedR / r
-                    x *= ratio
-                    y *= ratio
-                }
-                return [x, y]
-            }
-
             // 严格采用原始版本（7c90d7e）的三层紧凑 Z 轴分布：
             // • Cell 容器母体共处于星盘主层（Z ∈ [-37.8, +37.8] 微起伏）；
             // • L3 Noetic 知性神经节紧贴在星盘上方（Z ∈ [78, 122]），向下方容器发射跨层神经脉冲束。
@@ -1210,34 +1241,19 @@ export class Hypergraph3DEngine {
             }
         }
 
-        // 再定锚所有归属于 Cell 的容器内 Unit 微粒（分布在 Cell 光晕球壳内部的 3D 斐波那契球面轨道上），以及 Atom/Molecule 一等粒子节点
+        // ==================== 2.1 结构节点先落位（容器内微粒 / 游离单元 / 其余非粒子节点） ====================
+        // 必须先算完所有宿主位置，再放词 / 短语：数组里短语排在单元之前时，宿主尚未定位，
+        // 历史实现会把整批短语误判为“无宿主”并甩到球壳外（形成拖到数千单位外的长尾）。
+        const structuralNodes = nodes.filter((n) => !this.pos3DById.has(n.id) && !isWordKind(n.kind) && !isPhraseKind(n.kind))
+        let orphanTotal = 0
+        for (const n of structuralNodes) {
+            const parentId = unitParentCell.get(n.id)
+            if (!inDrill && parentId !== undefined && this.pos3DById.has(parentId)) continue
+            orphanTotal++
+        }
+
         let orphanIdx = 0
-        let particleIdx = 0
-        for (const n of nodes) {
-            if (this.pos3DById.has(n.id)) continue
-            if (isWordKind(n.kind) || isPhraseKind(n.kind)) {
-                particleIdx++
-                const hostId = particleHostNode.get(n.id)
-                const hostPos = hostId !== undefined ? this.pos3DById.get(hostId) : undefined
-                if (!inDrill && hostPos) {
-                    const isAtom = isWordKind(n.kind)
-                    const orbitR = isAtom ? 32 + (particleIdx % 4) * 9 : 46 + (particleIdx % 3) * 11
-                    const th = particleIdx * goldenAngle * 1.7
-                    const zOff = (isAtom ? 26 : -28) + ((particleIdx % 5) - 2) * 7
-                    this.pos3DById.set(
-                        n.id,
-                        new THREE.Vector3(hostPos.x + Math.cos(th) * orbitR, hostPos.y + Math.sin(th) * orbitR, hostPos.z + zOff)
-                    )
-                } else if (isSphere) {
-                    const shellR = isWordKind(n.kind) ? 165 : 285
-                    this.pos3DById.set(n.id, fibonacciSpherePoint(particleIdx, 40, shellR, 2.1))
-                } else {
-                    const p2 = coords2D[n.id] ?? [0, 0]
-                    const zParticle = isWordKind(n.kind) ? 48 : -44
-                    this.pos3DById.set(n.id, new THREE.Vector3(p2[0], p2[1], zParticle))
-                }
-                continue
-            }
+        for (const n of structuralNodes) {
             const parentId = unitParentCell.get(n.id)
             if (!inDrill && parentId !== undefined && this.pos3DById.has(parentId)) {
                 const cellCenter = this.pos3DById.get(parentId)!
@@ -1256,6 +1272,7 @@ export class Hypergraph3DEngine {
                 const uy = cellCenter.y + Math.sin(theta) * radiusAtY * innerR
                 const uz = cellCenter.z + y * innerR * 0.85
                 this.pos3DById.set(n.id, new THREE.Vector3(ux, uy, uz))
+                this.movingNodeIds.add(n.id)
                 this.intracellularOrbits.push({
                     nodeId: n.id,
                     parentId,
@@ -1267,15 +1284,108 @@ export class Hypergraph3DEngine {
                     bobPhase: (n.id % 19) * 0.33,
                 })
             } else if (isSphere) {
-                orphanIdx++
                 const shellR = n.layer === 'background' ? 350 : 235
-                this.pos3DById.set(n.id, fibonacciSpherePoint(orphanIdx, 48, shellR, 3.1))
+                this.pos3DById.set(n.id, spherePoint(orphanIdx, Math.max(1, orphanTotal), shellR, 3.1))
+                orphanIdx++
             } else {
                 const p2 = coords2D[n.id] ?? [0, 0]
+                const [dx, dy] = mapDiscXY(p2[0], p2[1], 1.0)
                 const zBase = n.layer === 'background' ? -24 : 0
-                this.pos3DById.set(n.id, new THREE.Vector3(p2[0] * 1.0, p2[1] * 1.0, zBase + ((n.id % 9) - 4) * 4))
+                this.pos3DById.set(n.id, new THREE.Vector3(dx, dy, zBase + ((n.id % 9) - 4) * 4))
             }
         }
+
+        // ==================== 2.2 词 / 短语粒子落位 ====================
+        // 三级定位：① 直接宿主（word_of / phrase_of / atom_of / molecule_of）；
+        // ② 已定位的相邻节点（如 phrase_has_word 连接的短语）；③ 球壳 / 星盘坐标回退。
+        // 第 ② 级保证无 word_of 的词仍贴着自己的短语，而不是被力导向坐标抛到星系外缘。
+        const wordNodes: Graph3DNode[] = []
+        const phraseNodes: Graph3DNode[] = []
+        for (const n of nodes) {
+            if (this.pos3DById.has(n.id)) continue
+            if (isWordKind(n.kind)) wordNodes.push(n)
+            else if (isPhraseKind(n.kind)) phraseNodes.push(n)
+        }
+        const isPositioned = (id: number | undefined): id is number => id !== undefined && this.pos3DById.has(id)
+        const hasAnchoredNeighbor = (n: Graph3DNode, alsoPlaced?: Set<number>): boolean => {
+            for (const nb of this.adjacencyMap.get(n.id) ?? []) {
+                if (this.pos3DById.has(nb.peerId) || alsoPlaced?.has(nb.peerId)) return true
+            }
+            return false
+        }
+        const neighborAnchor = (n: Graph3DNode): { hostId: number; pos: THREE.Vector3 } | null => {
+            let bestId = -1
+            let bestPos: THREE.Vector3 | null = null
+            let bestDegree = -1
+            for (const nb of this.adjacencyMap.get(n.id) ?? []) {
+                const p = this.pos3DById.get(nb.peerId)
+                if (!p) continue
+                const node = this.nodeById.get(nb.peerId)
+                const degree = node?.viewDegree ?? node?.degree ?? 0
+                if (degree > bestDegree) {
+                    bestDegree = degree
+                    bestId = nb.peerId
+                    bestPos = p
+                }
+            }
+            if (!bestPos) return null
+            return { hostId: bestId, pos: bestPos }
+        }
+
+        const phraseFallbackTotal = phraseNodes.filter((n) => !isPositioned(particleHostNode.get(n.id)) && !hasAnchoredNeighbor(n)).length
+        const resolvedPhrases = new Set<number>()
+        for (const n of phraseNodes) {
+            if (isPositioned(particleHostNode.get(n.id)) || hasAnchoredNeighbor(n)) resolvedPhrases.add(n.id)
+        }
+        const wordFallbackTotal = wordNodes.filter(
+            (n) => !isPositioned(particleHostNode.get(n.id)) && !hasAnchoredNeighbor(n, resolvedPhrases)
+        ).length
+
+        const placeParticleGroup = (
+            list: Graph3DNode[],
+            fallbackTotal: number,
+            opts: { shellR: number; baseOrbitR: number; zBase: number; zShell: number; density: number }
+        ): void => {
+            let orbitIdx = 0
+            let fallbackIdx = 0
+            for (const n of list) {
+                const hostId = particleHostNode.get(n.id)
+                const hostPos = isPositioned(hostId) ? this.pos3DById.get(hostId) : undefined
+                let anchorPos = hostPos ?? null
+                let anchorHostId = hostPos ? hostId! : -1
+                if (!anchorPos) {
+                    const nb = neighborAnchor(n)
+                    if (nb) {
+                        anchorPos = nb.pos
+                        anchorHostId = nb.hostId
+                    }
+                }
+                if (anchorPos) {
+                    orbitIdx++
+                    const orbitR = hostPos ? opts.baseOrbitR + (orbitIdx % 4) * opts.density : 20 + (orbitIdx % 3) * 7
+                    const th = orbitIdx * goldenAngle * 1.7 + (n.id % 13) * 0.29
+                    const zOff = (hostPos ? opts.zBase : 0) + ((orbitIdx % 5) - 2) * 6
+                    const ox = Math.cos(th) * orbitR
+                    const oy = Math.sin(th) * orbitR
+                    const oz = zOff
+                    this.pos3DById.set(n.id, new THREE.Vector3(anchorPos.x + ox, anchorPos.y + oy, anchorPos.z + oz))
+                    if (anchorHostId >= 0) {
+                        this.particleAnchors.push({ nodeId: n.id, hostId: anchorHostId, offset: new THREE.Vector3(ox, oy, oz) })
+                        this.movingNodeIds.add(n.id)
+                    }
+                } else if (isSphere) {
+                    this.pos3DById.set(n.id, spherePoint(fallbackIdx++, Math.max(1, fallbackTotal), opts.shellR, 2.1))
+                } else {
+                    const p2 = coords2D[n.id] ?? [0, 0]
+                    const [dx, dy] = mapDiscXY(p2[0], p2[1], 1.0)
+                    this.pos3DById.set(n.id, new THREE.Vector3(dx, dy, opts.zShell + ((n.id % 7) - 3) * 4))
+                }
+            }
+        }
+
+        // 先短语后词：词的相邻短语已在上一轮落位，可作为第 ② 级锚点。
+        placeParticleGroup(phraseNodes, phraseFallbackTotal, { shellR: 285, baseOrbitR: 46, zBase: -28, zShell: -44, density: 8 })
+        placeParticleGroup(wordNodes, wordFallbackTotal, { shellR: 165, baseOrbitR: 32, zBase: 26, zShell: 48, density: 7 })
 
         // 2.5 记录目标三维坐标，并基于 prevPos3DByKey 规划「存量节点平滑插值」与「新节点/容器 0->1 生长动画（0.6s）」
         const nowElapsed = this.clock.getElapsedTime()
@@ -1329,11 +1439,34 @@ export class Hypergraph3DEngine {
         )
         const topNoeticIds = new Set(
             nodes
-                .filter((x) => x.kind !== 'cell' && x.layer === 'noetic')
+                .filter((x) => !isContainerKind(x.kind) && x.layer === 'noetic')
                 .sort((a, b) => b.viewDegree - a.viewDegree)
                 .slice(0, 12)
                 .map((x) => x.id)
         )
+
+        // 铭牌预算：大图不再给 700+ 词/短语逐一生成 CanvasTexture（缩远后既不可读又拖慢渲染），
+        // 只保留高连接度代表；小图（<=220 节点）维持全量标签。
+        const particleNodes = nodes.filter((x) => isWordKind(x.kind) || isPhraseKind(x.kind))
+        const particleLabelIds =
+            nodes.length <= 220
+                ? new Set(particleNodes.map((x) => x.id))
+                : new Set(
+                      [...particleNodes]
+                          .sort((a, b) => b.viewDegree - a.viewDegree || (b.energy_nats ?? 0) - (a.energy_nats ?? 0) || a.id - b.id)
+                          .slice(0, 160)
+                          .map((x) => x.id)
+                  )
+        const freeUnitLabelIds =
+            nodes.length <= 220
+                ? new Set(nodes.filter((x) => x.kind === 'free_unit').map((x) => x.id))
+                : new Set(
+                      nodes
+                          .filter((x) => x.kind === 'free_unit')
+                          .sort((a, b) => b.viewDegree - a.viewDegree || a.id - b.id)
+                          .slice(0, 16)
+                          .map((x) => x.id)
+                  )
 
         let spawnedShockwaves = 0
         for (const n of nodes) {
@@ -1360,8 +1493,8 @@ export class Hypergraph3DEngine {
                 const isBgCell = n.layer === 'background'
                 const showMembrane = memberCount >= 2 || isFocus || this.selectedNodeId === n.id
                 if (showMembrane) {
-                    const membraneColor = new THREE.Color(isBgCell ? '#1d4ed8' : '#0d9488')
-                    const rimColor = new THREE.Color(isBgCell ? '#60a5fa' : '#2dd4bf')
+                    const membraneColor = new THREE.Color(isBgCell ? MEMORY_LAYER_COLORS.background.deep : '#0d9488')
+                    const rimColor = new THREE.Color(isBgCell ? MEMORY_LAYER_COLORS.background.light : '#2dd4bf')
                     const somaMat = new THREE.ShaderMaterial({
                         vertexShader: SOMA_MEMBRANE_VERTEX_SHADER,
                         fragmentShader: SOMA_MEMBRANE_FRAGMENT_SHADER,
@@ -1444,32 +1577,9 @@ export class Hypergraph3DEngine {
                 const isAtom = isWordKind(n.kind)
                 const isMolecule = isPhraseKind(n.kind)
                 const isFree = n.kind === 'free_unit'
-                const baseCol = isFocus
-                    ? '#f59e0b'
-                    : isFree
-                      ? '#94a3b8'
-                      : isAtom
-                        ? '#f59e0b'
-                        : isMolecule
-                          ? '#a855f7'
-                          : isNoetic
-                            ? '#ec4899'
-                            : n.layer === 'background'
-                              ? '#3b82f6'
-                              : '#10b981'
-                const emissiveCol = isFocus
-                    ? '#d97706'
-                    : isFree
-                      ? '#475569'
-                      : isAtom
-                        ? '#d97706'
-                        : isMolecule
-                          ? '#7e22ce'
-                          : isNoetic
-                            ? '#db2777'
-                            : n.layer === 'background'
-                              ? '#2563eb'
-                              : '#059669'
+                const layerPalette = MEMORY_LAYER_COLORS[normalizeMemoryLayer(n.layer) ?? 'episodic']
+                const baseCol = isFocus ? '#f59e0b' : isFree ? '#94a3b8' : isAtom ? '#f59e0b' : isMolecule ? '#a855f7' : layerPalette.hex
+                const emissiveCol = isFocus ? '#d97706' : isFree ? '#475569' : isAtom ? '#d97706' : isMolecule ? '#7e22ce' : layerPalette.deep
 
                 const coreRadius = isFocus ? 7.5 : isFree ? 4.6 : isAtom ? 4.4 : isMolecule ? 4.9 : isNoetic ? 5.8 : 5.2
                 const unitMat = new THREE.MeshStandardMaterial({
@@ -1489,7 +1599,8 @@ export class Hypergraph3DEngine {
                 this.nodeCoreMeshes.set(n.id, unitMesh)
                 this.nodeBaseScale.set(n.id, coreRadius)
 
-                const texKey = isFocus || isAtom ? 'focus' : isMolecule || isNoetic ? 'noetic' : n.layer === 'background' ? 'background' : 'episodic'
+                const texKey =
+                    isFocus || isAtom ? 'focus' : isMolecule ? 'molecule' : isNoetic ? 'noetic' : n.layer === 'background' ? 'background' : 'episodic'
                 const haloScale = coreRadius * (isAtom || isMolecule ? 4.4 : isNoetic ? 4.2 : 5.2)
                 const haloMat = new THREE.SpriteMaterial({
                     map: this.glowTextures[texKey],
@@ -1513,8 +1624,7 @@ export class Hypergraph3DEngine {
                     ? n.atoms
                     : (n.words ?? []).map((w) => ({ token: w.token, potential: w.mass_nats, weight: w.weight }))
             const showAtomicOrbitals =
-                (isFocus || n.id === this.selectedNodeId || topCellIds.has(n.id) || topNoeticIds.has(n.id)) &&
-                orbitalParticles.length > 0
+                (isFocus || n.id === this.selectedNodeId || topCellIds.has(n.id) || topNoeticIds.has(n.id)) && orbitalParticles.length > 0
             if (showAtomicOrbitals) {
                 const topA = orbitalParticles.slice(0, isCell ? 5 : 4)
                 const baseOrbitR = isCell ? somaRad * 1.12 : isFocus ? 14.5 : 10.5
@@ -1547,15 +1657,25 @@ export class Hypergraph3DEngine {
             // 4. 为核心 Hub Cell、L3 Noetic 神经节、Atom/Molecule 粒子、下钻焦点或选中节点生成科幻切角全息投影铭牌
             const isParticle = isWordKind(n.kind) || isPhraseKind(n.kind)
             const showLabel =
-                isFocus || n.id === this.selectedNodeId || isParticle || n.kind === 'free_unit' || nodes.length <= 48 || topCellIds.has(n.id) || topNoeticIds.has(n.id)
+                isFocus ||
+                n.id === this.selectedNodeId ||
+                nodes.length <= 48 ||
+                topCellIds.has(n.id) ||
+                topNoeticIds.has(n.id) ||
+                (isParticle && particleLabelIds.has(n.id)) ||
+                (n.kind === 'free_unit' && freeUnitLabelIds.has(n.id))
             if (showLabel) {
                 const rawLabel = (n.summary || `#${n.id}`).replace(/\s+/g, ' ').trim()
                 const shortText = rawLabel.length > 22 ? `${rawLabel.slice(0, 22)}…` : rawLabel
                 const accent = nodeAccentColor(n)
                 const labelSprite = createTextLabelSprite(shortText, accent, isCell, isDark)
+                const labelTexture = (labelSprite.material as THREE.SpriteMaterial).map
+                if (labelTexture) this.ownedTextures.add(labelTexture)
                 const zLift = isCell ? somaRad + 7 : isNoetic ? 12 : 8
                 labelSprite.position.set(startPos.x, startPos.y, startPos.z + zLift)
+                labelSprite.userData.baseScale = new THREE.Vector2(labelSprite.scale.x, labelSprite.scale.y)
                 this.labelGroup.add(labelSprite)
+                this.nodeLabelSprites.set(n.id, { sprite: labelSprite, lift: zLift })
                 labelSpriteRef = labelSprite
                 labelZLiftVal = zLift
             }
@@ -1641,7 +1761,10 @@ export class Hypergraph3DEngine {
             if (showEdgeLabels && !isMember && edges.length <= 180) {
                 const apex = curve.getPoint(0.5)
                 const relSprite = createTextLabelSprite(e.relation, colHex, false, isDark)
+                const relTexture = (relSprite.material as THREE.SpriteMaterial).map
+                if (relTexture) this.ownedTextures.add(relTexture)
                 relSprite.scale.multiplyScalar(0.82)
+                relSprite.userData.baseScale = new THREE.Vector2(relSprite.scale.x, relSprite.scale.y)
                 relSprite.position.set(apex.x, apex.y, apex.z + 4)
                 this.labelGroup.add(relSprite)
             }
@@ -1695,21 +1818,28 @@ export class Hypergraph3DEngine {
 
         // 7. 遴选「最近被激活 / 高连接度」种子节点队列（供自动神经放电巡航与首帧激活扩散使用）
         const noeticSeeds = nodes
-            .filter((x) => x.kind !== 'cell' && x.layer === 'noetic' && (this.adjacencyMap.get(x.id)?.length ?? 0) > 0)
+            .filter((x) => !isContainerKind(x.kind) && x.layer === 'noetic' && (this.adjacencyMap.get(x.id)?.length ?? 0) > 0)
             .sort((a, b) => (b.observed_at || '').localeCompare(a.observed_at || '') || b.viewDegree - a.viewDegree)
             .slice(0, 8)
             .map((x) => x.id)
         const unitSeeds = nodes
-            .filter((x) => x.kind !== 'cell' && x.layer !== 'noetic' && (this.adjacencyMap.get(x.id)?.length ?? 0) > 0)
+            .filter((x) => !isContainerKind(x.kind) && x.layer !== 'noetic' && (this.adjacencyMap.get(x.id)?.length ?? 0) > 0)
             .sort((a, b) => (b.observed_at || '').localeCompare(a.observed_at || '') || b.viewDegree - a.viewDegree)
             .slice(0, 6)
             .map((x) => x.id)
         this.recentSeedIds = [...noeticSeeds, ...unitSeeds]
         this.autoPulseCursor = 0
 
+        // 刷新后清理已不在视图中的上一帧坐标，避免 prevPos3DByKey 随窗口切换无限增长
+        const liveKeys = new Set(this.nodeKeyById.values())
+        for (const key of [...this.prevPos3DByKey.keys()]) {
+            if (!liveKeys.has(key)) this.prevPos3DByKey.delete(key)
+        }
+
         this.updateHighlightState()
-        if (forceFit) {
+        if (forceFit || !this.hasFittedData) {
             this.fitToViewport(false)
+            this.hasFittedData = true
         }
         // 首屏加载完成后立即触发一次最近记忆的 1-Hop -> 2-Hop 分形生物闪电扩散，呈现活体宇宙生命感
         if (this.recentSeedIds.length > 0) {
@@ -2048,17 +2178,14 @@ export class Hypergraph3DEngine {
         const center = box.getCenter(new THREE.Vector3())
         const size = box.getSize(new THREE.Vector3())
         const fovRad = (this.camera.fov * Math.PI) / 180
-        let dist: number
+        // 统一按最长轴配准 + 1.32 余量，避免球体/星盘在默认相机距离下只占视口一小块
+        const maxSpan = Math.max(180, size.x, size.y, size.z)
+        const dist = Math.min(4800, Math.max(220, (maxSpan / (2 * Math.tan(fovRad / 2))) * 1.32))
         let endPos: THREE.Vector3
         if (this.currentIsSphere) {
-            const maxSpan = Math.max(160, size.x, size.y, size.z)
-            dist = Math.min(4800, Math.max(220, (maxSpan / (2 * Math.tan(fovRad / 2))) * 1.89))
-            endPos = new THREE.Vector3(center.x, center.y - dist * 0.76, center.z + dist * 0.65)
+            endPos = new THREE.Vector3(center.x, center.y - dist * 0.72, center.z + dist * 0.69)
         } else {
-            // 展开星盘模式（Disc 3D）：按正圆星盘有效跨度与 54° 俯视仰角（sin54°≈0.81, cos54°≈0.59）配准视距，
-            // 消除倾斜透视造成的纵向拍扁，让展开星盘饱满圆润地呈现在视口中央
-            const effectiveSpan = Math.min(920, Math.max(220, (size.x + size.y) * 0.44))
-            dist = Math.min(4800, Math.max(240, (effectiveSpan / (2 * Math.tan(fovRad / 2))) * 1.78))
+            // 展开星盘模式（Disc 3D）：54° 俯视，X/Y 平面投影后仍保持正圆饱满
             endPos = new THREE.Vector3(center.x, center.y - dist * 0.59, center.z + dist * 0.81)
         }
         if (!animate) {
@@ -2197,6 +2324,8 @@ export class Hypergraph3DEngine {
                     }
                     const curPos = this.pos3DById.get(orb.nodeId)
                     if (curPos) curPos.set(ux, uy, uz)
+                    const targetPos = this.targetPos3DById.get(orb.nodeId)
+                    if (targetPos) targetPos.set(ux, uy, uz)
                     const nKey = this.nodeKeyById.get(orb.nodeId)
                     if (nKey) {
                         const prev = this.prevPos3DByKey.get(nKey)
@@ -2207,6 +2336,37 @@ export class Hypergraph3DEngine {
                     if (mesh) mesh.position.set(ux, uy, uz)
                     const halo = this.nodeHaloSprites.get(orb.nodeId)
                     if (halo) halo.position.set(ux, uy, uz)
+                    const label = this.nodeLabelSprites.get(orb.nodeId)
+                    if (label) label.sprite.position.set(ux, uy, uz + label.lift)
+                }
+            }
+
+            // 1.55 词 / 短语粒子刚性跟随宿主微粒：宿主公转时词族与轴突一起移动，避免词与宿主长期脱位
+            if (this.particleAnchors.length > 0) {
+                for (const pa of this.particleAnchors) {
+                    if (this.nodeTransitions.has(pa.nodeId)) continue
+                    const hostPos = this.pos3DById.get(pa.hostId)
+                    if (!hostPos) continue
+                    const x = hostPos.x + pa.offset.x
+                    const y = hostPos.y + pa.offset.y
+                    const z = hostPos.z + pa.offset.z
+                    const curPos = this.pos3DById.get(pa.nodeId)
+                    if (curPos) curPos.set(x, y, z)
+                    else this.pos3DById.set(pa.nodeId, new THREE.Vector3(x, y, z))
+                    const targetPos = this.targetPos3DById.get(pa.nodeId)
+                    if (targetPos) targetPos.set(x, y, z)
+                    const nKey = this.nodeKeyById.get(pa.nodeId)
+                    if (nKey) {
+                        const prev = this.prevPos3DByKey.get(nKey)
+                        if (prev) prev.set(x, y, z)
+                        else this.prevPos3DByKey.set(nKey, new THREE.Vector3(x, y, z))
+                    }
+                    const mesh = this.nodeCoreMeshes.get(pa.nodeId)
+                    if (mesh) mesh.position.set(x, y, z)
+                    const halo = this.nodeHaloSprites.get(pa.nodeId)
+                    if (halo) halo.position.set(x, y, z)
+                    const label = this.nodeLabelSprites.get(pa.nodeId)
+                    if (label) label.sprite.position.set(x, y, z + label.lift)
                 }
             }
 
@@ -2243,9 +2403,14 @@ export class Hypergraph3DEngine {
                 if (halo) halo.scale.setScalar(baseH * (1.0 + (mult - 1.0) * 1.35) * spawnScale)
             }
 
-            // 1.8 在节点平滑位移或新节点生长期间，实时同步神经轴突贝塞尔曲线几何体
-            if (hadActiveTransition && this.axonLines.length > 0) {
+            // 1.8 在节点平滑位移 / 新节点生长 / 微粒公转期间，实时同步神经轴突贝塞尔曲线几何体。
+            //     公转边按 ~12.5fps 节流重算，避免每帧重建上千条曲线；过渡期仍逐帧全量同步。
+            const syncAllAxons = hadActiveTransition
+            const syncMovingAxons = !syncAllAxons && this.movingNodeIds.size > 0 && elapsed - this.lastOrbitAxonSyncAt >= 0.08
+            if ((syncAllAxons || syncMovingAxons) && this.axonLines.length > 0) {
+                if (syncMovingAxons) this.lastOrbitAxonSyncAt = elapsed
                 for (const ax of this.axonLines) {
+                    if (!syncAllAxons && !this.movingNodeIds.has(ax.from) && !this.movingNodeIds.has(ax.to)) continue
                     const pA = this.pos3DById.get(ax.from)
                     const pB = this.pos3DById.get(ax.to)
                     if (!pA || !pB) continue
@@ -2393,6 +2558,18 @@ export class Hypergraph3DEngine {
                 }
             }
 
+            // 4.5 铭牌等屏高补偿：相机拉远 / 拉近时保持可读的屏幕尺寸，避免 3D 缩放后标签糊成小点
+            if (this.labelGroup.children.length > 0) {
+                for (const child of this.labelGroup.children) {
+                    const sprite = child as THREE.Sprite
+                    const base = sprite.userData.baseScale as THREE.Vector2 | undefined
+                    if (!base) continue
+                    const dist = this.camera.position.distanceTo(sprite.position)
+                    const factor = Math.min(2.4, Math.max(0.75, dist / 700))
+                    sprite.scale.set(base.x * factor, base.y * factor, 1)
+                }
+            }
+
             this.controls.update()
             this.renderer.render(this.scene, this.camera)
         }
@@ -2403,11 +2580,25 @@ export class Hypergraph3DEngine {
         this.disposed = true
         if (this.animFrameId) cancelAnimationFrame(this.animFrameId)
         if (this.clickDelayTimer) clearTimeout(this.clickDelayTimer)
+        this.clearGroup(this.somaGroup)
+        this.clearGroup(this.nodeGroup)
+        this.clearGroup(this.axonGroup)
+        this.clearGroup(this.labelGroup)
+        this.clearGroup(this.fxGroup)
+        if (this.pulsePoints) {
+            this.rootGroup.remove(this.pulsePoints)
+            this.pulsePoints.geometry.dispose()
+            this.disposeMaterial(this.pulsePoints.material as THREE.Material)
+            this.pulsePoints = null
+        }
+        for (const tex of this.ownedTextures) tex.dispose()
+        this.ownedTextures.clear()
         this.controls.dispose()
         this.renderer.dispose()
         for (const tex of Object.values(this.glowTextures)) {
             tex.dispose()
         }
         this.shockwaveTexture?.dispose()
+        this.container.innerHTML = ''
     }
 }

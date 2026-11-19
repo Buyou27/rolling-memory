@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestLocalModeNeverContactsBrain(t *testing.T) {
@@ -42,11 +42,11 @@ func TestLocalModeNeverContactsBrain(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			client, err := memory.ThinClient()
+			client, err := memory.LocalVault()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, ok := client.Transport.(*thinclient.LocalVaultTransport); !ok {
+			if _, ok := client.Transport.(*localvault.LocalVaultTransport); !ok {
 				t.Fatalf("transport = %T", client.Transport)
 			}
 			if _, err := client.Remember(context.Background(), "local-sentinel", "local sentinel content", 1); err != nil {

@@ -14,7 +14,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 )
 
 // Health is the read-time health projection (zero storage, zero LLM).
@@ -280,10 +280,10 @@ func (s *Store) AuditArtifactQuality(scope string) (map[string]any, error) {
 		nodeKinds[id] = kind
 		nodeLabels[id] = lb
 		if kind == "referent" {
-			if memcore.HasFirstPersonPossessivePrefix(lb) {
+			if delivery.HasFirstPersonPossessivePrefix(lb) {
 				danglingFirstPerson++
 			}
-			if memcore.IsRolePlaceholder(lb) {
+			if delivery.IsRolePlaceholder(lb) {
 				rolePlaceholders++
 			}
 		}
@@ -306,7 +306,7 @@ func (s *Store) AuditArtifactQuality(scope string) (map[string]any, error) {
 		"waived":    0,
 		"broken":    0,
 	}
-	memAssertions := make([]memcore.Assertion, 0, len(assertRows))
+	memAssertions := make([]delivery.Assertion, 0, len(assertRows))
 	for _, r := range assertRows {
 		sid := mapString(r, "subject_id")
 		oid := mapString(r, "object_id")
@@ -319,7 +319,7 @@ func (s *Store) AuditArtifactQuality(scope string) (map[string]any, error) {
 		if _, ok := loopStates[ls]; ok {
 			loopStates[ls]++
 		}
-		memAssertions = append(memAssertions, memcore.Assertion{
+		memAssertions = append(memAssertions, delivery.Assertion{
 			NodeID:        mapString(r, "node_id"),
 			SubjectID:     sid,
 			RelID:         rid,
@@ -328,7 +328,7 @@ func (s *Store) AuditArtifactQuality(scope string) (map[string]any, error) {
 			LoopState:     ls,
 		})
 	}
-	connMetrics := memcore.ComputeConnectivityMetrics(memAssertions, nodeKinds, nodeLabels)
+	connMetrics := delivery.ComputeConnectivityMetrics(memAssertions, nodeKinds, nodeLabels)
 
 	score := 100.0
 	totalNodes := len(nodeRows)
@@ -336,7 +336,7 @@ func (s *Store) AuditArtifactQuality(scope string) (map[string]any, error) {
 		defectRatio := float64(danglingFirstPerson+rolePlaceholders+selfLoops) / float64(totalNodes)
 		score -= math.Min(40.0, defectRatio*200.0)
 	}
-	if len(memAssertions) >= memcore.MinEvidenceQuorumRows && connMetrics.MultiEdgeEntityRatio < 0.50 {
+	if len(memAssertions) >= delivery.MinEvidenceQuorumRows && connMetrics.MultiEdgeEntityRatio < 0.50 {
 		score -= (0.50 - connMetrics.MultiEdgeEntityRatio) * 30.0
 	}
 	score = math.Max(0.0, math.Min(100.0, ids.PyRound(score, 2)))

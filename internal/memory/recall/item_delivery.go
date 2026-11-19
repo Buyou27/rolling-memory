@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
 
@@ -61,7 +61,7 @@ func ReconcileClauseEventDate(clauseText, occDate, spkDate string) string {
 	if err != nil {
 		return occTrim
 	}
-	if tag := strings.TrimSpace(memcore.ResolveRelativeTag(clauseText, tSpk.Unix())); tag != "" {
+	if tag := strings.TrimSpace(delivery.ResolveRelativeTag(clauseText, tSpk.Unix())); tag != "" {
 		if openIdx := strings.Index(tag, "（"); openIdx > 0 {
 			tag = strings.TrimSpace(tag[:openIdx])
 		}
@@ -88,10 +88,10 @@ func isInvalidOrPartDerivedAssertion(fact string) bool {
 					return true
 				}
 				lSet := make(map[string]bool, 8)
-				for _, lt := range memcore.Tokenize(lhs) {
+				for _, lt := range delivery.Tokenize(lhs) {
 					lSet[strings.ToLower(lt)] = true
 				}
-				rToks := memcore.Tokenize(rhs)
+				rToks := delivery.Tokenize(rhs)
 				if len(rToks) > 0 {
 					allInLHS := true
 					for _, rt := range rToks {
@@ -121,7 +121,7 @@ func foldSubordinatePureAssertionItems(entries []pureAssertionItem) []pureAssert
 	for i := range entries {
 		norms[i] = strings.ToLower(strings.TrimSpace(entries[i].fact))
 		ts := make(map[string]bool, 8)
-		for _, t := range memcore.Tokenize(norms[i]) {
+		for _, t := range delivery.Tokenize(norms[i]) {
 			if tl := strings.ToLower(strings.TrimSpace(t)); tl != "" {
 				ts[tl] = true
 			}
@@ -177,7 +177,7 @@ func hasLeadingSpeakerPrefix(s string) bool {
 	if cIdx <= 0 || strings.ContainsAny(trimmed[:cIdx], ".,!?/\\") {
 		return false
 	}
-	return memcore.CountTokens(trimmed[:cIdx]) <= memcore.TokenTier4
+	return delivery.CountTokens(trimmed[:cIdx]) <= delivery.TokenTier4
 }
 
 func splitCandidateClauses(raw string) []string {
@@ -199,7 +199,7 @@ func splitCandidateClauses(raw string) []string {
 		body := trimmed
 		if cIdx := strings.Index(trimmed, ": "); cIdx > 0 && !strings.ContainsAny(trimmed[:cIdx], ".,!?/\\") {
 			candSpk := strings.TrimSpace(trimmed[:cIdx])
-			if memcore.CountTokens(candSpk) <= memcore.TokenTier4 {
+			if delivery.CountTokens(candSpk) <= delivery.TokenTier4 {
 				speakerPrefix = candSpk + ": "
 				body = strings.TrimSpace(trimmed[cIdx+2:])
 			}
@@ -238,7 +238,7 @@ func ExtractTurnUncoveredResidualClauses(
 	deliveredResiduals map[string]bool,
 	allTokens []string,
 ) []string {
-	txt := memcore.CompactSupplementImageElaboration(strings.TrimSpace(rawText), allTokens)
+	txt := delivery.CompactSupplementImageElaboration(strings.TrimSpace(rawText), allTokens)
 	if txt == "" {
 		return nil
 	}
@@ -249,14 +249,14 @@ func ExtractTurnUncoveredResidualClauses(
 		if sClean == "" {
 			return true
 		}
-		hasRelTime := memcore.ResolveRelativeTag(sClean, 1700000000) != ""
+		hasRelTime := delivery.ResolveRelativeTag(sClean, 1700000000) != ""
 		sLow := strings.ToLower(sClean)
 		for _, f := range localAssertionFacts {
 			fLow := strings.ToLower(f)
 			if strings.Contains(fLow, sLow) {
 				return true
 			}
-			if !hasRelTime && memcore.StmtCoversSnippet(f, sClean) {
+			if !hasRelTime && delivery.StmtCoversSnippet(f, sClean) {
 				return true
 			}
 		}
@@ -270,7 +270,7 @@ func ExtractTurnUncoveredResidualClauses(
 		}
 		coreBody := clTrim
 		spkHead := ""
-		if cIdx := strings.Index(clTrim, ": "); cIdx > 0 && memcore.CountTokens(clTrim[:cIdx]) <= memcore.TokenTier4 {
+		if cIdx := strings.Index(clTrim, ": "); cIdx > 0 && delivery.CountTokens(clTrim[:cIdx]) <= delivery.TokenTier4 {
 			spkHead = clTrim[:cIdx+2]
 			coreBody = strings.TrimSpace(clTrim[cIdx+2:])
 		}
@@ -291,8 +291,8 @@ func ExtractTurnUncoveredResidualClauses(
 				coreBody = strings.Join(keptSubs, ", ")
 				clTrim = spkHead + coreBody
 				highGainCnt := 0
-				for _, tk := range memcore.Tokenize(coreBody) {
-					if memcore.IsHighGainToken(strings.ToLower(tk)) {
+				for _, tk := range delivery.Tokenize(coreBody) {
+					if delivery.IsHighGainToken(strings.ToLower(tk)) {
 						highGainCnt++
 					}
 				}
@@ -304,7 +304,7 @@ func ExtractTurnUncoveredResidualClauses(
 		if isCoveredByLocalAssertion(coreBody) {
 			continue
 		}
-		if memcore.StringShannonBits(coreBody) < 6.0 {
+		if delivery.StringShannonBits(coreBody) < 6.0 {
 			continue
 		}
 		normKey := strings.ToLower(coreBody)
@@ -324,10 +324,10 @@ func matchMorphTokenInText(textLow, ql string) float64 {
 	if strings.Contains(textLow, ql) {
 		return 1.0
 	}
-	if m := memcore.MatchTokenOrStem(textLow, ql); m >= 0.55 {
+	if m := delivery.MatchTokenOrStem(textLow, ql); m >= 0.55 {
 		return m
 	}
-	if st := memcore.StemToken(ql); st != "" && st != ql && memcore.StringShannonBits(st) >= memcore.AtomicConceptEntropyBits {
+	if st := delivery.StemToken(ql); st != "" && st != ql && delivery.StringShannonBits(st) >= delivery.AtomicConceptEntropyBits {
 		if strings.Contains(textLow, st) {
 			return 0.85
 		}
@@ -357,14 +357,14 @@ func extractInlineQuotesFromLine(line string) string {
 func computeUnifiedCandidateRelevance(baseRankScore float64, text string, allTokens []string) float64 {
 	sc := baseRankScore
 	if len(allTokens) > 0 {
-		ov := memcore.ShannonTokenOverlapSim(text, allTokens)
+		ov := delivery.ShannonTokenOverlapSim(text, allTokens)
 		textLow := strings.ToLower(text)
 		hitTerms := 0
 		morphSimSum := 0.0
 		seenQ := make(map[string]bool, len(allTokens))
 		for _, qt := range allTokens {
 			ql := strings.ToLower(strings.TrimSpace(qt))
-			if ql == "" || seenQ[ql] || !memcore.IsHighGainToken(ql) {
+			if ql == "" || seenQ[ql] || !delivery.IsHighGainToken(ql) {
 				continue
 			}
 			seenQ[ql] = true
@@ -383,7 +383,7 @@ func computeUnifiedCandidateRelevance(baseRankScore float64, text string, allTok
 			sc += 0.22 * float64(hitTerms-1)
 		}
 	}
-	bits := memcore.StringShannonBits(text)
+	bits := delivery.StringShannonBits(text)
 	if bits > 0 {
 		sc += 0.02 * math.Min(1.0, bits/24.0)
 	}
@@ -418,7 +418,7 @@ func prioritizeEvidenceInTopKPool(
 		if inPoolSeq[c.seq] {
 			continue
 		}
-		if len(allTokens) > 0 && memcore.ShannonTokenOverlapSim(c.text, allTokens) <= 0 {
+		if len(allTokens) > 0 && delivery.ShannonTokenOverlapSim(c.text, allTokens) <= 0 {
 			continue
 		}
 		if c.kind == flatKindUnit || c.kind == flatKindParse {
@@ -536,7 +536,7 @@ func prioritizeEvidenceInTopKPool(
 // reweightPoolByFocalMarginalGain promotes candidates that match scarce focal query tokens
 // (pool DF < 0.45) or share a spoken date with a focal time-shifted event.
 func reweightPoolByFocalMarginalGain(pool []flatDeliveryCandidate, allTokens []string) {
-	if len(pool) <= memcore.TokenTier16 || len(allTokens) == 0 {
+	if len(pool) <= delivery.TokenTier16 || len(allTokens) == 0 {
 		return
 	}
 	nPool := len(pool)
@@ -547,7 +547,7 @@ func reweightPoolByFocalMarginalGain(pool []flatDeliveryCandidate, allTokens []s
 	var focalTokens []string
 	for _, qt := range allTokens {
 		ql := strings.ToLower(strings.TrimSpace(qt))
-		if ql == "" || !memcore.IsHighGainToken(ql) {
+		if ql == "" || !delivery.IsHighGainToken(ql) {
 			continue
 		}
 		df := 0
@@ -567,7 +567,7 @@ func reweightPoolByFocalMarginalGain(pool []flatDeliveryCandidate, allTokens []s
 	focalDates := make(map[string]bool, 8)
 	focalOvList := make([]float64, nPool)
 	for i := range pool {
-		fov := memcore.ShannonTokenOverlapSim(pool[i].text, focalTokens)
+		fov := delivery.ShannonTokenOverlapSim(pool[i].text, focalTokens)
 		if len(focalTokens) > 0 {
 			mSum := 0.0
 			for _, ft := range focalTokens {
@@ -614,7 +614,7 @@ func reweightPoolByFocalMarginalGain(pool []flatDeliveryCandidate, allTokens []s
 
 // filterPoolBySubmodularMarginalGain applies focal-token IDF promotion and Top-K seat selection.
 func filterPoolBySubmodularMarginalGain(pool []flatDeliveryCandidate, allTokens []string, capN int) []flatDeliveryCandidate {
-	if capN < 20 || len(pool) <= memcore.TokenTier16 || len(allTokens) == 0 {
+	if capN < 20 || len(pool) <= delivery.TokenTier16 || len(allTokens) == 0 {
 		if len(pool) > capN {
 			return pool[:capN]
 		}
@@ -628,9 +628,9 @@ func filterPoolBySubmodularMarginalGain(pool []flatDeliveryCandidate, allTokens 
 		if len(selected) >= capN {
 			break
 		}
-		ov := memcore.ShannonTokenOverlapSim(c.text, allTokens)
+		ov := delivery.ShannonTokenOverlapSim(c.text, allTokens)
 		hasTimeShift := c.occDate != "" && c.spkDate != "" && c.occDate != c.spkDate
-		if len(selected) >= memcore.TokenTier16 && ov == 0 && !hasTimeShift && c.relScore < 0.55 {
+		if len(selected) >= delivery.TokenTier16 && ov == 0 && !hasTimeShift && c.relScore < 0.55 {
 			continue
 		}
 		selected = append(selected, c)
@@ -686,10 +686,10 @@ func BuildFlatItemDelivery(
 ) []map[string]any {
 	if capN <= 0 {
 		capN = 96
-	} else if capN > memcore.TokenTier256 {
-		capN = memcore.TokenTier256
+	} else if capN > delivery.TokenTier256 {
+		capN = delivery.TokenTier256
 	}
-	allTokens := memcore.Tokenize(query)
+	allTokens := delivery.Tokenize(query)
 
 	// Source head index: anchor/source trace hash -> leading segment of the source
 	// text. structured memory assertion entries reference their source trace by anchor; resolving the head
@@ -811,7 +811,7 @@ func BuildFlatItemDelivery(
 			if spkD == "" {
 				spkD = occD
 			}
-			baseSc := 0.5 + 0.5*memcore.ShannonTokenOverlapSim(rendered, allTokens)
+			baseSc := 0.5 + 0.5*delivery.ShannonTokenOverlapSim(rendered, allTokens)
 			anchorStr := asString(n["anchor"])
 			if iq := extractInlineQuotesFromLine(rendered); iq != "" {
 				qSc := baseSc
@@ -1040,7 +1040,7 @@ func BuildFlatItemDelivery(
 		if spk == "" {
 			spk = occ
 		}
-		contentLine := "发生:" + occ + " · 叙述:" + spk + " ｜ " + memcore.EscapeEngineChannel(c.text)
+		contentLine := "发生:" + occ + " · 叙述:" + spk + " ｜ " + delivery.EscapeEngineChannel(c.text)
 		// Report each item's own normalized relevance. The previous value was a pure function of
 		// delivery rank (1 - idx*0.008), a rank-index score that leaked into band/tail comparisons.
 		sc := math.Max(0.01, math.Round((c.relScore/maxRel)*10000)/10000)
@@ -1075,12 +1075,12 @@ func BuildFlatItemDelivery(
 }
 
 // buildPremiseAttributionNote computes the 0-LLM graph-topology premise & attribution verification
-// note for the primary subject band (delegating 1:1 to memcore.ComputeBandPremiseAttributionNote · U28).
+// note for the primary subject band (delegating 1:1 to delivery.ComputeBandPremiseAttributionNote · U28).
 func buildPremiseAttributionNote(query string, bands []map[string]any) string {
 	if len(bands) == 0 || strings.TrimSpace(query) == "" {
 		return ""
 	}
-	qTokens := memcore.Tokenize(query)
+	qTokens := delivery.Tokenize(query)
 	if len(qTokens) < 2 {
 		return ""
 	}
@@ -1095,14 +1095,14 @@ func buildPremiseAttributionNote(query string, bands []map[string]any) string {
 		if tl == "" || strings.Contains(primSubj, tl) {
 			continue
 		}
-		if memcore.IsHighGainToken(tl) {
+		if delivery.IsHighGainToken(tl) {
 			nonSubjCues = append(nonSubjCues, tl)
 		}
 	}
 	if len(nonSubjCues) == 0 {
 		return ""
 	}
-	profiles := make([]memcore.BandConceptProfile, 0, len(bands))
+	profiles := make([]delivery.BandConceptProfile, 0, len(bands))
 	for bi, b := range bands {
 		subj := strings.TrimSpace(asString(b["subject"]))
 		if subj == "" || subj == "XO" || subj == "misc" {
@@ -1119,7 +1119,7 @@ func buildPremiseAttributionNote(query string, bands []map[string]any) string {
 			txt := strings.ToLower(asString(n["content"]))
 			rowHits := 0
 			for _, cue := range nonSubjCues {
-				if strings.Contains(txt, cue) || memcore.MatchTokenOrStem(txt, cue) > 0 {
+				if strings.Contains(txt, cue) || delivery.MatchTokenOrStem(txt, cue) > 0 {
 					declHits[cue] = true
 					rowHits++
 				}
@@ -1131,7 +1131,7 @@ func buildPremiseAttributionNote(query string, bands []map[string]any) string {
 				multiHitRows++
 			}
 		}
-		profiles = append(profiles, memcore.BandConceptProfile{
+		profiles = append(profiles, delivery.BandConceptProfile{
 			SubjectLabel: subj,
 			IsCueMatched: bi == 0 && isCueMatched,
 			RowCount:     len(nodes),
@@ -1140,5 +1140,5 @@ func buildPremiseAttributionNote(query string, bands []map[string]any) string {
 			MultiHitRows: multiHitRows,
 		})
 	}
-	return memcore.ComputeBandPremiseAttributionNote(nonSubjCues, profiles, false)
+	return delivery.ComputeBandPremiseAttributionNote(nonSubjCues, profiles, false)
 }

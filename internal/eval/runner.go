@@ -20,8 +20,10 @@ import (
 
 // Options 是一次评测运行的完整参数（命令行 flag 覆盖 [eval] 段）。
 type Options struct {
-	Suite           string // locomo | atm
-	DataDir         string
+	Suite   string // locomo | atm | atm-probes
+	DataDir string
+	// ProbeDir 指向自建对抗探针目录（MANIFEST.json + 缺席/冲突 JSONL），仅 atm-probes 档使用。
+	ProbeDir        string
 	Tier            string
 	Limit           int
 	Offset          int
@@ -69,6 +71,9 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 	suite := strings.ToLower(strings.TrimSpace(opts.Suite))
 	tierLow := strings.ToLower(strings.TrimSpace(opts.Tier))
+	if suite == SuiteATMProbes || tierLow == TierProbeAbsence || tierLow == TierProbeConflict {
+		return RunATMProbes(cfg, opts)
+	}
 	if suite == SuiteATM || tierLow == TierATMHard || tierLow == TierATM1013 {
 		return RunATM(cfg, opts)
 	}
@@ -141,7 +146,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		documents := make([]CloudDocument, 0, len(corpus))
+		documents := make([]EvalDocument, 0, len(corpus))
 		// 同一会话内的轮次按出现顺序累加物理行号：相邻轮次行跨度紧邻（gap=1），
 		// 引擎的四维空间连续行共振即可在召回时补全上下文轮次。
 		sessionLineCursor := make(map[string]int, 64)
@@ -172,7 +177,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 			}
 			// 评测原始对话统一作为 L2 episodic 写入；评测模块只使用引擎的三个记忆层，
 			// 题目/证据等业务标注全部由评测模块自持，不进入引擎。
-			documents = append(documents, CloudDocument{
+			documents = append(documents, EvalDocument{
 				ID:         docID,
 				Text:       text,
 				Author:     author,
@@ -461,8 +466,8 @@ func runQuestions(engine *LocalEngine, opts Options,
 				"answer_token_recall":  PyRound(fullGoldRecall, 4),
 				"failure_bucket":       failureBucket, "judge": verdicts[index], "judge_reason": reasons[index],
 				"context_chars": row.counts["context_chars"], "bands": 0, "nodes": 0,
-				// "cloud_hits" 与 "engine_transport" 为跨版本数据兼容保留的历史键名（现值为本地命中数）。
-				"raw": row.counts["raw"], "cloud_hits": row.counts["cloud_hits"],
+				// local_hits is the local retrieval hit count; engine_transport names the local channel.
+				"raw": row.counts["raw"], "local_hits": row.counts["local_hits"],
 				"retrieval_unit_ids": row.unitIDs, "engine_transport": transport,
 				"engine_scope": opts.Scope, "local_fallback": false,
 				"recall_seconds": PyRound(row.seconds, 4),
@@ -517,7 +522,7 @@ func buildContext(opts Options, engine *LocalEngine, question map[string]any, st
 	row.context = TruncateRunes(joinLines(lines), opts.ContextChars)
 	row.items = Itemize(row.context, 0)
 	row.counts = map[string]int{
-		"raw": len(hits), "cloud_hits": len(hits), "context_chars": len([]rune(row.context)),
+		"raw": len(hits), "local_hits": len(hits), "context_chars": len([]rune(row.context)),
 	}
 	row.seconds = time.Since(started).Seconds()
 	return row

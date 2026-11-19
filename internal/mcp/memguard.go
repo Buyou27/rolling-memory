@@ -95,3 +95,11 @@ func coldBuildMemoryLimit(state daemonMemoryState) int64 {
 	}
 	return window
 }
+
+// ResolveColdBuildMemoryLimit applies the configured daemon memory limit in the
+// current process and returns the cold-build window for an out-of-process
+// builder. The builder is a separate process, so raising the window there never
+// moves the recall daemon's steady-state cap.
+func ResolveColdBuildMemoryLimit(cfg *config.Config) int64 {
+	return coldBuildMemoryLimit(ApplyMemoryLimit(cfg))
+}

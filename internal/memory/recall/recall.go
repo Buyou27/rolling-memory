@@ -22,7 +22,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/text"
 )
@@ -80,7 +80,7 @@ type Options struct {
 	RelativeTag     *bool
 	MentionBackfill *bool
 	PresenceLocus   string
-	Presence        *memcore.PresenceCoordinates
+	Presence        *delivery.PresenceCoordinates
 	ReaderSubject   string
 	SearchEngine    string
 	ResultUnit      string
@@ -138,7 +138,7 @@ func (r *Result) ToProbe() map[string]any {
 			// 两条血统的同名字段含义不同，必须分开，且不得把「本组内相对强度」当定性判据：
 			//   - 本地断言图血统：节点 confidence 是抽取时写入的置信度（rule-v1 对仅提及片段写 0.35），
 			//     可以在收据上附 fact / mention_only 的定性标注（mentionOnlyConfidence）。
-			//   - thin-vault 血统：只有 relative_strength（榜首恒为 1.00 的本组内相对强度），
+			//   - 早期本地金库：只有 relative_strength（榜首恒为 1.00 的本组内相对强度），
 			//     它不含「是否已成事实」的信息，故只原样透传，不据此下任何判断。
 			if writerConfidence, ok := node["confidence"]; ok {
 				hit["confidence"] = writerConfidence
@@ -364,19 +364,19 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 		}
 	}
 
-	var effPresence *memcore.PresenceCoordinates
+	var effPresence *delivery.PresenceCoordinates
 	if opts.Presence != nil && !opts.Presence.IsEmpty() {
 		norm := opts.Presence.Normalized()
 		effPresence = &norm
 	} else if strings.TrimSpace(opts.PresenceLocus) != "" {
-		norm := memcore.PresenceCoordinates{Locus: opts.PresenceLocus}.Normalized()
+		norm := delivery.PresenceCoordinates{Locus: opts.PresenceLocus}.Normalized()
 		effPresence = &norm
 	}
 	assistantID := ""
 	if cfg != nil {
 		assistantID = cfg.Identity.AssistantID
 	}
-	scopeVariants := memcore.CanonicalAssistantScopeVariants(scope, assistantID)
+	scopeVariants := delivery.CanonicalAssistantScopeVariants(scope, assistantID)
 	seeds, legs, err := memory.SearchSeeds(query, store.SeedOptions{
 		Scope: scope, Reader: opts.Reader, Limit: 32,
 		Deadline: &deadline, TokenCorrect: &tokenCorrect,
@@ -966,8 +966,8 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 		}
 		if itemCap <= 0 {
 			itemCap = 96
-		} else if itemCap > memcore.TokenTier256 {
-			itemCap = memcore.TokenTier256
+		} else if itemCap > delivery.TokenTier256 {
+			itemCap = delivery.TokenTier256
 		}
 		flatBands := BuildFlatItemDelivery(bands, rawHits, usable, query, opts.AsOf, itemCap, rankGroup)
 		result.Bands = flatBands
@@ -1832,7 +1832,7 @@ func seedExpansionTerms(memory *store.Store, seeds []store.Seed, limit int) []st
 				// morphological variants whose information is already covered by the canonical
 				// stem (evaluated via the symmetric Shannon bit-field kernel MorphSimWordPair).
 				if isExact && alNorm != "" && seedNorm != "" && strings.HasPrefix(seedNorm, alNorm) &&
-					memcore.MatchTokenOrStem(seedNorm, alNorm) >= 0.85 {
+					delivery.MatchTokenOrStem(seedNorm, alNorm) >= 0.85 {
 					continue
 				}
 				surfaces = append(surfaces, al)
@@ -1844,7 +1844,7 @@ func seedExpansionTerms(memory *store.Store, seeds []store.Seed, limit int) []st
 			// low-information surfaces via Shannon self-information bits (< 4.0 bits below
 			// one ASCII bigram / half a Han or Hangul ideograph) and over-long noise via the
 			// standard tokenz-r TokenTier ladder (tokenzr.Count <= TokenTier8).
-			if memcore.StringShannonBits(clean) < 4.0 || memcore.CountTokens(clean) > memcore.TokenTier8 {
+			if delivery.StringShannonBits(clean) < 4.0 || delivery.CountTokens(clean) > delivery.TokenTier8 {
 				continue
 			}
 			norm := ids.NormalizeLabel(clean)
@@ -1997,7 +1997,7 @@ func commonHierarchicalLocusPrefix(loci []string) string {
 	if len(loci) == 0 || !strings.Contains(loci[0], "/") {
 		return ""
 	}
-	common := memcore.SplitHierarchicalSegments(loci[0])
+	common := delivery.SplitHierarchicalSegments(loci[0])
 	if len(common) == 0 {
 		return ""
 	}
@@ -2005,7 +2005,7 @@ func commonHierarchicalLocusPrefix(loci []string) string {
 		if !strings.Contains(loc, "/") {
 			return ""
 		}
-		segs := memcore.SplitHierarchicalSegments(loc)
+		segs := delivery.SplitHierarchicalSegments(loc)
 		k := 0
 		for k < len(common) && k < len(segs) && strings.EqualFold(common[k], segs[k]) {
 			k++
@@ -2257,7 +2257,7 @@ func nonEmptyTrimmedLines(text string) []string {
 // per-line metadata suffix would flatten the conversation back into the unreadable
 // wall the assembly just removed. The header deliberately carries no strength
 // number: the caller reads the ordered content, not a scalar that impersonates
-// authority (see relativeStrength in the thin client).
+// authority (see relativeStrength in the local vault client).
 func episodicTurnBandLines(band map[string]any) []string {
 	title := plainLine(band["title"])
 	nodes, _ := band["nodes"].([]map[string]any)
@@ -2323,7 +2323,7 @@ func episodicTurnBandLines(band map[string]any) []string {
 }
 
 // bandHead builds the agent-facing header for one band: the visible label plus
-// the parenthetical labels that are not already part of it. Thin-client cell
+// the parenthetical labels that are not already part of it. Local-vault cell
 // bands carry an internal ladder address as their title ("带·C6:…#00"), which
 // means nothing to a reader; for those the header falls back to the space label
 // (file coordinates), the node's workspace locus, or a neutral label — and the

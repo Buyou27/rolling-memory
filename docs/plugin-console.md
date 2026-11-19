@@ -75,7 +75,7 @@ The console is **not a bespoke admin framework written from scratch**. Its prove
 Alongside the **Live Console**, **ROI Monitor**, and **Memory Graph**, the dashboard provides a dedicated **`Dashboard -> Memory Console`** (`/#/admin/dashboard/artifacts`) for unified monitoring and control of the **Rolling Autonoetic Memory Engine** (100% Vector-Free · 100% LLM-Free):
 
 - **Vector-Free & LLM-Free Architecture Panel**: Requires zero embedding model or cross-encoder reranking configuration — directly monitors local memory engine status, recall throughput, and local plaintext vault statistics.
-- **Live Runtime Switches**: Toggle session-start memory injection (`boot_context`), recall ledger recording (`ledger`), sparse raw fallback (`raw_when_sparse`), and the floating status widget (`widget_enabled`) in real time.
+- **Live Runtime Switches**: Toggle recall ledger recording (`ledger`), sparse raw fallback (`raw_when_sparse`), and the floating status widget (`widget_enabled`) in real time.
 
 ### 2.2 Zero-Poll Real-Time WebSocket Streams
 
@@ -96,8 +96,7 @@ The console includes a built-in **ROI & Efficacy evaluation module**, and local 
 > # Option 1: Wire only the pure MCP recall tool (removes all hooks and instruction blocks)
 > rolling-memory install --mcp-only
 >
-> # Option 2: Keep the install, but turn off boot-context injection or hook ledger recording
-> rolling-memory config set hooks.boot_context false
+> # Option 2: Keep the install, but turn off hook ledger recording
 > rolling-memory config set hooks.ledger false
 > ```
 
@@ -126,9 +125,9 @@ Every content surface (memory browser detail, recall debugger raw hits and full 
 
 ### 2.6 `Dashboard -> Memory Graph`
 
-The Memory Graph is generated from your local vault by the engine itself. Nodes follow two orthogonal axes: the memory layer (**L1 Background / L2 Episodic / L3 Noetic**) and the structural level — **word** (word family), **phrase** (two adjacent primary words), **cluster** (container), and **unit** / **free unit**. Containers are grouped as **time episodes**, **entity clusters** (dominant word family), and **source clusters** (one engine document provenance — a multi-chunk file, PDF, email thread or any other chunked source). Units outside every container are shown as **free units** on the outer shell.
+The Memory Graph is generated from your local vault by the engine itself. Nodes follow two orthogonal axes: the memory layer (**L1 Background / L2 Episodic / L3 Noetic**) and the structural level — **word** (word family), **phrase** (two adjacent terms whose text spans do not overlap; adjacent sliding windows of one character run are the same text projected twice and are not projected as phrases), **cluster** (container), and **unit** / **free unit**. Containers are grouped as **time episodes**, **entity clusters** (dominant word family), and **source clusters** (one engine document provenance — a multi-chunk file, PDF, email thread or any other chunked source). Units outside every container are shown as **free units** on the outer shell.
 
-The canvas supports layer / kind / cluster-type filters, word and phrase inspection, cluster member drill-down, citation edges, and a detail drawer with word energy, phrase binding energy, and cluster membership. When the local memory service is not running, the page shows an explicit empty state instead of sample data. The built-in LoCoMo sample remains available on the public landing page for layout preview.
+The canvas supports layer / kind / cluster-type filters, word and phrase inspection, cluster member drill-down, citation edges, and a detail drawer with word energy, phrase binding energy, pair and member df, `lift` association and coverage, and cluster membership. A dedicated **df=1 fragments** switch hides words and phrases that appear only once by default, so sparse noise does not drown the structural graph; turn it on to inspect the full lexical layer. When the local memory service is not running, the page shows an explicit empty state instead of sample data. The built-in LoCoMo sample remains available on the public landing page for layout preview.
 
 ![Rolling Memory Memory Graph — an interactive 3D memory nebula](assets/memory-graph.webp)
 

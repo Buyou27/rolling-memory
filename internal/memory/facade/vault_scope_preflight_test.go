@@ -12,12 +12,12 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 func TestVaultScopePreflightBeforeOpen(t *testing.T) {
 	for _, mode := range []string{"local"} {
-		for _, table := range []string{"trace", "noetic", "thin_vault_docs", "unexpected_user_data", "foreign_fts_data"} {
+		for _, table := range []string{"trace", "noetic", "rm_units", "unexpected_user_data", "foreign_fts_data"} {
 			t.Run(mode+"/"+table, func(t *testing.T) {
 				dir := t.TempDir()
 				path := filepath.Join(dir, "memory?#.db")
@@ -70,11 +70,11 @@ func TestVaultScopePreflightBeforeOpen(t *testing.T) {
 
 func TestVaultScopePreflightAcceptsMatchingAndRejectsOtherScope(t *testing.T) {
 	memory := newMemory(t)
-	client, err := memory.ThinClient()
+	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Vault.SaveLocalPlaintext("scope-witness", testNow, "private witness", nil, thinclient.IngestResponse{Layer: "episodic"}); err != nil {
+	if err := client.Vault.SaveLocalPlaintext("scope-witness", testNow, "private witness", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := *memory.Config
@@ -84,9 +84,9 @@ func TestVaultScopePreflightAcceptsMatchingAndRejectsOtherScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf("matching %s: %v", mode, err)
 		}
-		if _, err := matching.ThinClient(); err != nil {
+		if _, err := matching.LocalVault(); err != nil {
 			matching.Close()
-			t.Fatalf("matching thinclient %s: %v", mode, err)
+			t.Fatalf("matching localvault %s: %v", mode, err)
 		}
 		matching.Close()
 		other := cfg

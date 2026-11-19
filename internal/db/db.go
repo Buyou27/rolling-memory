@@ -23,11 +23,11 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-//go:embed schema_thin.sql
+//go:embed schema_vault.sql
 var schemaThinSQL string
 
-//go:embed schema_memcore.sql
-var schemaMemcoreSQL string
+//go:embed schema_delivery.sql
+var schemaDeliverySQL string
 
 // StorageProfile is a set of connection-level PRAGMAs.
 type StorageProfile struct {
@@ -196,16 +196,16 @@ func EnsureLegacyGraphSchema(connection *sql.DB) error {
 			return err
 		}
 	}
-	return EnsureMemcoreSchema(connection)
+	return EnsureDeliverySchema(connection)
 }
 
-// EnsureMemcoreSchema idempotently creates the 1:1 isomorphic extension tables
+// EnsureDeliverySchema idempotently creates the 1:1 isomorphic extension tables
 // (node_ext, assertion_ext, participant, node_vector, episode, episode_member,
 // memory_hot, restate) on any new or existing SQLite database.
 // Fast-path: if the extension tables and indexes already exist in sqlite_master,
 // return immediately with a single read-only query to avoid running 15 DDL statements
 // on every short-lived hook subprocess open.
-func EnsureMemcoreSchema(connection *sql.DB) error {
+func EnsureDeliverySchema(connection *sql.DB) error {
 	var hasLegacyNode int
 	if err := connection.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'node'`).Scan(&hasLegacyNode); err != nil {
 		return err
@@ -227,7 +227,7 @@ func EnsureMemcoreSchema(connection *sql.DB) error {
 			return nil
 		}
 	}
-	for _, statement := range splitSchemaStatements(schemaMemcoreSQL) {
+	for _, statement := range splitSchemaStatements(schemaDeliverySQL) {
 		if _, err := connection.Exec(statement); err != nil {
 			return err
 		}
@@ -298,8 +298,8 @@ func upgradeMetaEdgeEightKinds(connection *sql.DB) error {
 }
 
 // Migrate creates the bootstrap schema for a new database and writes db_meta
-// rows, then ensures the 1:1 memcore extension tables exist for databases that
-// still carry the legacy graph. Fresh databases start thin (schema_thin.sql):
+// rows, then ensures the 1:1 delivery extension tables exist for databases that
+// still carry the legacy graph. Fresh databases start with the vault schema (schema_vault.sql):
 // vault tables + shared bookkeeping only, no legacy assertion graph.
 func Migrate(connection *sql.DB) (int, error) {
 	current, err := userVersion(connection)
@@ -335,7 +335,7 @@ func Migrate(connection *sql.DB) (int, error) {
 			}
 		}
 	}
-	if err := EnsureMemcoreSchema(connection); err != nil {
+	if err := EnsureDeliverySchema(connection); err != nil {
 		return 0, err
 	}
 	return version.SchemaVersion, nil

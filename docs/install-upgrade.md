@@ -269,7 +269,7 @@ Downgrades are not a substitute for restoring a vault backup after an incompatib
 - Set `ROLLING_MEMORY_UPDATE_CHECK=off` to disable background checks. Explicit `update --check` still works.
 - Set `ROLLING_MEMORY_UPDATE_API_BASE` to use an enterprise mirror for tag discovery; set `ROLLING_MEMORY_RELEASE_BASE` to use a mirror for artifacts.
 
-- **One physical corpus**: this release drops the legacy thin-era corpus tables when the vault first opens, prunes unreadable pointer units, and rebuilds the retrieval index. The surviving canonical corpus stays local; the old tables are not migrated.
+- **One physical corpus**: this release uses only `rm_docs`/`rm_unit_meta` plus the read-only `rm_units` model. Pre-canonical vault schemas are not migrated; start from a fresh vault when upgrading from an early build.
 
 ---
 

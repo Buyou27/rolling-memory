@@ -532,26 +532,6 @@ func TestWriteDefaultAndSetConfigValue(t *testing.T) {
 	}
 }
 
-func TestRecallPruneKnobsConfig(t *testing.T) {
-	isolateHome(t)
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "prune.toml")
-	writeConfig(t, path, `[recall]
-prune_score_ratio = 0.65
-prune_min_info_lcs = 3.2
-prune_min_title_cov = 0.30
-preprobe_limit = 1024
-`)
-	cfg, err := Load(LoadOptions{Path: &path, Env: map[string]string{}})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Recall.PruneScoreRatio != 0.65 || cfg.Recall.PruneMinInfoLCS != 3.2 ||
-		cfg.Recall.PruneMinTitleCov != 0.30 || cfg.Recall.PreprobeLimit != 1024 {
-		t.Fatalf("unexpected prune knobs: %+v", cfg.Recall)
-	}
-}
-
 func TestSetConfigValueCreatesDefault(t *testing.T) {
 	isolateHome(t)
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -592,7 +572,6 @@ relative_tag = "false"
 mention_backfill = 2
 
 [hooks]
-boot_context = "on"
 ledger = 0
 
 [storage]
@@ -610,7 +589,7 @@ profile = "usb"
 		!cfg.Recall.MentionBackfill {
 		t.Fatalf("unexpected recall booleans: %+v allow=%v", cfg.Recall, cfg.AllowLoopbackLLM)
 	}
-	if !cfg.Hooks.BootContext || cfg.Hooks.Ledger {
+	if cfg.Hooks.Ledger {
 		t.Fatalf("unexpected hooks booleans: %+v", cfg.Hooks)
 	}
 	if cfg.Storage.Profile != "usb" {

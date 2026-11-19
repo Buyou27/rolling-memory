@@ -1,2 +1,0 @@
-{"event": "close", "source_error": "stat <CASE>/input/missing.jsonl: no such file or directory", "ts": "<NOW>"}
-{"event": "close", "imported": 0, "messages": 0, "replayed": 0, "ts": "<NOW>", "written": 0}

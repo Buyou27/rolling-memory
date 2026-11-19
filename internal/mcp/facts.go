@@ -92,7 +92,7 @@ func recordRecallFact(memory *facade.Memory, presence *text.PresenceCoordinates,
 		defer ledger.Close()
 		_ = ledger.Append(entry)
 	}
-	if tc, err := memory.ThinClient(); err == nil && tc != nil && tc.Vault != nil && tc.Vault.CorpusSize() >= 2048 {
+	if tc, err := memory.LocalVault(); err == nil && tc != nil && tc.Vault != nil && tc.Vault.CorpusSize() >= 2048 {
 		go writeFact()
 		return
 	}

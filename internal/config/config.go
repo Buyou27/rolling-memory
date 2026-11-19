@@ -47,12 +47,10 @@ func IsDefaultScope(scope string) bool {
 	return clean == "" || clean == DefaultScope || clean == LegacyDefaultScope
 }
 
-// WorkspaceScopeName derives the per-workspace scope name used when the
-// cross-version `[cloud.sync] scope_from_workspace` compatibility key is
-// enabled: the ROLLING_MEMORY_LOCUS override wins, otherwise the working
-// directory basename (the same rule the persona locus uses, so scope and locus
-// never disagree). Returns "" when nothing usable is derivable (callers keep
-// their existing scope).
+// WorkspaceScopeName derives a per-workspace scope name: the
+// ROLLING_MEMORY_LOCUS override wins, otherwise the working directory basename
+// (the same rule the persona locus uses, so scope and locus never disagree).
+// Returns "" when nothing usable is derivable (callers keep their scope).
 func WorkspaceScopeName(override string, wd string) string {
 	name := strings.TrimSpace(override)
 	if name == "" {
@@ -120,7 +118,6 @@ activation_record = true
 activation_rank = false
 
 [hooks]
-boot_context = false
 max_traces = 60
 ledger = true
 
@@ -231,10 +228,6 @@ type RecallConfig struct {
 	AdvancedOps      bool
 	SearchEngine     string
 	MaskDeliverable  string
-	PruneScoreRatio  float64
-	PruneMinInfoLCS  float64
-	PruneMinTitleCov float64
-	PreprobeLimit    int
 }
 
 // NormalizeDeliveryWindow normalizes an adaptive delivery window preset ("auto", "0-16",
@@ -262,9 +255,8 @@ func NormalizeDeliveryWindow(raw, fallback string) (string, int, bool) {
 
 // HooksConfig holds hook budgets.
 type HooksConfig struct {
-	BootContext bool
-	MaxTraces   int
-	Ledger      bool
+	MaxTraces int
+	Ledger    bool
 }
 
 // IdentityConfig holds the Assistant-centric autonoetic identity mapping ([identity] section):
@@ -360,30 +352,12 @@ func Load(opts LoadOptions) (*Config, error) {
 	identityTable := table(data, "identity")
 	evalTable := table(data, "eval")
 	updateTable := table(data, "update")
-	// 跨版本兼容键：`[cloud.sync] scope_from_workspace` 仍是控制台判定的输入，
-	// 这里只保留其本地 scope 派生语义；其余云端同步配置已回收。
-	cloudRoot := table(data, "cloud")
-	syncTable := map[string]any{}
-	if value, ok := cloudRoot["sync"].(map[string]any); ok {
-		syncTable = value
-	}
 	storageTable := table(data, "storage")
 
 	dbValue := firstTruthy(ids.OptionalNonEmptyString(opts.DB), envValue(env, "ROLLING_MEMORY_DB"), core["db"], DefaultDBPath())
 	logValue := firstTruthy(envValue(env, "ROLLING_MEMORY_LOG"), core["log"], filepath.Join(DefaultStateDir(), "rolling-memory.log"))
 	modeValue := firstTruthy(ids.OptionalNonEmptyString(opts.Mode), envValue(env, "ROLLING_MEMORY_MODE"), modeTable["name"], "local")
 	scopeValue := firstTruthy(ids.OptionalNonEmptyString(opts.Scope), envValue(env, "ROLLING_MEMORY_SCOPE"), core["scope"], DefaultScope)
-	// 兼容键 `[cloud.sync] scope_from_workspace`：默认 scope（空 / "default" / 旧 "mem:self"）
-	// 派生为当前工作区名（ROLLING_MEMORY_LOCUS 覆盖，否则工作目录 basename），使每个工作区
-	// 落在独立分区；显式 scope（--scope / ROLLING_MEMORY_SCOPE / 自定义 [core] scope）优先。
-	if asBool(syncTable["scope_from_workspace"], false) && IsDefaultScope(pyString(scopeValue)) {
-		if wd, err := os.Getwd(); err == nil {
-			locusOverride, _ := env("ROLLING_MEMORY_LOCUS")
-			if name := WorkspaceScopeName(locusOverride, wd); name != "" {
-				scopeValue = name
-			}
-		}
-	}
 	readerValue := firstTruthy(ids.OptionalNonEmptyString(opts.Reader), envValue(env, "ROLLING_MEMORY_READER"), core["reader"], "deliverable")
 
 	recallWindowRaw := pyString(envOr(env, "ROLLING_MEMORY_DELIVERY_WINDOW", getDefault(recallTable, "delivery_window", "0-16")))
@@ -414,15 +388,10 @@ func Load(opts LoadOptions) (*Config, error) {
 		AdvancedOps:      asBool(envOr(env, "ROLLING_MEMORY_ADVANCED_OPS", getDefault(recallTable, "advanced_ops", false)), false),
 		SearchEngine:     strings.ToLower(strings.TrimSpace(pyString(envOr(env, "ROLLING_MEMORY_SEARCH_ENGINE", getDefault(recallTable, "search_engine", "hybrid"))))),
 		MaskDeliverable:  strings.ToLower(strings.TrimSpace(pyString(envOr(env, "ROLLING_MEMORY_MASK_DELIVERABLE", getDefault(recallTable, "mask_deliverable", "off"))))),
-		PruneScoreRatio:  asFloat(recallTable["prune_score_ratio"], 0.55),
-		PruneMinInfoLCS:  asFloat(recallTable["prune_min_info_lcs"], 2.7),
-		PruneMinTitleCov: asFloat(recallTable["prune_min_title_cov"], 0.24),
-		PreprobeLimit:    asInt(recallTable["preprobe_limit"], 512),
 	}
 	hooksConfig := HooksConfig{
-		BootContext: asBool(hooksTable["boot_context"], false),
-		MaxTraces:   asInt(hooksTable["max_traces"], 60),
-		Ledger:      asBool(hooksTable["ledger"], true),
+		MaxTraces: asInt(hooksTable["max_traces"], 60),
+		Ledger:    asBool(hooksTable["ledger"], true),
 	}
 	identityConfig := IdentityConfig{
 		AssistantID: pyString(envOr(env, "ROLLING_MEMORY_ASSISTANT_ID", firstTruthy(identityTable["assistant_id"], core["assistant_id"], ""))),
@@ -690,17 +659,13 @@ func (c *Config) SecretStatus() map[string]map[string]any {
 
 // PublicDict returns the redacted configuration view.
 func (c *Config) PublicDict() map[string]any {
-	egress := "loopback-only"
-	if c.Mode != "local" {
-		egress = "remote-allowed"
-	}
 	return map[string]any{
 		"path":   c.Path,
 		"db":     c.DB,
 		"scope":  c.Scope,
 		"reader": c.Reader,
 		"mode":   c.Mode,
-		"egress": egress,
+		"egress": "loopback-only",
 		"log":    c.Log,
 		"recall": map[string]any{
 			"bands":             c.Recall.Bands,

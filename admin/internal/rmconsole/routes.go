@@ -65,7 +65,7 @@ func snapshotBgTask() BgTaskStatus {
 	return bgTaskState
 }
 
-// collectArtifactStats 汇总本地明文金库（thin_vault_docs / rm_noetic）与引擎统计读数。
+// collectArtifactStats 汇总本地明文金库（rm_units / rm_noetic）与引擎统计读数。
 // 控制台是纯本地面：恒报本地金库坐标（local://vault），绝不呈现任何云端地址 / 用户 ID。
 func collectArtifactStats(dbPath, scope string) ArtifactStats {
 	if scope == "" || scope == LegacyUserScope {
@@ -82,14 +82,14 @@ func collectArtifactStats(dbPath, scope string) ArtifactStats {
 	}
 	var layerCounts LayerStatsResponse
 	fillCachedLayerGlobalCounts(dbPath, &layerCounts)
-	st.ThinVaultDocs = layerCounts.BackgroundCount + layerCounts.EpisodicCount
+	st.VaultDocs = layerCounts.BackgroundCount + layerCounts.EpisodicCount
 	// 全库去重 cell 统计（substr/instr + UNION + COUNT(DISTINCT)，单次 0.25–0.65s）
 	// 走 TTL 缓存，不再随每次采样（浮标 1Hz / 状态帧随金库写入）重跑；见 artifact_stats_cache.go。
-	st.ThinVaultCells = cachedArtifactCells(dbPath)
-	st.ThinVaultNoetic = layerCounts.NoeticActiveCount
-	st.ActiveAssertions = st.ThinVaultDocs + st.ThinVaultNoetic
-	st.ReferentNodes = st.ThinVaultCells
-	st.EligibleNodes = st.ThinVaultCells + st.ThinVaultDocs + st.ThinVaultNoetic
+	st.VaultCells = cachedArtifactCells(dbPath)
+	st.VaultNoetic = layerCounts.NoeticActiveCount
+	st.ActiveAssertions = st.VaultDocs + st.VaultNoetic
+	st.ReferentNodes = st.VaultCells
+	st.EligibleNodes = st.VaultCells + st.VaultDocs + st.VaultNoetic
 	return st
 }
 
@@ -218,13 +218,11 @@ func triggerConsoleStartupPrewarm() {
 
 // Switches 开发调试监控开关集合（提供给用户在面板中实时开闭，100% 向量无关 · LLM 无关）。
 type Switches struct {
-	BootContext   bool   `json:"boot_context"`
 	Ledger        bool   `json:"ledger"`
 	RawWhenSparse bool   `json:"raw_when_sparse"`
 	Mode          string `json:"mode"`
 	// SyncAutoWatch 自动监控同步开关（控制台只写本地配置键 `sync.auto_watch`，不涉及任何云端同步）。
-	// JSON 键名 `cloud_auto_sync` 为前端存量契约，跨版本兼容保留。
-	SyncAutoWatch  bool   `json:"cloud_auto_sync"`
+	SyncAutoWatch  bool   `json:"sync_auto_watch"`
 	WidgetEnabled  bool   `json:"widget_enabled"`
 	DeliveryWindow string `json:"delivery_window"`
 }
@@ -258,7 +256,7 @@ type RecentAssertion struct {
 	Status     string  `json:"status"`
 }
 
-// ArtifactStats 薄客户端明文金库（thin_vault_docs / rm_noetic）与 RAME 引擎实时统计控制台数据。
+// ArtifactStats 薄客户端明文金库（rm_units / rm_noetic）与 RAME 引擎实时统计控制台数据。
 type ArtifactStats struct {
 	TotalTraces       int     `json:"total_traces"`
 	ProcessedTraces   int     `json:"processed_traces"`
@@ -267,9 +265,9 @@ type ArtifactStats struct {
 	ActiveAssertions  int     `json:"active_assertions"`
 	ReferentNodes     int     `json:"referent_nodes"`
 	EligibleNodes     int     `json:"eligible_nodes"`
-	ThinVaultDocs     int     `json:"thin_vault_docs"`
-	ThinVaultCells    int     `json:"thin_vault_cells"`
-	ThinVaultNoetic   int     `json:"rm_noetic"`
+	VaultDocs         int     `json:"vault_docs"`
+	VaultCells        int     `json:"vault_cells"`
+	VaultNoetic       int     `json:"vault_noetic"`
 	UpstreamEngine    string  `json:"upstream_engine"`
 	UpstreamUserID    string  `json:"upstream_user_id"`
 	UpstreamEndpoint  string  `json:"upstream_endpoint"`
@@ -341,7 +339,6 @@ type WidgetResponse struct {
 	LastEventTS       int64   `json:"last_event_ts"`
 	EventCount        int     `json:"event_count"`
 	LastRecallMS      int     `json:"last_recall_ms"`
-	BootContext       bool    `json:"boot_context"`
 	Ledger            bool    `json:"ledger"`
 	BgTask            string  `json:"bg_task,omitempty"`
 	SampledAtUnixMS   int64   `json:"sampled_at_ms"`
@@ -516,10 +513,10 @@ func collectStatus(home, hostVer, hostAPIVer string) StatusResponse {
 		return resp
 	}
 	resp.EngineOnline = true
-	resp.ActiveAssertions = resp.Artifacts.ThinVaultDocs + resp.Artifacts.ThinVaultNoetic
+	resp.ActiveAssertions = resp.Artifacts.VaultDocs + resp.Artifacts.VaultNoetic
 	resp.PendingTraces = 0
-	resp.TotalTraces = resp.Artifacts.ThinVaultDocs
-	resp.TotalNodes = resp.Artifacts.ThinVaultCells + resp.Artifacts.ThinVaultDocs + resp.Artifacts.ThinVaultNoetic
+	resp.TotalTraces = resp.Artifacts.VaultDocs
+	resp.TotalNodes = resp.Artifacts.VaultCells + resp.Artifacts.VaultDocs + resp.Artifacts.VaultNoetic
 	resp.ConflictsProposed = 0
 
 	if tvRows, err := sqliteQueryJSON(resp.DBPath, `
@@ -528,7 +525,7 @@ func collectStatus(home, hostVer, hostAPIVer string) StatusResponse {
 			COALESCE(layer, 'episodic') AS layer,
 			raw_text AS txt,
 			address_uri AS addr
-		FROM thin_vault_docs
+		FROM rm_units
 		ORDER BY occurred_at DESC
 		LIMIT 8;
 	`); err == nil && len(tvRows) > 0 {
@@ -564,8 +561,7 @@ func collectStatus(home, hostVer, hostAPIVer string) StatusResponse {
 
 func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 	sw := Switches{
-		BootContext: true,
-		Ledger:      true,
+		Ledger: true,
 		// 控制台只读写本地明文金库（local_plain）：运行模式读数恒为 local，
 		// 引擎配置里的 `[mode] name` 不再参与控制台路径判定。
 		RawWhenSparse:  true,
@@ -577,9 +573,6 @@ func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 	cfg := config.ParseRollingConfig(configPath)
 	if len(cfg) == 0 {
 		return sw
-	}
-	if val, ok := cfg["hooks.boot_context"]; ok {
-		sw.BootContext = strings.TrimSpace(val) == "true"
 	}
 	if val, ok := cfg["hooks.ledger"]; ok {
 		sw.Ledger = strings.TrimSpace(val) == "true"
@@ -597,15 +590,10 @@ func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 			sw.DeliveryWindow = "0-64"
 		}
 	}
-	// 自动监控同步开关（本地配置键）：`sync.auto_watch` 与 `hooks.auto_sync` 任一显式配置即生效
-	// （口径与引擎 internal/cli/autowatch.go 的本地键一致；历史云端键已随云端面回收）。
-	for _, key := range []string{"sync.auto_watch", "hooks.auto_sync"} {
-		val, ok := cfg[key]
-		if !ok {
-			continue
-		}
+	// 自动监控同步开关：唯一的本地配置键 `sync.auto_watch`。
+	if val, ok := cfg["sync.auto_watch"]; ok {
 		low := strings.ToLower(strings.TrimSpace(val))
-		sw.SyncAutoWatch = low != "false" && low != "0" && low != "manual"
+		sw.SyncAutoWatch = low != "false" && low != "0"
 	}
 	return sw
 }
@@ -689,11 +677,6 @@ func applySwitchToggle(home, key, value string) error {
 
 	configKey := ""
 	switch key {
-	case "boot_context":
-		if value != "true" && value != "false" {
-			return errors.New("boot_context 仅支持 true 或 false")
-		}
-		configKey = "hooks.boot_context"
 	case "ledger":
 		if value != "true" && value != "false" {
 			return errors.New("ledger 仅支持 true 或 false")
@@ -716,15 +699,15 @@ func applySwitchToggle(home, key, value string) error {
 			return errors.New("delivery_window 仅支持 0-16、0-32 或 0-64")
 		}
 		configKey = "recall.delivery_window"
-	case "cloud_auto_sync", "auto_sync", "sync_mode":
+	case "sync_auto_watch":
 		low := strings.ToLower(value)
 		switch low {
-		case "true", "1", "auto":
+		case "true", "1":
 			value = "true"
-		case "false", "0", "manual":
+		case "false", "0":
 			value = "false"
 		default:
-			return errors.New("cloud_auto_sync 仅支持 true/false 或 auto/manual")
+			return errors.New("sync_auto_watch 仅支持 true/false")
 		}
 		// 只写本地自动监控同步键（引擎 internal/cli/autowatch.go 的现役本地键）。
 		configKey = "sync.auto_watch"

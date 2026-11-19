@@ -12,7 +12,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/graphmodel"
 	"github.com/rocareer/rolling-memory/internal/memory/graph"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	_ "modernc.org/sqlite"
 )
 
@@ -24,7 +24,7 @@ func BenchmarkGraphViewCold(b *testing.B) {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = db.Close() })
-	vault, err := thinclient.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
+	vault, err := localvault.NewVault(db, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func BenchmarkGraphViewCold(b *testing.B) {
 		if i%17 == 0 {
 			layer = "noetic"
 		}
-		if err := vault.SaveLocalPlaintext(fmt.Sprintf("ep_%05d", i), 1700000000+int64(i)*60, text, nil, thinclient.IngestResponse{Layer: layer}); err != nil {
+		if err := vault.SaveLocalPlaintext(fmt.Sprintf("ep_%05d", i), 1700000000+int64(i)*60, text, nil, localvault.IngestResponse{Layer: layer}); err != nil {
 			b.Fatal(err)
 		}
 	}

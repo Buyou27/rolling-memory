@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // episodicTurnGroup is one harness turn's hits plus the turn's ordered segments.
@@ -132,7 +132,7 @@ func bestTurnSegmentIndex(rawPointer string, segments []string, query string, fa
 			return fallbackIdx
 		}
 	}
-	qWords := thinclient.SplitWords(strings.ToLower(strings.TrimSpace(query)))
+	qWords := localvault.SplitWords(strings.ToLower(strings.TrimSpace(query)))
 	seenW := make(map[string]bool, len(qWords))
 	uniqWords := make([]string, 0, len(qWords))
 	for _, w := range qWords {

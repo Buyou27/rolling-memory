@@ -69,7 +69,7 @@ func IsAutoSyncEnabled(cfgPath string) bool {
 		key := strings.TrimSpace(parts[0])
 		val := strings.ToLower(strings.Trim(strings.TrimSpace(parts[1]), `"'`))
 		switch section + "." + key {
-		case "sync.auto_watch", "hooks.auto_sync", "cloud.sync.auto_watch":
+		case "sync.auto_watch":
 			if val == "false" || val == "0" || val == "manual" {
 				return false
 			}
@@ -138,8 +138,19 @@ func SetEpisodicSyncPaused(db *sql.DB, paused bool) error {
 }
 
 // RunAutoWatchTick executes one single-flight pass of the auto-watcher if enabled.
-// It returns true if a pass ran, along with counts of synced background chunks and episodic turns.
-func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quiesceEpi time.Duration) (ran bool, bgChunks int, epiPushed int) {
+// It returns true if a pass ran, along with counts of synced background chunks and imported episodic turns.
+func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quiesceEpi time.Duration) (ran bool, bgChunks int, epiImported int) {
+	return runAutoWatchTickWithBudget(ctx, memory, settleBG, quiesceEpi, autoWatchTickBudget, autoWatchReconcileBudget)
+}
+
+// RunAutoWatchWorkerTick is the worker-process variant: the scan runs outside
+// the recall runtime, so it may use a much larger slice to make progress on
+// multi-gigabyte host databases. The reader keeps the short budget above.
+func RunAutoWatchWorkerTick(ctx context.Context, memory *facade.Memory, settleBG, quiesceEpi time.Duration) (ran bool, bgChunks int, epiImported int) {
+	return runAutoWatchTickWithBudget(ctx, memory, settleBG, quiesceEpi, workerAutoWatchTickBudget, workerAutoWatchStepBudget)
+}
+
+func runAutoWatchTickWithBudget(ctx context.Context, memory *facade.Memory, settleBG, quiesceEpi time.Duration, tickBudget, stepBudget time.Duration) (ran bool, bgChunks int, epiImported int) {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return false, 0, 0
 	}
@@ -173,6 +184,9 @@ func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quie
 	}
 	defer releaseAutoWatchLease(db, lease)
 	ctx = passCtx
+	tickCtx, cancelTick := context.WithTimeout(ctx, tickBudget)
+	defer cancelTick()
+	ctx = tickCtx
 
 	if _, err := runEpisodicIndexBackfillTick(ctx, memory); err != nil {
 		log.Printf("episodic index backfill: %v", err)
@@ -189,13 +203,13 @@ func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quie
 		log.Printf("episodic pointer heal: re-anchored %d drifted pointer(s)", healed)
 	}
 	if ctx.Err() != nil {
-		return false, bgChunks, epiPushed
+		return false, bgChunks, epiImported
 	}
 
 	// 1. L1 Background: only sync when mounted dirs have dirty/new/deleted files whose
 	// mtime has settled past settleBG.
 	if hasSettledDirtyBackgroundState(db, settleBG) {
-		if tc, err := memory.ThinClient(); err == nil && tc != nil && tc.Transport != nil {
+		if tc, err := memory.LocalVault(); err == nil && tc != nil && tc.Transport != nil {
 			if rep, sErr := tc.SyncBackgroundDirs(ctx); sErr == nil {
 				bgChunks += rep.IngestedChunks
 			}
@@ -206,27 +220,38 @@ func RunAutoWatchTick(ctx context.Context, memory *facade.Memory, settleBG, quie
 	// Both paths require explicit completion evidence before importing a turn.
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		passCtx, cancelPass := context.WithTimeout(ctx, autoWatchReconcileBudget)
+		passCtx, cancelPass := context.WithTimeout(ctx, stepBudget)
 		if err := runEpisodicSourceScanTick(passCtx, memory, home); err != nil {
 			log.Printf("episodic source scan: %v", err)
 		}
 		cancelPass()
 	}
 	if home != "" && harnessTranscriptChangedSince(db, home) {
-		passCtx, cancelPass := context.WithTimeout(ctx, autoWatchReconcileBudget)
+		passCtx, cancelPass := context.WithTimeout(ctx, stepBudget)
 		if rep, rErr := executeReconcileSync(passCtx, memory, "episodic", "", 15); rErr == nil {
-			epiPushed += rep.EpisodicPushedToRemote
+			epiImported += rep.EpisodicImportedFromHar
 			markHarnessTranscriptSynced(db, home)
 		}
 		cancelPass()
 	}
-	return true, bgChunks, epiPushed
+	return true, bgChunks, epiImported
 }
 
-// autoWatchReconcileBudget keeps one background pass inside the auto-watch tick
-// (defaultAutoWatchTick) so a slow engine cannot stack overlapping passes on the
-// single SQLite writer.
-const autoWatchReconcileBudget = 8 * time.Second
+// autoWatchReconcileBudget keeps one background step inside a bounded slice so
+// a slow engine cannot stack overlapping passes on the single SQLite writer.
+const autoWatchReconcileBudget = 400 * time.Millisecond
+
+// autoWatchTickBudget bounds the whole pass. The caller runs one pass per tick;
+// a pass that overruns is simply resumed from its checkpoint on the next tick.
+const autoWatchTickBudget = 1500 * time.Millisecond
+
+// workerAutoWatchTickBudget / workerAutoWatchStepBudget are used only by the
+// out-of-process ingest worker. They are large enough to make progress on
+// multi-gigabyte harness databases while remaining bounded.
+const (
+	workerAutoWatchTickBudget = 9 * time.Second
+	workerAutoWatchStepBudget = 8 * time.Second
+)
 
 // RunAutoWatchLoop runs the periodic background/episodic watcher until ctx is cancelled.
 func RunAutoWatchLoop(ctx context.Context, memory *facade.Memory, interval time.Duration) {
@@ -263,6 +288,10 @@ func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, shar
 			_ = watchMem.Close()
 		}
 	}()
+	if sharedMem != nil {
+		sharedMem.SetSnapshotOnly(true)
+		a.ensureSnapshotBuilder(ctx, sharedMem)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -289,11 +318,21 @@ func (a *application) backgroundMCPAutoWatchWithMemory(ctx context.Context, shar
 					if err != nil || mem == nil {
 						continue
 					}
+					mem.SetSnapshotOnly(true)
 					watchMem = mem
 					ownsMem = true
 				}
 			}
 			RunAutoWatchTick(ctx, watchMem, bgSettleWindow, episodicQuiescenceWindow)
+			if IsEpisodicSyncPaused(watchMem.Store.DB(), watchMem.Config.Path) {
+				continue
+			}
+			a.ensureSnapshotBuilder(ctx, watchMem)
+			if processed, queueErr := watchMem.ProcessCrystallizationQueue(ctx, 1); queueErr != nil {
+				log.Printf("crystallization queue: %v", queueErr)
+			} else if processed > 0 {
+				log.Printf("crystallization queue: processed %d deferred pulse(s)", processed)
+			}
 		}
 	}
 }

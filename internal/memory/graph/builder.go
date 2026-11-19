@@ -18,12 +18,12 @@ import (
 
 	core "github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/graphmodel"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // Builder caches one immutable graph snapshot per corpus generation.
 type Builder struct {
-	vault *thinclient.Vault
+	vault *localvault.Vault
 
 	mu   sync.Mutex
 	snap *Snapshot
@@ -35,8 +35,15 @@ type Builder struct {
 	viewResp *graphmodel.Response
 }
 
+// snapshotReuseWindow bounds how often a full engine projection rebuild can run.
+// The vault changes continuously while a session is active; without a reuse
+// window every auto-refresh would rescan the whole corpus and rebuild every
+// cluster. A short window keeps the graph responsive and still converges after
+// new writes on the next request past the window.
+const snapshotReuseWindow = 30 * time.Second
+
 // NewBuilder returns a graph builder bound to one local vault.
-func NewBuilder(vault *thinclient.Vault) *Builder {
+func NewBuilder(vault *localvault.Vault) *Builder {
 	return &Builder{vault: vault}
 }
 
@@ -63,6 +70,14 @@ func (b *Builder) Snapshot(ctx context.Context) (*Snapshot, error) {
 		return nil, fmt.Errorf("graph: nil builder")
 	}
 	b.mu.Lock()
+	// Fast path: a just-built snapshot is served without rescanning the vault.
+	// Auto-refresh during active writes would otherwise rebuild every few
+	// seconds; one rebuild per window is enough for a local graph view.
+	if b.snap != nil && time.Since(b.snap.BuiltAt) < snapshotReuseWindow {
+		snap := b.snap
+		b.mu.Unlock()
+		return snap, nil
+	}
 	defer b.mu.Unlock()
 
 	units, err := b.vault.GraphUnits(ctx)
@@ -446,8 +461,8 @@ func layerMixOf(snap *Snapshot, ids []string) map[string]int {
 }
 
 func dominantLayer(mix map[string]int) string {
-	order := []string{thinclient.LayerBackground, thinclient.LayerEpisodic, thinclient.LayerNoetic}
-	best := thinclient.LayerEpisodic
+	order := []string{localvault.LayerBackground, localvault.LayerEpisodic, localvault.LayerNoetic}
+	best := localvault.LayerEpisodic
 	bestCount := -1
 	for _, layer := range order {
 		if mix[layer] > bestCount {

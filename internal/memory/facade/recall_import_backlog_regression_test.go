@@ -38,7 +38,7 @@ func TestImportMirrorsAllEligiblePendingTracesWithoutConsumingRestrictedRows(t *
 		t.Fatal(err)
 	}
 	var docs, restrictedDocs, restrictedPending int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*), count(*) FILTER (WHERE raw_text IN (SELECT text FROM trace WHERE audience NOT IN ('shared','public'))) FROM thin_vault_docs`).Scan(&docs, &restrictedDocs); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*), count(*) FILTER (WHERE raw_text IN (SELECT text FROM trace WHERE audience NOT IN ('shared','public'))) FROM rm_units`).Scan(&docs, &restrictedDocs); err != nil {
 		t.Fatal(err)
 	}
 	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace WHERE audience NOT IN ('shared','public') AND processed = 0`).Scan(&restrictedPending); err != nil {
@@ -50,7 +50,7 @@ func TestImportMirrorsAllEligiblePendingTracesWithoutConsumingRestrictedRows(t *
 	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&docs); err != nil || docs != 71 {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units`).Scan(&docs); err != nil || docs != 71 {
 		t.Fatalf("repeat docs=%d err=%v", docs, err)
 	}
 }
@@ -69,10 +69,10 @@ func TestImportSharedTraceSurvivesPrivatePendingBacklogAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sharedDocs, privateDocs int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE raw_text LIKE '%zirconium telescope unique evidence%'`).Scan(&sharedDocs); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE raw_text LIKE '%zirconium telescope unique evidence%'`).Scan(&sharedDocs); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE raw_text LIKE '%private backlog item%'`).Scan(&privateDocs); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_units WHERE raw_text LIKE '%private backlog item%'`).Scan(&privateDocs); err != nil {
 		t.Fatal(err)
 	}
 	if privateDocs != 0 {

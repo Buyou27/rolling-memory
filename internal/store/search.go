@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/memory/legacy/memcore"
+	"github.com/rocareer/rolling-memory/internal/memory/delivery"
 )
 
 type nodeCore struct {
@@ -73,8 +73,8 @@ func (s *Store) SearchSeeds(cue string, o SeedOptions) ([]Seed, map[string]int, 
 		} else {
 			terms = allTerms
 		}
-		if len(terms) > memcore.TokenTier64 {
-			terms = terms[:memcore.TokenTier64]
+		if len(terms) > delivery.TokenTier64 {
+			terms = terms[:delivery.TokenTier64]
 		}
 	}
 	scores := map[string]*Seed{}
@@ -120,7 +120,7 @@ func (s *Store) SearchSeeds(cue string, o SeedOptions) ([]Seed, map[string]int, 
 	runTerm := func(term string) (int, error) {
 		hits := 0
 		isGolden := strings.HasPrefix(o.Scope, "mem:golden:")
-		termBits := memcore.StringShannonBits(term)
+		termBits := delivery.StringShannonBits(term)
 		infoTieBreak := 0.0
 		if !isGolden {
 			infoTieBreak = math.Min(0.04, termBits/1000.0)
@@ -150,7 +150,7 @@ func (s *Store) SearchSeeds(cue string, o SeedOptions) ([]Seed, map[string]int, 
 		if ids.HasCJK(term) {
 			minSubBits = 10.5
 		}
-		if (isGolden && termBits >= minSubBits) || (!isGolden && !memcore.IsShortOrDigitsToken(term) && termBits >= minSubBits) {
+		if (isGolden && termBits >= minSubBits) || (!isGolden && !delivery.IsShortOrDigitsToken(term) && termBits >= minSubBits) {
 			termNorm := ids.NormalizeLabel(term)
 			var rows []map[string]any
 			var err error
@@ -211,7 +211,7 @@ func (s *Store) SearchSeeds(cue string, o SeedOptions) ([]Seed, map[string]int, 
 			if err != nil {
 				return nil, nil, err
 			}
-			if hits == 0 && memcore.StringShannonBits(term) >= 6.0 {
+			if hits == 0 && delivery.StringShannonBits(term) >= 6.0 {
 				zeroTerms = append(zeroTerms, term)
 			}
 		}

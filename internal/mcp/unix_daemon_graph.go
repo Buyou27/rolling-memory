@@ -11,7 +11,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/graphmodel"
 	"github.com/rocareer/rolling-memory/internal/memory/graph"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 )
 
 // graphBuilderStore keeps one graph snapshot builder per active vault. The
@@ -19,30 +19,35 @@ import (
 // when the pointer changes.
 type graphBuilderStore struct {
 	mu      sync.Mutex
-	vault   *thinclient.Vault
+	vault   *localvault.Vault
 	builder *graph.Builder
 }
 
-func (s *graphBuilderStore) forVault(vault *thinclient.Vault) *graph.Builder {
+func (s *graphBuilderStore) forVault(vault *localvault.Vault) *graph.Builder {
 	if s == nil || vault == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.builder == nil || s.vault != vault {
+	// LocalVault() returns a fresh request-local clone on every call; the
+	// clone shares the SQLite handle and snapshot slots with the daemon's
+	// base vault. Comparing store identity keeps one builder (and its
+	// snapshot/view caches) alive across requests instead of rebuilding the
+	// whole projection per view.
+	if s.builder == nil || !s.vault.SharesStore(vault) {
 		s.vault = vault
 		s.builder = graph.NewBuilder(vault)
 	}
 	return s.builder
 }
 
-func (s *graphBuilderStore) invalidate(vault *thinclient.Vault) {
+func (s *graphBuilderStore) invalidate(vault *localvault.Vault) {
 	if s == nil || vault == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.builder != nil && s.vault == vault {
+	if s.builder != nil && s.vault.SharesStore(vault) {
 		s.builder.Invalidate()
 	}
 }
@@ -75,7 +80,7 @@ func handleUnixGraph(w http.ResponseWriter, r *http.Request, lazy *LazyMemory, s
 		http.Error(w, "daemon configuration changed", http.StatusConflict)
 		return
 	}
-	tc, tcErr := current.ThinClient()
+	tc, tcErr := current.LocalVault()
 	if tcErr != nil || tc == nil || tc.Vault == nil {
 		http.Error(w, "daemon memory unavailable", http.StatusServiceUnavailable)
 		return

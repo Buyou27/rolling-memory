@@ -2179,13 +2179,13 @@ func TestUnixDaemonRejectsNonLocalAndChangedConfig(t *testing.T) {
 }
 
 // TestUnixDaemonDocumentsResolveBackgroundChunkBody 锁定 L1 背景分块正文的读取通道：
-// 展示层（Admin 控制台）不能导入 thinclient，只能经守护进程 /v1/documents 取规范正文；
+// 展示层（Admin 控制台）不能导入 localvault，只能经守护进程 /v1/documents 取规范正文；
 // 守护进程必须从挂载目录的源文件现场重读重切，返回分块正文，而不是让调用方拿路径坐标代替。
 func TestUnixDaemonDocumentsResolveBackgroundChunkBody(t *testing.T) {
 	memory := newMemory(t)
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil || tc == nil || tc.Vault == nil {
-		t.Fatalf("thin client: %v", err)
+		t.Fatalf("local vault: %v", err)
 	}
 	dir := t.TempDir()
 	chunkBody := "# Emergency Failover Runbook\nExecute command `aurora-ctl drain --graceful` before replacing optical transceivers.\n"

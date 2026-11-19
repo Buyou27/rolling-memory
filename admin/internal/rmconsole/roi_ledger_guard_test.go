@@ -206,11 +206,11 @@ func TestSyncProductionRecallLedgerIdentityAndArchiveSafety(t *testing.T) {
 	}
 	memory := openTestSQLite(t, memoryPath)
 	if _, err := memory.Exec(`CREATE TABLE db_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-		CREATE TABLE thin_vault_docs(doc_id TEXT, occurred_at INTEGER)`); err != nil {
+		CREATE TABLE rm_units(doc_id TEXT, occurred_at INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.Exec(`INSERT INTO db_meta(key, value) VALUES ('created_at', '2026-01-01T00:00:00Z');
-		INSERT INTO thin_vault_docs(doc_id, occurred_at) VALUES ('doc-1', 1)`); err != nil {
+		INSERT INTO rm_units(doc_id, occurred_at) VALUES ('doc-1', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	fp := computeAdminDBFingerprint(memoryPath, UserScope)

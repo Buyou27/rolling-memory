@@ -41,8 +41,8 @@ func TestIntegrityCheckAfterWrites(t *testing.T) {
 	// canonical JSONL import never creates trace/event/assertion tables and
 	// the CLI writes no assertions.
 	var units, legacyTables int
-	if err := connection.QueryRow("SELECT count(*) FROM thin_vault_docs").Scan(&units); err != nil {
-		t.Fatalf("count thin_vault_docs: %v", err)
+	if err := connection.QueryRow("SELECT count(*) FROM rm_units").Scan(&units); err != nil {
+		t.Fatalf("count rm_units: %v", err)
 	}
 	if units != 2 {
 		t.Fatalf("vault units = %d, want 2", units)

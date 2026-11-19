@@ -234,7 +234,7 @@ func scanVaultRowDump(t *testing.T, db *sql.DB) string {
 		}
 		return builder.String()
 	}
-	return dump(`SELECT doc_id || '|' || layer || '|' || occurred_at || '|' || raw_text || '|' || assistant_id || '|' || incarnation_id || '|' || COALESCE(locus, '') FROM thin_vault_docs ORDER BY doc_id`) +
+	return dump(`SELECT doc_id || '|' || layer || '|' || occurred_at || '|' || raw_text || '|' || assistant_id || '|' || incarnation_id || '|' || COALESCE(locus, '') FROM rm_units ORDER BY doc_id`) +
 		dump(`SELECT doc_id || '|' || ref_pointer || '|' || hex(codec_key) || '|' || hex(payload) || '|' || hex(content_digest) || '|' || hex(payload_mac) FROM rm_episodic_index ORDER BY doc_id`) +
 		dump(`SELECT turn_ref || '|' || doc_id || '|' || ref_pointer || '|' || hex(content_digest) || '|' || hex(source_mac) FROM rm_episodic_sources ORDER BY turn_ref, doc_id, ref_pointer`) +
 		dump(`SELECT turn_ref || '|' || doc_id FROM rm_episodic_lineage ORDER BY turn_ref, doc_id`)
@@ -280,11 +280,11 @@ func TestEpisodicSourceScanSnapshotAndStreamingSaveIdenticalRows(t *testing.T) {
 	}
 	verifiedMemory := newMemory("verified.db")
 	streamedMemory := newMemory("streamed.db")
-	verifiedClient, err := verifiedMemory.ThinClient()
+	verifiedClient, err := verifiedMemory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	streamedClient, err := streamedMemory.ThinClient()
+	streamedClient, err := streamedMemory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestEpisodicSourceScanSnapshotAndStreamingSaveIdenticalRows(t *testing.T) {
 	// The fixture's first turn is explicitly completed (three units), the tail turn
 	// is not: only the completed units may land, and both paths must land the same.
 	var count int
-	if err := verifiedMemory.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err != nil || count != 3 {
+	if err := verifiedMemory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("verified scan wrote %d documents: %v", count, err)
 	}
 	t.Logf("scan parity: %d documents, rows identical between paths", count)
@@ -440,7 +440,7 @@ func TestEpisodicReconcileVerifiedSaveMatchesStreamingRows(t *testing.T) {
 		t.Fatalf("reconcile imported %d units, want %d: %+v", rep.EpisodicImportedFromHar, expectedDocs, rep.Warnings)
 	}
 	streamed := newMemory("streamed.db")
-	streamedClient, err := streamed.ThinClient()
+	streamedClient, err := streamed.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func TestEpisodicReconcileVerifiedSaveMatchesStreamingRows(t *testing.T) {
 		t.Fatalf("reconcile rows diverge between the frozen-parse and streaming saves:\n--- reconcile ---\n%s\n--- streamed ---\n%s", got, want)
 	}
 	var count int
-	if err := reconciled.Store.DB().QueryRow(`SELECT COUNT(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&count); err != nil || count != expectedDocs {
+	if err := reconciled.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE layer = 'episodic'`).Scan(&count); err != nil || count != expectedDocs {
 		t.Fatalf("reconcile wrote %d documents: %v", count, err)
 	}
 	t.Logf("reconcile parity: %d documents, rows identical between paths", count)

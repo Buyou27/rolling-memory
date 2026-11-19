@@ -3,23 +3,6 @@
     {
       "argv": [
         "hook",
-        "close"
-      ],
-      "id": "010-close",
-      "note": "import + local replay; no stdout without boot_context"
-    },
-    {
-      "argv": [
-        "hook",
-        "start",
-        "--json"
-      ],
-      "id": "020-start-boot",
-      "note": "boot line wrapped as SessionStart additionalContext"
-    },
-    {
-      "argv": [
-        "hook",
         "recall",
         "--json"
       ],
@@ -64,14 +47,6 @@
     {
       "argv": [
         "hook",
-        "close"
-      ],
-      "id": "080-close-missing-transcript",
-      "note": "missing transcript -> no import, still exit 0"
-    },
-    {
-      "argv": [
-        "hook",
         "recall"
       ],
       "id": "090-cadence-1",
@@ -104,7 +79,6 @@
     }
   ],
   "config": {
-    "hooks.boot_context": "true",
     "hooks.max_traces": "60"
   },
   "env": {

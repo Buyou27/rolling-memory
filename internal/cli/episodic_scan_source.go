@@ -22,7 +22,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/harness"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/speech"
 )
 
@@ -486,7 +486,7 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 	if memory.Config != nil && strings.TrimSpace(memory.Config.Scope) != "" {
 		scope = strings.TrimSpace(memory.Config.Scope)
 	}
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		return err
 	}
@@ -550,7 +550,7 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 
 // saveEpisodicSourceTurn stores one scanned turn with the live pointer
 // verification (`SaveLocalEpisodicPointerIndexed`).
-func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn) error {
+func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *localvault.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn) error {
 	return saveEpisodicSourceTurnVerified(ctx, db, base, scope, deletedEpi, turn, nil)
 }
 
@@ -560,7 +560,7 @@ func saveEpisodicSourceTurn(ctx context.Context, db *sql.DB, base *thinclient.Va
 // parse instead of re-reading and re-decompressing the transcript per unit. The
 // turn bookkeeping, tombstone handling and error classification are identical to
 // the live path.
-func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinclient.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn, snapshot *episodic.SourceSnapshot) error {
+func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *localvault.Vault, scope string, deletedEpi map[string]bool, turn candidateEpisodicTurn, snapshot *episodic.SourceSnapshot) error {
 	if episodicunit.DocID(scope, turn.Text) != turn.DocID {
 		return fmt.Errorf("episodic source scan %s: content identity mismatch", turn.DocID)
 	}
@@ -568,33 +568,33 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinc
 		return nil
 	}
 	vault := base.CloneWithSharedSlotCache()
-	vault.SetIdentity(thinclient.VaultIdentity{
+	vault.SetIdentity(localvault.VaultIdentity{
 		AssistantID:   turn.HarnessID,
 		IncarnationID: turn.SessionID,
 		Locus:         turn.Locus,
 	})
 	var stored string
-	err := db.QueryRowContext(ctx, `SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, turn.DocID).Scan(&stored)
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE d.unit_id = ?`, turn.DocID).Scan(&stored)
 	if err == nil {
 		if stored != turn.RefPointer {
 			// Authenticate the existing pointer before adding another occurrence.
 			// An unavailable legacy source must not block unrelated transcripts.
 			if strings.HasPrefix(stored, "@ref:") && !vault.HasLocalEpisodicIndex(turn.DocID, stored) {
 				if _, err := vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, turn.DocID, stored, turn.Text); err != nil {
-					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+					if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 						return nil
 					}
-					if errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+					if errors.Is(err, localvault.ErrEpisodicIndexItem) {
 						return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
 					}
 					return err
 				}
 			}
-			if sErr := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); sErr != nil {
-				if errors.Is(sErr, thinclient.ErrEpisodicUnitDeleted) {
+			if sErr := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, localvault.IngestResponse{}); sErr != nil {
+				if errors.Is(sErr, localvault.ErrEpisodicUnitDeleted) {
 					return nil
 				}
-				if errors.Is(sErr, thinclient.ErrEpisodicIndexItem) || errors.Is(sErr, thinclient.ErrEpisodicPointerSourceConflict) {
+				if errors.Is(sErr, localvault.ErrEpisodicIndexItem) || errors.Is(sErr, localvault.ErrEpisodicPointerSourceConflict) {
 					return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, sErr)
 				}
 				return sErr
@@ -602,10 +602,10 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinc
 		} else {
 			if !vault.HasLocalEpisodicIndex(turn.DocID, turn.RefPointer) {
 				if _, err = vault.EnsureLocalEpisodicIndexVerified(scope, snapshot, turn.DocID, turn.RefPointer, turn.Text); err != nil {
-					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+					if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 						return nil
 					}
-					if errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+					if errors.Is(err, localvault.ErrEpisodicIndexItem) {
 						return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
 					}
 					return err
@@ -616,17 +616,17 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinc
 				return err
 			}
 			if sourceRecorded == 0 {
-				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); err != nil {
-					if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+				if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, localvault.IngestResponse{}); err != nil {
+					if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 						return nil
 					}
-					if errors.Is(err, thinclient.ErrEpisodicIndexItem) {
+					if errors.Is(err, localvault.ErrEpisodicIndexItem) {
 						return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
 					}
 					return err
 				}
 			}
-			if _, err = db.ExecContext(ctx, `UPDATE thin_vault_docs SET assistant_id = ?, incarnation_id = ?, locus = CASE WHEN ? THEN ? ELSE locus END, occurred_at = ? WHERE doc_id = ? AND raw_text = ? AND NOT EXISTS (SELECT 1 FROM rm_deleted_units WHERE unit_id = thin_vault_docs.doc_id AND (layer = 'episodic' OR layer = '')) AND (COALESCE(assistant_id, '') != ? OR COALESCE(incarnation_id, '') != ? OR (? AND COALESCE(locus, '') != ?) OR occurred_at != ?)`, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
+			if err := updateEpisodicUnitSourceMeta(ctx, db, turn.DocID, turn.RefPointer, turn.HarnessID, turn.SessionID, turn.LocusKnown, turn.Locus, turn.OccurredAt); err != nil {
 				return err
 			}
 		}
@@ -635,11 +635,11 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *thinc
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, thinclient.IngestResponse{}); err != nil {
-		if errors.Is(err, thinclient.ErrEpisodicUnitDeleted) {
+	if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, localvault.IngestResponse{}); err != nil {
+		if errors.Is(err, localvault.ErrEpisodicUnitDeleted) {
 			return nil
 		}
-		if errors.Is(err, thinclient.ErrEpisodicIndexItem) || errors.Is(err, thinclient.ErrEpisodicPointerSourceConflict) {
+		if errors.Is(err, localvault.ErrEpisodicIndexItem) || errors.Is(err, localvault.ErrEpisodicPointerSourceConflict) {
 			return fmt.Errorf("%w: %s: %v", errEpisodicSourceItem, turn.DocID, err)
 		}
 		return err

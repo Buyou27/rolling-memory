@@ -498,14 +498,14 @@ type EvalQuestionResultItem struct {
 	ContextOrdering string `json:"context_ordering,omitempty"`
 	// 逐题引擎 provenance（评测模块自持的证据标签；引擎只按 scope × layer 返回通用能力）：
 	//   - EngineTransport / EngineScope / EngineUpstream / LocalFallback 取自严格 recall 的 meta；
-	//   - LocalHits 本次本地检索命中数（JSON 键名 cloud_hits 为跨版本契约），RetrievalUnitIDs 本次交付的 Unit ID；
+	//   - LocalHits 本次本地检索命中数，RetrievalUnitIDs 本次交付的 Unit ID；
 	//   - CorpusSHA256 本套件语料 manifest 摘要（只读；缺失时留空，不阻断评测）。
 	// 历史明细缺这些键时前端按未知渲染，不臆造。
 	EngineTransport  string   `json:"engine_transport,omitempty"`
 	EngineScope      string   `json:"engine_scope,omitempty"`
 	EngineUpstream   string   `json:"engine_upstream,omitempty"`
 	LocalFallback    *bool    `json:"local_fallback,omitempty"`
-	LocalHits        int      `json:"cloud_hits,omitempty"`
+	LocalHits        int      `json:"local_hits,omitempty"`
 	RetrievalUnitIDs []string `json:"retrieval_unit_ids,omitempty"`
 	CorpusSHA256     string   `json:"corpus_sha256,omitempty"`
 	// L0-3c 实际送入冻结答题载荷的交付计数（与未截断原始召回计数 Bands/Nodes/RawHits 对照）：
@@ -1613,8 +1613,8 @@ type EvalReadiness struct {
 	StorePath     string `json:"store_path"`
 	ManifestValid bool   `json:"manifest_valid"`
 	ProbeChecked  bool   `json:"probe_checked"`
-	// LocalHits 本 store 已有语料条数（JSON 键名 cloud_hits 为前端存量契约，跨版本兼容保留）。
-	LocalHits int           `json:"cloud_hits"`
+	// LocalHits 本 store 已有语料条数。
+	LocalHits int           `json:"local_hits"`
 	Error     string        `json:"error,omitempty"`
 	CheckedAt string        `json:"checked_at,omitempty"`
 	Manifest  *EvalManifest `json:"-"`
@@ -1885,7 +1885,7 @@ func validateLocalRecallMeta(recallRaw map[string]any, expectedScope string) err
 	return nil
 }
 
-// validateEvalRawHits 校验 raw_hits 与命中计数（键名 cloud_hits 为跨版本契约，
+// validateEvalRawHits 校验 raw_hits 与命中计数（键名 local_hits，
 // 现值即本次本地检索命中数），并返回去重后的 UnitID 列表。
 func validateEvalRawHits(recallRaw map[string]any, suite string, atmUnits map[string]atmEvalUnit) ([]string, error) {
 	rawValue, ok := recallRaw["raw_hits"]
@@ -1897,17 +1897,17 @@ func validateEvalRawHits(recallRaw map[string]any, suite string, atmUnits map[st
 		return nil, errors.New("recall.raw_hits 必须是数组")
 	}
 	meta, _ := recallRaw["meta"].(map[string]any)
-	hitCountValue, ok := meta["cloud_hits"]
+	hitCountValue, ok := meta["local_hits"]
 	if !ok {
-		return nil, errors.New("recall.meta.cloud_hits 缺失")
+		return nil, errors.New("recall.meta.local_hits 缺失")
 	}
 	switch hitCountValue.(type) {
 	case float64, int, int64:
 	default:
-		return nil, errors.New("recall.meta.cloud_hits 必须是数字")
+		return nil, errors.New("recall.meta.local_hits 必须是数字")
 	}
 	if hitCount := asInt(hitCountValue); hitCount != len(rawHits) {
-		return nil, fmt.Errorf("recall.meta.cloud_hits=%d 与 raw_hits=%d 不一致", hitCount, len(rawHits))
+		return nil, fmt.Errorf("recall.meta.local_hits=%d 与 raw_hits=%d 不一致", hitCount, len(rawHits))
 	}
 	unitIDs := make([]string, 0, len(rawHits))
 	seen := make(map[string]struct{}, len(rawHits))
@@ -2739,9 +2739,9 @@ func applyRecallProvenance(item *EvalQuestionResultItem, recallRaw map[string]an
 		if fallback, ok := meta["local_fallback"].(bool); ok {
 			item.LocalFallback = &fallback
 		}
-		// JSON 键名 cloud_hits 为跨版本契约，现值即本次本地检索命中数。
-		if _, ok := meta["cloud_hits"]; ok {
-			item.LocalHits = asInt(meta["cloud_hits"])
+		// local_hits 即本次本地检索命中数。
+		if _, ok := meta["local_hits"]; ok {
+			item.LocalHits = asInt(meta["local_hits"])
 		}
 		if recallMS := asInt(meta["recall_ms"]); recallMS > 0 {
 			item.RecallMS = int64(recallMS)
@@ -3436,7 +3436,7 @@ func activeEvalTier() string {
 }
 
 // —— 单题评测交付容量常量（字符载体口径 · 对齐记忆核心 tokenz-r TokenTier 阶梯）——
-// 本插件随宿主独立模块（github.com/ai-go-hub/ai-go-admin）构建，不可直接引用记忆核 internal/memcore，
+// 本插件随宿主独立模块（github.com/ai-go-hub/ai-go-admin）构建，不可直接引用记忆核 internal/delivery，
 // 故在此以同一 2 的幂次阶梯口径（128 / 256 / 512 / 1024 / 2048 / 4096 / 8192 tokens）锚定容量常量，
 // 禁止再出现匿名字符数魔数；数值本身保持冻结，以保证评测读数与 JSON / CLI 契约不变：
 //   - tokenz-r 128k 词表实测：ASCII ≈ 0.3 token/字符、CJK ≈ 0.6–0.7 token/字；

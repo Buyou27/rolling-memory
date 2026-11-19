@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,7 +26,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/sdk/go/public/tokenzr"
 )
@@ -458,187 +456,11 @@ func TestHookMainUnknownEventFailsOpen(t *testing.T) {
 	}
 }
 
-func TestStartBootContext(t *testing.T) {
-	env := newTestEnv(t)
-	seedCat(t)
-	if _, err := config.WriteDefault(env.configPath); err != nil {
-		t.Fatalf("write default: %v", err)
-	}
-	if _, err := config.SetConfigValue(env.configPath, "hooks.boot_context", "true"); err != nil {
-		t.Fatalf("set boot_context: %v", err)
-	}
-	cfg := loadConfig(t)
-	memory := openMemory(t)
-	status, err := memory.Status(cfg.Scope)
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	recent, err := memory.Recent(nil, nil, 3)
-	if err != nil {
-		t.Fatalf("recent: %v", err)
-	}
-	expected := fmt.Sprintf(
-		"Rolling-Memory (local): %d memory units · 0 episodic · 0 background · 0 crystallized · scope mem:hooks",
-		status["active_assertions"],
-	)
-	if status["active_assertions"] != int64(1) {
-		t.Fatalf("seed should leave one active assertion: %#v", status["active_assertions"])
-	}
-	rendered := []string{}
-	for _, item := range recent {
-		rendered = append(rendered, item["content"].(string))
-	}
-	if len(rendered) > 0 {
-		expected += "\n最近: " + strings.Join(rendered, "；")
-	}
-
-	code, stdout, stderr := runHookMain(t, []string{"start", "--json"}, `{"session_id":"s1"}`)
-	if code != 0 {
-		t.Fatalf("start exit = %d, stderr = %s", code, stderr)
-	}
-	decoded := map[string]any{}
-	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
-		t.Fatalf("start stdout is not JSON: %v\n%s", err, stdout)
-	}
-	hook := decoded["hookSpecificOutput"].(map[string]any)
-	if hook["hookEventName"] != "SessionStart" {
-		t.Fatalf("hookEventName = %#v", hook["hookEventName"])
-	}
-	if hook["additionalContext"] != expected {
-		t.Fatalf("boot context mismatch:\n got: %q\nwant: %q", hook["additionalContext"], expected)
-	}
-
-	// Without --json the same text is printed raw.
-	code, stdout, _ = runHookMain(t, []string{"start"}, `{"session_id":"s1"}`)
-	if code != 0 || strings.HasPrefix(stdout, "{") {
-		t.Fatalf("text start: exit=%d stdout=%q", code, stdout)
-	}
-	if strings.TrimSuffix(stdout, "\n") != expected {
-		t.Fatalf("text boot context = %q", stdout)
-	}
-}
-
-func TestCloseReplaysPendingTracesAndStaysSilent(t *testing.T) {
-	env := newTestEnv(t)
-	memory := openMemory(t)
-	if _, _, err := memory.Store.AddTrace("mem:hooks", "用户喜欢喝咖啡。",
-		store.TraceOptions{Session: "s1", Author: "user"}); err != nil {
-		t.Fatalf("trace: %v", err)
-	}
-	code, stdout, stderr := runHookMain(t, []string{"close", "--json"}, `{"session_id":"s1"}`)
-	if code != 0 {
-		t.Fatalf("close exit = %d, stderr = %s", code, stderr)
-	}
-	if stdout != "" {
-		t.Fatalf("close must not print: %q", stdout)
-	}
-	lines := logLines(t, env.log)
-	line := lines[len(lines)-1]
-	if line["event"] != "close" || line["imported"].(float64) != 0 || line["messages"].(float64) != 0 {
-		t.Fatalf("close log line = %#v", line)
-	}
-	if line["replayed"].(float64) != 1 {
-		t.Fatalf("close should replay one pending trace: %#v", line)
-	}
-	var pending int64
-	if err := memory.Store.DB().QueryRow(
-		"SELECT count(*) FROM trace WHERE scope = ? AND processed = 0", "mem:hooks").Scan(&pending); err != nil {
-		t.Fatalf("pending: %v", err)
-	}
-	if pending != 0 {
-		t.Fatalf("pending traces after close = %d", pending)
-	}
-}
-
-// TestCloseUploadsCurrentTurnToEpisodicLayer pins the thin-brain Stop contract: the
-// closed turn (the prompt that opened it plus the answer that closed it) is ingested
-// into `/open/memory/v1/ingest` with `layer="episodic"` in real time, the local vault
-// keeps the plaintext, and the upload stays content-addressed so a repeated Stop can
-// never fork a duplicate unit.
-func TestCloseUploadsCurrentTurnToEpisodicLayer(t *testing.T) {
-	env := newTestEnv(t)
-	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
-	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q}`, path)
-	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
-	if code != 0 || stdout != "" {
-		t.Fatalf("thin close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-
-	cfg := loadConfig(t)
-	connection, err := store.Open(cfg)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer connection.Close()
-	rows, err := connection.DB().Query(`SELECT doc_id, layer, raw_text FROM thin_vault_docs WHERE layer = 'episodic' ORDER BY doc_id`)
-	if err != nil {
-		t.Fatalf("query vault: %v", err)
-	}
-	var docIDs []string
-	var pointers []string
-	for rows.Next() {
-		var docID, layer, text string
-		if rows.Scan(&docID, &layer, &text) != nil {
-			continue
-		}
-		if layer != "episodic" {
-			t.Fatalf("vault layer = %q", layer)
-		}
-		docIDs = append(docIDs, docID)
-		pointers = append(pointers, text)
-	}
-	rows.Close()
-	if len(docIDs) != 2 {
-		t.Fatalf("expected two segment units in the vault, got %d (%v)", len(docIDs), docIDs)
-	}
-	for _, pointer := range pointers {
-		// Zero-copy: each unit stores only its segment pointer.
-		if !strings.HasPrefix(pointer, "@ref:jsonl:") || !strings.Contains(pointer, "#") {
-			t.Fatalf("segment unit must keep a #<k> pointer, got %q", pointer)
-		}
-	}
-	var lineage int
-	if err := connection.DB().QueryRow(`SELECT count(*) FROM rm_episodic_lineage`).Scan(&lineage); err != nil {
-		t.Fatalf("lineage table: %v", err)
-	}
-	if lineage != 2 {
-		t.Fatalf("expected lineage rows for both segments, got %d", lineage)
-	}
-	var legacyTableCount int64
-	if err := connection.DB().QueryRow(
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('trace', 'node', 'assertion', 'vector', 'node_vector')`,
-	).Scan(&legacyTableCount); err != nil {
-		t.Fatalf("check legacy tables: %v", err)
-	}
-	if legacyTableCount != 0 {
-		t.Fatalf("thin close/upload path must not create legacy tables, found %d", legacyTableCount)
-	}
-
-	lines := logLines(t, env.log)
-	line := lines[len(lines)-1]
-	if line["event"] != "close" || line["messages"].(float64) != 2 || line["imported"].(float64) != 2 {
-		t.Fatalf("thin close log line = %#v", line)
-	}
-
-	// A repeated Stop re-reads the same closed turn; content addressing keeps it two units.
-	code, stdout, stderr = runHookMain(t, []string{"close"}, payload)
-	if code != 0 || stdout != "" {
-		t.Fatalf("repeat thin close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-	var afterRepeat int
-	if err := connection.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs WHERE layer = 'episodic'`).Scan(&afterRepeat); err != nil {
-		t.Fatalf("count episodic after repeat: %v", err)
-	}
-	if afterRepeat != 2 {
-		t.Fatalf("repeated Stop must reuse the content-addressed units, got %d", afterRepeat)
-	}
-}
-
 func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
 	env := newTestEnv(t)
 	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
 	memory := openMemory(t)
-	tc, err := memory.ThinClient()
+	tc, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,96 +480,9 @@ func TestEpisodicUploadReportsFailuresAndSkipsDeleted(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if _, err := memory.Store.DB().Exec(`DROP TABLE rm_deleted_units`); err != nil {
-		t.Fatal(err)
-	}
-	out, err := importReplayEvent(memory, memory.Config, "close", payload, Options{})
-	if err != nil || out != "" {
-		t.Fatalf("hook output=%q err=%v", out, err)
-	}
-	found := false
-	for _, line := range logLines(t, env.log) {
-		if message, _ := line["vault_write_error"].(string); message != "" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("vault failure did not produce a diagnostic")
-	}
+
 }
 
-// TestCloseStripsThinkingAndToolEnvelopes checks that only conversation survives.
-func TestCloseStripsThinkingAndToolEnvelopes(t *testing.T) {
-	env := newTestEnv(t)
-
-	path := filepath.Join(env.base, "noisy.jsonl")
-	content := strings.Join([]string{
-		`{"type":"user","sessionId":"s1","timestamp":"2026-10-20T10:00:00",` +
-			`"message":{"role":"user","content":[{"type":"text","text":"<system-reminder>injected banner</system-reminder>请把缓存按 docID 失效。"}]}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:10",` +
-			`"message":{"role":"assistant","stop_reason":"tool_use","content":[` +
-			`{"type":"thinking","thinking":"internal monologue"},` +
-			`{"type":"text","text":"工具过程旁白"},` +
-			`{"type":"tool_use","name":"Bash","input":{"cmd":"go test ./..."}}]}}`,
-		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-20T10:00:20",` +
-			`"message":{"role":"assistant","stop_reason":"end_turn","content":[` +
-			`{"type":"text","text":"先确认缓存失效断言。\n[thinking] internal monologue A\n[tool_use Bash] {\"cmd\":\"go test ./...\"}\n[tool_result] ok  github.com/rocareer/rolling-memory/internal/ids\n\n结论：缓存按 docID 失效。"}]}}`,
-		"",
-	}, "\n")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("transcript: %v", err)
-	}
-	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q}`, path)
-	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
-	if code != 0 || stdout != "" {
-		t.Fatalf("thin close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-
-	cfg := loadConfig(t)
-	connection, err := store.Open(cfg)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer connection.Close()
-	rows, err := connection.DB().Query(
-		`SELECT raw_text FROM thin_vault_docs WHERE layer = 'episodic' ORDER BY doc_id`,
-	)
-	if err != nil {
-		t.Fatalf("query episodic rows: %v", err)
-	}
-	var pointers []string
-	for rows.Next() {
-		var pointer string
-		if rows.Scan(&pointer) == nil {
-			pointers = append(pointers, pointer)
-		}
-	}
-	rows.Close()
-	if len(pointers) != 2 {
-		t.Fatalf("expected two pointer units, got %v", pointers)
-	}
-	var storedText strings.Builder
-	for _, pointer := range pointers {
-		live, err := thinclient.ResolveEpisodicPointerLive(pointer)
-		if err != nil {
-			t.Fatalf("resolve %q: %v", pointer, err)
-		}
-		storedText.WriteString(live)
-		storedText.WriteString("\n")
-	}
-	for _, speech := range []string{"[user] 请把缓存按 docID 失效。", "[assistant] 先确认缓存失效断言。", "结论：缓存按 docID 失效。"} {
-		if !strings.Contains(storedText.String(), speech) {
-			t.Fatalf("episodic pulse lost speech %q: %q", speech, storedText.String())
-		}
-	}
-	for _, noise := range []string{"工具过程旁白", "[thinking]", "[tool_use", "[tool_result]", "internal monologue", "system-reminder"} {
-		if strings.Contains(storedText.String(), noise) {
-			t.Fatalf("episodic pulse kept noise %q: %q", noise, storedText.String())
-		}
-	}
-}
-
-// TestCurrentTurnUnitsPreservesUnknownTime keeps unknown source times unset.
 func TestCurrentTurnUnitsPreservesUnknownTime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "turn.jsonl")
 	content := `{"type":"user","message":{"role":"user","content":"unknown time"}}` + "\n" +
@@ -763,257 +498,6 @@ func TestCurrentTurnUnitsPreservesUnknownTime(t *testing.T) {
 	units, _ = unitsForSegments("mem:test", "", segmentsFromRows(rows), 0, true, len(rows))
 	if len(units) != 1 || units[0].OccurredAt != 0 {
 		t.Fatalf("unknown payload time = %+v", units)
-	}
-}
-
-func TestLocalCloseDefersIncompleteTurnUntilCompletion(t *testing.T) {
-	env := newTestEnv(t)
-	path := filepath.Join(env.base, "session.jsonl")
-	user := `{"type":"user","sessionId":"s1","timestamp":"2020-01-01T00:00:00Z","message":{"role":"user","content":"local user witness"}}` + "\n"
-	tool := `{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"private tool narration"},{"type":"tool_use","name":"shell"}]}}` + "\n"
-	final := `{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":"local final witness"}}` + "\n"
-	if err := os.WriteFile(path, []byte(user+tool), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q}`, path)
-	check := func(wantUser, wantFinal int) {
-		t.Helper()
-		memory := openMemory(t)
-		tc, err := memory.ThinClient()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := tc.Transport.(*thinclient.LocalVaultTransport); !ok {
-			t.Fatalf("local hook transport = %T", tc.Transport)
-		}
-		userID := episodicunit.DocID("mem:hooks", "[user] local user witness")
-		finalID := episodicunit.DocID("mem:hooks", "[assistant] local final witness")
-		var userCount, finalCount, toolCount, total int
-		err = memory.Store.DB().QueryRow(`SELECT
-			COALESCE(sum(doc_id = ? OR raw_text = 'local user witness'), 0),
-			COALESCE(sum(doc_id = ? OR raw_text = 'local final witness'), 0),
-			COALESCE(sum(raw_text = 'private tool narration'), 0), count(*)
-			FROM thin_vault_docs`, userID, finalID).Scan(&userCount, &finalCount, &toolCount, &total)
-		if err != nil || userCount != wantUser || finalCount != wantFinal || toolCount != 0 || total != wantUser+wantFinal {
-			t.Fatalf("vault user=%d final=%d tool=%d total=%d err=%v", userCount, finalCount, toolCount, total, err)
-		}
-		var traceCount int
-		if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace`).Scan(&traceCount); err != nil || traceCount != 0 {
-			t.Fatalf("unexpected legacy traces=%d err=%v", traceCount, err)
-		}
-		for _, fixture := range []struct {
-			id, text string
-			when     int64
-			count    int
-		}{
-			{userID, "[user] local user witness", 1577836800, wantUser},
-			{finalID, "[assistant] local final witness", 1767225600, wantFinal},
-		} {
-			if fixture.count == 0 {
-				continue
-			}
-			var pointer, assistant, incarnation, locus string
-			var occurred int64
-			if err := memory.Store.DB().QueryRow(`SELECT raw_text, occurred_at, assistant_id, incarnation_id, locus FROM thin_vault_docs WHERE doc_id = ?`, fixture.id).Scan(&pointer, &occurred, &assistant, &incarnation, &locus); err != nil {
-				t.Fatal(err)
-			}
-			resolved, err := tc.Vault.LoadVerifiedEpisodicPointer(fixture.id, pointer)
-			if err != nil || resolved != fixture.text || occurred != fixture.when || assistant != "" || incarnation != "" || locus != "" {
-				t.Fatalf("source=%q time=%d resolved=%q identity=(%q,%q,%q) err=%v", pointer, occurred, resolved, assistant, incarnation, locus, err)
-			}
-		}
-	}
-	if code, out, errOut := runHookMain(t, []string{"close"}, payload); code != 0 || out != "" {
-		t.Fatalf("incomplete close: code=%d out=%q stderr=%q", code, out, errOut)
-	}
-	if got, err := os.ReadFile(path); err != nil || string(got) != user+tool {
-		t.Fatalf("source changed during incomplete close: err=%v", err)
-	}
-	check(0, 0)
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.WriteString(final); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		if code, out, errOut := runHookMain(t, []string{"close"}, payload); code != 0 || out != "" {
-			t.Fatalf("completed close %d: code=%d out=%q stderr=%q", i, code, out, errOut)
-		}
-		check(1, 1)
-		lines := logLines(t, env.log)
-		wantInserted := float64(2)
-		if i > 0 {
-			wantInserted = 0
-		}
-		if got := lines[len(lines)-1]["imported"]; got != wantInserted {
-			t.Fatalf("repeat %d imported=%v want=%v", i, got, wantInserted)
-		}
-	}
-	memory := openMemory(t)
-	importPath := filepath.Join(env.base, "unrelated.txt")
-	if err := os.WriteFile(importPath, []byte("unrelated explicit import\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := memory.ImportFile(importPath, nil, nil, "shared", false); err != nil {
-		t.Fatal(err)
-	}
-	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 3 {
-		t.Fatalf("explicit import duplicated hook content: count=%d err=%v", count, err)
-	}
-}
-
-func TestLocalCloseConcurrentDeletionDoesNotResurrect(t *testing.T) {
-	env := newTestEnv(t)
-	path := filepath.Join(env.base, "concurrent.jsonl")
-	body := `{"type":"user","message":{"role":"user","content":"concurrent deletion witness"}}` + "\n" +
-		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"concurrent answer witness"}}` + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	memory := openMemory(t)
-	if _, err := memory.ThinClient(); err != nil {
-		t.Fatal(err)
-	}
-	id := episodicunit.DocID("mem:hooks", "[user] concurrent deletion witness")
-	payload := map[string]any{"session_id": "s1", "transcript_path": path}
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	var hookErr, deleteErr error
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		<-start
-		_, hookErr = importReplayEvent(memory, memory.Config, "close", payload, Options{})
-	}()
-	go func() {
-		defer wg.Done()
-		<-start
-		_, deleteErr = memory.Store.DB().Exec(`INSERT OR REPLACE INTO rm_deleted_units(unit_id, layer, deleted_at) VALUES (?, 'episodic', 1)`, id)
-		if deleteErr == nil {
-			_, deleteErr = memory.Store.DB().Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, id)
-		}
-	}()
-	close(start)
-	wg.Wait()
-	if hookErr != nil || deleteErr != nil {
-		t.Fatalf("hook error=%v delete error=%v", hookErr, deleteErr)
-	}
-	if _, err := importReplayEvent(memory, memory.Config, "close", payload, Options{}); err != nil {
-		t.Fatal(err)
-	}
-	var deleted, tombstone, retained int
-	if err := memory.Store.DB().QueryRow(`SELECT
-		(SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?),
-		(SELECT count(*) FROM rm_deleted_units WHERE unit_id = ?),
-		(SELECT count(*) FROM thin_vault_docs WHERE doc_id = ?)`, id, id,
-		episodicunit.DocID("mem:hooks", "[assistant] concurrent answer witness")).Scan(&deleted, &tombstone, &retained); err != nil || deleted != 0 || tombstone != 1 || retained != 1 {
-		t.Fatalf("deleted=%d tombstone=%d retained=%d err=%v", deleted, tombstone, retained, err)
-	}
-}
-
-func TestLocalCloseIgnoresUnverifiedPayload(t *testing.T) {
-	env := newTestEnv(t)
-	for _, payload := range []string{
-		`{"session_id":"s1","hook_event_name":"Stop","last_assistant_message":"unverified answer"}`,
-		`{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"unverified answer"}`,
-		`{"session_id":"s1","transcript_path":"absent.jsonl","last_assistant_message":"unverified answer"}`,
-	} {
-		if code, out, stderr := runHookMain(t, []string{"close"}, payload); code != 0 || out != "" {
-			t.Fatalf("close code=%d out=%q stderr=%s", code, out, stderr)
-		}
-	}
-	memory := openMemory(t)
-	if _, err := memory.ThinClient(); err != nil {
-		t.Fatal(err)
-	}
-	var traces, docs int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT count(*) FROM trace), (SELECT count(*) FROM thin_vault_docs)`).Scan(&traces, &docs); err != nil || traces != 0 || docs != 0 {
-		t.Fatalf("unverified payload traces=%d docs=%d err=%v base=%s", traces, docs, err, env.base)
-	}
-}
-
-func TestLocalCloseLogsVaultFailure(t *testing.T) {
-	env := newTestEnv(t)
-	path := writeTranscript(t, filepath.Join(env.base, "session.jsonl"))
-	memory := openMemory(t)
-	if _, err := memory.ThinClient(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := memory.Store.DB().Exec(`DROP TABLE rm_deleted_units`); err != nil {
-		t.Fatal(err)
-	}
-	payload := map[string]any{"session_id": "s1", "transcript_path": path}
-	out, err := importReplayEvent(memory, memory.Config, "close", payload, Options{})
-	if err != nil || out != "" {
-		t.Fatalf("hook protocol out=%q err=%v", out, err)
-	}
-	lines := logLines(t, env.log)
-	var found bool
-	for _, line := range lines {
-		if message, _ := line["vault_write_error"].(string); message != "" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("vault failure not diagnosed: %+v", lines)
-	}
-	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("failed vault write count=%d err=%v", count, err)
-	}
-}
-
-func TestLocalCloseHonorsDeletedUnitsAndMissingSource(t *testing.T) {
-	env := newTestEnv(t)
-	path := filepath.Join(env.base, "session.jsonl")
-	user := `[user] deleted witness`
-	final := `[assistant] retained witness`
-	body := `{"type":"user","message":{"role":"user","content":"deleted witness"}}` + "\n" +
-		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"retained witness"}}` + "\n"
-	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q,"last_assistant_message":"unverified fallback"}`, path)
-	memory := openMemory(t)
-	tc, err := memory.ThinClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	deletedID := episodicunit.DocID("mem:hooks", user)
-	tc.Vault.RecordDeletedUnits("episodic", deletedID)
-	if code, _, stderr := runHookMain(t, []string{"close"}, payload); code != 0 {
-		t.Fatalf("missing source: code=%d stderr=%s", code, stderr)
-	}
-	lines := logLines(t, env.log)
-	foundSourceError := false
-	for _, line := range lines {
-		if message, _ := line["source_error"].(string); message != "" {
-			foundSourceError = true
-		}
-	}
-	if !foundSourceError {
-		t.Fatalf("missing source was not diagnosed: %+v", lines)
-	}
-	var count int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM thin_vault_docs`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("missing source docs=%d err=%v", count, err)
-	}
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		if code, _, stderr := runHookMain(t, []string{"close"}, payload); code != 0 {
-			t.Fatalf("recovered source %d: code=%d stderr=%s", i, code, stderr)
-		}
-		var deletedCount, retainedCount int
-		err := memory.Store.DB().QueryRow(`SELECT COALESCE(sum(doc_id = ?),0), COALESCE(sum(doc_id = ?),0), count(*) FROM thin_vault_docs`,
-			deletedID, episodicunit.DocID("mem:hooks", final)).Scan(&deletedCount, &retainedCount, &count)
-		if err != nil || deletedCount != 0 || retainedCount != 1 || count != 1 {
-			t.Fatalf("recovered docs=%d deleted=%d retained=%d err=%v", count, deletedCount, retainedCount, err)
-		}
 	}
 }
 
@@ -1141,60 +625,6 @@ func TestCurrentTurnUnitsAreSegments(t *testing.T) {
 	}
 }
 
-// Missing transcript keeps the hook fail-open -- exit 0, nothing on stdout.
-func TestCloseMissingTranscriptFailsOpen(t *testing.T) {
-	env := newTestEnv(t)
-	payload := fmt.Sprintf(`{"session_id":"x","transcript_path":%q}`, filepath.Join(env.base, "nope.jsonl"))
-	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
-	if code != 0 || stdout != "" {
-		t.Fatalf("missing transcript close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-}
-
-func TestCloseCheckpointsUsbProfile(t *testing.T) {
-	env := newTestEnv(t)
-	if _, err := config.WriteDefault(env.configPath); err != nil {
-		t.Fatalf("write default: %v", err)
-	}
-	if _, err := config.SetConfigValue(env.configPath, "storage.profile", "usb"); err != nil {
-		t.Fatalf("set profile: %v", err)
-	}
-	seeder := openMemory(t)
-	if _, _, err := seeder.Store.AddTrace("mem:hooks", "用户搬到北京。",
-		store.TraceOptions{Session: "s1", Author: "user"}); err != nil {
-		t.Fatalf("trace: %v", err)
-	}
-	// The hook must be the last connection for the stop checkpoint to truncate.
-	if err := seeder.Close(); err != nil {
-		t.Fatalf("close seeder: %v", err)
-	}
-	code, stdout, stderr := runHookMain(t, []string{"close"}, `{"session_id":"s1"}`)
-	if code != 0 || stdout != "" {
-		t.Fatalf("usb close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-	// The stop checkpoint runs inside store.Close; the last connection is gone,
-	// so no WAL side files may survive.
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if info, err := os.Stat(env.db + suffix); err == nil && info.Size() > 0 {
-			t.Fatalf("%s not checkpointed: %d bytes", suffix, info.Size())
-		}
-	}
-	cfg := loadConfig(t)
-	connection, err := store.Open(cfg)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer connection.Close()
-	var integrity string
-	if err := connection.DB().QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
-		t.Fatalf("integrity: %v", err)
-	}
-	if integrity != "ok" {
-		t.Fatalf("integrity = %q", integrity)
-	}
-}
-
-// writeTranscript writes the two synthetic turns of one coding session.
 func writeTranscript(t *testing.T, path string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1276,58 +706,6 @@ func TestImportTurnsMovesTheCursor(t *testing.T) {
 	}
 	if none["messages"] != 0 || none["inserted"] != 0 {
 		t.Fatalf("pathless receipt = %#v", none)
-	}
-}
-
-// TestCloseImportsAndRecallHookStaysSilent checks that completed turns enter the
-// local vault without legacy trace replay and that the recall hook remains silent.
-func TestCloseImportsAndRecallHookStaysSilent(t *testing.T) {
-	env := newTestEnv(t)
-	path := writeTranscript(t, filepath.Join(env.base, "s1.jsonl"))
-	payload := fmt.Sprintf(`{"session_id":"s1","transcript_path":%q}`, path)
-	code, stdout, stderr := runHookMain(t, []string{"close"}, payload)
-	if code != 0 || stdout != "" {
-		t.Fatalf("close: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-	lines := logLines(t, env.log)
-	line := lines[len(lines)-1]
-	if line["imported"].(float64) != 2 || line["messages"].(float64) != 2 {
-		t.Fatalf("close import receipt = %#v", line)
-	}
-	if line["replayed"].(float64) != 0 {
-		t.Fatalf("close replay receipt = %#v", line)
-	}
-
-	memory := openMemory(t)
-	tc, err := memory.ThinClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, expected := range []string{"[user] 我喜欢猫。我的猫叫小白。", "[assistant] 记住了。"} {
-		id := episodicunit.DocID("mem:hooks", expected)
-		var pointer string
-		if err := memory.Store.DB().QueryRow(`SELECT raw_text FROM thin_vault_docs WHERE doc_id = ?`, id).Scan(&pointer); err != nil {
-			t.Fatal(err)
-		}
-		resolved, err := tc.Vault.LoadVerifiedEpisodicPointer(id, pointer)
-		if err != nil || resolved != expected {
-			t.Fatalf("resolved=%q want=%q err=%v", resolved, expected, err)
-		}
-	}
-	var traces int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace`).Scan(&traces); err != nil || traces != 0 {
-		t.Fatalf("legacy trace count=%d err=%v", traces, err)
-	}
-
-	code, stdout, stderr = runHookMain(t, []string{"recall", "--json"},
-		`{"session_id":"s1","prompt":"我的猫叫什么？"}`)
-	if code != 0 || strings.TrimSpace(stdout) != "" {
-		t.Fatalf("recall hook must stay silent: exit=%d stdout=%q stderr=%s", code, stdout, stderr)
-	}
-	code, stdout, _ = runHookMain(t, []string{"recall", "--json"},
-		`{"session_id":"s1","prompt":"我的猫叫什么？"}`)
-	if code != 0 || strings.TrimSpace(stdout) != "" {
-		t.Fatalf("repeat prompt must stay silent: exit=%d stdout=%q", code, stdout)
 	}
 }
 
@@ -1463,10 +841,11 @@ func TestLogRotation(t *testing.T) {
 	}
 }
 
-// TestRecallHookAutoSyncsMountedBackgroundWithCooldown 锁住增量冷却契约：
-// UserPromptSubmit (recall) 钩子在有挂载 L1 Background 目录且距上次扫描 >= 60s 时
-// 自动增量触发 SyncBackgroundDirs，而在 60s 冷却期内不重复扫描。
-func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
+// TestRecallHookDoesNotScanMountedBackground locks the prompt-hook boundary:
+// the hook captures the prompt and injects the recall nudge, while background
+// scanning belongs to the ingest worker. A changed mounted file must stay
+// untouched in the vault no matter how long the hook has been idle.
+func TestRecallHookDoesNotScanMountedBackground(t *testing.T) {
 	env := newTestEnv(t)
 
 	// 1. 挂载一个含初始文件的 L1 Background 目录。
@@ -1479,9 +858,9 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 		t.Fatalf("write v1: %v", err)
 	}
 	mem := openMemory(t)
-	tc, err := mem.ThinClient()
+	tc, err := mem.LocalVault()
 	if err != nil {
-		t.Fatalf("ThinClient: %v", err)
+		t.Fatalf("LocalVault: %v", err)
 	}
 	if _, err := tc.AddBackgroundDir(bgDir); err != nil {
 		t.Fatalf("AddBackgroundDir: %v", err)
@@ -1493,60 +872,34 @@ func TestRecallHookAutoSyncsMountedBackgroundWithCooldown(t *testing.T) {
 	if err := mem.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&initialSHA); err != nil || initialSHA == "" {
 		t.Fatalf("expected initial AddBackgroundDir to ingest v1 background file, got %q err=%v", initialSHA, err)
 	}
+	_ = mem.Close()
 
 	// 2. 修改挂载目录下的文件（大小和 mtime 改变）。
-	if err := os.WriteFile(notePath, []byte("更新规格说明 v2：新增 UserPromptSubmit 60s 冷却自动增量同步机制。\n"), 0o644); err != nil {
+	if err := os.WriteFile(notePath, []byte("更新规格说明 v2：后台扫描改由独立 worker 承担。\n"), 0o644); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
 	futureTime := time.Now().Add(5 * time.Second)
 	_ = os.Chtimes(notePath, futureTime, futureTime)
 
-	// 3. 冷却期内（距上次 10s < 60s）：触发 recall 钩子不应扫描或更新。
-	nowTS := ids.UTCNow()
-	_, err = mem.Store.DB().Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
-		backgroundHookMetaKey, []byte(fmt.Sprintf("%d", nowTS-10)))
-	if err != nil {
-		t.Fatalf("seed cooldown meta: %v", err)
+	// 3. 钩子执行后（无论距上次多久）都不得扫描或更新 L1 Background。
+	for round := 0; round < 2; round++ {
+		code, _, stderr := runHookMain(t, []string{"recall", "--json"}, `{"session_id":"s-bg","prompt":"检查规格"}`)
+		if code != 0 {
+			t.Fatalf("recall hook round %d failed: code=%d stderr=%s", round, code, stderr)
+		}
 	}
-	_ = mem.Close()
 
-	code, _, stderr := runHookMain(t, []string{"recall", "--json"}, `{"session_id":"s-bg","prompt":"检查规格"}`)
-	if code != 0 {
-		t.Fatalf("recall within cooldown failed: code=%d stderr=%s", code, stderr)
-	}
 	memCheck := openMemory(t)
-	var afterCooldownSHA string
-	_ = memCheck.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&afterCooldownSHA)
-	_ = memCheck.Close()
-	if afterCooldownSHA != initialSHA {
-		t.Fatalf("cooldown violated: file sha256 changed from %q to %q inside 60s window", initialSHA, afterCooldownSHA)
-	}
-
-	// 4. 冷却期已过（距上次 65s >= 60s）：触发 recall 钩子必须自动增量同步 v2 文件。
-	mem2 := openMemory(t)
-	_, err = mem2.Store.DB().Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
-		backgroundHookMetaKey, []byte(fmt.Sprintf("%d", ids.UTCNow()-65)))
-	if err != nil {
-		t.Fatalf("seed expired cooldown meta: %v", err)
-	}
-	_ = mem2.Close()
-
-	code, _, stderr = runHookMain(t, []string{"recall", "--json"}, `{"session_id":"s-bg","prompt":"再次检查规格"}`)
-	if code != 0 {
-		t.Fatalf("recall after cooldown failed: code=%d stderr=%s", code, stderr)
-	}
-
-	mem3 := openMemory(t)
-	defer mem3.Close()
+	defer memCheck.Close()
 	var updatedSHA string
-	if err := mem3.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&updatedSHA); err != nil {
+	if err := memCheck.Store.DB().QueryRow(`SELECT content_sha256 FROM rm_bg_files LIMIT 1`).Scan(&updatedSHA); err != nil {
 		t.Fatalf("query rm_bg_files: %v", err)
 	}
-	if updatedSHA == "" || updatedSHA == initialSHA {
-		t.Fatalf("expected recall hook after cooldown to auto-sync modified L1 file: initial=%s updated=%s", initialSHA, updatedSHA)
+	if updatedSHA != initialSHA {
+		t.Fatalf("prompt hook scanned background files: sha256 changed from %q to %q", initialSHA, updatedSHA)
 	}
 	var noeticCount int
-	if err := mem3.Store.DB().QueryRow(
+	if err := memCheck.Store.DB().QueryRow(
 		`SELECT COUNT(*) FROM rm_noetic`,
 	).Scan(&noeticCount); err != nil {
 		t.Fatalf("query rm_noetic: %v", err)
@@ -1657,22 +1010,6 @@ func TestSituationalBootAndSingleBigramCollisionSilence(t *testing.T) {
 		Author: "user", AutoSync: boolPtr(false),
 	}); err != nil {
 		t.Fatalf("remember card: %v", err)
-	}
-
-	// 1. SessionStart in workspace must include [刚干了什么 · 时序尾] and [记忆代理四问闭环]
-	if _, err := config.WriteDefault(env.configPath); err != nil {
-		t.Fatalf("write default: %v", err)
-	}
-	if _, err := config.SetConfigValue(env.configPath, "hooks.boot_context", "true"); err != nil {
-		t.Fatalf("set boot_context: %v", err)
-	}
-	startPayload, _ := json.Marshal(map[string]any{
-		"session_id": "new-sess-1",
-		"cwd":        wsDir,
-	})
-	code, startOut, _ := runHookMain(t, []string{"start"}, string(startPayload))
-	if code != 0 || !strings.Contains(startOut, "[刚干了什么 · 历史会话留痕") || !strings.Contains(startOut, "[记忆代理四问闭环与防幻觉准则]") || !strings.Contains(startOut, "历史记忆≠本轮已做") {
-		t.Fatalf("unexpected SessionStart situational boot output: %q", startOut)
 	}
 
 	// 2. Accidental single-bigram collision ("全部同意 推进实施" sharing only 2-char "实施" with "增量批实施卡首版")
@@ -1829,40 +1166,4 @@ func bandsText(bands []map[string]any) string {
 		}
 	}
 	return builder.String()
-}
-
-func TestBootContextUsesThinVaultAtlasAndEpisodicTail(t *testing.T) {
-	env := newTestEnv(t)
-	wsDir := filepath.Join(env.base, "Rolling-Memory")
-	if err := os.MkdirAll(filepath.Join(wsDir, "internal", "hooks"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	targetFile := filepath.Join(wsDir, "internal", "hooks", "hooks.go")
-	if err := os.WriteFile(targetFile, []byte("package hooks\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mem := openMemory(t)
-	tc, err := mem.ThinClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tc.SetIdentity("zcode", "sess_boot_1", "Rolling-Memory")
-	if err := tc.Vault.SaveLocalPlaintext("ep_boot_u", 100, "[user] 检查 SessionStart 唤醒路标", []string{"[user] 检查 SessionStart 唤醒路标"}, thinclient.IngestResponse{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tc.Vault.SaveLocalPlaintext("ep_boot_a", 101, "[assistant] 已修复 internal/hooks/hooks.go 的薄库回退。", []string{"[assistant] 已修复 internal/hooks/hooks.go 的薄库回退。"}, thinclient.IngestResponse{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tc.RememberNoetic("nt_boot_1", "SessionStart 唤醒路标入口", []string{"ep_boot_a"}, []string{"internal/hooks/hooks.go"}, "入口在 internal/hooks/hooks.go", 102); err != nil {
-		t.Fatal(err)
-	}
-	payload := map[string]any{"cwd": wsDir, "session_id": "sess_boot_2"}
-	atlas := queryDiskVerifiedWorkspaceAtlas(mem, "mem:hooks", "Rolling-Memory", payload, 5)
-	if !strings.Contains(atlas, "internal/hooks/hooks.go") {
-		t.Fatalf("expected rm_noetic verified path in atlas, got %q", atlas)
-	}
-	tail := queryWorkspaceEpisodicTail(mem, "mem:hooks", "Rolling-Memory", "sess_boot_2")
-	if !strings.Contains(tail, "检查 SessionStart 唤醒路标") || !strings.Contains(tail, "已修复 internal/hooks/hooks.go") {
-		t.Fatalf("expected thin_vault_docs episodic tail, got %q", tail)
-	}
 }

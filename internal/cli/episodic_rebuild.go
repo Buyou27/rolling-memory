@@ -29,8 +29,6 @@ type EpisodicRebuildReport struct {
 	UnitsReused  int      `json:"units_reused"`
 	OldTokens    int64    `json:"old_tokens"`
 	NewTokens    int64    `json:"new_tokens"`
-	UnitsPushed  int      `json:"units_pushed"`
-	RemotePurged int      `json:"remote_purged"`
 	BackupPath   string   `json:"backup_path,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
 }
@@ -48,7 +46,11 @@ func rebuildEpisodicUnits(ctx context.Context, memory *facade.Memory, apply bool
 	db := memory.Store.DB()
 	scope := memory.Config.Scope
 
-	oldRows, err := db.Query(`SELECT doc_id, occurred_at, raw_text FROM thin_vault_docs WHERE layer = 'episodic' OR layer = ''`)
+	oldRows, err := db.Query(`
+		SELECT d.unit_id, d.occurred_at, COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text)
+		FROM rm_docs d
+		LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+		WHERE d.layer = 'episodic' OR d.layer = ''`)
 	if err != nil {
 		return report, err
 	}
