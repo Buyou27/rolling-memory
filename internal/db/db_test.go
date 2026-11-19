@@ -556,54 +556,6 @@ func TestDBSize(t *testing.T) {
 	}
 }
 
-func TestRebuildFTS(t *testing.T) {
-	connection, _ := connectMigrated(t, LocalProfile())
-	execSQL(t, connection,
-		"INSERT INTO node(id, scope, kind, label, norm_label, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		"n1", "mem:a", "referent", "老张养了一只猫", "老张养了一只猫", "active", 1)
-	execSQL(t, connection,
-		"INSERT INTO node(id, scope, kind, label, norm_label, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		"n2", "mem:a", "referent", "project-a", "project-a", "provisional", 1)
-	execSQL(t, connection,
-		"INSERT INTO node(id, scope, kind, label, norm_label, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		"n3", "mem:a", "referent", "old-node", "old-node", "retired", 1)
-	execSQL(t, connection,
-		"INSERT INTO node_alias(node_id, alias, norm_alias, source, created_at) VALUES (?, ?, ?, ?, ?)",
-		"n1", "老张", "老张", "manual", 1)
-	execSQL(t, connection,
-		"INSERT INTO node_alias(node_id, alias, norm_alias, source, created_at) VALUES (?, ?, ?, ?, ?)",
-		"n1", "猫", "猫", "manual", 1)
-	execSQL(t, connection,
-		"INSERT INTO trace(hash, scope, text, occurred_at, recorded_at) VALUES (?, ?, ?, ?, ?)",
-		"h1", "mem:a", "老张养了一只猫。", 1, 1)
-	execSQL(t, connection,
-		"INSERT INTO trace(hash, scope, text, occurred_at, recorded_at) VALUES (?, ?, ?, ?, ?)",
-		"h2", "mem:a", "项目使用 SQLite。", 2, 2)
-
-	result, err := RebuildFTS(connection)
-	if err != nil {
-		t.Fatalf("RebuildFTS: %v", err)
-	}
-	if result["nodes"] != 2 || result["traces"] != 2 {
-		t.Fatalf("RebuildFTS = %+v, want nodes=2 traces=2", result)
-	}
-	if got := queryInt(t, connection, "SELECT count(*) FROM node_fts"); got != 2 {
-		t.Errorf("node_fts rows = %d, want 2", got)
-	}
-	if got := queryInt(t, connection, "SELECT count(*) FROM trace_fts"); got != 2 {
-		t.Errorf("trace_fts rows = %d, want 2", got)
-	}
-	if got := queryInt(t, connection, "SELECT count(*) FROM node_fts WHERE node_fts MATCH '老张养'"); got != 1 {
-		t.Errorf("node_fts trigram hits = %d, want 1", got)
-	}
-	if got := queryInt(t, connection, "SELECT count(*) FROM trace_fts WHERE trace_fts MATCH 'SQLite'"); got != 1 {
-		t.Errorf("trace_fts hits = %d, want 1", got)
-	}
-	if got := queryInt(t, connection, "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'old'"); got != 0 {
-		t.Errorf("retired node leaked into FTS: %d", got)
-	}
-}
-
 func TestIntegrityCheck(t *testing.T) {
 	connection, _ := connectMigrated(t, LocalProfile())
 	issues, err := IntegrityCheck(connection)

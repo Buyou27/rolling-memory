@@ -46,7 +46,7 @@ func TestGiteeLatestSelectsSemverByChannel(t *testing.T) {
 }
 
 func TestCheckGiteeUsesTagSpecificManifest(t *testing.T) {
-	manifest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  rolling-memory-darwin-arm64\n"
+	manifest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  " + PlatformCLIAssetName() + "\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/acme/Rolling-Memory/tags":

@@ -80,7 +80,7 @@ go test ./...                                   # public suite: zero-plaintext /
 ## 5. Data Sovereignty: Export, Delete, Backup, Migrate
 
 - **Zero collection**: local mode makes 0 external network requests and includes no analytics, crash upload, or usage reporting;
-- **Export**: JSON export is unavailable because it does not include the vault and referenced sources. Existing JSON exports can still be imported into a compatible database, but are not complete backups;
+- **Export**: JSON export and its legacy import path are retired because a JSON export cannot include the vault or referenced sources. To move conversations, import a JSONL or text transcript instead;
 - **Backup**: SQLite's `.backup` creates a consistent database copy, but not a self-contained backup. Preserve referenced conversation databases/files and mounted source files separately, including their paths. Protect all copies, which may contain private data and keys; `rolling-memory doctor --json` shows the vault path;
 - **Delete**: stop the process and delete `memory.db` plus its `-wal` / `-shm` sidecars to remove the local vault. Mounted background source files are not deleted;
 - **Migrate**: a vault copy alone does not migrate referenced sources. Preserve their original paths and verify access separately; `rolling-memory doctor` does not establish that every reference resolves.

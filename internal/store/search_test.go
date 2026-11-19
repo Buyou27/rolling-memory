@@ -197,7 +197,4 @@ func TestPreRetrievalAndLexicalScoringShannonBitField(t *testing.T) {
 		t.Fatalf("expected prefix derivation hit ('happy'->'unhappy', lex=%.2f) to strictly outscore over-stemming false positive ('organ'->'organization', lex=%.2f)",
 			cands[0].LexScore, cands[1].LexScore)
 	}
-	if s.Warning() != nil {
-		t.Fatalf("expected nil Warning() on healthy local store, got %v", s.Warning())
-	}
 }

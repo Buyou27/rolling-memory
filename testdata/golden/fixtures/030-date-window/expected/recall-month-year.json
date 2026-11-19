@@ -55,10 +55,6 @@
       "chars": false,
       "nodes": false
     },
-    "vector": {
-      "provider": "hash",
-      "warning": null
-    },
     "window": [
       1688169600,
       1690848000

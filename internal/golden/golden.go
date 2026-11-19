@@ -561,12 +561,6 @@ func (r *Runner) Invoke(name string, args map[string]any) (any, error) {
 		return r.Memory.Doctor()
 	case "check":
 		return r.Memory.Check()
-	case "reindex":
-		return r.Memory.Reindex()
-	case "export":
-		return r.Memory.Export(nil, nil)
-	case "import":
-		return r.opImport(args)
 	case "closure":
 		return r.opClosure(args)
 	case "dump":
@@ -733,57 +727,6 @@ func (r *Runner) opRecall(args map[string]any) (any, error) {
 		"probe":  result.ToProbe(),
 		"render": result.Render(maxChars),
 	}, nil
-}
-
-func (r *Runner) opImport(args map[string]any) (any, error) {
-	payload := args["payload_from"]
-	if text, ok := payload.(string); ok && strings.HasPrefix(text, "$") {
-		resolved, err := resolveRefs(text, r.Saved)
-		if err != nil {
-			return nil, err
-		}
-		payload = resolved
-	}
-	payloadMap, ok := payload.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("import payload must be an object")
-	}
-	if argBool(args, "fresh") {
-		freshRoot := filepath.Join(r.ScenarioRoot, "fresh")
-		if err := os.MkdirAll(freshRoot, 0o755); err != nil {
-			return nil, err
-		}
-		configPath := filepath.Join(freshRoot, "config.toml")
-		dbPath := filepath.Join(freshRoot, "memory.db")
-		mode := "local"
-		scope := r.Fixture.Scope
-		reader := "deliverable"
-		cfg, err := config.Load(config.LoadOptions{
-			Path: &configPath, DB: &dbPath, Mode: &mode, Scope: &scope, Reader: &reader,
-			Env: map[string]string{},
-		})
-		if err != nil {
-			return nil, err
-		}
-		cfg.Log = filepath.Join(freshRoot, "state", "rolling-memory.log")
-		cfg.Recall.BudgetMS = 60000
-		fresh, err := facade.New(cfg)
-		if err != nil {
-			return nil, err
-		}
-		defer fresh.Close()
-		result, err := fresh.ImportData(payloadMap, &scope)
-		if err != nil {
-			return nil, err
-		}
-		status, err := fresh.Status(scope)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"result": result, "status": status}, nil
-	}
-	scope := r.Fixture.Scope
-	return r.Memory.ImportData(payloadMap, &scope)
 }
 
 // opWriteTranscript writes the driver's synthetic transcript file: one JSON

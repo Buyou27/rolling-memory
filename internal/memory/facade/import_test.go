@@ -4,7 +4,6 @@
 package facade_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/transcript"
-	"github.com/rocareer/rolling-memory/internal/version"
 )
 
 func assertKeys(t *testing.T, label string, result map[string]any, want ...string) {
@@ -289,40 +287,5 @@ func TestImportFileFallsBackForPlainJSON(t *testing.T) {
 		"ok", "path", "session", "messages", "inserted", "offset", "total_lines", "size")
 	if result["messages"] != 0 || result["inserted"] != 0 || result["total_lines"] != 1 {
 		t.Fatalf("import = %#v", result)
-	}
-}
-
-// TestImportFileJSONExportReplays verifies importing a full JSON scope export.
-func TestImportFileJSONExportReplays(t *testing.T) {
-	memory := newMemory(t)
-	rememberOne(t, memory, "老张养了一只猫。", "老张", "养", map[string]any{"label": "猫"})
-	path := filepath.Join(t.TempDir(), "export.json")
-	payload, err := memory.Store.ExportScope("mem:test")
-	if err != nil {
-		t.Fatalf("legacy export fixture: %v", err)
-	}
-	payload["format"] = version.ExportFormat
-	payload["scope"] = "mem:test"
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal fixture: %v", err)
-	}
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	fresh := newMemory(t)
-	imported, err := fresh.ImportFile(path, nil, nil, "shared", true)
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	assertKeys(t, "import", imported, "ok", "scope", "inserted", "replay")
-	replayed, ok := imported["replay"].(map[string]any)
-	if !ok {
-		t.Fatalf("import has no replay receipt: %#v", imported)
-	}
-	assertKeys(t, "replay", replayed,
-		"ok", "scope", "processed", "written", "skipped", "anchor_failed", "resolve_failed", "llm_calls", "warnings")
-	if imported["scope"] != "mem:test" {
-		t.Fatalf("scope = %#v", imported["scope"])
 	}
 }

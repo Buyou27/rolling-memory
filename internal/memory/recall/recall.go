@@ -86,7 +86,6 @@ type Options struct {
 	ResultUnit      string
 	Rank            *bool
 	AttachFiles     *bool
-	VectorWarning   any
 }
 
 // Result is the assembled recall result.
@@ -912,9 +911,6 @@ func Recall(memory *store.Store, cfg *config.Config, opts Options) (*Result, err
 		"date_window":      window,
 		"session":          ids.OptionalString(opts.Session),
 		"canonical_merges": canonicalMerges,
-		"vector": map[string]any{
-			"provider": "hash", "warning": opts.VectorWarning,
-		},
 	}
 	if rawError := memory.RawError(); rawError != nil && *rawError != "" {
 		// Raw-leg failures are loud: the note rides on the receipt while

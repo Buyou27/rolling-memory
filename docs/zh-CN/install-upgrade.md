@@ -155,7 +155,7 @@ rolling-memory update --with-console
 rolling-memory update --check --json
 ```
 
-`update` 的别名是 `upgrade`。升级不会修改、清空或覆盖本地 SQLite 金库（`memory.db`）。可用 `--source gitee` 从 Gitee 镜像读取发布标签，或显式传入 `--release-base` URL。
+升级不会修改、清空或覆盖本地 SQLite 金库（`memory.db`）。可用 `--source gitee` 从 Gitee 镜像读取发布标签，或显式传入 `--release-base` URL。
 
 ### 3.2 控制台
 

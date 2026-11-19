@@ -79,11 +79,11 @@
     "db/030-date-window.db": "5c6d3393131f08a698d20e4d4c197667a4131e79db00b985fbd973204bb9854e",
     "db/250-config-egress.db": "9965f15b275a2604c660cc687d0f15888bc7fbf41e314d27a1ee27bf36c86ceb",
     "db/270-transcript-cursor.db": "ffb1a9c48fe873905bf00f83781585317d29fa7cbedab424299ee19201b13c62",
-    "fixtures/030-date-window/expected/recall-month-only.json": "4a4e4511856d76a797d32684958774fec302030c59ca75dcbd5f64ffa22cf65b",
+    "fixtures/030-date-window/expected/recall-month-only.json": "1934ff19b6af986e8dd56f591907b868e174216254ab5fc3109d69b9d4d997d1",
     "fixtures/030-date-window/expected/recall-month-only.txt": "5a7cf5a07ddca03768f77a854700556f4b8f98293b315401621f37efe097f77c",
-    "fixtures/030-date-window/expected/recall-month-year.json": "b0a50b865db875be9302c0134167afaace4077cde34cc3e7e1eb188503d265c1",
+    "fixtures/030-date-window/expected/recall-month-year.json": "340648fe32ac6cc8d5531d15fddb40e59201734111dfb2a784a69a9e4e815fab",
     "fixtures/030-date-window/expected/recall-month-year.txt": "5a7cf5a07ddca03768f77a854700556f4b8f98293b315401621f37efe097f77c",
-    "fixtures/030-date-window/expected/recall-outside.json": "ab355209b5f8e7d6c72a68daf1efe017bfe2b68278104e3fd000819a728fb9bb",
+    "fixtures/030-date-window/expected/recall-outside.json": "1abd8e741cb4d8c72799cc9692e293bfcff358475a19609ed1fb039aa7dbefe7",
     "fixtures/030-date-window/expected/t-zebra.json": "3cfd7ec16633dfbc27a6b498b3eeaafa867e8c06672403a2d671a4f9b61f9245",
     "fixtures/030-date-window/fixture.json": "58f642979548f5bf2b6226551db7e1b8e43fdb1f71b2180a87da509b660bfefb",
     "fixtures/250-config-egress/expected/egress-cloud.json": "01567dc4c0d7a88e84bce21783a084054adca06114895145a4ed886d2938a4e5",
@@ -218,7 +218,7 @@
     "vectors/time.json": "ad9afaba9f3d8fcbd3b28c968f4be3ac1978e2beb0678f1a43c8ed1979e571e7",
     "vectors/tokenize.json": "b0279bcf10b5f3e8d6f5f2dd94f9bba9f03df77f686279802df16de5f80a10e5"
   },
-  "seal_sha256": "a6f3eb4afb37ca78acc3aca89ca6a881a1db0722c000737465f255ca5af30555",
+  "seal_sha256": "a8a0551f494bd5806c56416f0b695bd85253b9ac00c5e387b77d57928e41578a",
   "frozen_at": 1793102400,
   "frozen_at_iso": "2026-10-27T12:00:00Z",
   "generator": {

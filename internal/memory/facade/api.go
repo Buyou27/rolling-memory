@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -478,7 +477,6 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 		PresenceLocus: req.PresenceLocus, Presence: req.Presence,
 		ReaderSubject: req.ReaderSubject, SearchEngine: req.SearchEngine,
 		ResultUnit: req.ResultUnit, Rank: req.Rank, AttachFiles: req.AttachFiles,
-		VectorWarning: m.vectorWarning(),
 	})
 	if err != nil {
 		return nil, err
@@ -497,11 +495,6 @@ func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 		if local != nil && (len(local.Bands) > 0 || len(local.RawHits) > 0 || local.Gaps["source_unavailable"] > 0 || local.Gaps["index_incomplete"] > 0) {
 			return local, nil
 		}
-	}
-	// The soft vector leg may set a warning while recall runs; standard reads the
-	// property after assembly, so refresh it before the caller renders/marshals.
-	if vector, ok := result.Meta["vector"].(map[string]any); ok {
-		vector["warning"] = m.vectorWarning()
 	}
 	return result, nil
 }
@@ -651,31 +644,9 @@ func fileSHA256(path string) (string, error) {
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
-func checkFileExportTraceAudiences(payload map[string]any) error {
-	value, exists := payload["traces"]
-	if !exists {
-		return nil
-	}
-	traces, ok := value.([]any)
-	if !ok {
-		return fmt.Errorf("file export contains invalid traces")
-	}
-	for _, item := range traces {
-		trace, ok := item.(map[string]any)
-		if !ok {
-			return fmt.Errorf("file export contains an invalid trace")
-		}
-		audience, ok := trace["audience"].(string)
-		if !ok || (audience != "shared" && audience != "public") {
-			return fmt.Errorf("file export contains a restricted or unknown trace audience: background transcript scanning cannot enforce file privacy")
-		}
-	}
-	return nil
-}
-
-// ImportFile imports a JSON export, or falls back to the transcript adapters.
-// JSONL transcripts in local plain mode go through the canonical pipeline shared
-// with the background scanner; plain-text transcripts keep the text adapter.
+// ImportFile imports a JSONL or plain-text transcript. JSONL transcripts in
+// local plain mode go through the canonical pipeline shared with the background
+// scanner; plain-text transcripts keep the text adapter.
 func (m *Memory) ImportFile(path string, scope, session *string, audience string, replay bool) (map[string]any, error) {
 	if audience != "" && audience != "shared" && audience != "public" {
 		return nil, fmt.Errorf("restricted or unknown audience file import is unavailable: background transcript scanning cannot enforce file privacy; keep sensitive files outside scanned directories until source-level access controls are supported")
@@ -685,19 +656,6 @@ func (m *Memory) ImportFile(path string, scope, session *string, audience string
 		return nil, err
 	}
 	target := config.ExpandUserPath(path)
-	var exportPayload map[string]any
-	if strings.EqualFold(filepath.Ext(target), ".json") {
-		raw, err := os.ReadFile(target)
-		if err == nil {
-			payload := map[string]any{}
-			if json.Unmarshal(raw, &payload) == nil && asString(payload["format"]) == version.ExportFormat {
-				if err := checkFileExportTraceAudiences(payload); err != nil {
-					return nil, err
-				}
-				exportPayload = payload
-			}
-		}
-	}
 	if m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") {
 		if err := m.bindLocalVaultScope(); err != nil {
 			return nil, err
@@ -722,23 +680,6 @@ func (m *Memory) ImportFile(path string, scope, session *string, audience string
 			"written": 0, "skipped": 0, "anchor_failed": 0, "resolve_failed": 0,
 			"llm_calls": 0, "warnings": []any{},
 		}, nil
-	}
-	if exportPayload != nil {
-		imported, err := m.ImportData(exportPayload, &effectiveScope)
-		if err != nil {
-			return nil, err
-		}
-		if err := m.rememberImportedTracesToVault(effectiveScope, session); err != nil {
-			return nil, err
-		}
-		if replay {
-			rep, err := drainPending(0)
-			if err != nil {
-				return nil, err
-			}
-			imported["replay"] = rep
-		}
-		return imported, nil
 	}
 	if m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") &&
 		(canonicalJSONLTranscript(target) || !m.Store.HasLegacyGraph()) {
@@ -944,74 +885,6 @@ func (m *Memory) importCanonicalJSONL(target, scope string, session *string, rep
 	return receipt, nil
 }
 
-// ExportUnavailable reports why the legacy JSON export cannot serve as a backup.
-func ExportUnavailable() error {
-	return fmt.Errorf("JSON export is unavailable: it omits the local vault and referenced source files and is not a complete backup; existing exports remain available for import into a compatible database")
-}
-
-// Export refuses to produce an incomplete backup.
-func (m *Memory) Export(path, scope *string) (map[string]any, error) {
-	return nil, ExportUnavailable()
-}
-
-// ImportData imports one export payload into scope.
-func (m *Memory) ImportData(payload map[string]any, scope *string) (map[string]any, error) {
-	if asString(payload["format"]) != version.ExportFormat {
-		return nil, fmt.Errorf("not a rolling-memory export")
-	}
-	// Fresh databases bootstrap thin (vault-only): the JSON export carries the
-	// legacy assertion graph and has nowhere to land. Fail closed with an
-	// actionable message instead of raw SQL errors.
-	if m.Store == nil || !m.Store.HasLegacyGraph() {
-		return nil, fmt.Errorf("JSON export import requires the legacy assertion graph, which this plaintext-vault database does not carry; import a JSONL transcript instead")
-	}
-	effectiveScope := m.Config.Scope
-	if scope != nil && *scope != "" {
-		effectiveScope = *scope
-	} else if value := asString(payload["scope"]); value != "" {
-		effectiveScope = value
-	}
-	if err := m.checkLocalVaultScope(effectiveScope); err != nil {
-		return nil, err
-	}
-	inserted, err := m.Store.ImportScope(effectiveScope, payload)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"ok": true, "scope": effectiveScope, "inserted": inserted}, nil
-}
-
-// Reindex rebuilds the legacy assertion-graph FTS index; the local plaintext vault
-// retrieval needs no rebuild.
-func (m *Memory) Reindex() (map[string]any, error) {
-	fts, err := db.RebuildFTS(m.Store.DB())
-	if err != nil {
-		return nil, err
-	}
-	rows, err := m.Store.DB().Query(
-		"SELECT id FROM node WHERE kind != 'assertion' AND status IN ('provisional','active') ORDER BY scope, kind, norm_label")
-	if err != nil {
-		return nil, err
-	}
-	nodeIDs := []string{}
-	for rows.Next() {
-		var value string
-		if err := rows.Scan(&value); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		nodeIDs = append(nodeIDs, value)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-	return map[string]any{
-		"ok": true, "fts": fts, "vectors": 0, "warning": m.vectorWarning(),
-	}, nil
-}
-
 // Check runs the integrity/audit report.
 func (m *Memory) Check() (map[string]any, error) {
 	return m.Store.Check()
@@ -1038,13 +911,6 @@ func (m *Memory) Efficacy(scope *string, harnessID string, limit, budgetSeconds 
 }
 
 // ------------------------------------------------------------------ helpers
-
-func (m *Memory) vectorWarning() any {
-	if m == nil || m.Store == nil {
-		return nil
-	}
-	return m.Store.Warning()
-}
 
 func pickString(value *string, fallback string) string {
 	if value != nil && *value != "" {

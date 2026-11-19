@@ -4,7 +4,6 @@
 package store
 
 import (
-	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -395,49 +394,6 @@ func TestRewindSessionResetsCursorWithoutDeleting(t *testing.T) {
 	}
 	if _, err := store.RewindSession(testScope, "", "reason", "user"); err == nil {
 		t.Fatal("expected session error")
-	}
-}
-
-func TestExportImportRoundtrip(t *testing.T) {
-	source := newTestStore(t, testScope)
-	addFact(t, source, testScope, "老张养了一只猫。", "老张", "养", "猫", "老张养了一只猫", factOptions{TValidFrom: 1772409600})
-	payload, err := source.ExportScope(testScope)
-	if err != nil {
-		t.Fatalf("export: %v", err)
-	}
-	if len(payload["assertions"].([]map[string]any)) != 1 {
-		t.Fatalf("exported assertions = %v", payload["assertions"])
-	}
-
-	target := newTestStore(t, testScope)
-	rawPayload, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal export: %v", err)
-	}
-	decoded := map[string]any{}
-	if err := json.Unmarshal(rawPayload, &decoded); err != nil {
-		t.Fatalf("decode export: %v", err)
-	}
-	inserted, err := target.ImportScope(testScope, decoded)
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	if inserted["assertions"] != 1 || inserted["traces"] != 1 {
-		t.Fatalf("inserted = %v", inserted)
-	}
-	if countRows(t, target, "assertion") != 1 {
-		t.Fatalf("target assertion count = %d", countRows(t, target, "assertion"))
-	}
-	again, err := target.ImportScope(testScope, decoded)
-	if err != nil {
-		t.Fatalf("second import: %v", err)
-	}
-	if again["assertions"] != 0 || again["traces"] != 0 {
-		t.Fatalf("second inserted = %v", again)
-	}
-	seeds, _, err := target.SearchSeeds("猫", SeedOptions{Scope: testScope, Reader: "deliverable"})
-	if err != nil || len(seeds) == 0 {
-		t.Fatalf("FTS after import seeds=%v err=%v", seeds, err)
 	}
 }
 

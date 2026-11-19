@@ -33,7 +33,4 @@ func TestMetadata(t *testing.T) {
 	if SchemaVersion != 1 {
 		t.Fatalf("SchemaVersion = %d", SchemaVersion)
 	}
-	if ExportFormat != "rolling-memory-export" || ExportVersion != 1 {
-		t.Fatalf("export metadata = %q/%d", ExportFormat, ExportVersion)
-	}
 }

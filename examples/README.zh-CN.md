@@ -37,6 +37,10 @@ ZCode 插件：将 `zcode-plugin/` 复制到插件目录（或注册为本地 ma
 `rolling-memory` MCP server 出现，且 `UserPromptSubmit` 钩子可正常触发。插件内的 `db` / `scope`
 为用户配置项，安装后可在插件设置中修改。
 
+## 给 R / 统计分析的入口
+
+- [../research/r/](../research/r/) — 命令行薄封装（`rmemory.R`）、端到端演示，以及占据天数零分布尾界的 base R 复算。不提供 R SDK：CLI + JSON 就是全部接口。
+
 ## 本地同步、体检与 Web 控制台
 
 ```bash

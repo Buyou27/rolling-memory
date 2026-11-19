@@ -67,11 +67,7 @@ func (a *application) printReplay(result map[string]any) {
 }
 
 func (a *application) printImport(result map[string]any) {
-	// A JSON export carries one count per table (Store.ImportScope's
-	// map[string]int), whereas a transcript carries the inserted trace count.
-	if inserted := asMap(result["inserted"]); inserted != nil {
-		a.printf("import (json export): scope %s  inserted %s\n", pyStr(result["scope"]), pyRepr(inserted))
-	} else if _, canonicalJSONL := result["skipped_incomplete_tail"]; canonicalJSONL {
+	if _, canonicalJSONL := result["skipped_incomplete_tail"]; canonicalJSONL {
 		// The canonical JSONL pipeline writes content-addressed vault units, not
 		// trace rows; the counter key marks that receipt shape.
 		a.printf("import: %s messages · %s new units · session %s · offset %s/%s\n",

@@ -56,10 +56,6 @@
       "chars": false,
       "nodes": false
     },
-    "vector": {
-      "provider": "hash",
-      "warning": null
-    },
     "window": [
       0,
       0

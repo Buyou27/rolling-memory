@@ -4,7 +4,6 @@
 package facade_test
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,79 +125,6 @@ func TestStatusAndDoctor(t *testing.T) {
 	}
 }
 
-func TestExportRejectsIncompleteBackupWithoutWriting(t *testing.T) {
-	memory := newMemory(t)
-	dir := t.TempDir()
-	existing := filepath.Join(dir, "existing.json")
-	if err := os.WriteFile(existing, []byte("original"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	missing := filepath.Join(dir, "missing", "backup.json")
-	for _, path := range []*string{nil, &existing, &missing, &memory.Config.DB} {
-		if payload, err := memory.Export(path, nil); err == nil || payload != nil || !strings.Contains(err.Error(), "not a complete backup") {
-			t.Fatalf("export = %#v, %v", payload, err)
-		}
-	}
-	raw, err := os.ReadFile(existing)
-	if err != nil || string(raw) != "original" {
-		t.Fatalf("existing file changed: %q, %v", raw, err)
-	}
-	if _, err := os.Stat(filepath.Dir(missing)); !os.IsNotExist(err) {
-		t.Fatalf("unexpected output directory: %v", err)
-	}
-	if err := memory.Store.DB().Ping(); err != nil {
-		t.Fatalf("database changed: %v", err)
-	}
-}
-
-func TestExportImportRoundTrip(t *testing.T) {
-	memory := newMemory(t)
-	rememberOne(t, memory, "老张养了一只猫。", "老张", "养", map[string]any{"label": "猫"})
-	payload, err := memory.Store.ExportScope("mem:test")
-	if err != nil {
-		t.Fatalf("legacy export fixture: %v", err)
-	}
-	payload["format"] = version.ExportFormat
-	payload["scope"] = "mem:test"
-	if payload["format"] != version.ExportFormat || payload["scope"] != "mem:test" {
-		t.Fatalf("payload = %#v", payload)
-	}
-	for _, key := range []string{"traces", "nodes", "aliases", "assertions", "mentions", "meta_edges", "events"} {
-		if _, ok := payload[key]; !ok {
-			t.Fatalf("payload missing %q", key)
-		}
-	}
-	fresh := newMemory(t)
-	imported, err := fresh.ImportData(payload, nil)
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	inserted := imported["inserted"].(map[string]int)
-	if inserted["traces"] != 1 || inserted["assertions"] != 1 {
-		t.Fatalf("inserted = %#v", inserted)
-	}
-	again, err := fresh.ImportData(payload, nil)
-	if err != nil {
-		t.Fatalf("second import: %v", err)
-	}
-	for table, count := range again["inserted"].(map[string]int) {
-		if count != 0 {
-			t.Fatalf("%s re-imported %d rows", table, count)
-		}
-	}
-	status, err := fresh.Status("mem:test")
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status["active_assertions"] != int64(1) {
-		t.Fatalf("active = %#v", status["active_assertions"])
-	}
-	if _, err := fresh.ImportData(map[string]any{"format": "other"}, nil); err == nil ||
-		err.Error() != "not a rolling-memory export" {
-		t.Fatalf("format error = %v", err)
-	}
-}
-
 func TestRecentOrdersAndFilters(t *testing.T) {
 	memory := newMemory(t)
 	old, err := memory.Remember(facade.RememberRequest{
@@ -251,41 +177,6 @@ func TestRecentOrdersAndFilters(t *testing.T) {
 	}
 }
 
-func TestExportFileAndImportFile(t *testing.T) {
-	memory := newMemory(t)
-	rememberOne(t, memory, "老张养了一只猫。", "老张", "养", map[string]any{"label": "猫"})
-	path := filepath.Join(t.TempDir(), "export.json")
-	payload, err := memory.Store.ExportScope("mem:test")
-	if err != nil {
-		t.Fatalf("legacy export fixture: %v", err)
-	}
-	payload["format"] = version.ExportFormat
-	payload["scope"] = "mem:test"
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal fixture: %v", err)
-	}
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	fresh := newMemory(t)
-	imported, err := fresh.ImportFile(path, nil, nil, "shared", false)
-	if err != nil {
-		t.Fatalf("import file: %v", err)
-	}
-	inserted := imported["inserted"].(map[string]int)
-	if inserted["traces"] != 1 || inserted["assertions"] != 1 {
-		t.Fatalf("inserted = %#v", inserted)
-	}
-	status, err := fresh.Status("mem:test")
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status["active_assertions"] != int64(1) {
-		t.Fatalf("active = %#v", status["active_assertions"])
-	}
-}
-
 func TestCloseIsIdempotent(t *testing.T) {
 	memory := newMemory(t)
 	if err := memory.Close(); err != nil {
@@ -296,39 +187,6 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestReindexAndStatus(t *testing.T) {
-	memory := newMemory(t)
-	rememberOne(t, memory, "老张养了一只猫。", "老张", "养", map[string]any{"label": "猫"})
-	reindexed, err := memory.Reindex()
-	if err != nil {
-		t.Fatalf("reindex: %v", err)
-	}
-	if reindexed["ok"] != true {
-		t.Fatalf("reindex = %#v", reindexed)
-	}
-	fts := reindexed["fts"].(map[string]int)
-	if fts["nodes"] < 2 {
-		t.Fatalf("fts = %#v", fts)
-	}
-	status, err := memory.Status("mem:test")
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status["active_assertions"] != int64(1) {
-		t.Fatalf("status = %#v", status)
-	}
-	if status["mode"] != "local" {
-		t.Fatalf("mode = %#v", status["mode"])
-	}
-	if status["schema_version"] != int64(1) {
-		t.Fatalf("schema_version = %#v", status["schema_version"])
-	}
-}
-
-// TestLocalImportIngestsCanonicalUnitsIntoVaultRecall locks the local-mode
-// canonical bridge: a JSONL transcript import must populate the thin plaintext
-// vault with content-addressed units (addressed by `@ref:jsonl:` pointers), so
-// `local` recall is not an empty assertion graph. The cloud path is untouched.
 func TestLocalImportIngestsCanonicalUnitsIntoVaultRecall(t *testing.T) {
 	memory := newMemory(t)
 	scope := "mem:test"

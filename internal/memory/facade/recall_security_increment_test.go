@@ -13,7 +13,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/store"
-	"github.com/rocareer/rolling-memory/internal/version"
 )
 
 func TestSecurityScopeRejectedBeforeImportAndGraphRecall(t *testing.T) {
@@ -65,88 +64,6 @@ func TestSecurityRestrictedFileImportFailsBeforeWrites(t *testing.T) {
 	var afterTrace, afterDocs, afterCursors int
 	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM thin_vault_docs), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&afterTrace, &afterDocs, &afterCursors); err != nil || beforeTrace != afterTrace || beforeDocs != afterDocs || beforeCursors != afterCursors || beforeDocs != 1 {
 		t.Fatalf("private rejection altered existing data: before=%d/%d/%d after=%d/%d/%d err=%v", beforeTrace, beforeDocs, beforeCursors, afterTrace, afterDocs, afterCursors, err)
-	}
-}
-
-func TestSecurityFileExportAudiencePreflight(t *testing.T) {
-	for _, fixture := range []struct {
-		name   string
-		traces any
-	}{
-		{"private", []any{map[string]any{"audience": "private"}}},
-		{"group", []any{map[string]any{"audience": "group"}}},
-		{"missing", []any{map[string]any{"text": "unknown"}}},
-		{"empty", []any{map[string]any{"audience": ""}}},
-		{"unknown", []any{map[string]any{"audience": "owner"}}},
-		{"spaced", []any{map[string]any{"audience": " shared "}}},
-		{"case", []any{map[string]any{"audience": "PUBLIC"}}},
-		{"nested", []any{map[string]any{"audience": map[string]any{"value": "shared"}}}},
-		{"non-string", []any{map[string]any{"audience": true}}},
-		{"mixed", []any{map[string]any{"audience": "shared"}, map[string]any{"audience": "private"}}},
-		{"non-object", []any{"shared"}},
-		{"not-array", map[string]any{"audience": "shared"}},
-		{"null", nil},
-	} {
-		t.Run(fixture.name, func(t *testing.T) {
-			memory := newMemory(t)
-			if _, err := memory.Store.DB().Exec(`DELETE FROM rm_meta WHERE k = 'local_plain_scope'`); err != nil {
-				t.Fatal(err)
-			}
-			raw, err := json.Marshal(map[string]any{"format": version.ExportFormat, "scope": memory.Config.Scope, "traces": fixture.traces})
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := writeTranscript(t, "export.json", string(raw))
-			if result, err := memory.ImportFile(path, nil, nil, "shared", false); err == nil || result != nil {
-				t.Fatalf("invalid export accepted: %#v %v", result, err)
-			}
-			var traces, cursors, bindings int
-			if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor), (SELECT COUNT(*) FROM rm_meta WHERE k = 'local_plain_scope')`).Scan(&traces, &cursors, &bindings); err != nil || traces != 0 || cursors != 0 || bindings != 0 {
-				t.Fatalf("rejected export wrote data: traces=%d cursors=%d bindings=%d err=%v", traces, cursors, bindings, err)
-			}
-		})
-	}
-	t.Run("cross-scope", func(t *testing.T) {
-		memory := newMemory(t)
-		raw, err := json.Marshal(map[string]any{"format": version.ExportFormat, "traces": []any{map[string]any{"audience": "shared"}}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := writeTranscript(t, "export.json", string(raw))
-		other := "mem:other"
-		if result, err := memory.ImportFile(path, &other, nil, "shared", false); err == nil || result != nil {
-			t.Fatalf("cross-scope export accepted: %#v %v", result, err)
-		}
-		var traces, cursors int
-		if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&traces, &cursors); err != nil || traces != 0 || cursors != 0 {
-			t.Fatalf("cross-scope export wrote data: traces=%d cursors=%d err=%v", traces, cursors, err)
-		}
-	})
-	for _, audience := range []string{"shared", "public"} {
-		t.Run(audience, func(t *testing.T) {
-			source := newMemory(t)
-			if _, created, err := source.Store.AddTrace(source.Config.Scope, "export audience witness", store.TraceOptions{Session: "export", Audience: audience}); err != nil || !created {
-				t.Fatalf("seed export trace: created=%v err=%v", created, err)
-			}
-			payload, err := source.Store.ExportScope(source.Config.Scope)
-			if err != nil {
-				t.Fatal(err)
-			}
-			payload["format"] = version.ExportFormat
-			raw, err := json.Marshal(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := writeTranscript(t, "export.json", string(raw))
-			target := newMemory(t)
-			if _, err := target.ImportFile(path, nil, nil, "shared", false); err != nil {
-				t.Fatal(err)
-			}
-			var got string
-			if err := target.Store.DB().QueryRow(`SELECT audience FROM trace WHERE text = ?`, "export audience witness").Scan(&got); err != nil || got != audience {
-				t.Fatalf("import audience=%q err=%v", got, err)
-			}
-		})
 	}
 }
 

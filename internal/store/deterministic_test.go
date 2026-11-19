@@ -30,39 +30,6 @@ func TestDeterministicIDsAcrossDatabases(t *testing.T) {
 	}
 }
 
-func TestSameInputSameRows(t *testing.T) {
-	first := newTestStore(t, testScope)
-	second := newTestStore(t, testScope)
-	operations := []struct {
-		text, subject, relation, object, anchor string
-	}{
-		{"老张养了一只猫。", "老张", "养", "猫", "老张养了一只猫"},
-		{"老张养了一只狗。", "老张", "养", "狗", "老张养了一只狗"},
-		{"老张住在北京。", "老张", "住在", "北京", "老张住在北京"},
-	}
-	for _, store := range []*Store{first, second} {
-		for _, operation := range operations {
-			addFact(t, store, testScope, operation.text, operation.subject, operation.relation, operation.object, operation.anchor, factOptions{})
-		}
-	}
-	left, err := first.ExportScope(testScope)
-	if err != nil {
-		t.Fatalf("export left: %v", err)
-	}
-	right, err := second.ExportScope(testScope)
-	if err != nil {
-		t.Fatalf("export right: %v", err)
-	}
-	if !reflect.DeepEqual(left, right) {
-		for _, key := range []string{"traces", "nodes", "assertions", "meta_edges", "events"} {
-			if !reflect.DeepEqual(left[key], right[key]) {
-				t.Fatalf("%s differs", key)
-			}
-		}
-		t.Fatalf("exports differ")
-	}
-}
-
 func TestDuplicateTraceIsIdempotent(t *testing.T) {
 	store := newTestStore(t, testScope)
 	firstHash, firstInserted, err := store.AddTrace(testScope, "老张养了一只猫。", TraceOptions{Author: "user"})

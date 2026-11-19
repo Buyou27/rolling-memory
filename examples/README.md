@@ -41,6 +41,10 @@ entry); after enabling it, confirm the `rolling-memory` MCP server appears and t
 `UserPromptSubmit` hook fires. `db` and `scope` inside the plugin are user config — change them in
 the plugin settings after installation.
 
+## For R / statistics work
+
+- [../research/r/](../research/r/) — shell-out helpers (`rmemory.R`), an end-to-end demo, and a base-R reproduction of the occupancy null bound. No R SDK: the CLI plus JSON is the whole interface.
+
 ## Local Sync, Diagnostics & Web Console
 
 ```bash

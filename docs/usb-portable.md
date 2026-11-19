@@ -13,7 +13,7 @@
 > 
 > Whether portable agent memory is genuinely useful or mostly a false premise is an open question — if you are curious and enjoy tinkering, feel free to try it out and discuss it with us!
 
-**Do not simply copy the source repository onto a USB drive.** A source checkout does not contain a compiled binary and defaults to writing data into the host machine's `$HOME` directory. Instead, use `rmem init --portable <USB_DIR>` to assemble a self-contained portable payload (for a multi-platform drive assembled from a source checkout, see Option B in section 4) — carrying your graph memory on the drive, wiring each new computer once, and running `rmem eject` before unplugging with zero database corruption.
+**Do not simply copy the source repository onto a USB drive.** A source checkout does not contain a compiled binary and defaults to writing data into the host machine's `$HOME` directory. Instead, use `rmem init --portable <USB_DIR>` to assemble a self-contained portable payload (for a multi-platform drive assembled from a source checkout, see Option B in section 4) — carrying your memory on the drive, wiring each new computer once, and running `rmem eject` before unplugging with zero database corruption.
 
 ---
 

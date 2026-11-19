@@ -51,27 +51,3 @@ func TestMetaEdgeUnsupportedKindsReturnConstraintError(t *testing.T) {
 		t.Fatalf("edge count = %d, err = %v", count, err)
 	}
 }
-
-func TestImportUnsupportedMetaEdgeRollsBack(t *testing.T) {
-	st := newTestStore(t, "mem:self")
-	left, err := st.EnsureNode("mem:self", "referent", "left", NodeOptions{Audience: "shared", Status: "active"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	right, err := st.EnsureNode("mem:self", "referent", "right", NodeOptions{Audience: "shared", Status: "active"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := map[string]any{
-		"traces":     []map[string]any{{"hash": "synthetic", "scope": "mem:self", "session": "import", "turn": 1, "kind": "message", "audience": "shared", "text": "witness", "occurred_at": 1, "recorded_at": 1}},
-		"meta_edges": []map[string]any{{"scope": "mem:self", "meta_kind": "unsupported-kind", "lhs_id": left, "rhs_id": right, "status": "active", "created_at": 1, "created_by": "system"}},
-	}
-	_, err = st.ImportScope("mem:self", payload)
-	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("import error = %v, want CHECK constraint error", err)
-	}
-	var count int
-	if err := st.DB().QueryRow(`SELECT count(*) FROM trace WHERE hash = 'synthetic'`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("rolled-back trace count = %d, err = %v", count, err)
-	}
-}

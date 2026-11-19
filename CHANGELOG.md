@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An R entry point for researchers: `research/r/` ships a thin shell-out layer (`rmemory.R`: `rm_init`, `rm_import`, `rm_recall`, `rm_bands` and friends), an end-to-end demo on a throwaway vault, and a base-R reproduction of the occupancy-null distribution and its tail bound. R needs only `jsonlite`; the CLI plus JSON stays the whole interface. The notes cover the two things that bite first — `system2()` does not quote arguments, and a vault only answers for the scope it was created with — and the JSONL sample carries the `stop_reason` completion marker that `import` requires.
+
 ## [0.0.7] - 2026-11-19
 
 ### Changed
@@ -18,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- OpenCode environments are now included in the turn-scanning capability set, so the console reports episodic alignment for them instead of leaving the layer marked as unknown whenever an OpenCode configuration directory is present.
 - Prompt hooks and the console now agree on where runtime presence lives when `XDG_STATE_HOME` is set or the engine log is redirected: the attachment ledger is written beside the rest of the runtime state and read from the same directory, so the console no longer reports an idle environment while a session is live.
 - Re-running `rolling-memory install` after the binary moved no longer stops on its own generated launcher: an owned launcher is updated in place with a backup, while a foreign script still reports a conflict.
 - `rolling-memory install --check` now compares the installed skill with the current release and inspects the launcher. An older owned copy reports `outdated`, a user-edited copy reports `conflict`, and a missing launcher fails the check instead of passing with a live probe against a different executable.

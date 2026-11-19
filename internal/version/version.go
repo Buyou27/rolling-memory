@@ -15,6 +15,4 @@ const (
 	CoreCodename = "rame"
 
 	SchemaVersion = 1
-	ExportFormat  = "rolling-memory-export"
-	ExportVersion = 1
 )

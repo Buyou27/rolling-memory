@@ -33,32 +33,6 @@ func TestDuplicateTraceAudienceConflictFailsClosed(t *testing.T) {
 	}
 }
 
-func TestImportDuplicateAudienceConflictRollsBack(t *testing.T) {
-	st := newTestStore(t, "mem:self")
-	hash, _, err := st.AddTrace("mem:self", "existing", TraceOptions{Session: "duplicate", Audience: "shared"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := st.ExportScope("mem:self")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := payload["traces"].([]map[string]any)
-	rows[0]["audience"] = "private"
-	rows = append([]map[string]any{{"hash": "rolled-back", "scope": "mem:self", "session": "import", "turn": 1, "kind": "message", "audience": "shared", "text": "before conflict", "occurred_at": 1, "recorded_at": 1}}, rows...)
-	payload["traces"] = rows
-	if _, err := st.ImportScope("mem:self", payload); err == nil {
-		t.Fatal("audience conflict accepted")
-	}
-	if _, found, err := st.Trace("rolled-back"); err != nil || found {
-		t.Fatalf("preceding import row was not rolled back: found=%v err=%v", found, err)
-	}
-	trace, found, err := st.Trace(hash)
-	if err != nil || !found || trace.Audience != "shared" {
-		t.Fatalf("original trace changed: %#v found=%v err=%v", trace, found, err)
-	}
-}
-
 func TestConcurrentDuplicateAudienceConflict(t *testing.T) {
 	st := newTestStore(t, "mem:self")
 	start := make(chan struct{})

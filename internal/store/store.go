@@ -403,7 +403,6 @@ type Store struct {
 	conn    *sql.DB
 	fts     bool
 	profile db.StorageProfile
-	warning *string
 	// rawError carries the last raw-leg failure note; the read chain resets it
 	// once per recall (loud raw errors).
 	rawErrorMu sync.Mutex

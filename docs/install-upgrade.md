@@ -155,7 +155,7 @@ rolling-memory update --with-console
 rolling-memory update --check --json
 ```
 
-`update` is aliased as `upgrade`. Updating never modifies, truncates, or overwrites the local SQLite vault (`memory.db`). Use `--source gitee` to read release tags from the Gitee mirror, or pass an explicit `--release-base` URL.
+Updating never modifies, truncates, or overwrites the local SQLite vault (`memory.db`). Use `--source gitee` to read release tags from the Gitee mirror, or pass an explicit `--release-base` URL.
 
 ### 3.2 Web console
 

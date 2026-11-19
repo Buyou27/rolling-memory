@@ -143,23 +143,3 @@ func TestImportAudienceChoicesNarrowed(t *testing.T) {
 		}
 	}
 }
-
-func TestImportJSONExportHumanLine(t *testing.T) {
-	env := newEnv(t)
-	exportPath := writeFile(t, filepath.Join(env.base, "export.json"),
-		`{"format":"rolling-memory-export","version":1,"scope":"mem:test","traces":[],"nodes":[],"aliases":[],"assertions":[],"mentions":[],"meta_edges":[],"events":[]}`)
-
-	ensureLegacyGraphEnv(t, env)
-	imported := run(t, "import", exportPath)
-	if imported.code != 0 {
-		t.Fatalf("import exit %d: %s", imported.code, imported.stderr)
-	}
-	if !strings.HasPrefix(imported.stdout, "import (json export): scope mem:test  inserted {") {
-		t.Fatalf("import human line = %q", imported.stdout)
-	}
-	for _, key := range []string{"traces", "nodes", "aliases", "assertions", "mentions", "meta_edges", "events"} {
-		if !strings.Contains(imported.stdout, "'"+key+"': ") {
-			t.Fatalf("import counts miss %q: %q", key, imported.stdout)
-		}
-	}
-}

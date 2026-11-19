@@ -1414,7 +1414,7 @@ func harnessSessionsScannable(harnessID string) bool {
 // must label that as "not counted" rather than "no history".
 func harnessTurnsScannable(harnessID string) bool {
 	switch harnessID {
-	case "zcode", "claude-code", "codex", "dsh", "codebuddy", "workbuddy":
+	case "zcode", "claude-code", "codex", "dsh", "codebuddy", "workbuddy", "opencode":
 		return true
 	}
 	return false
