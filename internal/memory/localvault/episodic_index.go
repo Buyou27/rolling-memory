@@ -226,20 +226,6 @@ func (v *Vault) resolveEpisodicTurnByDigest(refPointer string, digest []byte) (s
 	return "", "", false
 }
 
-// episodicTurnDigestMatch looks the recorded content digest up in the canonical unit
-// derivation of one enumerated turn (segment text, sentence-boundary chunks).
-func (v *Vault) episodicTurnDigestMatch(segments []episodic.Segment, digest []byte) (string, bool) {
-	for _, segment := range segments {
-		rendered := episodicunit.Text(segment.Role, segment.Text)
-		for _, chunk := range episodicunit.Chunk(rendered, episodicunit.TokenBudget) {
-			if hmac.Equal(digest, v.episodicContentDigest(chunk)) {
-				return chunk, true
-			}
-		}
-	}
-	return "", false
-}
-
 // EpisodicContentStatus classifies one indexed unit against its live source turn.
 type EpisodicContentStatus int
 
@@ -1447,15 +1433,4 @@ func (v *Vault) indexedEpisodicDocsSince(ctx context.Context, minIndexRowID int6
 		}
 	}
 	return docs, maxSeenRowID, nil
-}
-
-func (v *Vault) decodeEpisodicIndex(ref string, key, payload, expectedKey []byte) (BlindPulsePacket, error) {
-	if !hmac.Equal(key, expectedKey) {
-		return BlindPulsePacket{}, fmt.Errorf("localvault: episodic index encoder mismatch for %s", ref)
-	}
-	slots, frames, err := plain.DecodeWireBytes(payload)
-	if err != nil {
-		return BlindPulsePacket{}, fmt.Errorf("localvault: decode episodic index: %w", err)
-	}
-	return BlindPulsePacket{Slots: slots, SentenceFrames: frames}, nil
 }

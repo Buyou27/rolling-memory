@@ -655,7 +655,6 @@ const form = reactive({
     delivery_window: '0-16',
     bands: 16,
     nodes: 60,
-    depth: 2,
     include_raw: true,
     raw_limit: 16,
     sort_by: 'delivery',

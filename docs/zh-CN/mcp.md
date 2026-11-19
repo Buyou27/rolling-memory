@@ -56,15 +56,12 @@ rolling-memory mcp        # 构建产物 bin/rolling-memory，或 install 生成
 | `scope` | string | 覆盖默认 scope |
 | `reader` | `owner` \| `deliverable` | 默认 `deliverable`；历史受众限制可能无法覆盖所有来源。分享结果前请先检查内容。 |
 | `mode` | `full` \| `probe` \| `recent` | `full` 返回完整召回带与证据链；`probe` 返回紧凑存在性回执（摘要截断至 160 字）；`recent` 按时间倒序返回最新记忆条目（纯时间序、无语义匹配，忽略 `cue`） |
-| `result_unit` | `band` \| `item` | 交付粒度：按主题带聚合（`band`，默认）或扁平原文项（`item`） |
-| `rank` | bool | `item` 模式分组开关：默认 `true` 按记忆单元→原文块分组；`false` 纯相关性排序 |
 | `asof` | string \| int | 保留参数；请勿使用（指定该过滤条件会 fail closed 报错） |
 | `window` | object | 保留参数；请勿使用（指定时间边界会 fail closed 报错） |
 | `delivery_window` | `auto` \| `0-16` \| `0-32` \| `0-64` | **智能自适应交付窗口**（默认 `auto` 跟随后台设置，初始默认 `0-16`）：基于物理信息能量自然衰减包络 $E(u_k) \ge E(u_1)/e$ 零保底选材（无匹配时返回 `0` 条，单点精准命中自动返回 `1–5` 条，多事件/跨期问题自动沿能量平台展开至档位上限）。日常对话请省略或传 `auto`；仅在跨会话排查时传 `0-32`（标准扩展），或在全局架构溯源/多事件盘点时传 `0-64`（深度全景）。（基准评测中，ATM-Bench 默认采用 `0-64`，LoCoMo 默认采用 `0-96`。） |
-| `caps` | object | `{delivery_window, bands, nodes, chains, rows, raw}` 交付预算覆写。MCP 协议已移除字符截断参数 `chars`，避免 Agent 因保守传入小字符数造成跨期证据截断；交付容量统一由 `delivery_window`（`0-16` / `0-32` / `0-64`）智能控制。 |
+| `caps` | object | `{delivery_window, bands, nodes, chars, raw}` 交付预算覆写：交付带数、总节点数、字符预算与原文命中上限。 |
 | `session` | string | 保留参数；请勿使用（指定该过滤条件会 fail closed 报错） |
 | `offset` | int | 召回带分页偏移 |
-| `deep` | bool | 可选查询提示扩展；在默认零 LLM 本地模式下自动跳过 |
 
 ### 2.2 Full 回执与实时 `Noetic` 结晶
 

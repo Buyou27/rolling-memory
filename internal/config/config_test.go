@@ -383,7 +383,7 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 		t.Fatalf("unexpected public dict: %+v", public)
 	}
 	recall, ok := public["recall"].(map[string]any)
-	if !ok || len(recall) != 13 {
+	if !ok || len(recall) != 10 {
 		t.Fatalf("recall public shape = %#v", public["recall"])
 	}
 	if _, ok := public["llm"]; ok {

@@ -1142,7 +1142,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 				t0 := time.Now()
 				var retIDs []string
 				var rawHits []local.ResolvedHit
-				cloudHits := 0
+				localHits := 0
 				if opts.Oracle {
 					retIDs = append([]string{}, q.EvidenceIDs...)
 				} else {
@@ -1152,7 +1152,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 						recallErrs[idx] = recallErr
 						continue
 					}
-					cloudHits = len(retIDs)
+					localHits = len(retIDs)
 				}
 				recallSec := time.Since(t0).Seconds()
 				recMap := ComputeATMRecallMap(q.EvidenceIDs, retIDs)
@@ -1297,7 +1297,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 					"recall_seconds":       PyRound(recallSec, 4),
 					"bands":                0,
 					"nodes":                0,
-					"local_hits":           cloudHits,
+					"local_hits":           localHits,
 					"engine_transport":     rowTransport,
 					"engine_scope":         scope,
 					"local_fallback":       false,

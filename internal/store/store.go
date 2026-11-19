@@ -22,7 +22,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/rocareer/rolling-memory/internal/clock"
@@ -50,17 +49,9 @@ type Seed struct {
 
 // Candidate is one scored assertion row with its join columns.
 type Candidate struct {
-	Data        CandidateRow
-	Score       float64
-	LexScore    float64
-	RerankScore float64
-}
-
-// VectorHit is one name-vector similarity hit.
-type VectorHit struct {
-	NodeID     string
-	Label      string
-	Similarity float64
+	Data     CandidateRow
+	Score    float64
+	LexScore float64
 }
 
 // Window is an inclusive-start/exclusive-end time boost window.
@@ -824,18 +815,6 @@ func pyIntValue(value any) int64 {
 		return 0
 	}
 	return 0
-}
-
-func isSafeColumn(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, char := range strings.ReplaceAll(name, "_", "") {
-		if !unicode.IsLetter(char) && !unicode.IsDigit(char) {
-			return false
-		}
-	}
-	return true
 }
 
 // monthOf mirrors time.localtime(epoch).tm_mon.

@@ -5,8 +5,8 @@
 //
 // A segment is one text part of one speaker message — the unit of L2 episodic
 // memory (a harness "turn" mixes dozens of tool steps into one blob, so the turn
-// is the wrong unit: its wave address averages heterogeneous topics and delivery
-// has to slice it arbitrarily). Enumeration is deterministic and is the single
+// is the wrong unit: one blob mixes heterogeneous topics and delivery has to slice
+// it arbitrarily). Enumeration is deterministic and is the single
 // source for both the ingest scanner and the zero-copy pointer resolver, so
 // `@ref:zcode:<session>:<msgid>#<k>` names the same segment on both sides.
 //

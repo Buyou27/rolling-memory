@@ -83,16 +83,6 @@ func docFromSidecar(doc corpusDocSidecar) vaultDocEntry {
 	}
 }
 
-// writeCorpusDocsSidecar publishes the docs view atomically next to the
-// legacy cluster. A failure is non-fatal: the reader falls back to the
-// canonical scan.
-func writeCorpusDocsSidecar(dbPath, signature string, changeSeq int64, docs []vaultDocEntry) error {
-	if strings.TrimSpace(dbPath) == "" {
-		return nil
-	}
-	return writeCorpusDocsSidecarTo(corpusDocsSidecarPath(dbPath), signature, changeSeq, docs)
-}
-
 // writeCorpusDocsSidecarTo writes the docs view to an explicit path.
 func writeCorpusDocsSidecarTo(path, signature string, changeSeq int64, docs []vaultDocEntry) error {
 	if strings.TrimSpace(path) == "" {

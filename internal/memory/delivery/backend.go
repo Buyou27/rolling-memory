@@ -5,13 +5,12 @@ package delivery
 
 import "context"
 
-// StoreBackend defines the database-agnostic storage contract implemented identically by
-// PostgreSQL (server mode) and SQLite (Rolling-Memory local mode).
-//
-// Dialect differences (e.g. PostgreSQL ON CONFLICT / pgvector vs SQLite IMMEDIATE tx / FTS5 trigram)
-// are strictly encapsulated behind this interface so all higher-level memory capabilities remain 1:1.
+// StoreBackend defines the storage contract used by the delivery layer. The
+// current build implements it on the local SQLite store; the interface keeps the
+// dialect-specific details (SQLite immediate transactions, trigram search) behind
+// one boundary so higher-level capabilities stay backend-agnostic.
 type StoreBackend interface {
-	// Dialect returns the backend identifier ("postgres" or "sqlite").
+	// Dialect returns the backend identifier ("sqlite").
 	Dialect() string
 
 	// EnsureNode finds or creates a node by (scope, kind, label), returning (node, created, error).

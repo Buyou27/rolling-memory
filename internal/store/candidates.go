@@ -1297,9 +1297,8 @@ func (s *Store) RawTraces(cue string, o RawOptions) ([]RawHit, error) {
 	qStart, qEnd, _ := ids.ParseQueryWindow(cue)
 	qMonth := ids.ParseQueryMonth(cue)
 	rows = sessionCoverageOrderWithTime(rows, weights, qStart, qEnd, qMonth, sessAuthors, allAuthors)
-	// Single-session quota cap: always base on standard 10-per-session ceiling when Limit > 20
-	// (e.g. when max mode fetches 32 deep-pool candidates for Cross-Encoder reranking) so a single
-	// session never monopolizes the first 16 slots.
+	// Single-session quota cap: always base on the standard 10-per-session ceiling when Limit > 20
+	// so a single session never monopolizes the first 16 slots.
 	if o.Session == nil {
 		effLim := o.Limit
 		if effLim > 20 {

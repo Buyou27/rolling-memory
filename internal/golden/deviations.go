@@ -84,34 +84,6 @@ var enumeratedDeviations = []enumeratedDeviation{
 	},
 	{
 		Scenario: "220-mcp",
-		Path:     "result/tools/[name=recall]/inputSchema/properties/caps/properties",
-		Key:      "chains",
-		Value:    map[string]any{"type": "integer", "description": "Chains per band (delivery breadth)."},
-		Note:     "Delivery-breadth switch: chains per band (mirrors request-level caps_chains)",
-	},
-	{
-		Scenario: "220-mcp",
-		Path:     "result/tools/[name=recall]/inputSchema/properties/caps/properties",
-		Key:      "rows",
-		Value:    map[string]any{"type": "integer", "description": "Rows per chain (delivery breadth)."},
-		Note:     "Delivery-breadth switch: rows per chain (mirrors request-level caps_rows)",
-	},
-	{
-		Scenario: "220-mcp",
-		Path:     "result/tools/[name=recall]/inputSchema/properties",
-		Key:      "result_unit",
-		Value:    map[string]any{"enum": []any{"band", "item"}, "description": "Delivery unit: subject bands (default) or flat source items."},
-		Note:     "Delivery-unit switch: band (default) or item-level flat delivery",
-	},
-	{
-		Scenario: "220-mcp",
-		Path:     "result/tools/[name=recall]/inputSchema/properties",
-		Key:      "rank",
-		Value:    map[string]any{"type": "boolean", "description": "Item-mode grouping: true (default) groups by sxo->unit->parse->block; false delivers pure relevance order. Distinct from LLM rerank."},
-		Note:     "Item-mode grouping switch (orthogonal to LLM rerank)",
-	},
-	{
-		Scenario: "220-mcp",
 		Path:     "result/tools/[name=recall]/inputSchema/properties",
 		Key:      "delivery_window",
 		Value: map[string]any{

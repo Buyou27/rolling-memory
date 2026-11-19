@@ -185,8 +185,6 @@ func (a *application) dispatch() int {
 		return a.runDaemon()
 	case "eval":
 		return a.runEval()
-	case "wave":
-		return a.runWave()
 	case "recall":
 		scope := a.args.String("scope")
 		if eval.IsEvalScope(scope) {
@@ -376,36 +374,27 @@ func (a *application) tryDaemonRecall() (int, bool) {
 		renderMaxChars = *chars
 	}
 	payload := mcp.UnixRecallPayload{
-		DB:              cfg.DB,
-		Cue:             cue,
-		Scope:           scopePtr,
-		Reader:          readerPtr,
-		Mode:            a.args.String("result_mode"),
-		AsOf:            asOf,
-		WindowStart:     windowStart,
-		WindowEnd:       windowEnd,
-		CapsBands:       a.args.IntPtr("bands"),
-		CapsNodes:       a.args.IntPtr("nodes"),
-		CapsChars:       a.args.IntPtr("chars"),
-		CapsChains:      a.args.IntPtr("caps_chains"),
-		CapsRows:        a.args.IntPtr("caps_rows"),
-		ResultUnit:      a.args.String("result_unit"),
-		Rank:            a.args.FlagPtr("rank"),
-		Offset:          a.args.Int("offset"),
-		Depth:           a.args.Int("depth"),
-		IncludeRaw:      a.args.FlagPtr("include_raw"),
-		BudgetMS:        a.args.IntPtr("budget_ms"),
-		RawLimit:        a.args.Int("raw_limit"),
-		Session:         a.args.StringPtr("session"),
-		TimeRef:         timeRef,
-		TokenCorrect:    a.args.FlagPtr("token_correct"),
-		AliasExpand:     a.args.FlagPtr("alias_expand"),
-		RelativeTag:     a.args.FlagPtr("relative_tag"),
-		MentionBackfill: a.args.FlagPtr("mention_backfill"),
-		Presence:        presence,
-		NoCrystallize:   a.args.Flag("no_crystallize"),
-		RenderMaxChars:  renderMaxChars,
-		NeedRendered:    !isJSONOrProbe,
+		DB:             cfg.DB,
+		Cue:            cue,
+		Scope:          scopePtr,
+		Reader:         readerPtr,
+		Mode:           a.args.String("result_mode"),
+		AsOf:           asOf,
+		WindowStart:    windowStart,
+		WindowEnd:      windowEnd,
+		CapsBands:      a.args.IntPtr("bands"),
+		CapsNodes:      a.args.IntPtr("nodes"),
+		CapsChars:      a.args.IntPtr("chars"),
+		Offset:         a.args.Int("offset"),
+		IncludeRaw:     a.args.FlagPtr("include_raw"),
+		BudgetMS:       a.args.IntPtr("budget_ms"),
+		RawLimit:       a.args.Int("raw_limit"),
+		Session:        a.args.StringPtr("session"),
+		TimeRef:        timeRef,
+		Presence:       presence,
+		NoCrystallize:  a.args.Flag("no_crystallize"),
+		RenderMaxChars: renderMaxChars,
+		NeedRendered:   !isJSONOrProbe,
 	}
 	resp, err := mcp.CallUnixDaemonRecall(context.Background(), "", cfg, payload)
 	if err != nil {
@@ -426,11 +415,6 @@ func (a *application) tryDaemonRecall() (int, bool) {
 			return a.fail(err), true
 		}
 		return 0, true
-	}
-	if a.args.Flag("wave") {
-		qText := strings.TrimSpace(cue + " " + a.args.String("s") + " " + a.args.String("x") + " " + a.args.String("o"))
-		amps, hexCode, slots := ComputeTerminalWaveSpec(qText)
-		a.printf("%s", RenderBrailleOscilloscope("Recall Query Wave", amps, hexCode, slots, 44))
 	}
 	a.printf("%s\n", resp.Rendered)
 	return 0, true
@@ -480,32 +464,23 @@ func (a *application) runRecall(memory *facade.Memory) (int, error) {
 		}
 	}
 	result, err := memory.Recall(facade.RecallRequest{
-		Cue:             cue,
-		Reader:          a.args.StringPtr("reader"),
-		Mode:            a.args.String("result_mode"),
-		AsOf:            asOf,
-		WindowStart:     windowStart,
-		WindowEnd:       windowEnd,
-		CapsBands:       a.args.IntPtr("bands"),
-		CapsNodes:       a.args.IntPtr("nodes"),
-		CapsChars:       a.args.IntPtr("chars"),
-		CapsChains:      a.args.IntPtr("caps_chains"),
-		CapsRows:        a.args.IntPtr("caps_rows"),
-		ResultUnit:      a.args.String("result_unit"),
-		Rank:            a.args.FlagPtr("rank"),
-		Offset:          a.args.Int("offset"),
-		Depth:           a.args.Int("depth"),
-		IncludeRaw:      a.args.FlagPtr("include_raw"),
-		BudgetMS:        a.args.IntPtr("budget_ms"),
-		RawLimit:        a.args.Int("raw_limit"),
-		Session:         a.args.StringPtr("session"),
-		TimeRef:         timeRef,
-		TokenCorrect:    a.args.FlagPtr("token_correct"),
-		AliasExpand:     a.args.FlagPtr("alias_expand"),
-		RelativeTag:     a.args.FlagPtr("relative_tag"),
-		MentionBackfill: a.args.FlagPtr("mention_backfill"),
-		Presence:        presence,
-		NoCrystallize:   a.args.Flag("no_crystallize"),
+		Cue:           cue,
+		Reader:        a.args.StringPtr("reader"),
+		Mode:          a.args.String("result_mode"),
+		AsOf:          asOf,
+		WindowStart:   windowStart,
+		WindowEnd:     windowEnd,
+		CapsBands:     a.args.IntPtr("bands"),
+		CapsNodes:     a.args.IntPtr("nodes"),
+		CapsChars:     a.args.IntPtr("chars"),
+		Offset:        a.args.Int("offset"),
+		IncludeRaw:    a.args.FlagPtr("include_raw"),
+		BudgetMS:      a.args.IntPtr("budget_ms"),
+		RawLimit:      a.args.Int("raw_limit"),
+		Session:       a.args.StringPtr("session"),
+		TimeRef:       timeRef,
+		Presence:      presence,
+		NoCrystallize: a.args.Flag("no_crystallize"),
 	})
 	if err != nil {
 		return 1, err
@@ -525,44 +500,8 @@ func (a *application) runRecall(memory *facade.Memory) (int, error) {
 	if chars := a.args.IntPtr("chars"); chars != nil && *chars != 0 {
 		maxChars = *chars
 	}
-	if a.args.Flag("wave") {
-		qText := strings.TrimSpace(cue + " " + a.args.String("s") + " " + a.args.String("x") + " " + a.args.String("o"))
-		amps, hexCode, slots := ComputeTerminalWaveSpec(qText)
-		a.printf("%s", RenderBrailleOscilloscope("Recall Query Wave", amps, hexCode, slots, 44))
-	}
 	a.printf("%s\n", result.Render(maxChars))
 	return 0, nil
-}
-
-func (a *application) runWave() int {
-	text := a.args.String("text")
-	width := a.args.Int("width")
-	amps, hexCode, slots := ComputeTerminalWaveSpec(text)
-	if a.args.Flag("json") {
-		ampAny := make([]any, len(amps))
-		for i, v := range amps {
-			ampAny[i] = v
-		}
-		slotAny := make([]any, len(slots))
-		for i, sl := range slots {
-			slotAny[i] = map[string]any{
-				"token": sl.Token,
-				"amp":   sl.Amp,
-				"hex":   sl.Hex,
-			}
-		}
-		if err := a.printJSON(map[string]any{
-			"text":       text,
-			"hex":        hexCode,
-			"amplitudes": ampAny,
-			"slots":      slotAny,
-		}); err != nil {
-			return a.fail(err)
-		}
-		return 0
-	}
-	a.printf("%s", RenderBrailleOscilloscope("Memory Engine Oscilloscope", amps, hexCode, slots, width))
-	return 0
 }
 
 // ------------------------------------------------------------------- config

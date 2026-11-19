@@ -483,7 +483,7 @@ func pruneLargeVaultHydrationCandidates(dbPath, home string, rows []map[string]a
 				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 220*time.Millisecond)
-			raw, handled, dErr := tryConsoleDaemonRecall(ctx, home, dbPath, scope, "owner", "full", 8, 8, 1024, 1, 8, searchCue, "", true, false, "", "", "")
+			raw, handled, dErr := tryConsoleDaemonRecall(ctx, home, dbPath, scope, "owner", "full", 8, 8, 1024, 8, searchCue, "", true, false, "", "", "")
 			cancel()
 			if handled && dErr == nil && raw != nil {
 				daemonResponded = true
@@ -502,7 +502,7 @@ func pruneLargeVaultHydrationCandidates(dbPath, home string, rows []map[string]a
 				go func(h, db, sc, cue, ck string) {
 					bgCtx, bgCancel := context.WithTimeout(context.Background(), 3*time.Second)
 					defer bgCancel()
-					if bgRaw, ok, err := tryConsoleDaemonRecall(bgCtx, h, db, sc, "owner", "full", 16, 16, 2048, 1, 16, cue, "", true, false, "", "", ""); ok && err == nil && bgRaw != nil {
+					if bgRaw, ok, err := tryConsoleDaemonRecall(bgCtx, h, db, sc, "owner", "full", 16, 16, 2048, 16, cue, "", true, false, "", "", ""); ok && err == nil && bgRaw != nil {
 						bgIDs := make(map[string]bool, 64)
 						extractIDs(bgRaw, bgIDs)
 						recallCueCacheMu.Lock()

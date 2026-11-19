@@ -15,7 +15,7 @@ import (
 // ① 默认只读（--no-crystallize），控制台试查不写 L3；显式勾选才按 Agent 同等路径结晶；
 // ② 工作区锚用引擎现役 cue 首部 `[<工作区>]` 语法，不另造参数。
 func TestRecallQueryArgsReadOnlyByDefault(t *testing.T) {
-	args := recallQueryArgs("/tmp/m.db", "mem:self", "owner", "full", 8, 60, 12000, 2, 5, "登录页 预置账号", "", true, false)
+	args := recallQueryArgs("/tmp/m.db", "mem:self", "owner", "full", 8, 60, 12000, 5, "登录页 预置账号", "", true, false)
 	if !slices.Contains(args, "--no-crystallize") {
 		t.Fatalf("console recall must be read-only by default: %v", args)
 	}
@@ -24,7 +24,7 @@ func TestRecallQueryArgsReadOnlyByDefault(t *testing.T) {
 		t.Fatalf("cue without workspace = %q", cue)
 	}
 
-	args = recallQueryArgs("/tmp/m.db", "mem:self", "owner", "full", 8, 60, 12000, 2, 5, "登录页 预置账号", "Rolling-Memory", false, true)
+	args = recallQueryArgs("/tmp/m.db", "mem:self", "owner", "full", 8, 60, 12000, 5, "登录页 预置账号", "Rolling-Memory", false, true)
 	if slices.Contains(args, "--no-crystallize") {
 		t.Fatalf("explicit crystallize must drop --no-crystallize: %v", args)
 	}
@@ -39,7 +39,7 @@ func TestRecallQueryArgsReadOnlyByDefault(t *testing.T) {
 // TestRecallQueryArgsCarryConsoleBudget 钉住控制台试查的引擎预算：必须显式携带
 // --budget-ms（consoleRecallBudgetMS = 1 分钟），不再落回引擎缺省 10s 在负载下误报超时失败。
 func TestRecallQueryArgsCarryConsoleBudget(t *testing.T) {
-	args := recallQueryArgs("/tmp/m.db", "mem:self", "owner", "full", 8, 60, 12000, 2, 5, "登录页 预置账号", "", false, false)
+	args := recallQueryArgs("/tmp/m.db", "mem:self", "owner", "full", 8, 60, 12000, 5, "登录页 预置账号", "", false, false)
 	i := slices.Index(args, "--budget-ms")
 	if i < 0 || i+1 >= len(args) {
 		t.Fatalf("console recall must pass --budget-ms: %v", args)
@@ -62,7 +62,7 @@ func TestTryConsoleDaemonRecallOverEngineChannel(t *testing.T) {
 
 	raw, handled, err := tryConsoleDaemonRecall(
 		context.Background(), "/tmp", "/tmp/m.db", "mem:self", "owner", "full",
-		8, 60, 12000, 2, 5, "检索性能", "Rolling-Memory", false, false, "", "", "",
+		8, 60, 12000, 5, "检索性能", "Rolling-Memory", false, false, "", "", "",
 	)
 	if err != nil || !handled || raw == nil {
 		t.Fatalf("tryConsoleDaemonRecall = (%v, %v, %v), want handled", raw, handled, err)

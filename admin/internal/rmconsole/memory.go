@@ -170,7 +170,6 @@ type RecallQueryRequest struct {
 	Bands          int      `json:"bands"`
 	Nodes          int      `json:"nodes"`
 	Chars          int      `json:"chars"`
-	Depth          int      `json:"depth"`
 	IncludeRaw     bool     `json:"include_raw"`
 	RawLimit       int      `json:"raw_limit"`
 	MinConfidence  *float64 `json:"min_confidence"`  // 结果集内按置信度二次过滤
@@ -1376,7 +1375,7 @@ const consoleRecallBudgetMS = 60000
 // 不应被写成 L3 Noetic 污染认知层；只有显式勾选「写入 L3」时才按 Agent 同等路径结晶。
 // 工作区锚走引擎现役的 cue 首部 `[<工作区>]` 语法（同工作区证据置前、其余不删）。
 // 引擎预算显式携带 consoleRecallBudgetMS，避免落回引擎缺省 10s 在负载下误报超时失败。
-func recallQueryArgs(dbPath, scope, reader, resultMode string, bands, nodes, chars, depth, rawLimit int, q, workspace string, includeRaw, crystallize bool) []string {
+func recallQueryArgs(dbPath, scope, reader, resultMode string, bands, nodes, chars, rawLimit int, q, workspace string, includeRaw, crystallize bool) []string {
 	cue := q
 	if workspace != "" {
 		cue = "[" + workspace + "] " + q
@@ -1390,7 +1389,6 @@ func recallQueryArgs(dbPath, scope, reader, resultMode string, bands, nodes, cha
 		"--bands", strconv.Itoa(bands),
 		"--nodes", strconv.Itoa(nodes),
 		"--chars", strconv.Itoa(chars),
-		"--depth", strconv.Itoa(depth),
 		"--budget-ms", strconv.Itoa(consoleRecallBudgetMS),
 		"--q", cue,
 		"--json",
@@ -1540,7 +1538,7 @@ func triggerConsoleDaemonBootstrap(home, dbPath string) {
 // 子进程保底执行（同时异步自举拉起守护进程），绝不回退到未核验 socket。
 func tryConsoleDaemonRecall(
 	ctx context.Context, home, dbPath, scope, reader, resultMode string,
-	bands, nodes, chars, depth, rawLimit int, q, workspace string,
+	bands, nodes, chars, rawLimit int, q, workspace string,
 	includeRaw, crystallize bool, presenceLocus, carrier, incarnation string,
 ) (map[string]any, bool, error) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ROLLING_MEMORY_DAEMON")), "0") ||
@@ -1576,7 +1574,6 @@ func tryConsoleDaemonRecall(
 		"caps_bands":     bands,
 		"caps_nodes":     nodes,
 		"caps_chars":     chars,
-		"depth":          depth,
 		"include_raw":    includeRaw,
 		"raw_limit":      rawLimit,
 		"budget_ms":      budget,
@@ -1770,10 +1767,6 @@ func recallQueryHandler(c *gin.Context) {
 	if chars <= 0 {
 		chars = 64000
 	}
-	depth := req.Depth
-	if depth <= 0 {
-		depth = 2
-	}
 	rawLimit := req.RawLimit
 	if rawLimit <= 0 {
 		rawLimit = bands
@@ -1814,7 +1807,7 @@ func recallQueryHandler(c *gin.Context) {
 	cliScope := resolveBoundVaultScope(dbPath, scope)
 	raw, daemonHandled, daemonErr := tryConsoleDaemonRecall(
 		c.Request.Context(), home, dbPath, cliScope, reader, resultMode,
-		bands, nodes, chars, depth, rawLimit, q, workspace,
+		bands, nodes, chars, rawLimit, q, workspace,
 		req.IncludeRaw, req.Crystallize, req.PresenceLocus, req.Carrier, req.Incarnation,
 	)
 	if daemonHandled && daemonErr != nil {
@@ -1822,7 +1815,7 @@ func recallQueryHandler(c *gin.Context) {
 		return
 	}
 	if !daemonHandled {
-		args := recallQueryArgs(dbPath, cliScope, reader, resultMode, bands, nodes, chars, depth, rawLimit, q, workspace, req.IncludeRaw, req.Crystallize)
+		args := recallQueryArgs(dbPath, cliScope, reader, resultMode, bands, nodes, chars, rawLimit, q, workspace, req.IncludeRaw, req.Crystallize)
 
 		cmd := exec.CommandContext(c.Request.Context(), bin, args...)
 		// 子进程零云端覆盖变量：不注入任何远端端点/凭据（检索只读本地明文金库；

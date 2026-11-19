@@ -77,8 +77,8 @@ func TestAmbiguousAbbreviations(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"recall", "--r", "x"}, "ambiguous option: --r could match --reader, --result-mode, --raw-limit, --relative-tag, --result-unit, --rank"},
-		{[]string{"recall", "--no"}, "ambiguous option: --no could match --nodes, --no-raw, --no-alias-expand, --no-mention-backfill, --no-rank, --no-crystallize"},
+		{[]string{"recall", "--r", "x"}, "ambiguous option: --r could match --reader, --result-mode, --raw-limit"},
+		{[]string{"recall", "--no"}, "ambiguous option: --no could match --nodes, --no-raw, --no-crystallize"},
 		{[]string{"sync", "reconcile", "--l"}, "ambiguous option: --l could match --layer, --limit"},
 	}
 	for _, testCase := range cases {

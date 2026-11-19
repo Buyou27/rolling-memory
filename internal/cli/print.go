@@ -90,16 +90,6 @@ func (a *application) printStatus(result map[string]any) {
 		a.printf("update:   %s -> %s available (run `rolling-memory update --check`)\n",
 			pyStr(update["current_version"]), pyStr(update["latest_display"]))
 	}
-	if a.args.Flag("wave") {
-		seed := fmt.Sprintf("scope %s memories %s episodic %s background %s crystallized %s",
-			pyStr(result["scope"]),
-			pyStr(getOr(corpus, "memories", 0)),
-			pyStr(getOr(corpus, "episodic", 0)),
-			pyStr(getOr(corpus, "background", 0)),
-			pyStr(getOr(corpus, "crystallized", 0)))
-		amps, hexCode, slots := ComputeTerminalWaveSpec(seed)
-		a.printf("%s", RenderBrailleOscilloscope("Status Telemetry Wave", amps, hexCode, slots, 44))
-	}
 }
 
 func (a *application) printDoctor(result map[string]any) {
@@ -202,8 +192,8 @@ func (a *application) printEfficacyCard(m map[string]any) {
 	row("Audited Sessions", fmt.Sprintf("%s sessions · %s evaluated turns", pyStr(m["total_sessions"]), pyStr(m["evaluated_turns"])))
 	row("Adoption / Silence", fmt.Sprintf("%s%% adopted · %s%% noise silenced", pyStr(m["adopt_rate"]), pyStr(m["silence_rate"])))
 	row("Avg Turn Context", fmt.Sprintf("%s tok/turn", pyStr(getOr(m, "avg_round_cost_tokens", 0))))
-	row("Today Net Saved", fmt.Sprintf("%s tok (%s blind turns avoided)", pyStr(getOr(m, "today_net_saved_tokens", 0)), pyStr(getOr(m, "today_saved_rounds", 0))))
-	row("Total Net Saved", fmt.Sprintf("%s tok (%s blind turns avoided)", pyStr(m["net_saved_tokens"]), pyStr(m["total_saved_rounds"])))
+	row("Today Net Saved", fmt.Sprintf("%s tok (%s round-trips avoided)", pyStr(getOr(m, "today_net_saved_tokens", 0)), pyStr(getOr(m, "today_saved_rounds", 0))))
+	row("Total Net Saved", fmt.Sprintf("%s tok (%s round-trips avoided)", pyStr(m["net_saved_tokens"]), pyStr(m["total_saved_rounds"])))
 	a.printLine(border)
 	a.printLine("| Verified locally · github.com/rocareer/rolling-memory        |")
 	a.printLine(border)

@@ -7,15 +7,9 @@ import (
 	"github.com/rocareer/rolling-memory/internal/text"
 )
 
-// 本文件 = 记忆生产 1024 三位一体源轮切片与历史/工作上下文收敛算子（0-LLM · 零外部依赖 · 100% 逐字子串保真）：
-//   1. 单轮切片（SplitTurnIntoVerbatimSlices）：
-//      - 不压缩、不超不切：单轮 tokens ≤ SliceTargetTokens (1024) 时整轮原样保持；
-//      - 超长单轮（> 1024 tokens）按自然句界/换行切分，目标片长 1024 tokens、跨片重叠 128 tokens、
-//        尾片若 < 256 tokens 则不单独成片直接随前片合并；
-//      - 每个切片均为原轮文本的 100% 逐字子串，落图 structured assertion 通过 (anchor_trace_hash, anchor_start, anchor_end) 精确绑回原轮字节区间。
-//   2. 历史上下文（CapContextTurnsByTokens）：
-//      - 紧前最多 ContextWindowTurns (4) 轮，单轮 ≤ 1024 tokens 时不截断直接给完整原始原文（巨型轮取最末 1024 切片）；
-//      - 从紧邻前 1 轮往回累加，累计 ≤ ContextTotalTokenBudget (1024 tokens) 即止（长则 1 轮完整原文，短则 4 轮完整原文）。
+// 本文件 = 记忆交付共用的 Token 阶梯、词元计数转发与逐字子串切片算子（0-LLM · 零外部依赖 · 100% 逐字子串保真）：
+//   1. Token 阶梯：全链路统一使用 tokenz-r 计数（4 / 8 / 16 / 32 / 64 / 128 / 256 / 512 / 1024 / 2048 / 4096 / 8192）；
+//   2. SliceRunesBounded：按 rune 坐标提取严格子串，用于结构化断言的 (anchor_start, anchor_end) 字节区间绑回。
 
 const (
 	// 标准 2 的幂次 Token 阶梯（全链路统一使用 tokenz-r 计数，严格使用 4 / 8 / 16 / 32 / 64 / 128 / 256 / 512 / 1024 / 2048 / 4096 / 8192 阶梯）。
@@ -85,61 +79,4 @@ func SliceRunesBounded(value string, start, end int) string {
 		return ""
 	}
 	return value[byteStart:]
-}
-
-type verbatimSpan struct {
-	start  int
-	end    int
-	tokens int
-}
-
-// VerbatimSpan 单条逐字子串切片的字节区间与 Token 计数（100% 原文连续子串，不跨句界）。
-type VerbatimSpan struct {
-	Start  int
-	End    int
-	Tokens int
-}
-
-// TraceWatermarkRow 表示生产窗口中一条按 ID 升序排列的源语料进度锚点（零宿主依赖通用结构）。
-type TraceWatermarkRow struct {
-	ID      int64
-	Session string
-}
-
-// WaveCausalAssertion 表示单会话分波并发编码中一条已落图的活跃断言摘要。
-type WaveCausalAssertion struct {
-	NodeID        uint64
-	SubjectID     uint64
-	RelID         uint64
-	RelLabel      string
-	ObjectID      uint64
-	ObjectLabel   string
-	ObjectLiteral string
-	// ObjectIsAssertion 客体为断言节点（外层言说/提问/认知包装行）。
-	ObjectIsAssertion bool
-	Warrant           string
-	World             string
-	LoopState         string
-	TurnHash          string
-	TSource           int64
-	TValidFrom        int64
-	WaveOrder         int
-	// ClosesPriorValue：本条显式关闭点名的旧值 O 槽原文（逐字）；波次补关按此匹配。
-	ClosesPriorValue string
-}
-
-// WaveSupersedePair 表示经波次因果序对齐后需补齐取代状态的（旧断言 -> 新断言）对。
-type WaveSupersedePair struct {
-	OlderNodeID  uint64
-	CloserNodeID uint64
-	ValidTo      int64
-}
-
-// PriorTurnCandidate represents an earlier dialogue turn within the same session
-// outside the immediate sliding context window, used for 0-LLM causal resonance pre-projection.
-type PriorTurnCandidate struct {
-	TurnSeq int    // 1-based chronological turn index within the session
-	Speaker string // Resolved speaker label
-	DateStr string // Formatted UTC date/time string of the turn
-	Text    string // Raw turn or slice text
 }

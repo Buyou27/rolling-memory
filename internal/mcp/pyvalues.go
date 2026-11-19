@@ -291,23 +291,3 @@ func textOrEmpty(value any) string {
 	}
 	return ""
 }
-
-// boolOrNil reads an optional boolean argument as a three-state pointer:
-// absent -> nil (the engine keeps its default), explicit false survives.
-func boolOrNil(value any) *bool {
-	switch typed := value.(type) {
-	case bool:
-		result := typed
-		return &result
-	case string:
-		switch strings.ToLower(strings.TrimSpace(typed)) {
-		case "true":
-			result := true
-			return &result
-		case "false":
-			result := false
-			return &result
-		}
-	}
-	return nil
-}

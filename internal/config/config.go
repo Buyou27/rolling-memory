@@ -101,15 +101,11 @@ memory_limit = "auto"
 bands = 8
 nodes = 50
 chars = 16000
-hook_bands = 3
-hook_nodes = 12
-hook_chars = 1500
 budget_ms = 500
 # raw_limit = 原文腿交付条数上限（判分面的主要旋钮：在字符预算内多给原文；5 = 旧行为）。
 # Tier-100 实测（冻结答题/判官）：5 → 判对 0.45 · 20 → 0.60 · 30 → 0.62。
 raw_limit = 5
 raw_when_sparse = true
-vector = true
 token_correct = false
 alias_expand = true
 relative_tag = false
@@ -212,9 +208,6 @@ type RecallConfig struct {
 	Chars            int
 	Chains           int
 	Rows             int
-	HookBands        int
-	HookNodes        int
-	HookChars        int
 	BudgetMS         int
 	RawLimit         int
 	RawWhenSparse    bool
@@ -259,7 +252,7 @@ type HooksConfig struct {
 	Ledger    bool
 }
 
-// IdentityConfig holds the Assistant-centric autonoetic identity mapping ([identity] section):
+// IdentityConfig holds the Assistant-centric identity mapping ([identity] section):
 //   - AssistantID: the Assistant's first-class identity ID (maps to scope "assistant:<assistant_id>" co-read with "default").
 //   - Assistant:   the Assistant's self-referent label I_self (origin="self").
 //   - Owner:       the bound host user label I_peer (origin="roster", equal in node status to other roster persons).
@@ -372,9 +365,6 @@ func Load(opts LoadOptions) (*Config, error) {
 		Chars:            asInt(recallTable["chars"], 16000),
 		Chains:           asInt(recallTable["chains"], 8),
 		Rows:             asInt(recallTable["rows"], 12),
-		HookBands:        asInt(recallTable["hook_bands"], 3),
-		HookNodes:        asInt(recallTable["hook_nodes"], 12),
-		HookChars:        asInt(recallTable["hook_chars"], 1500),
 		BudgetMS:         asInt(recallTable["budget_ms"], 500),
 		RawLimit:         asInt(recallTable["raw_limit"], 5),
 		RawWhenSparse:    asBool(recallTable["raw_when_sparse"], true),
@@ -506,9 +496,6 @@ func (c *Config) Validate() error {
 		c.Recall.Chars,
 		c.Recall.Chains,
 		c.Recall.Rows,
-		c.Recall.HookBands,
-		c.Recall.HookNodes,
-		c.Recall.HookChars,
 		c.Hooks.MaxTraces,
 		c.Eval.Workers,
 	} {
@@ -671,9 +658,6 @@ func (c *Config) PublicDict() map[string]any {
 			"bands":             c.Recall.Bands,
 			"nodes":             c.Recall.Nodes,
 			"chars":             c.Recall.Chars,
-			"hook_bands":        c.Recall.HookBands,
-			"hook_nodes":        c.Recall.HookNodes,
-			"hook_chars":        c.Recall.HookChars,
 			"budget_ms":         c.Recall.BudgetMS,
 			"token_correct":     c.Recall.TokenCorrect,
 			"alias_expand":      c.Recall.AliasExpand,

@@ -467,7 +467,7 @@ func assertRecallSchema(t *testing.T, schema map[string]any) {
 	properties := asMap(t, schema["properties"])
 	assertKeys(t, "recall properties", properties, []string{
 		"cue", "scope", "reader", "mode", "asof", "window", "caps", "delivery_window",
-		"result_unit", "rank", "offset", "session", "deep",
+		"offset", "session",
 	})
 	if keys := stringList(t, asMap(t, properties["mode"])["enum"]); strings.Join(keys, ",") != "full,probe,recent" {
 		t.Fatalf("mode enum: %v", keys)
@@ -475,11 +475,8 @@ func assertRecallSchema(t *testing.T, schema map[string]any) {
 	if keys := stringList(t, asMap(t, properties["reader"])["enum"]); strings.Join(keys, ",") != "owner,deliverable" {
 		t.Fatalf("reader enum: %v", keys)
 	}
-	if keys := stringList(t, asMap(t, properties["result_unit"])["enum"]); strings.Join(keys, ",") != "band,item" {
-		t.Fatalf("result_unit enum: %v", keys)
-	}
 	assertKeys(t, "window properties", asMap(t, asMap(t, properties["window"])["properties"]), []string{"start", "end"})
-	assertKeys(t, "caps properties", asMap(t, asMap(t, properties["caps"])["properties"]), []string{"delivery_window", "bands", "nodes", "chains", "rows", "raw"})
+	assertKeys(t, "caps properties", asMap(t, asMap(t, properties["caps"])["properties"]), []string{"delivery_window", "bands", "nodes", "chars", "raw"})
 }
 
 func assertKeys(t *testing.T, label string, values map[string]any, want []string) {
@@ -606,10 +603,10 @@ func TestRecallCapsQuirk(t *testing.T) {
 	}
 }
 
-// TestRecallDeliverySwitchArgs 锁定交付开关的入口接线：result_unit / rank /
-// caps.chains / caps.rows 必须逐值映射到 facade.RecallRequest，且 rank 保持三态
-// （缺省 nil 让引擎沿用分组缺省，显式 false 必须存活），否则入口与内核能力脱节。
-func TestRecallDeliverySwitchArgs(t *testing.T) {
+// TestRecallRetiredDeliverySwitchesIgnored pins the local surface: result_unit /
+// rank / caps.chains / caps.rows are no longer part of the MCP contract, and a
+// caller that still sends them must not change the request.
+func TestRecallRetiredDeliverySwitchesIgnored(t *testing.T) {
 	request, err := recallRequest(map[string]any{
 		"cue":         "x",
 		"result_unit": "ITEM",
@@ -619,28 +616,8 @@ func TestRecallDeliverySwitchArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recallRequest: %v", err)
 	}
-	if request.ResultUnit != "item" {
-		t.Fatalf("result_unit: %q", request.ResultUnit)
-	}
-	if request.Rank == nil || *request.Rank {
-		t.Fatalf("rank=false must survive as explicit false: %#v", request.Rank)
-	}
-	if request.CapsChains == nil || *request.CapsChains != 48 {
-		t.Fatalf("caps.chains: %#v", request.CapsChains)
-	}
-	if request.CapsRows == nil || *request.CapsRows != 24 {
-		t.Fatalf("caps.rows: %#v", request.CapsRows)
-	}
-	// Absent switches keep the engine defaults (nil rank, empty unit).
-	plain, err := recallRequest(map[string]any{"cue": "x"})
-	if err != nil {
-		t.Fatalf("recallRequest: %v", err)
-	}
-	if plain.Rank != nil {
-		t.Fatalf("absent rank must stay nil, got %#v", plain.Rank)
-	}
-	if plain.ResultUnit != "" {
-		t.Fatalf("absent result_unit must stay empty, got %q", plain.ResultUnit)
+	if request.ResultUnit != "" || request.Rank != nil || request.CapsChains != nil || request.CapsRows != nil {
+		t.Fatalf("retired delivery switches must not reach the request: %#v", request)
 	}
 }
 

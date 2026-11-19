@@ -53,16 +53,13 @@ The server opens SQLite lazily on the first `tools/call` so `initialize` and `to
 | `cue` | string | Literal search clue (required for `mode=full`/`probe`): prefix with `[<workspace>]` (e.g. `[Rolling-Memory]`) to prioritize current-repository memories, followed by 2–6 exact tokens, file/symbol names, status codes, or error fingerprints (avoid natural-language paraphrasing; if noisy, drop broad words and retry with fewer exact tokens) |
 | `scope` | string | Override default memory scope |
 | `reader` | `owner` \| `deliverable` | Defaults to `deliverable`; historical audience restrictions may not be enforced across all sources. Review results before sharing. |
-| `mode` | `full` \| `probe` \| `recent` | `full` returns `bands × chains`; `probe` returns a compact existence receipt (summaries truncated to 160 chars); `recent` lists the newest entries in pure time order (no semantic matching; `cue` is ignored) |
-| `result_unit` | `band` \| `item` | Delivery unit: subject bands (`band`, default) or flat source items (`item`) |
-| `rank` | bool | Item-mode grouping switch: `true` (default) groups by memory unit → source block; `false` delivers pure relevance order |
+| `mode` | `full` \| `probe` \| `recent` | `full` returns subject bands with ranked evidence; `probe` returns a compact existence receipt (summaries truncated to 160 chars); `recent` lists the newest entries in pure time order (no semantic matching; `cue` is ignored) |
 | `asof` | string \| int | Reserved; do not use (requests specifying this filter fail closed) |
 | `window` | object | Reserved; do not use (requests specifying a boundary fail closed) |
 | `delivery_window` | `auto` \| `0-16` \| `0-32` \| `0-64` | **Smart Adaptive Delivery Window** (default `auto` uses the console setting, `0-16` by default): delivers `0` to `N` memories within the natural physical information energy envelope $E(u_k) \ge E(u_1)/e$ with no minimum floor. Omit or pass `auto` for normal turns; pass `0-32` (balanced span) or `0-64` (deep synthesis) only for cross-session history audits or broad multi-event synthesis. (In benchmark evaluations, ATM-Bench defaults to `0-64` and LoCoMo defaults to `0-96`.) |
-| `caps` | object | `{delivery_window, bands, nodes, chains, rows, raw}` delivery budget overrides. Character-count truncation (`chars`) is intentionally omitted from the MCP schema so agents do not conservatively truncate multi-event evidence; delivery is governed by `delivery_window` (`0-16`, `0-32`, or `0-64`). |
+| `caps` | object | `{delivery_window, bands, nodes, chars, raw}` delivery budget overrides: band count, total nodes, character budget, and raw-hit cap. |
 | `session` | string | Reserved; do not use (requests specifying this filter fail closed) |
 | `offset` | int | Band pagination offset |
-| `deep` | bool | Optional query-hint expansion; skipped automatically in zero-LLM local mode |
 
 ### 2.2 Full Receipt & Real-Time `Noetic` Crystallization
 

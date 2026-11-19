@@ -1868,10 +1868,10 @@ func WaitForPendingNoeticPulses(budget time.Duration) bool {
 	}
 }
 
-// pushNoeticPulse ingests the blind `layer="noetic"` pulse (query + answer + cited unit ids)
-// into the local vault while the retrieval is still hot, so the L3 node and its `cites` edges
-// materialise immediately; the `rm_noetic` row stays the plaintext owner and records
-// the assigned cell address (`address_uri`, `coord64`, `waveform_bar`).
+// pushNoeticPulse writes the `layer="noetic"` record (query + answer + cited unit ids)
+// into the local vault while the retrieval is still hot, so the L3 node and its `cites`
+// edges materialise immediately; the `rm_noetic` row stays the plaintext owner and
+// records the assigned memory address (`address_uri`, `coord64`, `waveform_bar`).
 func pushNoeticPulse(tc *localvault.Client, noeticID, query, answer string, citedUnitIDs []string, occurredAt int64) {
 	if tc == nil || tc.Transport == nil || tc.Vault == nil {
 		return

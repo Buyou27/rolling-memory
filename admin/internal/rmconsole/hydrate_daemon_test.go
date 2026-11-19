@@ -812,7 +812,7 @@ func TestConsoleDaemonChannelNeverDialsRawSocket(t *testing.T) {
 
 	raw, handled, err := tryConsoleDaemonRecall(
 		context.Background(), home, dbPath, "mem:self", "owner", "full",
-		8, 60, 12000, 2, 5, "检索性能", "Rolling-Memory", false, false, "", "", "",
+		8, 60, 12000, 5, "检索性能", "Rolling-Memory", false, false, "", "", "",
 	)
 	if err != nil || !handled || raw == nil {
 		t.Fatalf("tryConsoleDaemonRecall = (%v, %v, %v), want handled", raw, handled, err)
@@ -871,7 +871,7 @@ func TestConsoleDaemonChannelFailuresDegrade(t *testing.T) {
 			}
 			raw, handled, err := tryConsoleDaemonRecall(
 				context.Background(), home, dbPath, "mem:self", "owner", "full",
-				8, 60, 12000, 2, 5, "x", "", false, false, "", "", "",
+				8, 60, 12000, 5, "x", "", false, false, "", "", "",
 			)
 			if handled || err != nil || raw != nil {
 				t.Fatalf("recall must fall back to the CLI path, got (%v, %v, %v)", raw, handled, err)

@@ -1,23 +1,21 @@
 // Copyright 2026 Rocareer & Rolling & PsychologyLake.org.cn
 // Author: Albert <albert@rocareer.com>
 
-// Thin-brain episodic upload: the harness Stop hook hands the just-ended turn to
-// the Autonoetic Engine `/open/memory/v1/ingest` with `layer="episodic"` in real
-// time, so the cloud distils the episode into Cell addressing while the turn is
-// still hot instead of on the next session boot.
+// Episodic stop-hook ingest: the harness Stop hook writes the just-ended turn to
+// the local plaintext vault in real time, so the episode is addressable while the
+// turn is still hot instead of on the next session boot.
 //
-// The turn is uploaded as one unit per speech segment (a user message or one
+// The turn is stored as one unit per speech segment (a user message or one
 // assistant text part), not as one blob: a harness turn mixes dozens of tool steps
-// into a single text, which averages the wave address over unrelated topics and
-// forces delivery to slice it arbitrarily. Segment units keep every spoken word —
-// low-value chatter simply stops matching cues — and only a segment that alone
-// outgrows the tokenz-r top rung is split at sentence boundaries.
+// into a single text, which averages unrelated topics and forces delivery to slice
+// it arbitrarily. Segment units keep every spoken word — low-value chatter simply
+// stops matching cues — and only a segment that alone outgrows the tokenz-r top
+// rung is split at sentence boundaries.
 //
-// The upload is best-effort and fail-open: a shared timeout keeps the hook inside
-// the harness Stop budget, the local plaintext vault is written by the same call
-// (the engine only ever receives the blind `{h, b, f}` integer frame), and every
-// failure is logged without raising into the harness. Units that miss the budget
-// stay in the local vault for the next reconcile sweep to push.
+// The write is best-effort and fail-open: a shared timeout keeps the hook inside
+// the harness Stop budget, and every failure is logged without raising into the
+// harness. Units that miss the budget stay on disk as transcripts for the next
+// reconcile sweep to pick up.
 package hooks
 
 import (
@@ -40,7 +38,7 @@ import (
 
 const (
 	// episodicUploadTimeout bounds the whole Stop-time ingest (all units) so a slow
-	// or unreachable engine never eats the harness hook budget (Stop is wired with 5s).
+	// vault write never eats the harness hook budget (Stop is wired with 5s).
 	episodicUploadTimeout = 3 * time.Second
 )
 

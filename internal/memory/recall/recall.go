@@ -2323,8 +2323,8 @@ func episodicTurnBandLines(band map[string]any) []string {
 }
 
 // bandHead builds the agent-facing header for one band: the visible label plus
-// the parenthetical labels that are not already part of it. Local-vault cell
-// bands carry an internal ladder address as their title ("带·C6:…#00"), which
+// the parenthetical labels that are not already part of it. Local-vault ladder
+// bands carry an internal memory address as their title ("带·C6:…#00"), which
 // means nothing to a reader; for those the header falls back to the space label
 // (file coordinates), the node's workspace locus, or a neutral label — and the
 // space label is then not repeated in the parens.

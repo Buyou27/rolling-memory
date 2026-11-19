@@ -1143,7 +1143,7 @@ func (v *Vault) packBlindPacketWithKey(key [32]byte, docID, text string, occurre
 	}, sents
 }
 
-// SaveLocalPlaintext persists the document's plaintext and cloud-assigned metadata in local SQLite.
+// SaveLocalPlaintext persists the document's plaintext and assigned metadata in local SQLite.
 func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error {
 	sentsJSON, err := json.Marshal(sents)
 	if err != nil {
@@ -1195,7 +1195,7 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 }
 
 // SaveLocalEpisodicPointer stores ONLY a zero-copy pointer (`@ref:zcode:...` or `@ref:jsonl:...`)
-// and the cloud-assigned C6 cell address / waveform in `rm_units`, without duplicating the
+// and the assigned memory address / carrier metadata in `rm_units`, without duplicating the
 // Harness's conversation plaintext into SQLite. `turnRef` records the provenance of the unit (a
 // content-addressed unit can be said in several turns; the row keeps one pointer, the lineage
 // table keeps every occurrence).

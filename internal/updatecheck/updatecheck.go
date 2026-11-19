@@ -866,11 +866,6 @@ func ReadInstallMetadata() InstallMetadata {
 	return meta
 }
 
-// InstallMethod reads the install provenance written by install.sh / install.ps1.
-func InstallMethod() string {
-	return ReadInstallMetadata().Method
-}
-
 // ResolveChannel resolves an explicit flag, environment, config, then the
 // stable default.
 func ResolveChannel(flag string) string {

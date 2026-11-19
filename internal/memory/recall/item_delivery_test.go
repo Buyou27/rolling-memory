@@ -5,6 +5,7 @@ package recall
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,53 @@ import (
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/store"
 )
+
+// TestFlatItemDeliveryIgnoresRetiredRerankScore pins the retirement of the
+// rerank arm: raw hits that still carry the old `_rerank_score` key must
+// deliver exactly the same items as hits without it.
+func TestFlatItemDeliveryIgnoresRetiredRerankScore(t *testing.T) {
+	bands := []map[string]any{
+		{
+			"id":      "mem:band:alice",
+			"kind":    "subject",
+			"subject": "Alice",
+			"nodes": []map[string]any{
+				{
+					"id":           "a1",
+					"content":      "Alice —works on→ Project Alpha",
+					"anchor":       "trace:ta1#0-30",
+					"status":       "active",
+					"t_valid_from": int64(1704067200),
+					"t_source":     int64(1704067200),
+					"time":         "2024-01-01",
+					"score":        0.60,
+				},
+				{
+					"id":           "a2",
+					"content":      "Alice —works on→ Project Beta",
+					"anchor":       "trace:ta2#0-30",
+					"status":       "active",
+					"t_valid_from": int64(1704153600),
+					"t_source":     int64(1704153600),
+					"time":         "2024-01-02",
+					"score":        0.40,
+				},
+			},
+		},
+	}
+	plainHits := []map[string]any{{"trace": "ta2", "session": "s", "turn": 1, "text": "Alice works on Project Beta"}}
+	scoredHits := []map[string]any{{"trace": "ta2", "session": "s", "turn": 1, "text": "Alice works on Project Beta", "_rerank_score": 0.99}}
+	plain := BuildFlatItemDelivery(bands, plainHits, nil, "Alice project", 0, 10, false)
+	scored := BuildFlatItemDelivery(bands, scoredHits, nil, "Alice project", 0, 10, false)
+	if len(plain) != len(scored) {
+		t.Fatalf("retired rerank key changed item count: %d vs %d", len(plain), len(scored))
+	}
+	for i := range plain {
+		if !reflect.DeepEqual(plain[i], scored[i]) {
+			t.Fatalf("retired rerank key changed item %d: %#v vs %#v", i, plain[i], scored[i])
+		}
+	}
+}
 
 func TestFlatItemDeliveryResidualSubtractionAndRankSwitch(t *testing.T) {
 	// 1. ReconcileClauseEventDate calibrates relative clause date only when turn already has a cross-day shift
@@ -112,77 +160,6 @@ func TestFlatItemDeliveryResidualSubtractionAndRankSwitch(t *testing.T) {
 	asOfItems := BuildFlatItemDelivery(bands, rawHits, usable, "Chicago", 1704585600, 10, true)
 	if len(asOfItems) != 1 {
 		t.Fatalf("expected AsOf > 0 with active structured memory assertion to suppress full-turn residual resurrection, got %d: %#v", len(asOfItems), asOfItems)
-	}
-}
-
-func TestCrossEncoderRerankScorePropagatesToItemDelivery(t *testing.T) {
-	bands := []map[string]any{
-		{
-			"id":      "mem:band:alice",
-			"kind":    "subject",
-			"subject": "Alice",
-			"nodes": []map[string]any{
-				{
-					"id":           "a1",
-					"content":      "Alice —works on→ Project Alpha",
-					"anchor":       "trace:ta1#0-30",
-					"status":       "active",
-					"t_valid_from": int64(1704067200),
-					"t_source":     int64(1704067200),
-					"time":         "2024-01-01",
-					"score":        0.50,
-				},
-				{
-					"id":           "a2",
-					"content":      "Alice —works on→ Project Beta",
-					"anchor":       "trace:ta2#0-30",
-					"status":       "active",
-					"t_valid_from": int64(1704153600),
-					"t_source":     int64(1704153600),
-					"time":         "2024-01-02",
-					"score":        0.40,
-				},
-			},
-		},
-	}
-	usable := []store.Candidate{
-		{
-			Data: store.CandidateRow{
-				Assertion: store.Assertion{
-					NodeID:     "a1",
-					Status:     "active",
-					TSource:    1704067200,
-					TValidFrom: 1704067200,
-				},
-				SLabel: "Alice",
-				XLabel: "works on",
-				OLabel: "Project Alpha",
-			},
-			Score:       0.50,
-			RerankScore: 0.35,
-		},
-		{
-			Data: store.CandidateRow{
-				Assertion: store.Assertion{
-					NodeID:     "a2",
-					Status:     "active",
-					TSource:    1704153600,
-					TValidFrom: 1704153600,
-				},
-				SLabel: "Alice",
-				XLabel: "works on",
-				OLabel: "Project Beta",
-			},
-			Score:       0.40,
-			RerankScore: 0.92,
-		},
-	}
-	items := BuildFlatItemDelivery(bands, nil, usable, "Alice project", 0, 10, false)
-	if len(items) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(items))
-	}
-	if !strings.Contains(asString(items[0]["title"]), "Project Beta") {
-		t.Fatalf("expected higher RerankScore item Project Beta first, got %#v", items[0])
 	}
 }
 

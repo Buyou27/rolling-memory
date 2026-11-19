@@ -720,30 +720,6 @@ func BuildFlatItemDelivery(
 		return hashHead[strings.TrimPrefix(k, "trace:")]
 	}
 
-	// Extract Cross-Encoder Rerank float scores (0..1) per assertion fact and per source turn:
-	turnBestRerank := make(map[string]float64, 64)
-	factBestRerank := make(map[string]float64, 128)
-	for _, c := range usable {
-		if c.RerankScore <= 0 || c.Data.Status == "superseded" || c.Data.Status == "retracted" {
-			continue
-		}
-		for _, h := range []string{c.Data.SourceTraceHash, c.Data.AnchorTraceHash} {
-			if h != "" {
-				if c.RerankScore > turnBestRerank[h] {
-					turnBestRerank[h] = c.RerankScore
-				}
-				sh := "trace:" + ids.ShortHash(h)
-				if c.RerankScore > turnBestRerank[sh] {
-					turnBestRerank[sh] = c.RerankScore
-				}
-			}
-		}
-		rendered := strings.ToLower(strings.TrimSpace(ids.RenderAssertion(c.Data.SLabel, c.Data.XLabel, c.Data.OLabel)))
-		if rendered != "" && c.RerankScore > factBestRerank[rendered] {
-			factBestRerank[rendered] = c.RerankScore
-		}
-	}
-
 	var rawEntries []pureAssertionItem
 	seenAssertion := make(map[string]int, 64)
 	assertionSeq := 0
@@ -751,18 +727,6 @@ func BuildFlatItemDelivery(
 		fTrim := strings.TrimSpace(fact)
 		if fTrim == "" || isInvalidOrPartDerivedAssertion(fTrim) {
 			return
-		}
-		if rSc := factBestRerank[strings.ToLower(fTrim)]; rSc > 0 {
-			baseScore += 0.65 * rSc
-		}
-		if turnKey != "" {
-			prefixKey := turnKey
-			if idx := strings.IndexByte(prefixKey, '#'); idx > 0 {
-				prefixKey = prefixKey[:idx]
-			}
-			if trSc := turnBestRerank[prefixKey]; trSc > 0 {
-				baseScore += 0.55 * trSc
-			}
 		}
 		if occDate == "" || occDate == "unknown" {
 			occDate = "未知"
@@ -892,9 +856,6 @@ func BuildFlatItemDelivery(
 			priorFactsByDate[spkD] = append(priorFactsByDate[spkD], clauses...)
 			allPriorFacts = append(allPriorFacts, clauses...)
 			baseSc := 0.92 / (1.0 + 0.035*float64(evIdx))
-			if trSc := turnBestRerank[th]; trSc > 0 {
-				baseSc += 0.65 * trSc
-			}
 			evIdx++
 			kd := flatKindUnit
 			if isCodeBlockText(joined) {
@@ -936,9 +897,6 @@ func BuildFlatItemDelivery(
 			baseSc := 0.90 / (1.0 + 0.05*float64(suppIdx))
 			if suppIdx >= 2 {
 				baseSc = 0.42 / (1.0 + 0.04*float64(suppIdx))
-			}
-			if rSc := asFloat(hit["_rerank_score"], 0.0); rSc > 0 {
-				baseSc += 0.65 * rSc
 			}
 			kd := flatKindUnit
 			if isCodeBlockText(joined) {

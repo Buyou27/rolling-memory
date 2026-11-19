@@ -234,36 +234,27 @@ func unixDaemonHealth(cfg *config.Config, exeMTime int64) (UnixHealthResponse, e
 
 // UnixRecallPayload carries a CLI or Admin Console recall request over the local Unix socket.
 type UnixRecallPayload struct {
-	DB              string                    `json:"db,omitempty"`
-	Cue             string                    `json:"cue"`
-	Scope           *string                   `json:"scope,omitempty"`
-	Reader          *string                   `json:"reader,omitempty"`
-	Mode            string                    `json:"mode,omitempty"`
-	AsOf            any                       `json:"asof,omitempty"`
-	WindowStart     any                       `json:"window_start,omitempty"`
-	WindowEnd       any                       `json:"window_end,omitempty"`
-	CapsBands       *int                      `json:"caps_bands,omitempty"`
-	CapsNodes       *int                      `json:"caps_nodes,omitempty"`
-	CapsChars       *int                      `json:"caps_chars,omitempty"`
-	CapsChains      *int                      `json:"caps_chains,omitempty"`
-	CapsRows        *int                      `json:"caps_rows,omitempty"`
-	ResultUnit      string                    `json:"result_unit,omitempty"`
-	Rank            *bool                     `json:"rank,omitempty"`
-	Offset          int                       `json:"offset,omitempty"`
-	Depth           int                       `json:"depth,omitempty"`
-	IncludeRaw      *bool                     `json:"include_raw,omitempty"`
-	BudgetMS        *int                      `json:"budget_ms,omitempty"`
-	RawLimit        int                       `json:"raw_limit,omitempty"`
-	Session         *string                   `json:"session,omitempty"`
-	TimeRef         any                       `json:"time_ref,omitempty"`
-	TokenCorrect    *bool                     `json:"token_correct,omitempty"`
-	AliasExpand     *bool                     `json:"alias_expand,omitempty"`
-	RelativeTag     *bool                     `json:"relative_tag,omitempty"`
-	MentionBackfill *bool                     `json:"mention_backfill,omitempty"`
-	Presence        *text.PresenceCoordinates `json:"presence,omitempty"`
-	NoCrystallize   bool                      `json:"no_crystallize,omitempty"`
-	RenderMaxChars  int                       `json:"render_max_chars,omitempty"`
-	NeedRendered    bool                      `json:"need_rendered,omitempty"`
+	DB             string                    `json:"db,omitempty"`
+	Cue            string                    `json:"cue"`
+	Scope          *string                   `json:"scope,omitempty"`
+	Reader         *string                   `json:"reader,omitempty"`
+	Mode           string                    `json:"mode,omitempty"`
+	AsOf           any                       `json:"asof,omitempty"`
+	WindowStart    any                       `json:"window_start,omitempty"`
+	WindowEnd      any                       `json:"window_end,omitempty"`
+	CapsBands      *int                      `json:"caps_bands,omitempty"`
+	CapsNodes      *int                      `json:"caps_nodes,omitempty"`
+	CapsChars      *int                      `json:"caps_chars,omitempty"`
+	Offset         int                       `json:"offset,omitempty"`
+	IncludeRaw     *bool                     `json:"include_raw,omitempty"`
+	BudgetMS       *int                      `json:"budget_ms,omitempty"`
+	RawLimit       int                       `json:"raw_limit,omitempty"`
+	Session        *string                   `json:"session,omitempty"`
+	TimeRef        any                       `json:"time_ref,omitempty"`
+	Presence       *text.PresenceCoordinates `json:"presence,omitempty"`
+	NoCrystallize  bool                      `json:"no_crystallize,omitempty"`
+	RenderMaxChars int                       `json:"render_max_chars,omitempty"`
+	NeedRendered   bool                      `json:"need_rendered,omitempty"`
 }
 
 // UnixRecallResponse is returned by POST /v1/recall on the local Unix socket.
@@ -1573,33 +1564,24 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *facade.Mem
 		}
 	}
 	req := facade.RecallRequest{
-		Cue:             payload.Cue,
-		Scope:           payload.Scope,
-		Reader:          payload.Reader,
-		Mode:            payload.Mode,
-		AsOf:            payload.AsOf,
-		WindowStart:     payload.WindowStart,
-		WindowEnd:       payload.WindowEnd,
-		CapsBands:       payload.CapsBands,
-		CapsNodes:       payload.CapsNodes,
-		CapsChars:       payload.CapsChars,
-		CapsChains:      payload.CapsChains,
-		CapsRows:        payload.CapsRows,
-		ResultUnit:      payload.ResultUnit,
-		Rank:            payload.Rank,
-		Offset:          payload.Offset,
-		Depth:           payload.Depth,
-		IncludeRaw:      payload.IncludeRaw,
-		BudgetMS:        payload.BudgetMS,
-		RawLimit:        payload.RawLimit,
-		Session:         payload.Session,
-		TimeRef:         payload.TimeRef,
-		TokenCorrect:    payload.TokenCorrect,
-		AliasExpand:     payload.AliasExpand,
-		RelativeTag:     payload.RelativeTag,
-		MentionBackfill: payload.MentionBackfill,
-		Presence:        presence,
-		NoCrystallize:   payload.NoCrystallize,
+		Cue:           payload.Cue,
+		Scope:         payload.Scope,
+		Reader:        payload.Reader,
+		Mode:          payload.Mode,
+		AsOf:          payload.AsOf,
+		WindowStart:   payload.WindowStart,
+		WindowEnd:     payload.WindowEnd,
+		CapsBands:     payload.CapsBands,
+		CapsNodes:     payload.CapsNodes,
+		CapsChars:     payload.CapsChars,
+		Offset:        payload.Offset,
+		IncludeRaw:    payload.IncludeRaw,
+		BudgetMS:      payload.BudgetMS,
+		RawLimit:      payload.RawLimit,
+		Session:       payload.Session,
+		TimeRef:       payload.TimeRef,
+		Presence:      presence,
+		NoCrystallize: payload.NoCrystallize,
 	}
 	result, err := active.Recall(req)
 	if err != nil {

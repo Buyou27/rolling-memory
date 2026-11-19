@@ -402,21 +402,19 @@ type RecallRequest struct {
 	CapsChars      *int
 	DeliveryWindow string
 	// CapsChains / CapsRows bound delivery breadth: chains per band and rows per
-	// chain. The engine already accepts these as request-level overrides; the cloud
-	// `/open/memory` protocol carries them as optional `caps_chains` / `caps_rows`
-	// fields. Unset/0 keeps the remote default (QA-shaped folding), so only
+	// chain. Unset/0 keeps the configured default (QA-shaped folding), so only
 	// enumeration-shaped callers raise them.
 	CapsChains *int
 	CapsRows   *int
-	// ResultUnit selects the delivery unit on `/open/memory/search`: ""/"band" (default
-	// subject-band folding) or "item" (source-item ranked delivery). Unset/"" omits the
-	// wire field so default callers remain byte-identical.
+	// ResultUnit selects the delivery unit: ""/"band" (default subject-band
+	// folding) or "item" (source-item ranked delivery). Unset/"" keeps the default
+	// for callers that do not care.
 	ResultUnit string
-	// Rank controls item-mode grouping on `/open/memory/search` (distinct from LLM `rerank`):
+	// Rank controls item-mode grouping (distinct from any rerank stage):
 	// nil/true = grouped delivery (sxo -> unit -> parse -> block); false = pure relevance order without grouping.
 	Rank *bool
 	// AttachFiles controls whether original multimodal/file parts (`memory_part_parse.file`) are attached
-	// on delivery (`attach_files` body field + `X-Rolling-Memory-Attach-Files` header).
+	// to delivered items.
 	AttachFiles *bool
 	Offset      int
 	Depth       int

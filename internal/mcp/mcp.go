@@ -769,7 +769,7 @@ func toolCall(requestID any, rawParams any, memory *facade.Memory, lazy *LazyMem
 	}
 	// In live MCP daemon mode with full band rendering (mode != "probe"),
 	// content[0].text already carries the budget-capped <rolling-memory-recall>
-	// bands x chains projection; omitting the duplicate multi-tens-of-KB
+	// band projection; omitting the duplicate multi-tens-of-KB
 	// structuredContent JSON prevents the host from injecting the raw JSON tree
 	// a second time into the model context window. Probe mode keeps the compact
 	// structured receipt for hosts that consume it programmatically.
@@ -857,12 +857,7 @@ func recallRequest(arguments map[string]any) (facade.RecallRequest, error) {
 		CapsNodes:      intOrNil(caps["nodes"]),
 		CapsChars:      intOrNil(caps["chars"]),
 		DeliveryWindow: deliveryWindow,
-		CapsChains:     intOrNil(caps["chains"]),
-		CapsRows:       intOrNil(caps["rows"]),
-		ResultUnit:     strings.ToLower(textOrEmpty(arguments["result_unit"])),
-		Rank:           boolOrNil(arguments["rank"]),
 		Offset:         offset,
-		Depth:          2,
 		RawLimit:       rawLimit,
 		Session:        sessionPtr,
 	}, nil

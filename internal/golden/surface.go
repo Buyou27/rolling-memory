@@ -5,7 +5,6 @@ package golden
 
 import (
 	"cmp"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,14 +42,6 @@ func temporaryEnv(values map[string]string) func() {
 	}
 }
 
-// orInt returns fallback when value is zero.
-func orInt(value, fallback int) int {
-	if value == 0 {
-		return fallback
-	}
-	return value
-}
-
 // surfaceCaseDir returns (and creates) the per-case scratch directory of one
 // surface op (cases/<prefix>/<case> under the scenario root).
 func (r *Runner) surfaceCaseDir(prefix, name string) (string, error) {
@@ -69,47 +60,6 @@ func (r *Runner) expandCaseValue(value any) any {
 		return value
 	}
 	return strings.ReplaceAll(text, "{ROOT}", r.ScenarioRoot)
-}
-
-// plainJSON turns the json.Number leaves of a fixture-decoded payload back into
-// float64, the shape the HTTP client hands the cloud legs after a real decode
-// (fixture.json keeps numbers as json.Number so table digests stay exact).
-func plainJSON(value any) any {
-	switch typed := value.(type) {
-	case json.Number:
-		number, err := typed.Float64()
-		if err != nil {
-			return typed.String()
-		}
-		return number
-	case map[string]any:
-		result := make(map[string]any, len(typed))
-		for key, item := range typed {
-			result[key] = plainJSON(item)
-		}
-		return result
-	case []any:
-		result := make([]any, 0, len(typed))
-		for _, item := range typed {
-			result = append(result, plainJSON(item))
-		}
-		return result
-	}
-	return value
-}
-
-// plainScriptedMap returns one scripted reply as a fresh map (the driver hands
-// each fake transport call its own shallow copy).
-func plainScriptedMap(value any) map[string]any {
-	row, _ := plainJSON(value).(map[string]any)
-	if row == nil {
-		return map[string]any{}
-	}
-	copied := make(map[string]any, len(row))
-	for key, item := range row {
-		copied[key] = item
-	}
-	return copied
 }
 
 // opConfigLoad mirrors the driver's config_load: write the case files, then

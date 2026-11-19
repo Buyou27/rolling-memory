@@ -705,7 +705,7 @@ func BuildParser() *Parser {
 	}
 
 	recallCmd := &command{
-		Name: "recall", Path: []string{"recall"}, Help: "read memory as bands x chains",
+		Name: "recall", Path: []string{"recall"}, Help: "read local memory as subject bands with ranked evidence",
 		Options: append(commonOptions(),
 			stringOption([]string{"--q", "--cue"}, "cue", "", ""),
 			choiceOption([]string{"--reader"}, "reader", []string{"owner", "deliverable"}, nil, ""),
@@ -713,37 +713,21 @@ func BuildParser() *Parser {
 			stringOption([]string{"--asof"}, "asof", nil, "reserved; specifying this filter currently fails closed"),
 			stringOption([]string{"--window-start"}, "window_start", nil, "reserved; specifying this filter currently fails closed"),
 			stringOption([]string{"--window-end"}, "window_end", nil, "reserved; specifying this filter currently fails closed"),
-			&Option{Names: []string{"--bands"}, Dest: "bands", Kind: kindInt, Default: nil, Help: ""},
-			&Option{Names: []string{"--nodes"}, Dest: "nodes", Kind: kindInt, Default: nil, Help: ""},
-			&Option{Names: []string{"--chars"}, Dest: "chars", Kind: kindInt, Default: nil, Help: ""},
-			intOption([]string{"--offset"}, "offset", 0, ""),
-			intOption([]string{"--depth"}, "depth", 2, ""),
-			flagOption([]string{"--include-raw"}, "include_raw", nil, ""),
-			&Option{Names: []string{"--no-raw"}, Dest: "include_raw", Kind: kindFlagFalse, Help: ""},
+			&Option{Names: []string{"--bands"}, Dest: "bands", Kind: kindInt, Default: nil,
+				Help: "maximum delivered bands (also raises the candidate depth when larger than --raw-limit)"},
+			&Option{Names: []string{"--nodes"}, Dest: "nodes", Kind: kindInt, Default: nil,
+				Help: "maximum delivered nodes across all bands"},
+			&Option{Names: []string{"--chars"}, Dest: "chars", Kind: kindInt, Default: nil,
+				Help: "delivery character budget"},
+			intOption([]string{"--offset"}, "offset", 0, "band pagination offset"),
+			flagOption([]string{"--include-raw"}, "include_raw", nil, "include raw source hits in the result"),
+			&Option{Names: []string{"--no-raw"}, Dest: "include_raw", Kind: kindFlagFalse, Help: "omit raw source hits"},
 			intOption([]string{"--raw-limit"}, "raw_limit", 10, "raw-hit limit (default 10, maximum 64)"),
 			stringOption([]string{"--session"}, "session", nil,
 				"reserved; specifying this filter currently fails closed"),
 			stringOption([]string{"--time-ref"}, "time_ref", nil,
 				"reference time for relative expressions (ISO date or epoch)"),
-			flagOption([]string{"--token-correct"}, "token_correct", nil,
-				"enable the zero-hit token correction leg"),
-			&Option{Names: []string{"--no-alias-expand"}, Dest: "alias_expand", Kind: kindFlagFalse,
-				Help: "disable raw-leg token expansion with seed aliases"},
-			flagOption([]string{"--relative-tag"}, "relative_tag", nil,
-				"annotate relative time phrases with resolved dates"),
-			&Option{Names: []string{"--no-mention-backfill"}, Dest: "mention_backfill", Kind: kindFlagFalse,
-				Help: "disable mention/anchor backfill from raw hits"},
 			&Option{Names: []string{"--budget-ms"}, Dest: "budget_ms", Kind: kindInt, Default: nil, Help: ""},
-			choiceOption([]string{"--result-unit"}, "result_unit", []string{"band", "item"}, nil,
-				"delivery unit: subject bands (default) or flat source items"),
-			flagOption([]string{"--rank"}, "rank", nil,
-				"item-mode grouping: grouped by 记忆单元→原文块 (default); pair with --no-rank for pure relevance order"),
-			&Option{Names: []string{"--no-rank"}, Dest: "rank", Kind: kindFlagFalse,
-				Help: "deliver items in pure relevance order without grouping"},
-			&Option{Names: []string{"--caps-chains"}, Dest: "caps_chains", Kind: kindInt, Default: nil, Help: ""},
-			&Option{Names: []string{"--caps-rows"}, Dest: "caps_rows", Kind: kindInt, Default: nil, Help: ""},
-			flagOption([]string{"--wave"}, "wave", false,
-				"render high-resolution Unicode Braille oscilloscope waveform in terminal"),
 			flagOption([]string{"--no-crystallize"}, "no_crystallize", false,
 				"read-only recall: do not record this query as an L3 noetic entry (debug consoles, probes)"),
 			flagOption([]string{"--stdin-batch"}, "stdin_batch", false,
@@ -951,10 +935,7 @@ func BuildParser() *Parser {
 
 	statusCmd := &command{
 		Name: "status", Path: []string{"status"}, Help: "show counts, mode and storage paths",
-		Options: append(commonOptions(),
-			flagOption([]string{"--wave"}, "wave", false,
-				"render high-resolution Unicode Braille oscilloscope waveform in terminal"),
-		),
+		Options: commonOptions(),
 	}
 	doctorCmd := &command{
 		Name: "doctor", Path: []string{"doctor"}, Help: "environment and integrity diagnostics",
@@ -1068,17 +1049,6 @@ func BuildParser() *Parser {
 		),
 	}
 
-	waveCmd := &command{
-		Name: "wave", Path: []string{"wave"},
-		Help: "render high-resolution Unicode Braille oscilloscope waveform for a sentence or query",
-		Options: append(commonOptions(),
-			intOption([]string{"--width"}, "width", 44, "oscilloscope character column width (20..80)"),
-		),
-		Positionals: []*positional{{
-			Name: "text", Help: "input sentence or query text", Required: true,
-		}},
-	}
-
 	panelCmd := &command{
 		Name: "panel", Path: []string{"panel"},
 		Help: "open the local web console (backend :9006 + web frontend :8008; fetches the console on first use)",
@@ -1152,7 +1122,7 @@ func BuildParser() *Parser {
 		initCmd, modeCmd, configCmd, recallCmd, recentCmd,
 		importCmd, syncCmd, backgroundCmd, mcpCmd, buildCmd, ingestdCmd, scanCmd, hookCmd,
 		statusCmd, doctorCmd, checkCmd, installCmd, evalCmd,
-		ejectCmd, efficacyCmd, waveCmd, panelCmd, updateCmd,
+		ejectCmd, efficacyCmd, panelCmd, updateCmd,
 		maintainCmd, daemonCmd, engineCmd,
 	}
 	for _, sub := range root.Subcommands {

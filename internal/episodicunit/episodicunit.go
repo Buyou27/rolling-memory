@@ -4,8 +4,8 @@
 // Package episodicunit turns enumerated speech segments into L2 ingest units.
 //
 // One segment = one unit. A harness "turn" mixes dozens of tool steps into one
-// blob: encoding it as a single unit averages the wave address over heterogeneous
-// topics and forces delivery to slice it arbitrarily. Per-segment units keep every
+// blob: encoding it as a single unit averages heterogeneous topics and forces
+// delivery to slice it arbitrarily. Per-segment units keep every
 // spoken word (nothing is deleted —低价值 content simply stops matching cues), and
 // only a segment that alone outgrows the tokenz-r top rung is split at sentence
 // boundaries (never mid-sentence, never truncated).

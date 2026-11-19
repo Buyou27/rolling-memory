@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Memory-graph phrase nodes now require two terms whose text spans do not overlap. Adjacent sliding windows of one Han run are the dual track that keeps retrieval recall, but they are one text run projected twice, so they are no longer projected as phrases; disjoint tilings of the same run are recovered instead, which keeps genuine Chinese pairs such as 推进·继续 visible. Every phrase fragment now carries the pair df, both member dfs, `lift` against the independence expectation, and how much of the rarer member the pair covers, and the detail drawer shows them next to the binding energy. Retrieval postings, word families and the tokenizer are untouched.
+- The `recall` surface now matches what the local vault can deliver: `--bands` / `--nodes` / `--chars` and `--offset` are documented in the CLI, and the MCP schema advertises `delivery_window` plus `caps{delivery_window,bands,nodes,chars,raw}`. Filters the local vault cannot enforce (`asof`, `window`, `session`) stay fail-closed, and the console no longer sends a graph-walk depth it cannot use.
 
 ### Added
 
@@ -19,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - The legacy JSON export import path and the assertion-graph FTS rebuild helper are gone. JSONL and plain-text transcripts are the only supported import formats, and recall receipts no longer carry a `vector` provider block.
+- The `wave` command, the `recall` / `status` `--wave` flags, and the Braille oscilloscope renderer are gone. The command was never part of the documented surface.
+- The legacy-only item and breadth switches (`--depth`, `--caps-chains`, `--caps-rows`, `--result-unit`, `--rank` / `--no-rank`, `--token-correct`, `--no-alias-expand`, `--relative-tag`, `--no-mention-backfill`) no longer parse. The MCP schema also dropped `deep`, `result_unit`, `rank`, `caps.chains` and `caps.rows` instead of accepting switches the local vault ignores.
+- `hook_bands` / `hook_nodes` / `hook_chars` are gone from `[recall]` — the prompt hook captures and reminds but does not recall — and the generated config template no longer writes the retired `vector` switch.
 
 ## [0.0.7] - 2026-11-19
 

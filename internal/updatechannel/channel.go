@@ -37,9 +37,3 @@ func Normalize(raw string) (string, error) {
 	}
 	return "", fmt.Errorf("update channel must be one of stable, beta, dev; got %q", raw)
 }
-
-// Valid reports whether a value is a known channel.
-func Valid(raw string) bool {
-	_, err := Normalize(raw)
-	return err == nil
-}

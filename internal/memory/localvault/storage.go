@@ -10,11 +10,11 @@ import (
 // PlaintextStore is the universal pluggable storage interface for user plaintext.
 type PlaintextStore interface {
 	// PackBlindPacket mechanically splits raw plaintext into sentences and encodes
-	// each word into an irreversible blind integer pulse `{h, b, f}` using the user's secret key.
+	// each word into its irreversible integer carrier `{h, b, f}` with the user's secret key.
 	PackBlindPacket(docID string, text string, occurredAt int64) (BlindPulsePacket, []string)
 
-	// SaveLocalPlaintext persists the user's raw plaintext alongside the engine-assigned
-	// cell address, waveform bar, and kept dry-sentence indices.
+	// SaveLocalPlaintext persists the user's raw plaintext alongside the assigned
+	// memory address, carrier metadata, and kept dry-sentence indices.
 	SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error
 
 	// LoadLocalDocument loads the user's raw plaintext and reconstructs the distilled

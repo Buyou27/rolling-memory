@@ -58,19 +58,10 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 	capsBands := a.args.IntPtr("bands")
 	capsNodes := a.args.IntPtr("nodes")
 	capsChars := a.args.IntPtr("chars")
-	capsChains := a.args.IntPtr("caps_chains")
-	capsRows := a.args.IntPtr("caps_rows")
-	resultUnit := a.args.String("result_unit")
-	rank := a.args.FlagPtr("rank")
 	offset := a.args.Int("offset")
-	depth := a.args.Int("depth")
 	includeRaw := a.args.FlagPtr("include_raw")
 	budgetMS := a.args.IntPtr("budget_ms")
 	sessionOpt := a.args.StringPtr("session")
-	tokenCorrect := a.args.FlagPtr("token_correct")
-	aliasExpand := a.args.FlagPtr("alias_expand")
-	relativeTag := a.args.FlagPtr("relative_tag")
-	mentionBackfill := a.args.FlagPtr("mention_backfill")
 	noCrystallize := a.args.Flag("no_crystallize")
 	defaultRawLimit := a.args.Int("raw_limit")
 	var presence *text.PresenceCoordinates
@@ -124,33 +115,24 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 				payload["error"] = "recall requires q"
 			default:
 				result, recallErr := memory.Recall(facade.RecallRequest{
-					Cue:             req.Q,
-					Scope:           scopeOpt,
-					Reader:          readerOpt,
-					Mode:            mode,
-					AsOf:            asOf,
-					WindowStart:     windowStart,
-					WindowEnd:       windowEnd,
-					CapsBands:       capsBands,
-					CapsNodes:       capsNodes,
-					CapsChars:       capsChars,
-					CapsChains:      capsChains,
-					CapsRows:        capsRows,
-					ResultUnit:      resultUnit,
-					Rank:            rank,
-					Offset:          offset,
-					Depth:           depth,
-					IncludeRaw:      includeRaw,
-					BudgetMS:        budgetMS,
-					RawLimit:        rawLimit,
-					Session:         sessionOpt,
-					TimeRef:         timeRef,
-					TokenCorrect:    tokenCorrect,
-					AliasExpand:     aliasExpand,
-					RelativeTag:     relativeTag,
-					MentionBackfill: mentionBackfill,
-					Presence:        presence,
-					NoCrystallize:   noCrystallize,
+					Cue:           req.Q,
+					Scope:         scopeOpt,
+					Reader:        readerOpt,
+					Mode:          mode,
+					AsOf:          asOf,
+					WindowStart:   windowStart,
+					WindowEnd:     windowEnd,
+					CapsBands:     capsBands,
+					CapsNodes:     capsNodes,
+					CapsChars:     capsChars,
+					Offset:        offset,
+					IncludeRaw:    includeRaw,
+					BudgetMS:      budgetMS,
+					RawLimit:      rawLimit,
+					Session:       sessionOpt,
+					TimeRef:       timeRef,
+					Presence:      presence,
+					NoCrystallize: noCrystallize,
 				})
 				if recallErr != nil {
 					payload["error"] = recallErr.Error()

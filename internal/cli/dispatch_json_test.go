@@ -61,7 +61,7 @@ func TestPrintEfficacyCardRendersShareableReceipt(t *testing.T) {
 		"15 sessions · 45 evaluated turns",
 		"86.7% adopted · 40.0% noise silenced",
 		"271100 tok/turn",
-		"27110000 tok (100 blind turns avoided)",
+		"27110000 tok (100 round-trips avoided)",
 		"Verified locally · github.com/rocareer/rolling-memory",
 	} {
 		if !strings.Contains(card, want) {
