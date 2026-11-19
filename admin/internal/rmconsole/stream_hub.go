@@ -456,7 +456,7 @@ func newEvalStreamHub(key streamKey) *streamHub {
 // `probe` 帧按 1Hz 固定节拍推浮标采样（供心电式实时曲线，替代原每秒一次的 /widget 轮询端点）。
 func newStatusStreamHub(key streamKey, home string) *streamHub {
 	dbPath := resolveMemoryDBPath(home)
-	logPath := filepath.Join(home, ".local", "state", "rolling-memory", "rolling-memory.log")
+	logPath := rollingMemoryLogPath(home)
 	hostVer := version.Get().Version
 	hostAPIVer := HostAPIVersion
 
@@ -507,7 +507,7 @@ func newStatusStreamHub(key streamKey, home string) *streamHub {
 // 与 status 流同一套两段闸：指纹未变不跑聚合，变化且距上次聚合 ≥500ms 才重算（持续写入时 CPU 有界）。
 func newDashboardStreamHub(key streamKey, home string) *streamHub {
 	dbPath := resolveMemoryDBPath(home)
-	logPath := filepath.Join(home, ".local", "state", "rolling-memory", "rolling-memory.log")
+	logPath := rollingMemoryLogPath(home)
 	var sigMu sync.Mutex
 	var lastFullSig string
 	var hubRef *streamHub
@@ -538,7 +538,7 @@ func newDashboardStreamHub(key streamKey, home string) *streamHub {
 // 覆盖指纹盲区（例如无 Hook 写入的宿主会话在既有 jsonl 上原地增长）。
 func newEnvHealthStreamHub(key streamKey, home string) *streamHub {
 	dbPath := resolveMemoryDBPath(home)
-	logPath := filepath.Join(home, ".local", "state", "rolling-memory", "rolling-memory.log")
+	logPath := rollingMemoryLogPath(home)
 	cfgPath := filepath.Join(home, ".config", "rolling-memory", "config.toml")
 
 	var gateMu sync.Mutex
@@ -615,7 +615,7 @@ func newEnvHealthStreamHub(key streamKey, home string) *streamHub {
 // newTerminalStreamHub 装配终端流：Hook 日志与金库指纹变化即推一帧新的终端输出。
 func newTerminalStreamHub(key streamKey, home string) *streamHub {
 	dbPath := resolveMemoryDBPath(home)
-	logPath := filepath.Join(home, ".local", "state", "rolling-memory", "rolling-memory.log")
+	logPath := rollingMemoryLogPath(home)
 	limit := key.limit
 	if limit <= 0 {
 		limit = 40
@@ -687,7 +687,7 @@ func envHealthChangeSignature(home, cfgPath, dbPath, logPath string) string {
 		cfgPath,
 		dbPath,
 		logPath,
-		filepath.Join(home, ".local", "state", "rolling-memory", "active_workspace.json"),
+		filepath.Join(rollingMemoryStateDir(home), "active_workspace.json"),
 		// 宿主会话库主文件：配合 active_workspace.json 与 Hook 日志覆盖回合级活跃变化。
 		filepath.Join(home, ".zcode", "cli", "db", "db.sqlite"),
 		// 各 Harness 的历史根目录：目录 mtime 覆盖「新会话落盘」。
@@ -817,18 +817,14 @@ func buildWidgetSnapshot(ctx context.Context, home string, st StatusResponse) Wi
 	}
 }
 
-// activeHarnessID 读取 ~/.local/state/rolling-memory/active_workspace.json 的 carrier 机器标识
-// （`harness:zcode` → `zcode`），用作 `sync status --harness` 的过滤值。
-// 与 detectActiveHarnessLabel 同源同文件但不同用途：前者要机器标识（子进程过滤），后者要宿主显示名
-// （界面文案，映射表只服务展示），故不合并。
+// activeHarnessID reads the live attachment ledger and returns the machine
+// identifier of the session that currently holds a lease. It is used as the
+// `sync status --harness` scan scope, never as evidence about the user's
+// current window.
 func activeHarnessID(home string) string {
-	raw, err := os.ReadFile(filepath.Join(home, ".local", "state", "rolling-memory", "active_workspace.json"))
-	if err != nil {
+	attachment, ok := livePresenceAttachment(home)
+	if !ok {
 		return ""
 	}
-	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
-		return ""
-	}
-	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(asString(m["carrier"]))), "harness:")
+	return strings.ToLower(strings.TrimSpace(attachment.Host))
 }

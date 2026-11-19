@@ -188,38 +188,19 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 			turnRef = ""
 		}
 		if invalidPointer {
-			sentsJSON, err := json.Marshal(sents)
-			if err != nil {
+			if c.Vault != nil {
+				var existing string
+				if err := c.Vault.db.QueryRow(`SELECT COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id WHERE d.unit_id = ?`, docID).Scan(&existing); err == nil && existing != "" && existing != livePlaintext {
+					return fmt.Errorf("%w: %s", ErrEpisodicPointerSourceConflict, docID)
+				}
+				resp.Layer = LayerEpisodic
+			}
+			if err := st.SaveLocalPlaintext(docID, occurredAt, livePlaintext, sents, resp); err != nil {
 				return err
 			}
-			keptJSON, err := json.Marshal(resp.KeptSentenceIndices)
-			if err != nil {
-				return err
+			if c.Vault != nil {
+				c.Vault.clearSlotCache()
 			}
-			tx, err := c.Vault.db.Begin()
-			if err != nil {
-				return err
-			}
-			defer func() { _ = tx.Rollback() }()
-			if err := checkEpisodicTombstone(tx, docID); err != nil {
-				return err
-			}
-			// Never replace a different source, even if another writer claims this ID.
-			result, err := tx.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id) DO UPDATE SET occurred_at=CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END, inserted_at=CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END, sentences_json=excluded.sentences_json, address_uri=excluded.address_uri, coord64=excluded.coord64, waveform_bar=excluded.waveform_bar, doc_macro_wave=excluded.doc_macro_wave, kept_indices_json=excluded.kept_indices_json, assistant_id=excluded.assistant_id, incarnation_id=excluded.incarnation_id, locus=excluded.locus WHERE thin_vault_docs.raw_text=excluded.raw_text`, docID, occurredAt, time.Now().Unix(), livePlaintext, string(sentsJSON), resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON), c.Vault.identity.AssistantID, c.Vault.identity.IncarnationID, c.Vault.identity.Locus)
-			if err != nil {
-				return err
-			}
-			changed, err := result.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if changed == 0 {
-				return fmt.Errorf("thinclient: episodic document already exists with different source")
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
-			c.Vault.clearSlotCache()
 			return nil
 		}
 		if c.Vault != nil {

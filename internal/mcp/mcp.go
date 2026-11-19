@@ -48,6 +48,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/hostid"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
@@ -191,6 +192,13 @@ type Server struct {
 	// when targeting the default primary vault, avoiding per-window 280MB corpus
 	// snapshot duplication while falling back to in-process LazyMemory on error.
 	ProxyToDaemon bool
+	// AttachmentDir, when non-empty, records this sidecar as the live client
+	// attachment for the session. The real CLI entry point passes the
+	// canonical state directory; unit tests leave it empty so they never
+	// rewrite the developer's presence ledger.
+	AttachmentDir string
+
+	attachment *hostid.Attachment
 
 	// Test seams; zero values fall back to the process calls.
 	exitFn func(code int)
@@ -220,11 +228,14 @@ func (s *Server) Run() error {
 	activity.Store(time.Now().UnixNano())
 	stop := make(chan struct{})
 	defer close(stop)
+	s.recordClientAttachment()
+	go s.attachmentHeartbeat(stop)
 	go s.watchdog(stop, &activity, &inFlight, lazy)
 	reader := bufio.NewReader(in)
 	for {
 		line, err := readLineBounded(reader, maxHTTPBody)
 		activity.Store(time.Now().UnixNano())
+		s.touchClientAttachment()
 		if line != "" {
 			inFlight.Add(1)
 			writeErr := s.processLine(line, out, lazy)
@@ -238,6 +249,64 @@ func (s *Server) Run() error {
 		}
 		if err != nil {
 			return err
+		}
+	}
+}
+
+// recordClientAttachment writes this sidecar's session into the shared ledger.
+// The sidecar is the only process that knows both the host identity and the
+// session's working directory; the daemon it forwards to must never guess
+// either from its own environment or cwd.
+func (s *Server) recordClientAttachment() {
+	if s.AttachmentDir == "" || os.Getenv("ROLLING_MEMORY_DISABLE_ATTACHMENT") == "1" {
+		return
+	}
+	identity := hostid.Detect()
+	cwd, _ := os.Getwd()
+	attachment := hostid.Attachment{
+		Host:       string(identity.ID),
+		Label:      identity.Label,
+		SessionID:  identity.SessionID,
+		Role:       "main",
+		PID:        os.Getpid(),
+		CWD:        cwd,
+		Locus:      text.DetectGitWorkspaceName(cwd),
+		Evidence:   identity.Evidence,
+		Mode:       hostid.ModeProcess,
+		LastSeenAt: ids.UTCNow(),
+	}
+	if attachment.Host == "" || attachment.Host == string(hostid.Unknown) {
+		attachment.Host = string(hostid.Unknown)
+		attachment.Label = hostid.Label(hostid.Unknown)
+	}
+	if attachment.Label == "" {
+		attachment.Label = hostid.Label(hostid.Normalize(attachment.Host))
+	}
+	if err := hostid.RecordAt(s.AttachmentDir, attachment, attachment.LastSeenAt); err != nil {
+		return
+	}
+	s.attachment = &attachment
+}
+
+func (s *Server) touchClientAttachment() {
+	if s.AttachmentDir == "" || s.attachment == nil {
+		return
+	}
+	_ = hostid.Touch(s.AttachmentDir, hostid.Key(*s.attachment), ids.UTCNow())
+}
+
+func (s *Server) attachmentHeartbeat(stop <-chan struct{}) {
+	if s.AttachmentDir == "" {
+		return
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			s.touchClientAttachment()
 		}
 	}
 }
@@ -281,14 +350,26 @@ func startUpdateRefresh() {
 // ServeWithDaemonProxy runs the stdio loop over in/out and routes `tools/call`
 // requests through the shared local Unix domain socket daemon when available.
 func ServeWithDaemonProxy(in io.Reader, out io.Writer) error {
+	return ServeWithDaemonProxyAt(in, out, "")
+}
+
+// ServeWithDaemonProxyAt additionally records the sidecar's host identity in
+// attachmentDir. The CLI passes the canonical state directory; tests pass an
+// empty directory and keep their presence state untouched.
+func ServeWithDaemonProxyAt(in io.Reader, out io.Writer, attachmentDir string) error {
 	startUpdateRefresh()
-	return (&Server{In: in, Out: out, ProxyToDaemon: true}).Run()
+	return (&Server{In: in, Out: out, ProxyToDaemon: true, AttachmentDir: attachmentDir}).Run()
 }
 
 // Serve runs the loop over in/out; memory may be nil to open one lazily.
 func Serve(in io.Reader, out io.Writer, memory *facade.Memory) error {
+	return ServeAt(in, out, memory, "")
+}
+
+// ServeAt is Serve with an explicit attachment directory.
+func ServeAt(in io.Reader, out io.Writer, memory *facade.Memory, attachmentDir string) error {
 	startUpdateRefresh()
-	return (&Server{In: in, Out: out, Memory: memory}).Run()
+	return (&Server{In: in, Out: out, Memory: memory, AttachmentDir: attachmentDir}).Run()
 }
 
 // Lifecycle knobs for the stdio daemon. Hosts keep abandoned connections open,
@@ -590,10 +671,10 @@ func normalizeJSONValue(value any) any {
 
 // handle dispatches one decoded message; nil means "notification, no response".
 func handle(request any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer) any {
-	return handleWithMemoryMode(request, memory, lazy, debugOut, memory == nil)
+	return handleWithMemoryMode(request, memory, lazy, debugOut, memory == nil, true)
 }
 
-func handleWithMemoryMode(request any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
+func handleWithMemoryMode(request any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool, clientProcess bool) any {
 	request = normalizeJSONValue(request)
 	object, ok := request.(map[string]any)
 	if !ok {
@@ -633,14 +714,14 @@ func handleWithMemoryMode(request any, memory *facade.Memory, lazy *LazyMemory, 
 	case "tools/list":
 		return resultResponse(requestID, map[string]any{"tools": tools})
 	case "tools/call":
-		return toolCall(requestID, object["params"], memory, lazy, debugOut, liveDaemon)
+		return toolCall(requestID, object["params"], memory, lazy, debugOut, liveDaemon, clientProcess)
 	}
 	return errorResponse(requestID, codeMethodNotFound, "method not found: "+method)
 }
 
 // toolCall runs recall and turns every failure into an isError result, never a
 // crash.
-func toolCall(requestID any, rawParams any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool) any {
+func toolCall(requestID any, rawParams any, memory *facade.Memory, lazy *LazyMemory, debugOut io.Writer, liveDaemon bool, clientProcess bool) any {
 	params, ok := rawParams.(map[string]any)
 	if !ok {
 		return errorResponse(requestID, codeInvalidParams, "params must be an object")
@@ -661,7 +742,7 @@ func toolCall(requestID any, rawParams any, memory *facade.Memory, lazy *LazyMem
 		}
 		active = opened
 	}
-	presence := resolveMCPPresence(active, arguments, liveDaemon)
+	presence := resolveMCPPresence(active, arguments, clientProcess)
 	structured, text, err := recallResponse(active, arguments, presence)
 	if err != nil {
 		return toolError(requestID, err, debugOut)
@@ -821,13 +902,6 @@ func renderMaxChars(arguments map[string]any, fallback int) (int, error) {
 	return pyInt(chars)
 }
 
-func valueOr(values map[string]any, key string, fallback any) any {
-	if value, present := values[key]; present {
-		return value
-	}
-	return fallback
-}
-
 // optionalText maps a slot standard stringifies at first use (anchor_text goes
 // through str(), scope/reader flow into text comparisons): falsy values fall
 // through to the caller's default, everything else becomes pyStr.
@@ -887,18 +961,19 @@ func debugTrace(out io.Writer, err error) {
 	fmt.Fprint(out, ids.Redact(err.Error()+"\n"+string(debug.Stack())))
 }
 
-// resolveMCPPresence extracts active workspace PresenceCoordinates for MCP tool calls.
-// Explicit arguments ("cwd", "locus", "incarnation") or ROLLING_MEMORY_WORKSPACE always take priority;
-// in live stdio daemon mode (liveDaemon=true), it also checks the hook-written active_workspace.json
-// or the daemon's own git repository cwd.
-func resolveMCPPresence(active *facade.Memory, arguments map[string]any, liveDaemon bool) *text.PresenceCoordinates {
+// resolveMCPPresence builds the presence coordinates for one recall call.
+//
+// The client process is authoritative. When clientProcess is true the harness
+// identity comes from the live process (environment plus ancestry) and the
+// workspace from that process's cwd. The shared daemon must never re-derive
+// identity from its own environment or cwd; it only honors explicit
+// coordinates forwarded by the sidecar. Unknown identity leaves Carrier and
+// Incarnation empty so no carrier or incarnation resonance is granted.
+func resolveMCPPresence(active *facade.Memory, arguments map[string]any, clientProcess bool) *text.PresenceCoordinates {
 	var explicit text.PresenceCoordinates
 	if arguments != nil {
 		if rawCwd := arguments["cwd"]; pyTruthy(rawCwd) {
-			coords := text.DetectHarnessPresence(pyStr(rawCwd), "", "")
-			if !coords.IsEmpty() {
-				explicit = coords
-			}
+			explicit.Locus = text.DetectGitWorkspaceName(pyStr(rawCwd))
 		}
 		if rawLocus := arguments["locus"]; pyTruthy(rawLocus) {
 			explicit.Locus = pyStr(rawLocus)
@@ -911,9 +986,6 @@ func resolveMCPPresence(active *facade.Memory, arguments map[string]any, liveDae
 		}
 	}
 	mergeExplicit := func(base text.PresenceCoordinates) *text.PresenceCoordinates {
-		if explicit.World != "" {
-			base.World = explicit.World
-		}
 		if explicit.Carrier != "" {
 			base.Carrier = explicit.Carrier
 		}
@@ -932,172 +1004,50 @@ func resolveMCPPresence(active *facade.Memory, arguments map[string]any, liveDae
 		}
 		return &norm
 	}
-	if ws := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_WORKSPACE")); ws != "" {
-		coords := text.DetectHarnessPresence(ws, "", "")
-		if merged := mergeExplicit(coords); merged != nil {
-			return merged
-		}
-	}
-	if !liveDaemon {
+	if !clientProcess {
 		return mergeExplicit(text.PresenceCoordinates{})
 	}
 	if active != nil && active.Config != nil && strings.HasPrefix(active.Config.Scope, "mem:golden:") {
 		return mergeExplicit(text.PresenceCoordinates{})
 	}
-	stateDir := ""
-	if active != nil && active.Config != nil && active.Config.Log != "" {
-		stateDir = filepath.Dir(active.Config.Log)
-	} else {
-		stateDir = config.DefaultStateDir()
+	identity := hostid.Detect()
+	harness := ""
+	if identity.ID != hostid.Unknown && identity.ID != hostid.CLI {
+		harness = string(identity.ID)
 	}
-	readSavedPresence := func() text.PresenceCoordinates {
-		if stateDir == "" {
-			return text.PresenceCoordinates{}
-		}
-		raw, err := os.ReadFile(filepath.Join(stateDir, "active_workspace.json"))
-		if err != nil {
-			return text.PresenceCoordinates{}
-		}
-		var saved map[string]any
-		if json.Unmarshal(raw, &saved) != nil {
-			return text.PresenceCoordinates{}
-		}
-		return text.PresenceCoordinates{
-			World:       pyStr(valueOr(saved, "world", "")),
-			Carrier:     pyStr(valueOr(saved, "carrier", "")),
-			Locus:       pyStr(valueOr(saved, "locus", "")),
-			Incarnation: pyStr(valueOr(saved, "incarnation", "")),
-			SelfLabel:   pyStr(valueOr(saved, "self_label", "")),
-			PeerLabel:   pyStr(valueOr(saved, "peer_label", "")),
-		}.Normalized()
-	}
-	// 1. L1 Per-Process Isolation: the MCP daemon's own working directory (when inside a git repository)
-	//    takes priority over the shared active_workspace.json for Locus, while inheriting the active host
-	//    harness identity when the child process environment does not carry host-specific variables.
-	if cwd, err := os.Getwd(); err == nil && cwd != "" {
-		if text.DetectGitWorkspaceName(cwd) != "" {
-			harnessHint := resolvedHarnessHint(readSavedPresence(), resolveZCodeInFlightToolDirectory(ids.UTCNow()) != "")
-			coords := text.DetectHarnessPresence(cwd, harnessHint, "")
-			if inferred := calibrateLocusFromArguments(arguments, coords.Locus, true); inferred != "" {
-				coords.Locus = inferred
-			}
-			if merged := mergeExplicit(coords); merged != nil {
-				persistResolvedPresence(stateDir, *merged)
-				return merged
-			}
-		}
-	}
-	// 1b. L1.5 In-Flight Tool Call Session Directory Lookup:
-	//     When an MCP daemon was spawned with cwd in /tmp or $HOME (outside a git repo), query
-	//     ZCode's native `tool_usage JOIN session` for the currently running tool call's session
-	//     directory before falling back to the globally shared `active_workspace.json`.
-	if inFlightDir := resolveZCodeInFlightToolDirectory(ids.UTCNow()); inFlightDir != "" {
-		if text.DetectGitWorkspaceName(inFlightDir) != "" {
-			coords := text.DetectHarnessPresence(inFlightDir, "zcode", "")
-			if inferred := calibrateLocusFromArguments(arguments, coords.Locus, true); inferred != "" {
-				coords.Locus = inferred
-			}
-			if merged := mergeExplicit(coords); merged != nil {
-				persistResolvedPresence(stateDir, *merged)
-				return merged
-			}
-		}
-	}
-	// 2. L2 Hook State Fallback: read hook-written active_workspace.json when daemon cwd is outside a git repo (e.g. $HOME),
-	//    and self-calibrate Locus against explicit repository coordinates in the tool payload so concurrent multi-window
-	//    sessions never cross-contaminate each other's repository locus.
-	if coords := applyLiveHarnessIdentity(readSavedPresence()); !coords.IsEmpty() {
-		if inferred := calibrateLocusFromArguments(arguments, coords.Locus, false); inferred != "" {
-			coords.Locus = inferred
-		}
-		if merged := mergeExplicit(coords); merged != nil {
+	if ws := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_WORKSPACE")); ws != "" {
+		if merged := mergeExplicit(text.DetectHarnessPresence(ws, harness, "")); merged != nil {
 			return merged
 		}
 	}
-	return mergeExplicit(text.PresenceCoordinates{})
-}
-
-// persistResolvedPresence mirrors a live-resolved presence (the daemon's own
-// repository cwd or the host's in-flight tool-call directory) into the shared
-// active_workspace.json, keeping a fresh writer for the reconcile / console /
-// widget readers when no harness hook is wired. The L2 saved-state branch
-// never persists: echoing file-derived coordinates with a new timestamp would
-// fake activity recency.
-func persistResolvedPresence(stateDir string, coords text.PresenceCoordinates) {
-	_ = text.SavePresenceFile(stateDir, coords, "", ids.UTCNow())
-}
-
-// resolvedHarnessHint picks the harness identity for daemon-side presence. The
-// live process environment outranks the ZCode in-flight tool directory, which
-// outranks the shared saved-carrier file: a daemon spawned by one host must
-// never inherit another host's stored identity (Codex/DSH calls were stamped
-// harness:zcode whenever the last saved presence came from ZCode).
-func resolvedHarnessHint(saved text.PresenceCoordinates, inFlightZCode bool) string {
-	if h := text.DetectHarnessFromEnv(); h != "" {
-		return h
-	}
-	if inFlightZCode {
-		return "zcode"
-	}
-	if h := strings.TrimPrefix(saved.Carrier, "harness:"); h != "" && h != "cli" {
-		return h
-	}
-	return ""
-}
-
-// applyLiveHarnessIdentity stamps the live environment's harness onto saved
-// coordinates when the daemon process itself runs inside a host and the saved
-// carrier names a different one. A matching carrier keeps the saved
-// incarnation untouched (it may carry a subagent role).
-func applyLiveHarnessIdentity(coords text.PresenceCoordinates) text.PresenceCoordinates {
-	h := text.DetectHarnessFromEnv()
-	if h == "" {
-		return coords
-	}
-	if want := "harness:" + h; coords.Carrier != want {
-		coords.Carrier = want
-		coords.Incarnation = text.NormalizeHierarchicalPath("coding/" + h + "/main")
-	}
-	return coords
-}
-
-func isRepoIdentByte(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '-' || b == '_'
-}
-
-// indexRepoWordBoundary finds the first occurrence of needle in haystack where neither the
-// preceding nor the following byte is an identifier character ([a-zA-Z0-9-_]), preventing
-// a short repository stem from matching as a prefix of a longer hyphenated repository name.
-func indexRepoWordBoundary(haystack, needle string) int {
-	if needle == "" {
-		return -1
-	}
-	offset := 0
-	for offset <= len(haystack)-len(needle) {
-		idx := strings.Index(haystack[offset:], needle)
-		if idx < 0 {
-			return -1
+	cwd, _ := os.Getwd()
+	coords := text.DetectHarnessPresence(cwd, harness, "")
+	// ZCode's sidecar may be spawned from $HOME. The host's own in-flight
+	// tool record names the session directory, but it is only meaningful when
+	// the current process really is ZCode: querying it from another host is
+	// how Codex/DSH calls were stamped harness:zcode.
+	if identity.ID == hostid.ZCode {
+		if inFlight := resolveZCodeInFlightToolDirectory(ids.UTCNow(), identity.SessionID); inFlight != "" {
+			if text.DetectGitWorkspaceName(inFlight) != "" {
+				coords = text.DetectHarnessPresence(inFlight, "zcode", "")
+			}
 		}
-		absIdx := offset + idx
-		prevOK := absIdx == 0 || !isRepoIdentByte(haystack[absIdx-1])
-		endIdx := absIdx + len(needle)
-		nextOK := endIdx == len(haystack) || !isRepoIdentByte(haystack[endIdx])
-		if prevOK && nextOK {
-			return absIdx
-		}
-		offset = absIdx + 1
 	}
-	return -1
+	if inferred := calibrateLocusFromArguments(arguments, coords.Locus); inferred != "" {
+		coords.Locus = inferred
+	}
+	return mergeExplicit(coords)
 }
 
-// calibrateLocusFromArguments checks if the tool arguments explicitly reference a
-// known local git workspace under $HOME whose name differs from the fallback locus
-// (preventing multi-window locus cross-contamination).
-func calibrateLocusFromArguments(arguments map[string]any, fallbackLocus string, hasDedicatedRepoCwd bool) string {
+// calibrateLocusFromArguments honors an explicit assertion locus. The former
+// implementation also scanned $HOME directory names for any repository whose
+// name appeared in the JSON payload; a prompt that mentioned another
+// repository could then move the call to that workspace. Workspace now comes
+// from the client process, so only explicit coordinates may override it.
+func calibrateLocusFromArguments(arguments map[string]any, fallbackLocus string) string {
 	if arguments == nil {
 		return fallbackLocus
 	}
-	// 1. Explicit locus inside assertion / assertions[0] always wins.
 	if aMap, ok := arguments["assertion"].(map[string]any); ok {
 		if rawLoc := pyStr(aMap["locus"]); strings.Contains(rawLoc, "/") {
 			return text.NormalizeHierarchicalPath(rawLoc)
@@ -1110,65 +1060,15 @@ func calibrateLocusFromArguments(arguments map[string]any, fallbackLocus string,
 			}
 		}
 	}
-	// If the MCP daemon is already running inside a dedicated git repository cwd,
-	// keep that repository's locus unless an explicit assertion locus overrode it above.
-	if hasDedicatedRepoCwd && fallbackLocus != "" {
-		return fallbackLocus
-	}
-	rawBytes, err := json.Marshal(arguments)
-	if err != nil {
-		return fallbackLocus
-	}
-	payloadStr := strings.ToLower(string(rawBytes))
-	if fallbackLocus != "" {
-		parts := strings.Split(fallbackLocus, "/")
-		repoName := strings.ToLower(parts[len(parts)-1])
-		if repoName != "" && indexRepoWordBoundary(payloadStr, repoName) >= 0 {
-			return fallbackLocus
-		}
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return fallbackLocus
-	}
-	entries, err := os.ReadDir(home)
-	if err != nil {
-		return fallbackLocus
-	}
-	bestRepo := ""
-	bestLen := 0
-	bestIdx := len(payloadStr) + 1
-	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		nameLower := strings.ToLower(entry.Name())
-		if len(nameLower) < 4 {
-			continue
-		}
-		idx := indexRepoWordBoundary(payloadStr, nameLower)
-		if idx >= 0 {
-			candidateDir := filepath.Join(home, entry.Name())
-			if locus := text.DetectGitWorkspaceName(candidateDir); locus != "" {
-				if len(nameLower) > bestLen || (len(nameLower) == bestLen && idx < bestIdx) {
-					bestLen = len(nameLower)
-					bestIdx = idx
-					bestRepo = locus
-				}
-			}
-		}
-	}
-	if bestRepo != "" {
-		return bestRepo
-	}
 	return fallbackLocus
 }
 
-// resolveZCodeInFlightToolDirectory recovers the directory of the session that
-// is currently running (or just ran) a Rolling-Memory tool call, so an MCP
-// daemon spawned outside a git repository can still calibrate its workspace
-// locus instead of falling back to the globally shared active_workspace.json.
-func resolveZCodeInFlightToolDirectory(nowSec int64) string {
+// resolveZCodeInFlightToolDirectory recovers the directory of the ZCode
+// session that is currently running (or just ran) a Rolling-Memory call. The
+// caller must already have established that the current process is ZCode; the
+// session id, when known, narrows the query to this window instead of any
+// other ZCode window on the machine.
+func resolveZCodeInFlightToolDirectory(nowSec int64, sessionID string) string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
@@ -1184,16 +1084,23 @@ func resolveZCodeInFlightToolDirectory(nowSec int64) string {
 	defer db.Close()
 	runningCutoffMS := (nowSec - 180) * 1000
 	recentCutoffMS := (nowSec - 30) * 1000
-	var dir string
-	_ = db.QueryRow(`
+	query := `
 		SELECT coalesce(s.directory, '')
 		FROM tool_usage t
 		JOIN session s ON s.id = t.session_id
-		WHERE (t.tool_name LIKE '%rolling-memory%' OR t.tool_name LIKE '%recall%')
+		WHERE t.tool_name LIKE '%rolling-memory%'
+		  AND t.tool_name LIKE '%recall%'
 		  AND ((t.status = 'running' AND t.started_at >= ?) OR t.started_at >= ?)
-		  AND coalesce(s.directory, '') != ''
+		  AND coalesce(s.directory, '') != ''`
+	args := []any{runningCutoffMS, recentCutoffMS}
+	if session := strings.TrimSpace(sessionID); session != "" {
+		query += ` AND s.id = ?`
+		args = append(args, session)
+	}
+	query += `
 		ORDER BY (t.status = 'running') DESC, t.started_at DESC
-		LIMIT 1
-	`, runningCutoffMS, recentCutoffMS).Scan(&dir)
+		LIMIT 1`
+	var dir string
+	_ = db.QueryRow(query, args...).Scan(&dir)
 	return strings.TrimSpace(dir)
 }

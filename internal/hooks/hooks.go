@@ -89,7 +89,7 @@ func importReplayEvent(
 		session = pyStr(value)
 	}
 	if presence != nil {
-		saveActiveWorkspacePresence(cfg, *presence, session)
+		saveActiveWorkspacePresence(*presence, session)
 	}
 	imported := map[string]any{"messages": 0, "inserted": 0}
 	units, _, sourceErr := currentTurnUnitsChecked(cfg.Scope, session, payload)
@@ -409,7 +409,7 @@ func recallHook(memory *facade.Memory, cfg *config.Config, payload map[string]an
 	}
 	presence := workspacePresence(payload)
 	if presence != nil {
-		saveActiveWorkspacePresence(cfg, *presence, session)
+		saveActiveWorkspacePresence(*presence, session)
 	}
 	maybeSyncBackgroundOnHook(memory)
 	if project != "" {
@@ -1065,11 +1065,15 @@ func isEphemeralProbeSession(session string) bool {
 	return false
 }
 
-func saveActiveWorkspacePresence(cfg *config.Config, coords text.PresenceCoordinates, session string) {
-	if cfg == nil || cfg.Log == "" || coords.IsEmpty() || isEphemeralProbeSession(session) {
+// saveActiveWorkspacePresence records a hook heartbeat. The state directory is
+// the canonical one from config, not the log file's directory: the log may be
+// redirected while the presence ledger stays beside the rest of the runtime
+// state.
+func saveActiveWorkspacePresence(coords text.PresenceCoordinates, session string) {
+	if coords.IsEmpty() || isEphemeralProbeSession(session) {
 		return
 	}
-	_ = text.SavePresenceFile(filepath.Dir(cfg.Log), coords, session, ids.UTCNow())
+	_ = text.SavePresenceFile(config.DefaultStateDir(), coords, session, ids.UTCNow())
 }
 
 func nextSessionTurn(memory *facade.Memory, scope, session string) int64 {

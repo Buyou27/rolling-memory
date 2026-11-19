@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/clock"
+	"github.com/rocareer/rolling-memory/internal/hostid"
 )
 
 // fixture is a synthetic HOME with all five harness directories present. It
@@ -510,6 +511,23 @@ func TestResolvedBinaryExpandsUserPaths(t *testing.T) {
 	for _, binary := range []string{"rolling-memory", "/usr/local/bin/rolling-memory"} {
 		if got := (InstallOptions{Home: home, Binary: binary}).ResolvedBinary(); got != binary {
 			t.Fatalf("ResolvedBinary(%q) rewrote to %q", binary, got)
+		}
+	}
+}
+
+// TestEveryHarnessHasHostIdentity keeps the install registry and the runtime
+// identity registry in lockstep: a host that can be installed must also have a
+// label the console can display when a live attachment names it.
+func TestEveryHarnessHasHostIdentity(t *testing.T) {
+	home := t.TempDir()
+	defs := append(BuildHarnesses(home, ""), BuildExtendedHarnesses(home)...)
+	for _, def := range defs {
+		id := hostid.Normalize(def.ID)
+		if id == hostid.Unknown {
+			t.Fatalf("harness %q has no runtime identity", def.ID)
+		}
+		if label := hostid.Label(id); label == "" || label == string(id) {
+			t.Fatalf("harness %q has no runtime label", def.ID)
 		}
 	}
 }

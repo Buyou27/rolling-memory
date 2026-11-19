@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/hostid"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
 	"github.com/rocareer/rolling-memory/internal/text"
@@ -161,6 +162,10 @@ type UnixHealthResponse struct {
 	MemLimitBytes  int64  `json:"mem_limit_bytes"`
 	MemLimitSource string `json:"mem_limit_source"`
 	MemLimitConfig string `json:"mem_limit_config"`
+	// Attachments exposes the live client sessions for diagnostics. The
+	// daemon is shared by every host on the machine, so this is the only
+	// place where its attachments can be observed without reading state.
+	Attachments []hostid.Attachment `json:"attachments,omitempty"`
 }
 
 // DaemonConfigID exposes the daemon configuration identity so diagnostics can
@@ -211,6 +216,7 @@ func unixDaemonHealth(cfg *config.Config, exeMTime int64) (UnixHealthResponse, e
 	if startedAt.IsZero() {
 		startedAt = time.Now()
 	}
+	attachments := hostid.LiveAttachments(hostid.LoadLedger(config.DefaultStateDir()), time.Now().Unix())
 	return UnixHealthResponse{
 		OK: true, PID: os.Getpid(), DB: cfg.DB, ExeModTimeNS: exeMTime,
 		IdentityVersion: daemonIdentityVersion, Mode: cfg.Mode, PulseMode: "local_plain", ConfigID: id,
@@ -222,6 +228,7 @@ func unixDaemonHealth(cfg *config.Config, exeMTime int64) (UnixHealthResponse, e
 		MemLimitBytes:  limit.LimitBytes,
 		MemLimitSource: limit.LimitSource,
 		MemLimitConfig: limit.ConfigValue,
+		Attachments:    attachments,
 	}, nil
 }
 

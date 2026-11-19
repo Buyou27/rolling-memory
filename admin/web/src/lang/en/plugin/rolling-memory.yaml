@@ -147,6 +147,8 @@ overview:
     jumpHint: Open this layer's dedicated page
     aggregateTitle: Cross-Layer Aggregate List (All Memory Units)
     envLabel: Active Harness
+    envUnknown: No live host detected
+    envRecentLabel: Recent activity
     healthLabel: Memory Health
     reconcileAllBtn: Reconcile All 3 Layers
     reconcileLayerBtn: Reconcile Layer

@@ -5,7 +5,7 @@ This third-party DSH bundle exposes the Rolling Memory `recall` MCP tool and the
 ## Requirements
 
 - DSH `0.2.2-rc.3` and `pnpm` for plugin installation; `npm` is needed to build the tarball. Other DSH versions have not been verified.
-- A compatible Rolling Memory executable named `rolling-memory` on the DSH process's `PATH`. The tested builds reported `rolling-memory 0.0.1` and `rolling-memory 0.0.2`; this is not a claim that all builds with those versions are equivalent. See the [Rolling Memory installation guide](https://github.com/rocareer/rolling-memory#quick-start) for installation options. Install it separately and check `rolling-memory --version`. This bundle does not install or update the executable. Graphical launchers may have a different `PATH` from your terminal; ensure the executable is available to the DSH process.
+- A compatible Rolling Memory executable named `rolling-memory` on the DSH process's `PATH`. The bundle is not pinned to a Rolling Memory version; install a current build separately and check `rolling-memory --version`. See the [Rolling Memory installation guide](https://github.com/rocareer/rolling-memory#quick-start) for installation options. This bundle does not install or update the executable. Graphical launchers may have a different `PATH` from your terminal; ensure the executable is available to the DSH process.
 - A DSH profile with the standard tools and skill services, such as `web`, `headless`, or `sdk`. The `sdk-minimal` profile does not include the skill services by default.
 
 ## Build a local package
@@ -16,7 +16,7 @@ The directory is self-contained: it carries its own `LICENSE`, the bundle patch,
 bash examples/dsh-plugin/pack.sh /absolute/path/to/output-directory
 ```
 
-The helper writes `rocareer-dsh-rolling-memory-0.0.2.tgz` to the output directory and refuses to overwrite an existing package. `npm pack` directly in this directory produces the same complete package. No registry access or install scripts are needed.
+The helper writes `rocareer-dsh-rolling-memory-0.0.6.tgz` to the output directory and refuses to overwrite an existing package. `npm pack` directly in this directory produces the same complete package. No registry access or install scripts are needed.
 
 ## Install and use
 
@@ -31,7 +31,7 @@ DSH requires unique server names within a scope. If an existing Rolling Memory M
 Then install a tarball and inspect the resulting configuration:
 
 ```sh
-dsh plugin --profile web add --offline /absolute/path/to/rocareer-dsh-rolling-memory-0.0.2.tgz
+dsh plugin --profile web add --offline /absolute/path/to/rocareer-dsh-rolling-memory-0.0.6.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -39,7 +39,7 @@ dsh --profile web
 A published tarball URL works the same way, for example:
 
 ```sh
-dsh plugin --profile web add https://github.com/rocareer/rolling-memory/releases/download/dsh-plugin-v0.0.2/rocareer-dsh-rolling-memory-0.0.2.tgz
+dsh plugin --profile web add https://github.com/rocareer/rolling-memory/releases/download/dsh-plugin-v0.0.6/rocareer-dsh-rolling-memory-0.0.6.tgz
 ```
 
 To install from the public Git repository instead, pin the bundle's directory at a commit:

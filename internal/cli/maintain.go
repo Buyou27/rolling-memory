@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,10 +56,14 @@ type maintainItem struct {
 	AgeDays int       `json:"age_days"`
 	Family  string    `json:"family,omitempty"`
 	Action  string    `json:"action"` // delete | keep | clear | report
+	Dir     bool      `json:"dir,omitempty"`
 	mod     time.Time `json:"-"`
 }
 
-// maintainScanDirs 返回安装目录下允许清理旧副本的三个位置（不递归）。
+// maintainScanDirs returns the installation directories whose file backups are
+// managed (non-recursive). The vault backup directory is included: its files use
+// the same family naming and are the largest reclaimable family on long-lived
+// installations.
 func maintainScanDirs(dataDir string) []string {
 	return []string{
 		filepath.Join(dataDir, "bin"),
@@ -134,6 +139,275 @@ func maintainScanBackups(dirs []string, keep int, now time.Time) []maintainItem 
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
+	return items
+}
+
+// maintainStampLike reports whether a backup suffix looks machine-generated
+// (digits, dashes, and the ISO T/Z separators). Semantic suffixes such as
+// -anchor or -wirev1 are manual checkpoints and are never auto-deleted.
+func maintainStampLike(suffix string) bool {
+	if suffix == "" {
+		return false
+	}
+	for _, char := range suffix {
+		switch {
+		case char >= '0' && char <= '9':
+		case char == '-', char == 'T', char == 'Z':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// maintainScanVaultBackups groups database backups with their -shm/-wal
+// sidecars. Sidecars must not consume the keep quota: a 0-byte WAL would
+// otherwise outrank the database file it belongs to. Semantic suffixes are
+// kept regardless of age.
+func maintainScanVaultBackups(backupDir string, keep int, now time.Time) []maintainItem {
+	if keep < 0 {
+		keep = 0
+	}
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return nil
+	}
+	type group struct {
+		main     maintainItem
+		sidecars []maintainItem
+		managed  bool
+	}
+	var groups []group
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		family, ok := maintainBackupFamily(name)
+		if !ok {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		item := maintainItem{
+			Path:    filepath.Join(backupDir, name),
+			Bytes:   info.Size(),
+			AgeDays: int(now.Sub(info.ModTime()).Hours() / 24),
+			Family:  family,
+			mod:     info.ModTime(),
+		}
+		if strings.HasSuffix(name, "-shm") || strings.HasSuffix(name, "-wal") {
+			base := strings.TrimSuffix(strings.TrimSuffix(name, "-shm"), "-wal")
+			for index := range groups {
+				if filepath.Base(groups[index].main.Path) == base {
+					groups[index].sidecars = append(groups[index].sidecars, item)
+					break
+				}
+			}
+			continue
+		}
+		suffix := ""
+		if idx := strings.Index(name, ".bak-"); idx >= 0 {
+			suffix = name[idx+len(".bak-"):]
+		}
+		groups = append(groups, group{main: item, managed: suffix != "" && maintainStampLike(suffix)})
+	}
+	var items []maintainItem
+	type familyGroup struct {
+		managed   []int
+		protected []int
+	}
+	byFamily := map[string]*familyGroup{}
+	for index := range groups {
+		fg := byFamily[groups[index].main.Family]
+		if fg == nil {
+			fg = &familyGroup{}
+			byFamily[groups[index].main.Family] = fg
+		}
+		if groups[index].managed {
+			fg.managed = append(fg.managed, index)
+		} else {
+			fg.protected = append(fg.protected, index)
+		}
+	}
+	for _, fg := range byFamily {
+		sort.Slice(fg.managed, func(left, right int) bool {
+			return groups[fg.managed[left]].main.mod.After(groups[fg.managed[right]].main.mod)
+		})
+		for rank, index := range fg.managed {
+			if rank < keep {
+				groups[index].main.Action = "keep"
+			} else {
+				groups[index].main.Action = "delete"
+			}
+			items = append(items, groups[index].main)
+			for _, sidecar := range groups[index].sidecars {
+				sidecar.Action = groups[index].main.Action
+				items = append(items, sidecar)
+			}
+		}
+		for _, index := range fg.protected {
+			groups[index].main.Action = "keep"
+			items = append(items, groups[index].main)
+			for _, sidecar := range groups[index].sidecars {
+				sidecar.Action = "keep"
+				items = append(items, sidecar)
+			}
+		}
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].Path < items[right].Path })
+	return items
+}
+
+// maintainDirBytes returns the recursive regular-file size of a directory.
+func maintainDirBytes(path string) int64 {
+	var total int64
+	_ = filepath.WalkDir(path, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() {
+			return nil
+		}
+		if info, infoErr := entry.Info(); infoErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// maintainScanWebDistBackups finds the panel's previous web-dist directories.
+// The updater replaces the whole directory, so these are directory-shaped
+// backups that the regular file scan intentionally skips.
+func maintainScanWebDistBackups(adminDir string, keep int, now time.Time) []maintainItem {
+	if keep < 0 {
+		keep = 0
+	}
+	entries, err := os.ReadDir(adminDir)
+	if err != nil {
+		return nil
+	}
+	var items []maintainItem
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "web-dist.bak-") && !strings.HasPrefix(name, "web-dist.old") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		path := filepath.Join(adminDir, name)
+		items = append(items, maintainItem{
+			Path:    path,
+			Bytes:   maintainDirBytes(path),
+			AgeDays: int(now.Sub(info.ModTime()).Hours() / 24),
+			Family:  "web-dist",
+			Dir:     true,
+			mod:     info.ModTime(),
+		})
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].mod.After(items[right].mod) })
+	for index := range items {
+		switch {
+		case index < keep:
+			items[index].Action = "keep"
+		case strings.HasSuffix(items[index].Path, ".old") && now.Sub(items[index].mod) < maintainTransientMinAge:
+			items[index].Action = "keep"
+		default:
+			items[index].Action = "delete"
+		}
+	}
+	return items
+}
+
+// maintainScanBinaryBackups finds launcher backups written by update/install in
+// the user's ~/.local/bin. Only this tool's launcher families are eligible.
+func maintainScanBinaryBackups(home string, keep int, now time.Time) []maintainItem {
+	if home == "" || keep < 0 {
+		return nil
+	}
+	dir := filepath.Join(home, ".local", "bin")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	type groupKey struct{ dir, family string }
+	groups := map[groupKey][]maintainItem{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		family, ok := maintainBackupFamily(entry.Name())
+		if !ok {
+			continue
+		}
+		suffix := ""
+		if idx := strings.Index(entry.Name(), ".bak-"); idx >= 0 {
+			suffix = entry.Name()[idx+len(".bak-"):]
+		} else if strings.HasSuffix(entry.Name(), ".old") {
+			suffix = "old"
+		}
+		if suffix != "old" && !maintainStampLike(suffix) {
+			continue
+		}
+		switch family {
+		case "rolling-memory", "rmem", "rolling-memory-panel", "rolling-memory.sh":
+		default:
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		key := groupKey{dir, family}
+		groups[key] = append(groups[key], maintainItem{
+			Path:    filepath.Join(dir, entry.Name()),
+			Bytes:   info.Size(),
+			AgeDays: int(now.Sub(info.ModTime()).Hours() / 24),
+			Family:  family,
+			mod:     info.ModTime(),
+		})
+	}
+	var items []maintainItem
+	for _, members := range groups {
+		sort.Slice(members, func(left, right int) bool { return members[left].mod.After(members[right].mod) })
+		for index, item := range members {
+			if index < keep {
+				item.Action = "keep"
+			} else {
+				item.Action = "delete"
+			}
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].Path < items[right].Path })
+	return items
+}
+
+// maintainScanUserHistory reports experiment history. It is never part of the
+// clean plan: deleting evaluation evidence is a user decision, not maintenance.
+func maintainScanUserHistory(stateDir string, now time.Time) []maintainItem {
+	var items []maintainItem
+	for _, name := range []string{"eval", "atmbench"} {
+		path := filepath.Join(stateDir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		items = append(items, maintainItem{
+			Path:    path,
+			Bytes:   maintainDirBytes(path),
+			AgeDays: int(now.Sub(info.ModTime()).Hours() / 24),
+			Family:  "user-history",
+			Action:  "report",
+			Dir:     true,
+			mod:     info.ModTime(),
+		})
+	}
 	return items
 }
 
@@ -330,8 +604,18 @@ func maintainApplyClean(plan []maintainItem, stateDir string, now time.Time) (ma
 		if item.Action != "delete" && item.Action != "clear" {
 			continue
 		}
-		if err := os.Remove(item.Path); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", item.Path, err))
+		var removeErr error
+		if item.Dir {
+			if info, statErr := os.Lstat(item.Path); statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				removeErr = fmt.Errorf("not a safe backup directory")
+			} else {
+				removeErr = os.RemoveAll(item.Path)
+			}
+		} else {
+			removeErr = os.Remove(item.Path)
+		}
+		if removeErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", item.Path, removeErr))
 			continue
 		}
 		freed += item.Bytes
@@ -495,10 +779,15 @@ func (a *application) runMaintainStatus(memory *facade.Memory) (int, error) {
 	now := time.Now()
 	dataDir := filepath.Dir(memory.Config.DB)
 	stateDir := config.DefaultStateDir()
+	home, _ := os.UserHomeDir()
 	backupItems := maintainScanBackups(maintainScanDirs(dataDir), maintainDefaultBackupKeep, now)
+	backupItems = append(backupItems, maintainScanVaultBackups(filepath.Join(dataDir, "backups"), maintainDefaultBackupKeep, now)...)
+	backupItems = append(backupItems, maintainScanWebDistBackups(filepath.Join(dataDir, "admin"), maintainDefaultBackupKeep, now)...)
+	backupItems = append(backupItems, maintainScanBinaryBackups(home, maintainDefaultBackupKeep, now)...)
 	cacheItems := maintainScanCaches(stateDir, now)
 	engineCacheItems := maintainScanEngineCache(memory.Config.DB, false, now)
 	logItems := maintainScanLogs(stateDir, now)
+	historyItems := maintainScanUserHistory(stateDir, now)
 	vault := maintainVaultStat(memory, dataDir)
 	daemon := maintainDaemonStat()
 
@@ -506,6 +795,7 @@ func (a *application) runMaintainStatus(memory *facade.Memory) (int, error) {
 	caches := maintainSection("caches", cacheItems)
 	engineCache := maintainSection("engine_cache", engineCacheItems)
 	logs := maintainSection("logs", logItems)
+	history := maintainSection("history", historyItems)
 	reclaimBackups := backups["reclaimable_bytes"].(int64)
 	reclaimCaches := caches["reclaimable_bytes"].(int64)
 	reclaimCompact, _ := vault["free_bytes"].(int64)
@@ -519,6 +809,7 @@ func (a *application) runMaintainStatus(memory *facade.Memory) (int, error) {
 		"backups":      backups,
 		"caches":       caches,
 		"logs":         logs,
+		"history":      history,
 		"vault":        vault,
 		"daemon":       daemon,
 		"engine_cache": engineCache,
@@ -549,7 +840,11 @@ func (a *application) runMaintainClean(memory *facade.Memory) (int, error) {
 	dataDir := filepath.Dir(memory.Config.DB)
 	stateDir := config.DefaultStateDir()
 
+	home, _ := os.UserHomeDir()
 	plan := maintainScanBackups(maintainScanDirs(dataDir), keep, now)
+	plan = append(plan, maintainScanVaultBackups(filepath.Join(dataDir, "backups"), keep, now)...)
+	plan = append(plan, maintainScanWebDistBackups(filepath.Join(dataDir, "admin"), keep, now)...)
+	plan = append(plan, maintainScanBinaryBackups(home, keep, now)...)
 	if includeCaches {
 		plan = append(plan, maintainScanCaches(stateDir, now)...)
 	}
@@ -668,6 +963,12 @@ func (a *application) printMaintainStatus(report map[string]any) {
 			}
 			a.printf("    %s %s (%s, %dd)\n", item.Action, item.Path, maintainHumanBytes(item.Bytes), item.AgeDays)
 			printed++
+		}
+	}
+	if section, _ := report["history"].(map[string]any); section != nil {
+		if items, _ := section["items"].([]maintainItem); len(items) > 0 {
+			a.printf("  history: %d dirs · %s · kept (evaluation evidence is never auto-deleted)\n",
+				len(items), maintainHumanBytes(section["total_bytes"].(int64)))
 		}
 	}
 	if section, _ := report["engine_cache"].(map[string]any); section != nil {

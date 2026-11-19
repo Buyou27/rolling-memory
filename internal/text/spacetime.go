@@ -4,12 +4,11 @@
 package text
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/rocareer/rolling-memory/internal/hostid"
 )
 
 // PresenceCoordinates holds the 4D presence probe coordinates (World x Carrier x Locus x Incarnation)
@@ -467,26 +466,34 @@ func parseRemoteURLFromGitConfig(content string) string {
 // DetectHarnessPresence synthesizes PresenceCoordinates from a workspace cwd, optional harness name,
 // and optional agent subrole (0-LLM, deterministic). The locus is the canonical workspace identity
 // (DetectGitWorkspaceName): the enclosing repository root's name, or "" outside any repository.
+//
+// An undetected host leaves Carrier and Incarnation empty. The historical
+// "harness:cli" fallback turned every detection failure into a concrete
+// identity, which then received carrier and incarnation resonance and was
+// written into assertion metadata. Unknown is now a first-class state: only
+// the locus can still contribute resonance, and the console can say so.
 func DetectHarnessPresence(cwd, harnessName, subrole string) PresenceCoordinates {
 	locus := DetectGitWorkspaceName(cwd)
-	h := strings.ToLower(strings.TrimSpace(harnessName))
-	if h == "" {
-		h = DetectHarnessFromEnv()
+	h := hostid.Normalize(harnessName)
+	if h == hostid.Unknown {
+		h = hostid.Normalize(hostid.DetectFromEnv())
 	}
-	if h == "" {
-		h = "cli"
+	coords := PresenceCoordinates{
+		Locus:     locus,
+		PeerLabel: DetectGitWorkspaceUser(cwd),
 	}
-	role := strings.ToLower(strings.TrimSpace(subrole))
-	if role == "" {
-		role = "main"
+	if h != hostid.Unknown && h != "" {
+		role := strings.ToLower(strings.TrimSpace(subrole))
+		if role == "" {
+			role = "main"
+		}
+		coords.Carrier = "harness:" + string(h)
+		coords.Incarnation = NormalizeHierarchicalPath("coding/" + string(h) + "/" + role)
 	}
-	return PresenceCoordinates{
-		World:       "actual",
-		Carrier:     "harness:" + h,
-		Locus:       locus,
-		Incarnation: NormalizeHierarchicalPath("coding/" + h + "/" + role),
-		PeerLabel:   DetectGitWorkspaceUser(cwd),
+	if coords.Carrier != "" || coords.Locus != "" {
+		coords.World = "actual"
 	}
+	return coords
 }
 
 // DetectGitWorkspaceUser inspects the git config (local repository or ~/.gitconfig) to extract
@@ -605,95 +612,43 @@ func CanonicalAssistantScopeVariants(scope, assistantID string) []string {
 }
 
 // DetectHarnessFromEnv returns the harness fingerprint carried by the process
-// environment, or "" when no host-specific marker is present. Callers holding a
-// fallback identity (a saved presence file, a plugin declaration) must consult
-// this first: a child process spawned by one host inherits another host's
-// exported variables, so a live fingerprint always outranks a stored carrier.
-//
-// Ordering is by marker strength: session-scoped markers stamped by the host
-// itself come before plain shell exports that every descendant inherits.
+// environment, or "" when no host-specific session marker is present. The
+// registry and the strength ladder live in internal/hostid; this wrapper keeps
+// the historical text-package call site.
 func DetectHarnessFromEnv() string {
-	if v := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_HARNESS")); v != "" {
-		return strings.ToLower(v)
-	}
-	// DeepSeek Harness stamps these only on the processes it spawns; a DSH
-	// session started inside another host's terminal also carries that host's
-	// plain exports, so DSH must be asked before ZCode.
-	if os.Getenv("DSH_SESSION_ID") != "" || os.Getenv("DSH_SHELL") != "" {
-		return "dsh"
-	}
-	if os.Getenv("ZCODE_SESSION_ID") != "" || os.Getenv("ZCODE_WORKSPACE") != "" || strings.Contains(strings.ToLower(os.Getenv("TERM_PROGRAM")), "zcode") {
-		return "zcode"
-	}
-	if os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "" || os.Getenv("CLAUDECODE") != "" {
-		return "claude-code"
-	}
-	if os.Getenv("CURSOR_TRACE_ID") != "" {
-		return "cursor"
-	}
-	if os.Getenv("WINDSURF_SESSION") != "" {
-		return "windsurf"
-	}
-	// Codex stamps its thread id on the processes it spawns and points
-	// CODEX_HOME at its store; a plain shell export of CODEX_HOME is weaker
-	// evidence than any marker above, so this stays last.
-	if os.Getenv("CODEX_THREAD_ID") != "" || os.Getenv("CODEX_HOME") != "" {
-		return "codex"
-	}
-	// Unknown host: return empty so DetectHarnessPresence stamps the generic
-	// "cli" carrier. Naming a concrete harness here (the historical hardcoded
-	// "zcode") would write a false identity into the presence state — the
-	// console then reports ZCode as active on machines that never ran it.
-	return ""
+	return hostid.DetectFromEnv()
 }
 
-// SavePresenceFile atomically replaces the shared active_workspace.json with
-// the latest writer's coordinates. The document holds only the latest writer's
-// coordinates — the locus is the canonical workspace name (repository root
-// basename) or "", and no per-locus session map is accumulated — so every
-// consumer (MCP presence resolution, reconcile, console) reads one schema.
-// Writers are last-writer-wins across processes; a lock stale for more than
-// two seconds is reaped, and the temp-file rename keeps readers on a complete
-// document.
+// SavePresenceFile records a hook heartbeat in the shared attachment ledger.
+// It is no longer a last-writer-wins document: each session keeps its own
+// entry, and a hook carries a short lease rather than claiming that its
+// short-lived process is still online. The document schema and locking live in
+// internal/hostid.
 func SavePresenceFile(stateDir string, coords PresenceCoordinates, session string, updatedAt int64) error {
 	if strings.TrimSpace(stateDir) == "" || coords.IsEmpty() {
 		return nil
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return err
+	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(coords.Carrier)), "harness:")
+	if host == "" {
+		host = string(hostid.Unknown)
 	}
-	statePath := filepath.Join(stateDir, "active_workspace.json")
-	lockPath := statePath + ".lock"
-	for attempt := 0; attempt < 8; attempt++ {
-		if info, err := os.Stat(lockPath); err == nil && time.Since(info.ModTime()) > 2*time.Second {
-			_ = os.Remove(lockPath)
-		}
-		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_ = lock.Close()
-			defer os.Remove(lockPath)
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
+	attachment := hostid.Attachment{
+		Host:       host,
+		Label:      hostid.Label(hostid.Normalize(host)),
+		SessionID:  session,
+		Role:       incarnationRole(coords.Incarnation),
+		Locus:      coords.Locus,
+		Evidence:   "hook",
+		Mode:       hostid.ModeHeartbeat,
+		LastSeenAt: updatedAt,
 	}
-	data, err := json.Marshal(map[string]any{
-		"world":       coords.World,
-		"carrier":     coords.Carrier,
-		"locus":       coords.Locus,
-		"incarnation": coords.Incarnation,
-		"session_id":  session,
-		"updated_at":  updatedAt,
-	})
-	if err != nil {
-		return err
+	return hostid.RecordAt(stateDir, attachment, updatedAt)
+}
+
+func incarnationRole(incarnation string) string {
+	parts := strings.Split(strings.TrimSpace(incarnation), "/")
+	if len(parts) < 3 {
+		return ""
 	}
-	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", statePath, os.Getpid(), time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, statePath); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	return parts[len(parts)-1]
 }

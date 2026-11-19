@@ -272,8 +272,12 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			bits = idx.TermBitsOf(h)
 		}
 		dfH := idx.TermDF(h)
+		// [count-floor] properGuardMinDF — 文档数下限（篇）。低于它时词项的大写占比不稳，
+		// 不启用专名守卫。旧写法 `float64(dfH) > e²` 把无量纲常数接到文档计数上
+		// （量纲不齐）；因 df 为整数，`df > e²` ⟺ `df ≥ 8`，故换为整数并逐位不变（A24）。
+		const properGuardMinDF = 8
 		isTrueProper := qa.Flags&rmProperMask != 0 && float64(bits)*eulerNumber >= meanBits && dfH <= highDFThresh
-		if isTrueProper && float64(dfH) > eulerNumber*eulerNumber && st.properRatioOf(h) < transmissionPerHop && !hasAdjacentProper(h, qa) {
+		if isTrueProper && dfH >= properGuardMinDF && st.properRatioOf(h) < transmissionPerHop && !hasAdjacentProper(h, qa) {
 			isTrueProper = false
 		}
 		if qa.Flags&rmCaseFreeRigidMask != 0 || (qa.Flags&rmBitConn != 0 && qa.Flags&rmFlagCompanion == 0) || isTrueProper {
@@ -358,6 +362,12 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	} else {
 		clear(anchorKappa)
 	}
+	// 两套凝聚度口径（非对称，均承重，改动须配对 ATM）：
+	//   kappaOcc   = 1 - (特异提及的日数) / E0(全部提及数)  —— 分母按总用量计，等价于「特异性
+	//                提及之外的总量被视作可摊开的日子」，对高用量词族更宽松（批量特化折扣）。
+	//   anchorKappa= 1 - (特异提及的日数) / E0(特异提及数) —— 同一观测集上的严格估计量。
+	// 实测：把 kappaOcc 改成任一一致估计量（D_all 配 n_all，或 D_spec 配 n_spec）都会显著退化
+	// （73.67 → 72.71 / 72.76），见 A22.7 与 F-50；故此处的不对称属设计选择，不是笔误。
 	for g, um := range groupUnits {
 		n := float64(len(um))
 		dObs := float64(len(groupDays[g]))
@@ -988,7 +998,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 			if hasSpecificProper && gate < 1.0 {
 				g := m.group
-				if !isAnchorGroup[g] && !groupRigid[g] && kappaOcc[g] < shellScatterFloor && float64(len(groupAnchorUnits[g])) > eulerNumber*eulerNumber {
+				// [count-floor] shellGuardMinAnchorUnits — 单元数下限（个）：少于 8 个特异
+				// 单元时不施加口语壳消光。旧写法 `len > e²` 同属量纲不齐，整数等价于 ≥ 8（A24）。
+				const shellGuardMinAnchorUnits = 8
+				if !isAnchorGroup[g] && !groupRigid[g] && kappaOcc[g] < shellScatterFloor && len(groupAnchorUnits[g]) >= shellGuardMinAnchorUnits {
 					if _, alreadyScaled := shellScale[g]; !alreadyScaled {
 						m.mass *= gate
 					}

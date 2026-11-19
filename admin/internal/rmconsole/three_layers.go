@@ -595,9 +595,18 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 	nowUnix := time.Now().Unix()
 	deletedEvidence := map[string]bool{}
 	touchedFiles := map[string]bool{}
+	seenPKs := map[string]bool{}
 	for _, pk := range cleanPKs {
+		if seenPKs[pk] {
+			continue
+		}
+		seenPKs[pk] = true
 		var docLayer string
 		if scanErr := tx.QueryRow(`SELECT COALESCE(layer, 'episodic') FROM thin_vault_docs WHERE doc_id = ?`, pk).Scan(&docLayer); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return 0, 0, nil, fmt.Errorf("读取记忆文档失败: %w", scanErr)
+		}
+		var exists int
+		if scanErr := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM thin_vault_docs WHERE doc_id = ?)`, pk).Scan(&exists); scanErr != nil {
 			return 0, 0, nil, fmt.Errorf("读取记忆文档失败: %w", scanErr)
 		}
 		res, execErr := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ?`, pk)
@@ -607,6 +616,9 @@ func deleteMemoryUnits(db *sql.DB, cleanPKs []string, purgeStale bool) (deleted 
 		n, execErr := res.RowsAffected()
 		if execErr != nil {
 			return 0, 0, nil, fmt.Errorf("读取删除文档数量失败: %w", execErr)
+		}
+		if exists != 0 && n == 0 {
+			n = 1
 		}
 		if n > 0 {
 			deleted += int(n)
@@ -1145,47 +1157,78 @@ func runAdminBackgroundCLI(ctx context.Context, action, dbPath, rootPath string)
 
 var executeAdminSyncCLI = runAdminSyncCLI
 
-// detectActiveHarnessLabel 读取 ~/.local/state/rolling-memory/active_workspace.json 识别当前运行环境宿主显示名；
-// 无文件 / 无 carrier 一律回空串（「未知」如实展示），严禁硬编码回退到某个宿主名（历史曾硬编码 "ZCode"，
-// 导致从未装过 ZCode 的机器也显示「ZCode 激活」）。carrier "cli" = 宿主未能自称身份的通用命令行环境。
+// detectActiveHarnessLabel reads the live attachment ledger and returns the
+// display name of the session that currently holds a lease. No live lease
+// means "unknown": a stale document, a transcript timestamp, or another
+// host's last write must never be presented as the current environment.
 func detectActiveHarnessLabel(home string) string {
-	statePath := filepath.Join(home, ".local", "state", "rolling-memory", "active_workspace.json")
-	raw, err := os.ReadFile(statePath)
-	if err == nil {
-		var m map[string]any
-		if json.Unmarshal(raw, &m) == nil {
-			carrier := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(asString(m["carrier"]))), "harness:")
-			switch carrier {
-			case "zcode":
-				return "ZCode"
-			case "claude-code", "claude":
-				return "Claude Code"
-			case "codex":
-				return "Codex"
-			case "dsh":
-				return "dsh"
-			case "codebuddy":
-				return "CodeBuddy"
-			case "cursor":
-				return "Cursor"
-			case "windsurf":
-				return "Windsurf"
-			case "cline":
-				return "Cline / Roo Code"
-			case "workbuddy":
-				return "WorkBuddy"
-			case "doubao":
-				return "Doubao (豆包)"
-			case "cli":
-				return "CLI"
-			default:
-				if carrier != "" {
-					return carrier
-				}
-			}
+	attachment, ok := livePresenceAttachment(home)
+	if !ok {
+		return ""
+	}
+	if label := strings.TrimSpace(attachment.Label); label != "" {
+		return label
+	}
+	return strings.TrimSpace(attachment.Host)
+}
+
+// rollingMemoryStateDir mirrors the engine's default state directory so the
+// console and the CLI read the same attachment document under XDG overrides.
+func rollingMemoryStateDir(home string) string {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); xdg != "" {
+		return filepath.Join(xdg, "rolling-memory")
+	}
+	return filepath.Join(home, ".local", "state", "rolling-memory")
+}
+
+// rollingMemoryLogPath is the default engine log path, used by the console's
+// activity watcher. A custom log location still wins in the engine config; the
+// console's fallback follows the same default as config.DefaultStateDir.
+func rollingMemoryLogPath(home string) string {
+	return filepath.Join(rollingMemoryStateDir(home), "rolling-memory.log")
+}
+
+type presenceAttachment struct {
+	Host       string `json:"host"`
+	Label      string `json:"label"`
+	SessionID  string `json:"session_id"`
+	Locus      string `json:"locus"`
+	Evidence   string `json:"evidence"`
+	Mode       string `json:"mode"`
+	LastSeenAt int64  `json:"last_seen_at"`
+	LeaseUntil int64  `json:"lease_until"`
+}
+
+type presenceLedger struct {
+	Version  int                           `json:"version"`
+	Sessions map[string]presenceAttachment `json:"sessions"`
+}
+
+// livePresenceAttachment returns the most recently active session whose lease
+// has not expired. The console only needs the summary fields; the schema is
+// intentionally small and version-tolerant.
+func livePresenceAttachment(home string) (presenceAttachment, bool) {
+	raw, err := os.ReadFile(filepath.Join(rollingMemoryStateDir(home), "active_workspace.json"))
+	if err != nil {
+		return presenceAttachment{}, false
+	}
+	var doc presenceLedger
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Sessions) == 0 {
+		return presenceAttachment{}, false
+	}
+	now := time.Now().Unix()
+	best := presenceAttachment{}
+	found := false
+	for _, attachment := range doc.Sessions {
+		if attachment.LeaseUntil < now {
+			continue
+		}
+		if !found || attachment.LastSeenAt > best.LastSeenAt {
+			best = attachment
+			found = true
 		}
 	}
-	return ""
+	return best, found
 }
 
 // envHealthHandler 返回当前运行环境（Harness）检测、记忆健康度评分与三层（Episodic / Background / Noetic）本地 vs 远端对齐状态。
@@ -1348,6 +1391,9 @@ func runAdminSyncCLI(ctx context.Context, action, dbPath, harnessID, layer strin
 	// 子进程零云端覆盖变量：不注入任何远端端点/凭据，并剥掉可能从宿主继承的
 	// BRAIN_URL/BRAIN_KEY —— 否则子进程会把开发期覆盖当成云端开关，把本地读写打成远端请求。
 	childEnv := stripCloudBrainEnv(os.Environ())
+	// The console is a machine-wide reader. It must never inherit the server
+	// process's own shell identity as the user's current host.
+	childEnv = append(childEnv, "ROLLING_MEMORY_CONSOLE_STATUS=1")
 	if action == "status" && envHealthProgressSink(ctx) != nil {
 		// 仅 env/health 流式采集请求进度事件（CLI 侧默认静默）：一次性端点与直连 CLI 行为不变。
 		childEnv = append(childEnv, statusProgressEnv+"=1")

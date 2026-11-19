@@ -83,10 +83,28 @@ func newEnv(t *testing.T) *cliEnv {
 	t.Setenv("ZCODE_SESSION_ID", "")
 	t.Setenv("ZCODE_WORKSPACE", "")
 	t.Setenv("TERM_PROGRAM", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
 	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
 	t.Setenv("CLAUDECODE", "")
+	t.Setenv("OPENCODE_SESSION_ID", "")
+	t.Setenv("OPENCODE", "")
+	t.Setenv("OPENCODE_CLIENT", "")
+	t.Setenv("OPENCODE_TERMINAL", "")
+	t.Setenv("AI_AGENT", "")
 	t.Setenv("CURSOR_TRACE_ID", "")
 	t.Setenv("WINDSURF_SESSION", "")
+	t.Setenv("CODEBUDDY_SESSION_ID", "")
+	t.Setenv("CODEBUDDY_HOME", "")
+	t.Setenv("WORKBUDDY_SESSION_ID", "")
+	t.Setenv("WORKBUDDY_HOME", "")
+	t.Setenv("DOUBAO_SESSION_ID", "")
+	t.Setenv("DOUBAO_HOME", "")
+	t.Setenv("CLINE_SESSION_ID", "")
+	t.Setenv("CLINE_HOME", "")
+	// The console subprocess and unit tests read the attachment ledger; they
+	// must not inherit the developer's shell identity.
+	t.Setenv("ROLLING_MEMORY_CONSOLE_STATUS", "1")
+	t.Setenv("ROLLING_MEMORY_DISABLE_PROCESS_ANCESTRY", "1")
 	return &cliEnv{base: base}
 }
 

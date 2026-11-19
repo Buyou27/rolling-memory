@@ -141,9 +141,9 @@ func TestDetectGitWorkspaceLocusSpatialContract(t *testing.T) {
 	}
 }
 
-// TestSavePresenceFileRoundtripAndReplace pins the shared presence-state file
-// contract: one document, last writer wins, no leftover temp files, and empty
-// inputs are no-ops.
+// TestSavePresenceFileRoundtripAndReplace pins the attachment-ledger contract:
+// one document, one entry per session, hooks hold a short heartbeat lease, and
+// empty inputs are no-ops.
 func TestSavePresenceFileRoundtripAndReplace(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	coords := PresenceCoordinates{World: "actual", Carrier: "harness:zcode", Locus: "Rolling-Memory", Incarnation: "coding/zcode/main"}
@@ -162,25 +162,42 @@ func TestSavePresenceFileRoundtripAndReplace(t *testing.T) {
 		}
 		return doc
 	}
-	doc := read()
-	if doc["locus"] != "Rolling-Memory" || doc["carrier"] != "harness:zcode" || doc["session_id"] != "sess-1" {
-		t.Fatalf("roundtrip mismatch: %v", doc)
+	entry := func(doc map[string]any, key string) map[string]any {
+		t.Helper()
+		sessions, _ := doc["sessions"].(map[string]any)
+		value, _ := sessions[key].(map[string]any)
+		if value == nil {
+			t.Fatalf("missing session %q in %v", key, doc)
+		}
+		return value
 	}
-	if at, _ := doc["updated_at"].(float64); int64(at) != 123 {
-		t.Fatalf("updated_at = %v, want 123", doc["updated_at"])
+	doc := read()
+	if at, _ := doc["version"].(float64); int(at) != 2 {
+		t.Fatalf("version = %v, want 2", doc["version"])
+	}
+	first := entry(doc, "zcode:sess-1")
+	if first["locus"] != "Rolling-Memory" || first["host"] != "zcode" || first["session_id"] != "sess-1" {
+		t.Fatalf("roundtrip mismatch: %v", first)
+	}
+	if at, _ := first["last_seen_at"].(float64); int64(at) != 123 {
+		t.Fatalf("last_seen_at = %v, want 123", first["last_seen_at"])
+	}
+	if lease, _ := first["lease_until"].(float64); int64(lease) <= 123 {
+		t.Fatalf("heartbeat lease = %v, want > 123", first["lease_until"])
 	}
 
-	// Last writer wins: the replace document drops the previous session.
+	// Sessions are independent: a second writer must not drop the first.
 	coords.Locus = "my-repo"
-	if err := SavePresenceFile(stateDir, coords, "", 456); err != nil {
+	if err := SavePresenceFile(stateDir, coords, "sess-2", 456); err != nil {
 		t.Fatalf("SavePresenceFile replace: %v", err)
 	}
 	doc = read()
-	if doc["locus"] != "my-repo" || doc["session_id"] != "" {
-		t.Fatalf("replace mismatch: %v", doc)
+	if got := entry(doc, "zcode:sess-1")["locus"]; got != "Rolling-Memory" {
+		t.Fatalf("first session locus = %v, want Rolling-Memory", got)
 	}
-	if at, _ := doc["updated_at"].(float64); int64(at) != 456 {
-		t.Fatalf("replace updated_at = %v, want 456", doc["updated_at"])
+	second := entry(doc, "zcode:sess-2")
+	if second["locus"] != "my-repo" || second["session_id"] != "sess-2" {
+		t.Fatalf("second session mismatch: %v", second)
 	}
 
 	// Empty coordinates and an empty state dir write nothing.

@@ -47,13 +47,6 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload = x'00' WHERE doc_id = 'bad'`); err != nil {
 		t.Fatal(err)
 	}
-	// Retrieval now comes from the canonical store; an unusable source is removed
-	// from it instead of being filtered at snapshot time. The tombstone keeps the
-	// one-time canonical derivation from re-adding it.
-	if err := v.deleteCanonicalUnits("bad"); err != nil {
-		t.Fatal(err)
-	}
-	v.RecordDeletedUnits("episodic", "bad")
 	report, err := v.EpisodicIndexFaultDiagnostics()
 	if err != nil || report.Compatible != 1 || report.Corrupt != 1 || report.Incompatible != 0 || report.Missing != 0 {
 		t.Fatalf("diagnostics: %+v %v", report, err)
@@ -61,6 +54,15 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 	compatible, incompatible, missing, err := v.EpisodicIndexDiagnostics()
 	if err != nil || compatible != 1 || incompatible != 0 || missing != 0 {
 		t.Fatalf("coverage: %d %d %d %v", compatible, incompatible, missing, err)
+	}
+	// A corrupt source is removed from the canonical store; the tombstone keeps
+	// the one-time derivation from re-adding it, and diagnostics stop counting it.
+	if err := v.deleteCanonicalUnits("bad"); err != nil {
+		t.Fatal(err)
+	}
+	v.RecordDeletedUnits("episodic", "bad")
+	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.Compatible != 1 || report.Corrupt != 0 || report.Missing != 0 {
+		t.Fatalf("after deletion: %+v %v", report, err)
 	}
 	assertHits := func(hits []QueryHit, err error) {
 		t.Helper()
@@ -75,7 +77,7 @@ func TestEpisodicIndexCorruptPayloadIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err = v.EpisodicIndexFaultDiagnostics()
-	if err != nil || report.NeedsRebuild != 1 || report.Corrupt != 1 || report.Compatible != 0 {
+	if err != nil || report.NeedsRebuild != 1 || report.Corrupt != 0 || report.Compatible != 0 {
 		t.Fatalf("unverified digest: %+v %v", report, err)
 	}
 }
@@ -215,13 +217,13 @@ func TestEpisodicIndexSwappedRows(t *testing.T) {
 	if _, err := db.Exec(`UPDATE rm_episodic_index SET payload_mac = CASE doc_id WHEN 'one' THEN ? ELSE ? END WHERE doc_id IN ('one', 'two')`, mac2, mac1); err != nil {
 		t.Fatal(err)
 	}
+	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.Corrupt != 2 || report.Compatible != 1 {
+		t.Fatalf("swapped rows: %+v %v", report, err)
+	}
 	if err := v.deleteCanonicalUnits("one", "two"); err != nil {
 		t.Fatal(err)
 	}
 	v.RecordDeletedUnits("episodic", "one", "two")
-	if report, err := v.EpisodicIndexFaultDiagnostics(); err != nil || report.Corrupt != 2 || report.Compatible != 1 {
-		t.Fatalf("swapped rows: %+v %v", report, err)
-	}
 	if hits, err := v.SearchClientSDKDefault("quartz nebula", 10); err != nil || len(hits) != 1 || hits[0].UnitID != "good" {
 		t.Fatalf("unaffected row: %+v %v", hits, err)
 	}

@@ -449,7 +449,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 				if ctx != nil && ctx.Err() != nil {
 					break
 				}
-				if res, uErr := tx.ExecContext(ctx, `UPDATE thin_vault_docs SET locus = ? WHERE doc_id = ?`, u.locus, u.docID); uErr == nil {
+				if res, uErr := tx.ExecContext(ctx, `UPDATE rm_unit_meta SET locus = ? WHERE unit_id = ?`, u.locus, u.docID); uErr == nil {
 					if n, _ := res.RowsAffected(); n > 0 {
 						locusHealed += int(n)
 					}

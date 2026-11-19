@@ -33,7 +33,10 @@ const episodicIndexDDL = `CREATE TABLE IF NOT EXISTS rm_episodic_index (
  doc_id TEXT NOT NULL, ref_pointer TEXT NOT NULL, codec_key BLOB NOT NULL, payload BLOB NOT NULL, content_digest BLOB, payload_mac BLOB,
  PRIMARY KEY (doc_id, codec_key)
 );
-CREATE TRIGGER IF NOT EXISTS thin_episodic_source_delete AFTER DELETE ON thin_vault_docs BEGIN DELETE FROM rm_episodic_index WHERE doc_id = OLD.doc_id; END;`
+CREATE TRIGGER IF NOT EXISTS rm_episodic_source_delete AFTER DELETE ON rm_docs BEGIN
+ DELETE FROM rm_episodic_index WHERE doc_id = OLD.unit_id;
+ DELETE FROM rm_unit_meta WHERE unit_id = OLD.unit_id;
+END;`
 
 // initEpisodicIndex ensures the canonical episodic index schema.
 func initEpisodicIndex(db *sql.DB) error {
@@ -503,7 +506,7 @@ func (v *Vault) healEpisodicPointerUnit(docID string, occurredAt int64, oldRaw, 
 		if err := v.repointEpisodicIndexes(tx, docID, curRaw, targetRef, digest); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE thin_vault_docs SET raw_text = ? WHERE doc_id = ? AND raw_text = ?`, targetRef, docID, curRaw); err != nil {
+		if _, err := tx.Exec(`UPDATE rm_unit_meta SET ref_pointer = ? WHERE unit_id = ? AND ref_pointer = ?`, targetRef, docID, curRaw); err != nil {
 			return err
 		}
 	}
@@ -545,16 +548,33 @@ func (v *Vault) DeleteLocalEpisodicUnit(docID, expectPointer string) (bool, erro
 	defer func() { _ = tx.Rollback() }()
 	// Any separately recorded source can change after classification. Keep the
 	// document when one exists, including malformed rows whose identity is unknown.
-	result, err := tx.Exec(`DELETE FROM thin_vault_docs WHERE doc_id = ? AND raw_text = ? AND (layer = 'episodic' OR layer = '') AND NOT EXISTS (SELECT 1 FROM rm_episodic_sources s WHERE s.doc_id = thin_vault_docs.doc_id AND s.turn_ref <> ?)`, docID, expectPointer, pointerStem(expectPointer))
-	if err != nil {
-		return false, err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	if changed == 0 {
-		return false, nil
+	if strings.HasPrefix(expectPointer, "@ref:") {
+		result, err := tx.Exec(`DELETE FROM rm_unit_meta WHERE unit_id = ? AND ref_pointer = ? AND (layer = 'episodic' OR layer = '') AND NOT EXISTS (SELECT 1 FROM rm_episodic_sources s WHERE s.doc_id = rm_unit_meta.unit_id AND s.turn_ref <> ?)`, docID, expectPointer, pointerStem(expectPointer))
+		if err != nil {
+			return false, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if changed == 0 {
+			return false, nil
+		}
+		if _, err = tx.Exec(`DELETE FROM rm_docs WHERE unit_id = ? AND (layer = 'episodic' OR layer = '')`, docID); err != nil {
+			return false, err
+		}
+	} else {
+		result, err := tx.Exec(`DELETE FROM rm_docs WHERE unit_id = ? AND raw_text = ? AND (layer = 'episodic' OR layer = '') AND NOT EXISTS (SELECT 1 FROM rm_episodic_sources s WHERE s.doc_id = rm_docs.unit_id AND s.turn_ref <> ?)`, docID, expectPointer, pointerStem(expectPointer))
+		if err != nil {
+			return false, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if changed == 0 {
+			return false, nil
+		}
 	}
 	if _, err = tx.Exec(`DELETE FROM rm_episodic_lineage WHERE doc_id = ?`, docID); err != nil {
 		return false, err
@@ -1072,10 +1092,6 @@ func (v *Vault) saveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 		}
 		return nil
 	}
-	_, err = tx.Exec(`INSERT INTO thin_vault_docs(doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json, assistant_id, incarnation_id, locus) VALUES (?, 'episodic', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id) DO UPDATE SET occurred_at=CASE WHEN thin_vault_docs.occurred_at <= 0 AND excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END, inserted_at=CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END, address_uri=excluded.address_uri, coord64=excluded.coord64, waveform_bar=excluded.waveform_bar, doc_macro_wave=excluded.doc_macro_wave, kept_indices_json=excluded.kept_indices_json`, docID, occurredAt, time.Now().Unix(), refPointer, resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON), v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus)
-	if err != nil {
-		return err
-	}
 	if _, err = tx.Exec(`INSERT INTO rm_episodic_index(doc_id, ref_pointer, codec_key, payload, content_digest, payload_mac) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(doc_id, codec_key) DO NOTHING`, docID, refPointer, codecKey, payload, digest, v.episodicPayloadMAC(docID, refPointer, codecKey, payload, digest)); err != nil {
 		return err
 	}
@@ -1084,9 +1100,6 @@ func (v *Vault) saveLocalEpisodicPointerIndexed(docID string, occurredAt int64, 
 		// current filter names, and re-authenticate the index row against it (the MAC is
 		// bound to the ref pointer), so verification and hydration agree again.
 		if err := v.repointEpisodicIndexes(tx, docID, existingRaw, refPointer, digest); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(`UPDATE thin_vault_docs SET raw_text = ? WHERE doc_id = ? AND raw_text = ?`, refPointer, docID, existingRaw); err != nil {
 			return err
 		}
 	}

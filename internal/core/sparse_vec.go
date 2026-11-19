@@ -702,13 +702,15 @@ func (e *Engine) TermEnergyVector(termID uint64) (TermEnergyProfile, bool) {
 		})
 	}
 
+	// CalendarCohesion must be the retrieval path's κ_occ, not a second formula:
+	// the retired (n−1)/(n+2) shrink and −1 shift were removed in F-43, and a
+	// duplicate implementation here silently kept them. Single source of truth is
+	// calendarConcentration (A22).
 	var kappa float64
 	n := float64(len(posts))
 	dObs := float64(len(days))
 	if n > 1 && dObs >= 1 && st.totalDaysM > 0 {
-		eNull := st.totalDaysM * (1.0 - math.Exp(-n/st.totalDaysM))
-		denom := math.Max(1.0, eNull-1.0)
-		kappa = ((n - 1.0) / (n + 2.0)) * math.Max(0, 1.0-(dObs-1.0)/denom)
+		kappa = calendarConcentration(dObs, n, st.totalDaysM)
 	}
 
 	// 搭档扫描：主序 (a, b) 二分命中 a==termID 的键（复用 phrasePostings 前缀

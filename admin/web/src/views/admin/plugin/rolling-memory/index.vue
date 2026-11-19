@@ -8,8 +8,17 @@
                         <span class="rm-hero-title"
                             >{{ t('plugin.rolling-memory.title') }} · {{ t('plugin.rolling-memory.overview.heroTitleSuffix') }}</span
                         >
-                        <el-tag v-if="envHealth.active_harness_label" size="small" type="primary" effect="dark" data-testid="badge-active-harness">
-                            {{ t('plugin.rolling-memory.overview.envLabel') }}: {{ envHealth.active_harness_label }}
+                        <el-tag size="small" type="primary" effect="dark" data-testid="badge-active-harness">
+                            {{ t('plugin.rolling-memory.overview.envLabel') }}: {{ activeEnvLabel }}
+                        </el-tag>
+                        <el-tag
+                            v-if="!envHealth.attachment && envHealth.recent_harness_label"
+                            size="small"
+                            type="info"
+                            effect="plain"
+                            data-testid="badge-recent-harness"
+                        >
+                            {{ t('plugin.rolling-memory.overview.envRecentLabel') }}: {{ envHealth.recent_harness_label }}
                         </el-tag>
                         <el-tag size="small" :type="healthTagType(envHealth.health_score)" effect="dark" data-testid="badge-memory-health">
                             {{ t('plugin.rolling-memory.overview.healthLabel') }}:
@@ -561,6 +570,14 @@ const stats = ref<any>({
 })
 
 const envHealth = ref<any>({ harnesses: [], health_checks: [], layers: {} })
+// 「当前运行环境」只认 live 附着；没有在线会话时显示未知，绝不回退到最近活跃或旧文件。
+const activeEnvLabel = computed(() => {
+    const label = envHealth.value?.attachment?.label || envHealth.value?.active_harness_label
+    if (label && label !== 'Unknown') {
+        return label
+    }
+    return t('plugin.rolling-memory.overview.envUnknown')
+})
 // 会话清单与轮次内容是两个独立能力，未声明支持时不把未知写成零。
 const showsSessions = (h: any) => h.sessions_scan_supported === true
 const showsTurns = (h: any) => h.turns_scan_supported === true

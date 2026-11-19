@@ -269,6 +269,8 @@ ROLLING_MEMORY_SOURCE_REF=v0.0.5 bash install.sh
 - `ROLLING_MEMORY_UPDATE_CHECK=off` 可关闭后台检查；显式 `update --check` 仍然可用。
 - `ROLLING_MEMORY_UPDATE_API_BASE` 可改用企业镜像做版本发现；`ROLLING_MEMORY_RELEASE_BASE` 可改用产物镜像。
 
+- **单一物理语料**：本版本首次打开金库时会删除旧 thin 语料表、清理不可读指针单元并重建检索索引；保留的规范语料仍在本地，旧表不做迁移。
+
 ---
 
 ## 6. 排障

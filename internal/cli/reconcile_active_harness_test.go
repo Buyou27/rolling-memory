@@ -11,27 +11,14 @@ import (
 	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
+	"github.com/rocareer/rolling-memory/internal/text"
 )
 
-// writeActiveWorkspacePresence 以 hook 写侧的同一形状落一份 active_workspace.json。
+// writeActiveWorkspacePresence 以 hook 写侧的同一形状落一条短租约会话记录。
 func writeActiveWorkspacePresence(t *testing.T, carrier, session string, updatedAt int64) {
 	t.Helper()
-	stateDir := config.DefaultStateDir()
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	body, err := json.Marshal(map[string]any{
-		"world":      "actual",
-		"carrier":    carrier,
-		"locus":      "demo-repo",
-		"session_id": session,
-		"updated_at": updatedAt,
-	})
-	if err != nil {
-		t.Fatalf("marshal presence: %v", err)
-	}
-	path := filepath.Join(stateDir, "active_workspace.json")
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	coords := text.PresenceCoordinates{Carrier: carrier, Locus: "demo-repo"}
+	if err := text.SavePresenceFile(config.DefaultStateDir(), coords, session, updatedAt); err != nil {
 		t.Fatalf("write presence: %v", err)
 	}
 }
@@ -77,8 +64,8 @@ func TestSyncStatusResolvesWorkBuddyPresenceToWorkBuddy(t *testing.T) {
 	if payload["active_harness_label"] != "WorkBuddy" {
 		t.Fatalf("active_harness_label = %v, want WorkBuddy", payload["active_harness_label"])
 	}
-	if payload["detection_source"] != "active_workspace.json" {
-		t.Fatalf("detection_source = %v, want active_workspace.json", payload["detection_source"])
+	if payload["detection_source"] != "hook" {
+		t.Fatalf("detection_source = %v, want hook", payload["detection_source"])
 	}
 	workbuddy := harnessItem(t, payload, "workbuddy")
 	if workbuddy["active"] != true || workbuddy["detected"] != true {
@@ -111,8 +98,8 @@ func TestSyncStatusWithoutHarnessEvidenceReportsNone(t *testing.T) {
 }
 
 // TestSyncStatusStalePresenceLosesToFresherTranscript 锁定过期 presence 不再挟持读数：
-// 三天前的 zcode presence 对上刚刚写入的 claude-code 转录，活跃宿主应为 claude-code，
-// 来源如实记 recent_activity。
+// 三天前的 zcode 租约对上一个刚写入的 claude-code 转录，「当前附着」为空，
+// 「最近活跃」如实记 claude-code。
 func TestSyncStatusStalePresenceLosesToFresherTranscript(t *testing.T) {
 	env := newEnv(t)
 	writeActiveWorkspacePresence(t, "harness:zcode", "sess-old", time.Now().Add(-72*time.Hour).Unix())
@@ -128,11 +115,14 @@ func TestSyncStatusStalePresenceLosesToFresherTranscript(t *testing.T) {
 	}
 
 	payload := runStatusJSON(t, filepath.Join(env.base, "stale.db"))
-	if payload["active_harness_id"] != "claude-code" {
-		t.Fatalf("active_harness_id = %v, want claude-code", payload["active_harness_id"])
+	if payload["active_harness_id"] != "" {
+		t.Fatalf("stale lease must not be the current attachment: %v", payload["active_harness_id"])
 	}
-	if payload["detection_source"] != "recent_activity" {
-		t.Fatalf("detection_source = %v, want recent_activity", payload["detection_source"])
+	if payload["detection_source"] != "none" {
+		t.Fatalf("detection_source = %v, want none", payload["detection_source"])
+	}
+	if payload["recent_harness_id"] != "claude-code" {
+		t.Fatalf("recent_harness_id = %v, want claude-code", payload["recent_harness_id"])
 	}
 }
 

@@ -124,6 +124,8 @@ Open the console and choose **System → Memory Service** in the sidebar:
 
 Disk maintenance keeps the engine's on-disk index cache by default. A missing cache makes the next recall rebuild the whole index (minutes of work and a multi-GB memory peak), so freeing that space is an explicit opt-in: `rmem maintain clean --purge-engine-cache --apply --yes`.
 
+Backup cleanup covers vault database backups, launcher backups in `~/.local/bin`, and the console's previous `web-dist` directories, keeping the newest copies per family. Evaluation history under the state directory (`eval/`, `atmbench/`) is reported with its size but never auto-deleted; removing experiment evidence is a separate user decision.
+
 Stopping the daemon blocks nothing: the next recall or background sync starts it again automatically.
 
 ---

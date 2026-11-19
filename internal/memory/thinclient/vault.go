@@ -791,6 +791,150 @@ func (v *Vault) DeletedUnitSet(layer string) map[string]bool {
 	return out
 }
 
+// ensureLegacyCorpusView makes the canonical corpus the only physical store.
+// The former thin tables are dropped (history is disposable in this release) and
+// a read-only view keeps the old column shape for the remaining read queries.
+// No new row is ever written through the view.
+func ensureLegacyCorpusView(db *sql.DB) error {
+	if db == nil {
+		return nil
+	}
+	// Drop the FTS virtual table before its shadow tables: dropping the shadow
+	// tables first leaves a virtual-table entry that fails to construct on the
+	// next schema read.
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS thin_vault_docs_fts`,
+		`DROP TABLE IF EXISTS thin_vault_docs_fts_config`,
+		`DROP TABLE IF EXISTS thin_vault_docs_fts_data`,
+		`DROP TABLE IF EXISTS thin_vault_docs_fts_docsize`,
+		`DROP TABLE IF EXISTS thin_vault_docs_fts_idx`,
+		`DROP TABLE IF EXISTS thin_vault_fts_map`,
+	} {
+		_, _ = db.Exec(stmt)
+	}
+	rows, err := db.Query(`SELECT name, type FROM sqlite_master WHERE name LIKE 'thin_vault_%' AND name <> 'thin_vault_meta' AND name NOT LIKE 'thin_vault_docs_fts%' AND name <> 'thin_vault_fts_map'`)
+	if err != nil {
+		return err
+	}
+	type object struct{ name, kind string }
+	var objects []object
+	for rows.Next() {
+		var item object
+		if err := rows.Scan(&item.name, &item.kind); err != nil {
+			rows.Close()
+			return err
+		}
+		objects = append(objects, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	hasTable := false
+	for _, item := range objects {
+		if item.kind == "table" {
+			hasTable = true
+			break
+		}
+	}
+	if hasTable {
+		for _, kind := range []string{"view", "table"} {
+			for _, item := range objects {
+				if item.kind != kind {
+					continue
+				}
+				drop := "DROP TABLE IF EXISTS"
+				if kind == "view" {
+					drop = "DROP VIEW IF EXISTS"
+				}
+				if _, err := db.Exec(drop + ` "` + item.name + `"`); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	_, err = db.Exec(`
+		CREATE VIEW IF NOT EXISTS thin_vault_docs AS
+		SELECT d.unit_id AS doc_id,
+		       d.layer AS layer,
+		       d.occurred_at AS occurred_at,
+		       COALESCE(NULLIF(m.inserted_at, 0), d.ingested_at, d.occurred_at) AS inserted_at,
+		       COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) AS raw_text,
+		       COALESCE(m.sentences_json, '[]') AS sentences_json,
+		       COALESCE(m.address_uri, '') AS address_uri,
+		       COALESCE(m.coord64, 0) AS coord64,
+		       COALESCE(m.waveform_bar, '') AS waveform_bar,
+		       COALESCE(m.doc_macro_wave, '') AS doc_macro_wave,
+		       COALESCE(m.kept_indices_json, '[]') AS kept_indices_json,
+		       COALESCE(m.assistant_id, '') AS assistant_id,
+		       COALESCE(m.incarnation_id, '') AS incarnation_id,
+		       COALESCE(m.locus, '') AS locus
+		  FROM rm_docs d
+		  LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id;
+		CREATE TRIGGER IF NOT EXISTS thin_vault_docs_insert INSTEAD OF INSERT ON thin_vault_docs
+		BEGIN
+		  INSERT INTO rm_docs(unit_id, layer, occurred_at, raw_text)
+		  VALUES (NEW.doc_id, COALESCE(NULLIF(NEW.layer, ''), 'episodic'), COALESCE(NEW.occurred_at, 0),
+		          CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN '' ELSE COALESCE(NEW.raw_text, '') END)
+		  ON CONFLICT(unit_id) DO UPDATE SET layer = excluded.layer, occurred_at = CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE rm_docs.occurred_at END, raw_text = excluded.raw_text;
+		  INSERT INTO rm_unit_meta(unit_id, layer, ref_pointer, sentences_json, kept_indices_json, address_uri, coord64, waveform_bar, doc_macro_wave, assistant_id, incarnation_id, locus, inserted_at, meta_rev)
+		  VALUES (NEW.doc_id, COALESCE(NULLIF(NEW.layer, ''), 'episodic'),
+		          CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN NEW.raw_text ELSE '' END,
+		          COALESCE(NEW.sentences_json, '[]'), COALESCE(NEW.kept_indices_json, '[]'),
+		          COALESCE(NEW.address_uri, ''), COALESCE(NEW.coord64, 0), COALESCE(NEW.waveform_bar, ''), COALESCE(NEW.doc_macro_wave, ''),
+		          COALESCE(NEW.assistant_id, ''), COALESCE(NEW.incarnation_id, ''), COALESCE(NEW.locus, ''),
+		          COALESCE(NULLIF(NEW.inserted_at, 0), NEW.occurred_at, 0), 1)
+		  ON CONFLICT(unit_id) DO UPDATE SET layer = excluded.layer, ref_pointer = excluded.ref_pointer,
+		          sentences_json = excluded.sentences_json, kept_indices_json = excluded.kept_indices_json,
+		          address_uri = excluded.address_uri, coord64 = excluded.coord64, waveform_bar = excluded.waveform_bar,
+		          doc_macro_wave = excluded.doc_macro_wave,
+		          assistant_id = CASE WHEN rm_unit_meta.assistant_id <> '' THEN rm_unit_meta.assistant_id ELSE excluded.assistant_id END,
+		          incarnation_id = CASE WHEN rm_unit_meta.incarnation_id <> '' THEN rm_unit_meta.incarnation_id ELSE excluded.incarnation_id END,
+		          locus = CASE WHEN rm_unit_meta.locus <> '' THEN rm_unit_meta.locus ELSE excluded.locus END,
+		          inserted_at = CASE WHEN rm_unit_meta.inserted_at > 0 THEN rm_unit_meta.inserted_at ELSE excluded.inserted_at END,
+		          meta_rev = rm_unit_meta.meta_rev + 1;
+		END;
+		CREATE TRIGGER IF NOT EXISTS thin_vault_docs_update INSTEAD OF UPDATE ON thin_vault_docs
+		BEGIN
+		  UPDATE rm_docs SET layer = COALESCE(NULLIF(NEW.layer, ''), layer), occurred_at = COALESCE(NEW.occurred_at, occurred_at),
+		          raw_text = CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN '' ELSE COALESCE(NEW.raw_text, raw_text) END
+		    WHERE unit_id = OLD.doc_id;
+		  UPDATE rm_unit_meta SET layer = COALESCE(NULLIF(NEW.layer, ''), layer),
+		          ref_pointer = CASE WHEN substr(trim(COALESCE(NEW.raw_text, '')), 1, 5) = '@ref:' THEN NEW.raw_text ELSE '' END,
+		          sentences_json = COALESCE(NEW.sentences_json, sentences_json),
+		          kept_indices_json = COALESCE(NEW.kept_indices_json, kept_indices_json),
+		          address_uri = COALESCE(NEW.address_uri, address_uri), coord64 = COALESCE(NEW.coord64, coord64),
+		          waveform_bar = COALESCE(NEW.waveform_bar, waveform_bar), doc_macro_wave = COALESCE(NEW.doc_macro_wave, doc_macro_wave),
+		          assistant_id = COALESCE(NEW.assistant_id, assistant_id), incarnation_id = COALESCE(NEW.incarnation_id, incarnation_id),
+		          locus = COALESCE(NEW.locus, locus), inserted_at = COALESCE(NULLIF(NEW.inserted_at, 0), inserted_at),
+		          meta_rev = meta_rev + 1
+		    WHERE unit_id = OLD.doc_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS thin_vault_docs_delete INSTEAD OF DELETE ON thin_vault_docs
+		BEGIN
+		  DELETE FROM rm_docs WHERE unit_id = OLD.doc_id;
+		END;`)
+	if err == nil && hasTable {
+		// Pointer units without a canonical index are unreadable leftovers from the
+		// thin-era store. History is disposable in this release; remove them instead
+		// of rendering a source-gap row forever.
+		_, _ = db.Exec(`DELETE FROM rm_docs WHERE unit_id IN (
+			SELECT m.unit_id FROM rm_unit_meta m
+			 WHERE m.ref_pointer <> ''
+			   AND NOT EXISTS (SELECT 1 FROM rm_episodic_index i WHERE i.doc_id = m.unit_id))`)
+		_, _ = db.Exec(`DELETE FROM rm_unit_meta
+			 WHERE ref_pointer <> ''
+			   AND NOT EXISTS (SELECT 1 FROM rm_episodic_index i WHERE i.doc_id = rm_unit_meta.unit_id)`)
+		var orphanTerms int
+		if db.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_terms t WHERE NOT EXISTS (SELECT 1 FROM rm_docs d WHERE d.unit_id = t.unit_id))`).Scan(&orphanTerms) == nil && orphanTerms != 0 {
+			_, _ = db.Exec(`DELETE FROM rm_terms WHERE unit_id NOT IN (SELECT unit_id FROM rm_docs)`)
+			_, _ = db.Exec(`DELETE FROM rm_citations WHERE unit_id NOT IN (SELECT unit_id FROM rm_docs)`)
+		}
+	}
+	return err
+}
+
 // NewVault initializes the local SQLite tables (`thin_vault_meta` and `thin_vault_docs`)
 // and loads or generates the user's 256-bit local secret key (which never leaves the machine).
 func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
@@ -802,16 +946,19 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		var storageType string
 		if err := db.QueryRow(`SELECT v, typeof(v) FROM thin_vault_meta WHERE k = 'user_secret_key'`).Scan(&stored, &storageType); err == nil && storageType == "blob" && len(stored) == 32 {
 			var readyCnt int
-			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('thin_vault_docs', 'rm_noetic')`).Scan(&readyCnt)
+			_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('rm_docs', 'rm_noetic')`).Scan(&readyCnt)
 			if readyCnt == 2 {
-				if err := initEpisodicIndex(db); err != nil {
-					return nil, err
-				}
-				ensureInsertedAtColumns(db)
 				_ = EnsureCoreSQLiteSchema(db)
 				if err := ensureCanonicalBusinessSchema(db); err != nil {
 					return nil, err
 				}
+				if err := initEpisodicIndex(db); err != nil {
+					return nil, err
+				}
+				if err := ensureLegacyCorpusView(db); err != nil {
+					return nil, err
+				}
+				ensureInsertedAtColumns(db)
 				CoreSchemaContracts()
 				v := &Vault{
 					db:                   db,
@@ -830,22 +977,6 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		k TEXT PRIMARY KEY,
 		v BLOB NOT NULL
 	);
-				CREATE TABLE IF NOT EXISTS thin_vault_docs (
-					doc_id TEXT PRIMARY KEY,
-					layer TEXT NOT NULL DEFAULT 'episodic',
-					occurred_at INTEGER NOT NULL DEFAULT 0,
-					inserted_at INTEGER NOT NULL DEFAULT 0,
-					raw_text TEXT NOT NULL,
-					sentences_json TEXT NOT NULL,
-					address_uri TEXT NOT NULL DEFAULT '',
-					coord64 INTEGER NOT NULL DEFAULT 0,
-					waveform_bar TEXT NOT NULL DEFAULT '',
-					doc_macro_wave TEXT NOT NULL DEFAULT '',
-					kept_indices_json TEXT NOT NULL DEFAULT '[]',
-					assistant_id TEXT NOT NULL DEFAULT '',
-					incarnation_id TEXT NOT NULL DEFAULT '',
-					locus TEXT NOT NULL DEFAULT ''
-				);
 					CREATE TABLE IF NOT EXISTS rm_noetic (
 						noetic_id TEXT PRIMARY KEY,
 						occurred_at INTEGER NOT NULL DEFAULT 0,
@@ -865,21 +996,20 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 	if _, err := db.Exec(ddl); err != nil {
 		return nil, err
 	}
-	if err := initEpisodicIndex(db); err != nil {
-		return nil, err
-	}
 	if err := EnsureCoreSQLiteSchema(db); err != nil {
 		return nil, err
 	}
 	if err := ensureCanonicalBusinessSchema(db); err != nil {
 		return nil, err
 	}
+	if err := initEpisodicIndex(db); err != nil {
+		return nil, err
+	}
+	if err := ensureLegacyCorpusView(db); err != nil {
+		return nil, err
+	}
 	CoreSchemaContracts()
-	_, _ = db.Exec(`ALTER TABLE thin_vault_docs ADD COLUMN layer TEXT NOT NULL DEFAULT 'episodic'`)
 	for _, stmt := range []string{
-		`ALTER TABLE thin_vault_docs ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_docs ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE thin_vault_docs ADD COLUMN locus TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE rm_noetic ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE rm_noetic ADD COLUMN incarnation_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE rm_noetic ADD COLUMN address_uri TEXT NOT NULL DEFAULT ''`,
@@ -935,44 +1065,19 @@ func ensureInsertedAtColumns(db *sql.DB) {
 	if db == nil {
 		return
 	}
-	var docsHas, noeticHas, bgTable, bgHas, idxCnt int
+	var metaHas, noeticHas, bgTable, bgHas int
 	_ = db.QueryRow(`
 		SELECT
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'thin_vault_docs' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_unit_meta' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_noetic' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_chunks' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_chunks' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN type = 'index' AND name IN (
-				'idx_thin_vault_docs_occurred_at',
-				'idx_thin_vault_docs_layer_occurred',
-				'idx_thin_vault_docs_inserted_at',
-				'idx_rm_noetic_inserted_at',
-				'idx_rm_bg_chunks_occurred_at',
-				'idx_rm_bg_chunks_inserted_at',
-				'idx_rm_bg_chunks_meta'
-			) THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN type = 'table' AND name = 'rm_bg_chunks' AND sql LIKE '%inserted_at%' THEN 1 ELSE 0 END), 0)
 		FROM sqlite_master
-		WHERE name IN (
-			'thin_vault_docs', 'rm_noetic', 'rm_bg_chunks',
-			'idx_thin_vault_docs_occurred_at',
-			'idx_thin_vault_docs_layer_occurred',
-			'idx_thin_vault_docs_inserted_at',
-			'idx_rm_noetic_inserted_at',
-			'idx_rm_bg_chunks_occurred_at',
-			'idx_rm_bg_chunks_inserted_at',
-			'idx_rm_bg_chunks_meta'
-		)
-	`).Scan(&docsHas, &noeticHas, &bgTable, &bgHas, &idxCnt)
-	wantIdx := 4
-	if bgTable == 1 {
-		wantIdx = 7
-	}
-	if docsHas == 1 && noeticHas == 1 && (bgTable == 0 || bgHas == 1) && idxCnt >= wantIdx {
-		return
-	}
-	if docsHas == 0 {
-		_, _ = db.Exec(`ALTER TABLE thin_vault_docs ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
-		_, _ = db.Exec(`UPDATE thin_vault_docs SET inserted_at = occurred_at WHERE inserted_at = 0 AND occurred_at > 0`)
+		WHERE name IN ('rm_unit_meta', 'rm_noetic', 'rm_bg_chunks')
+	`).Scan(&metaHas, &noeticHas, &bgTable, &bgHas)
+	if metaHas == 0 {
+		_, _ = db.Exec(`ALTER TABLE rm_unit_meta ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
+		_, _ = db.Exec(`UPDATE rm_unit_meta SET inserted_at = COALESCE((SELECT occurred_at FROM rm_docs WHERE rm_docs.unit_id = rm_unit_meta.unit_id), 0) WHERE inserted_at = 0`)
 	}
 	if noeticHas == 0 {
 		_, _ = db.Exec(`ALTER TABLE rm_noetic ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0`)
@@ -990,9 +1095,9 @@ func ensureInsertedAtColumns(db *sql.DB) {
 		`)
 	}
 	_, _ = db.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_docs_occurred_at ON thin_vault_docs(occurred_at DESC, doc_id ASC);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_docs_layer_occurred ON thin_vault_docs(layer, occurred_at DESC, doc_id ASC);
-		CREATE INDEX IF NOT EXISTS idx_thin_vault_docs_inserted_at ON thin_vault_docs(inserted_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_rm_docs_occurred_at ON rm_docs(occurred_at DESC, unit_id ASC);
+		CREATE INDEX IF NOT EXISTS idx_rm_docs_layer_occurred ON rm_docs(layer, occurred_at DESC, unit_id ASC);
+		CREATE INDEX IF NOT EXISTS idx_rm_unit_meta_inserted_at ON rm_unit_meta(inserted_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_rm_noetic_inserted_at ON rm_noetic(inserted_at DESC);
 	`)
 	if bgTable == 1 {
@@ -1124,46 +1229,16 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 	if layer != "background" && layer != "noetic" {
 		layer = "episodic"
 	}
-	tx, err := v.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
 	if layer == LayerEpisodic {
-		if err := checkEpisodicTombstone(tx, docID); err != nil {
-			return err
+		var deleted int
+		if err := v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_deleted_units WHERE unit_id = ? AND (layer = 'episodic' OR layer = ''))`, strings.TrimSpace(docID)).Scan(&deleted); err != nil {
+			return fmt.Errorf("thinclient: check episodic tombstone: %w", err)
+		}
+		if deleted != 0 {
+			return fmt.Errorf("%w: %s", ErrEpisodicUnitDeleted, docID)
 		}
 	}
 	insertedAt := time.Now().Unix()
-	_, err = tx.Exec(`
-			INSERT INTO thin_vault_docs(
-				doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json,
-				assistant_id, incarnation_id, locus
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(doc_id) DO UPDATE SET
-				layer = excluded.layer,
-				occurred_at = CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END,
-				inserted_at = CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END,
-				raw_text = excluded.raw_text,
-				sentences_json = excluded.sentences_json,
-				address_uri = excluded.address_uri,
-				coord64 = excluded.coord64,
-				waveform_bar = excluded.waveform_bar,
-				doc_macro_wave = excluded.doc_macro_wave,
-				kept_indices_json = excluded.kept_indices_json,
-				assistant_id = excluded.assistant_id,
-				incarnation_id = excluded.incarnation_id,
-				locus = excluded.locus`,
-		docID, layer, occurredAt, insertedAt, rawText, string(sentsJSON),
-		resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON),
-		v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus,
-	)
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
 	if err := v.ingestCanonicalText(docID, occurredAt, rawText, canonicalUnitMeta{
 		Layer:           layer,
 		SentencesJSON:   string(sentsJSON),
@@ -1201,47 +1276,34 @@ func (v *Vault) SaveLocalEpisodicPointer(docID string, occurredAt int64, refPoin
 	if err != nil {
 		return err
 	}
-	tx, err := v.db.Begin()
-	if err != nil {
-		return err
+	refPointer = strings.TrimSpace(refPointer)
+	var deleted int
+	if err := v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_deleted_units WHERE unit_id = ? AND (layer = 'episodic' OR layer = ''))`, strings.TrimSpace(docID)).Scan(&deleted); err != nil {
+		return fmt.Errorf("thinclient: check episodic tombstone: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	if err := checkEpisodicTombstone(tx, docID); err != nil {
-		return err
+	if deleted != 0 {
+		return fmt.Errorf("%w: %s", ErrEpisodicUnitDeleted, docID)
 	}
-	_, err = tx.Exec(`
-			INSERT INTO thin_vault_docs(
-				doc_id, layer, occurred_at, inserted_at, raw_text, sentences_json, address_uri, coord64, waveform_bar, doc_macro_wave, kept_indices_json,
-				assistant_id, incarnation_id, locus
-			) VALUES (?, 'episodic', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(doc_id) DO UPDATE SET
-				layer = excluded.layer,
-				occurred_at = CASE WHEN excluded.occurred_at > 0 THEN excluded.occurred_at ELSE thin_vault_docs.occurred_at END,
-				inserted_at = CASE WHEN thin_vault_docs.inserted_at > 0 THEN thin_vault_docs.inserted_at ELSE excluded.inserted_at END,
-				raw_text = excluded.raw_text,
-				sentences_json = excluded.sentences_json,
-				address_uri = excluded.address_uri,
-				coord64 = excluded.coord64,
-				waveform_bar = excluded.waveform_bar,
-				doc_macro_wave = excluded.doc_macro_wave,
-				kept_indices_json = excluded.kept_indices_json,
-				assistant_id = excluded.assistant_id,
-				incarnation_id = excluded.incarnation_id,
-				locus = excluded.locus`,
-		docID, occurredAt, time.Now().Unix(), strings.TrimSpace(refPointer),
-		resp.AddressURI, int64(resp.AddressCoord64), resp.WaveformBar, resp.DocMacroWaveform, string(keptJSON),
-		v.identity.AssistantID, v.identity.IncarnationID, v.identity.Locus,
-	)
-	if err != nil {
+	if err := v.ingestCanonicalText(docID, occurredAt, "", canonicalUnitMeta{
+		Layer:           "episodic",
+		RefPointer:      refPointer,
+		KeptIndicesJSON: string(keptJSON),
+		AddressURI:      resp.AddressURI,
+		Coord64:         int64(resp.AddressCoord64),
+		WaveformBar:     resp.WaveformBar,
+		DocMacroWave:    resp.DocMacroWaveform,
+		AssistantID:     v.identity.AssistantID,
+		IncarnationID:   v.identity.IncarnationID,
+		Locus:           v.identity.Locus,
+		InsertedAt:      time.Now().Unix(),
+		StoreRawText:    false,
+	}); err != nil {
 		return err
 	}
 	if turnRef = strings.TrimSpace(turnRef); turnRef != "" {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
+		if _, err := v.db.Exec(`INSERT OR IGNORE INTO rm_episodic_lineage(turn_ref, doc_id, occurred_at) VALUES (?, ?, ?)`, turnRef, docID, occurredAt); err != nil {
 			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
 	}
 	if v.slotCacheMu != nil {
 		v.slotCacheMu.Lock()
@@ -1537,7 +1599,13 @@ func (v *Vault) LoadLocalDocument(docID string) (rawText string, distilledText s
 		}
 	}
 	var sentsJSON, keptJSON string
-	err = v.db.QueryRow(`SELECT raw_text, sentences_json, kept_indices_json FROM thin_vault_docs WHERE doc_id = ?`, docID).
+	err = v.db.QueryRow(`
+		SELECT COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text),
+		       COALESCE(m.sentences_json, '[]'),
+		       COALESCE(m.kept_indices_json, '[]')
+		  FROM rm_docs d
+		  LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+		 WHERE d.unit_id = ?`, docID).
 		Scan(&rawText, &sentsJSON, &keptJSON)
 	if err != nil {
 		if raw, dist, kept, bgErr := v.loadBackgroundChunkLive(docID); bgErr == nil {
@@ -1865,11 +1933,14 @@ func (v *Vault) RecentDocs(limit int) ([]RecentDoc, error) {
 		return nil, nil
 	}
 	entries := []RecentDoc{}
-	rows, err := v.db.Query(
-		`SELECT doc_id, layer, occurred_at, raw_text, assistant_id, incarnation_id, locus
-		   FROM thin_vault_docs
-		  ORDER BY occurred_at DESC, doc_id DESC
-		  LIMIT ?`, limit)
+	rows, err := v.db.Query(`
+		SELECT d.unit_id, d.layer, d.occurred_at,
+		       COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text),
+		       COALESCE(m.assistant_id, ''), COALESCE(m.incarnation_id, ''), COALESCE(m.locus, '')
+		  FROM rm_docs d
+		  LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+		 ORDER BY d.occurred_at DESC, d.unit_id DESC
+		 LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -20,10 +20,12 @@ import (
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/harness"
+	"github.com/rocareer/rolling-memory/internal/hostid"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/mcp"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/thinclient"
+	"github.com/rocareer/rolling-memory/internal/text"
 )
 
 const reconcileDefaultLimit = 50
@@ -106,11 +108,20 @@ type EpisodicIndexStatus struct {
 // EnvHealthAndSyncStatus is the unified payload for `rolling-memory sync status --json`
 // and `/admin/plugin/rolling-memory/env/health`.
 type EnvHealthAndSyncStatus struct {
-	ActiveHarnessID    string                        `json:"active_harness_id"`
-	ActiveHarnessLabel string                        `json:"active_harness_label"`
-	ActiveWorkspace    string                        `json:"active_workspace"`
-	ActiveSessionID    string                        `json:"active_session_id"`
-	DetectionSource    string                        `json:"detection_source"`
+	ActiveHarnessID    string `json:"active_harness_id"`
+	ActiveHarnessLabel string `json:"active_harness_label"`
+	ActiveWorkspace    string `json:"active_workspace"`
+	ActiveSessionID    string `json:"active_session_id"`
+	DetectionSource    string `json:"detection_source"`
+	// Attachment is the live session the console should present as the
+	// current environment. It is absent when no client holds a live lease.
+	Attachment *hostid.Attachment `json:"attachment,omitempty"`
+	// Attachments lists every live session, newest activity first.
+	Attachments []hostid.Attachment `json:"attachments,omitempty"`
+	// RecentHarnessID/Label describe the host with the freshest transcript or
+	// last call. They are telemetry, never a substitute for Attachment.
+	RecentHarnessID    string                        `json:"recent_harness_id,omitempty"`
+	RecentHarnessLabel string                        `json:"recent_harness_label,omitempty"`
 	Mode               string                        `json:"mode"` // local | cloud：本地模式远端读数恒为 0（零外呼）
 	Harnesses          []HarnessEnvItem              `json:"harnesses"`
 	CloudOnline        bool                          `json:"cloud_online"`
@@ -520,13 +531,28 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		"noetic": len(localNoeticActive), "dirty_files": dirtyFilesCount,
 	})
 
-	// 2. Detect Harness environments and scan local conversation turns
+	// 2. Detect live client attachments and scan local conversation turns.
+	// A live attachment is a session lease, not a recent file write. The
+	// console's status subprocess sets ROLLING_MEMORY_CONSOLE_STATUS=1 so it
+	// never mistakes the server process's own shell identity for the user's
+	// current window.
 	endWiringStage := stageStart(progressStageWiring, nil)
-	activeID, activeWS, activeSess, detectSrc, presenceAt := detectActiveHarness(home)
-	// An explicit `--harness` filter is a soft scan/display scope (the console passes
-	// the last presence-file host to keep its capture single-harness fast); it narrows
-	// the inventory but is not recency evidence, so it can never outvote a fresher
-	// transcript into reporting a stale host as active.
+	attachments, activeAttachment, detectSrc := detectLiveAttachments()
+	activeID, activeWS, activeSess, presenceAt := "", "", "", int64(0)
+	if activeAttachment != nil {
+		activeID = activeAttachment.Host
+		activeWS = activeAttachment.Locus
+		activeSess = activeAttachment.SessionID
+		presenceAt = activeAttachment.LastSeenAt
+	}
+	liveHosts := map[string]bool{}
+	for _, attachment := range attachments {
+		if attachment.Host != "" {
+			liveHosts[attachment.Host] = true
+		}
+	}
+	// An explicit `--harness` filter is a soft scan/display scope; it is not
+	// recency evidence and can never outvote a fresher transcript.
 	displayFilter := ""
 	if harnessFilter != "" && harnessFilter != "all" {
 		displayFilter = harnessFilter
@@ -599,12 +625,13 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		// INSTALLED lights on real footprint evidence: a state directory survives
 		// an uninstall and can be created by our own wiring, so bare directory
 		// existence is not proof the host is still here. Session activity, the
-		// host's own app/launcher, or the active pick qualify.
-		installed := detected && (sessionsCnt > 0 || lastTS > 0 || d.ID == activeID || harness.AppPresent(d.ID, home))
+		// host's own app/launcher, or a live attachment qualify.
+		installed := detected && (sessionsCnt > 0 || lastTS > 0 || liveHosts[d.ID] || harness.AppPresent(d.ID, home))
 		out.Harnesses = append(out.Harnesses, HarnessEnvItem{
 			ID:                    d.ID,
 			Label:                 d.Label,
 			Detected:              installed,
+			Active:                liveHosts[d.ID],
 			SkillWired:            w["skill"],
 			MCPWired:              w["mcp"],
 			HooksWired:            w["hooks"],
@@ -620,34 +647,45 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 		})
 	}
 
-	// Active harness = strongest recency evidence (live env / presence file write
-	// time / transcript recency); zero evidence reports "none" instead of a
-	// fabricated default, and a claim whose id has no registry entry is dropped.
-	winnerID, winnerSrc := resolveActiveHarness(
+	// Recent activity is telemetry: the newest transcript or last-call claim.
+	// It never substitutes for a live attachment in the console badge.
+	recentID, _ := resolveActiveHarness(
 		out.Harnesses,
 		harnessClaims(out.Harnesses, activeID, detectSrc, presenceAt, time.Now().Unix()),
 	)
-	var activeItem *HarnessEnvItem
+	var recentItem *HarnessEnvItem
 	for i := range out.Harnesses {
-		if winnerID == "" || out.Harnesses[i].ID != winnerID {
+		if recentID == "" || out.Harnesses[i].ID != recentID {
 			continue
 		}
-		out.Harnesses[i].Active = true
 		cp := out.Harnesses[i]
-		activeItem = &cp
+		recentItem = &cp
 	}
 	endScanStage(map[string]any{"unsynced": totalHarnessUnsynced})
 
-	out.ActiveHarnessID = winnerID
+	out.Attachment = activeAttachment
+	out.Attachments = attachments
+	out.ActiveHarnessID = activeID
 	out.ActiveHarnessLabel = ""
-	if activeItem != nil {
-		out.ActiveHarnessLabel = activeItem.Label
-	} else if winnerID != "" {
-		out.ActiveHarnessLabel = winnerID
+	if activeAttachment != nil {
+		out.ActiveHarnessLabel = activeAttachment.Label
+	}
+	if out.ActiveHarnessLabel == "" && activeID != "" {
+		out.ActiveHarnessLabel = activeID
 	}
 	out.ActiveWorkspace = activeWS
 	out.ActiveSessionID = activeSess
-	out.DetectionSource = winnerSrc
+	out.DetectionSource = detectSrc
+	if out.DetectionSource == "" {
+		out.DetectionSource = "none"
+	}
+	out.RecentHarnessID = recentID
+	out.RecentHarnessLabel = ""
+	if recentItem != nil {
+		out.RecentHarnessLabel = recentItem.Label
+	} else if recentID != "" {
+		out.RecentHarnessLabel = recentID
+	}
 
 	// 3. Probe Cloud Engine & fetch remote unit sets via /open/memory/v1/units。
 	// 云面判定以实际传输为准：只有绑定 HTTP 传输（云端配置或显式端点覆盖）才探针与取远端全集；
@@ -791,6 +829,14 @@ func inspectEnvHealth(ctx context.Context, memory *facade.Memory, harnessFilter 
 	})
 
 	// (2) Active Harness Wiring (15 pts)
+	var activeItem *HarnessEnvItem
+	for i := range out.Harnesses {
+		if activeID != "" && out.Harnesses[i].ID == activeID {
+			cp := out.Harnesses[i]
+			activeItem = &cp
+			break
+		}
+	}
 	hScore := 0
 	hStatus := "warning"
 	hDetailZH := fmt.Sprintf("当前环境：%s", out.ActiveHarnessLabel)
@@ -1264,54 +1310,40 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 	return rep, nil
 }
 
-// detectActiveHarness inspects `active_workspace.json` (the hook-written presence
-// file, which carries its own `updated_at`) and runtime environment variables to
-// identify which coding harness (ZCode / Claude Code / Codex / dsh / CodeBuddy /
-// WorkBuddy) the machine is currently working in. The presence timestamp is
-// returned alongside the id so the caller can weigh this signal against
-// per-harness transcript recency instead of trusting a possibly stale file.
-// No signal → empty id and source "none": emitting a fabricated default (the
-// historical hardcoded "zcode") made every machine without evidence claim ZCode
-// as active — including machines where ZCode was never installed.
-func detectActiveHarness(home string) (harnessID, workspace, sessionID, source string, presenceAt int64) {
-	statePath := filepath.Join(config.DefaultStateDir(), "active_workspace.json")
-	if raw, err := os.ReadFile(statePath); err == nil {
-		var m map[string]any
-		if json.Unmarshal(raw, &m) == nil {
-			carrier, _ := m["carrier"].(string)
-			locus, _ := m["locus"].(string)
-			sess, _ := m["session_id"].(string)
-			carrier = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(carrier)), "harness:")
-			if carrier != "" {
-				at, _ := m["updated_at"].(float64)
-				return carrier, locus, sess, "active_workspace.json", int64(at)
-			}
+// detectLiveAttachments returns the lease-valid sessions from the attachment
+// ledger. A direct CLI invocation (not the console's status subprocess) may
+// additionally report a strong process identity when no ledger entry exists,
+// because that command itself is running inside the host. Weak shell exports
+// are deliberately ignored: they describe a workspace, not an identity.
+func detectLiveAttachments() ([]hostid.Attachment, *hostid.Attachment, string) {
+	now := ids.UTCNow()
+	live := hostid.LiveAttachments(hostid.LoadLedger(config.DefaultStateDir()), now)
+	if len(live) == 0 && os.Getenv("ROLLING_MEMORY_CONSOLE_STATUS") != "1" {
+		identity := hostid.DetectFromEnvOnly()
+		if identity.Strong && identity.ID != hostid.Unknown && identity.ID != hostid.CLI {
+			cwd, _ := os.Getwd()
+			live = append(live, hostid.Attachment{
+				Host:       string(identity.ID),
+				Label:      identity.Label,
+				SessionID:  identity.SessionID,
+				CWD:        cwd,
+				Locus:      text.DetectGitWorkspaceName(cwd),
+				Evidence:   identity.Evidence,
+				Mode:       "env",
+				LastSeenAt: now,
+				LeaseUntil: now,
+			})
 		}
 	}
-	// An explicit identity stamp outranks inference, mirroring the presence-file
-	// precedence in internal/text.
-	if v := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_HARNESS")); v != "" {
-		return strings.ToLower(v), "", "", "env:ROLLING_MEMORY_HARNESS", 0
+	if len(live) == 0 {
+		return nil, nil, "none"
 	}
-	// DeepSeek Harness exports DSH_SESSION_ID / DSH_SHELL to the processes it
-	// spawns; those markers are session-scoped and are only ever stamped by DSH
-	// itself, while ZCODE_PROJECT_DIR / CLAUDE_PROJECT_DIR are plain shell
-	// exports that every descendant inherits — a DSH session started from a
-	// ZCode terminal carries both, so the ZCode checks below must not be asked
-	// first about a process a DSH session owns.
-	if os.Getenv("DSH_SESSION_ID") != "" || os.Getenv("DSH_SHELL") != "" {
-		return "dsh", "", "", "env:DSH_SESSION_ID", 0
+	latest := live[0]
+	source := latest.Evidence
+	if source == "" {
+		source = "attachment"
 	}
-	if os.Getenv("ZCODE_PROJECT_DIR") != "" {
-		return "zcode", os.Getenv("ZCODE_PROJECT_DIR"), "", "env:ZCODE_PROJECT_DIR", 0
-	}
-	if os.Getenv("CLAUDE_PROJECT_DIR") != "" {
-		return "claude-code", os.Getenv("CLAUDE_PROJECT_DIR"), "", "env:CLAUDE_PROJECT_DIR", 0
-	}
-	if os.Getenv("CODEX_HOME") != "" {
-		return "codex", "", "", "env:CODEX_HOME", 0
-	}
-	return "", "", "", "none", 0
+	return live, &latest, source
 }
 
 // harnessEnvDefinitions is the environment-inventory list behind the console's
@@ -1341,18 +1373,13 @@ type activeHarnessClaim struct {
 	source string
 }
 
-// harnessClaims assembles the recency evidence behind the active-harness pick: a
-// live harness environment variable (the calling process runs inside that harness
-// right now) is timestamped `now`; the hook-written presence file keeps its own
-// write time; every harness with a transcript contributes its last-activity time.
-// The explicit CLI filter deliberately contributes nothing here: it is a scan
-// scope, not evidence.
+// harnessClaims assembles the recency evidence behind the recent-harness pick:
+// the live attachment contributes its last-seen time, and every harness with a
+// transcript contributes its last-activity time. The explicit CLI filter
+// deliberately contributes nothing here: it is a scan scope, not evidence.
 func harnessClaims(items []HarnessEnvItem, signalID, detectSrc string, presenceAt, now int64) []activeHarnessClaim {
 	var claims []activeHarnessClaim
-	switch {
-	case strings.HasPrefix(detectSrc, "env:"):
-		claims = append(claims, activeHarnessClaim{signalID, now, detectSrc})
-	case detectSrc == "active_workspace.json" && presenceAt > 0:
+	if signalID != "" && detectSrc != "" && detectSrc != "none" && presenceAt > 0 {
 		claims = append(claims, activeHarnessClaim{signalID, presenceAt, detectSrc})
 	}
 	for _, it := range items {
@@ -1392,7 +1419,7 @@ func resolveActiveHarness(items []HarnessEnvItem, claims []activeHarnessClaim) (
 // harness's local conversation sessions (the count shown on the panel).
 func harnessSessionsScannable(harnessID string) bool {
 	switch harnessID {
-	case "zcode", "claude-code", "codex", "dsh", "codebuddy", "workbuddy":
+	case "zcode", "claude-code", "codex", "dsh", "codebuddy", "workbuddy", "opencode":
 		return true
 	}
 	return false
@@ -1456,6 +1483,9 @@ func scanHarnessTurnsWithCoverageContext(ctx context.Context, home, harnessID, s
 	complete = true
 	if maxTurns <= 0 {
 		maxTurns = 100
+	}
+	if harnessID == "opencode" {
+		return scanOpenCodeSessions(ctx, home)
 	}
 	if !harnessTurnsScannable(harnessID) {
 		seen := map[string]bool{}
@@ -1534,6 +1564,36 @@ func scanHarnessTurnsWithCoverageContext(ctx context.Context, home, harnessID, s
 		turns = append(turns, sourceTurns...)
 	}
 	return sessionsCount, turns, lastActiveAt, complete
+}
+
+// scanOpenCodeSessions reads OpenCode's SQLite session store for inventory and
+// last-activity. OpenCode keeps turns in message/part rows with a host-specific
+// JSON schema, so turn extraction stays unsupported; the panel reports
+// sessions_scan_supported=true and turns_scan_supported=false.
+func scanOpenCodeSessions(ctx context.Context, home string) (int, []candidateEpisodicTurn, int64, bool) {
+	path := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+	if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
+		path = filepath.Join(xdg, "opencode", "opencode.db")
+	}
+	if _, err := os.Stat(path); err != nil {
+		return 0, nil, 0, os.IsNotExist(err)
+	}
+	db, err := sql.Open("sqlite", ids.SQLiteFileURI(path)+"?mode=ro&_pragma=busy_timeout(1500)")
+	if err != nil {
+		return 0, nil, 0, false
+	}
+	defer db.Close()
+	var count int
+	var lastMS int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(MAX(time_updated), 0) FROM session WHERE COALESCE(time_archived, 0) = 0`,
+	).Scan(&count, &lastMS); err != nil {
+		return 0, nil, 0, false
+	}
+	if lastMS < 0 {
+		lastMS = 0
+	}
+	return count, nil, lastMS / 1000, true
 }
 
 // countDirtyBackgroundFiles checks whether any mounted background file on disk has changed mtime/size

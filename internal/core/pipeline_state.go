@@ -1840,6 +1840,35 @@ func (st *rmClusterState) docSubjectCos(idx *Index, sc *rmQueryScratch, a, b int
 	return st.computeDocSubjectCos(idx, a, b)
 }
 
+// docSubjectCosLocal is the worker-local variant used by the parallel
+// intra-event endorsement pass. It keeps the warm-domain episode/time-neighbor
+// cache in the caller's scratch and never touches the shared st.dayCos map, so
+// concurrent workers cannot race; the value is computed by the same
+// computeDocSubjectCos and is bit-identical.
+func (st *rmClusterState) docSubjectCosLocal(idx *Index, sc *rmQueryScratch, a, b int32) float64 {
+	if ep := st.episodeOf[a]; (ep >= 0 && ep == st.episodeOf[b]) || st.isDirectTimeNeighbor(a, b) {
+		x, y := uint32(a), uint32(b)
+		if x > y {
+			x, y = y, x
+		}
+		key := (uint64(x) << 32) | uint64(y)
+		if sc != nil {
+			if val, ok := sc.dayCos[key]; ok {
+				return val
+			}
+		}
+		val := st.computeDocSubjectCos(idx, a, b)
+		if sc != nil {
+			if sc.dayCos == nil {
+				sc.dayCos = make(map[uint64]float64)
+			}
+			sc.dayCos[key] = val
+		}
+		return val
+	}
+	return st.computeDocSubjectCos(idx, a, b)
+}
+
 // buildEnvelopeDF counts, per distinct envelope commitment key (AuthorHash,
 // DocHash, BlockHash), how many units carry it. The count feeds the
 // null-hypothesis collision surprisal of "two units share this key", so the

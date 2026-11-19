@@ -147,6 +147,8 @@ overview:
     jumpHint: 进入该层独立页面
     aggregateTitle: 跨层聚合列表（全部记忆单元）
     envLabel: 当前运行环境
+    envUnknown: 未检测到在线宿主
+    envRecentLabel: 最近活跃
     healthLabel: 记忆健康度
     reconcileAllBtn: 一键三层对齐同步
     reconcileLayerBtn: 对齐同步本层

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rolling-Memory 插件内置 Hook 执行器（纯 POSIX sh · SessionStart / UserPromptSubmit / Stop）。
+# Rolling-Memory 插件内置 Hook 执行器（纯 POSIX sh · UserPromptSubmit recall）。
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "${SCRIPT_DIR}/rolling-memory-lib.sh"

@@ -4,6 +4,7 @@ package rollingmemory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -418,18 +419,21 @@ func TestSyncReconcileHandlerStripsWindowScopeNotice(t *testing.T) {
 }
 
 // TestEnvHealthHandlerDefaultsToActiveHarness 锁定一次性 /env/health 的扫描口径：
-// 空 harness 必须解析为 active_workspace.json 的 carrier 机器标识并透传给 `sync status --harness`
+// 空 harness 必须解析为 active_workspace.json 的 live attachment 机器标识并透传给 `sync status --harness`
 // （与实时流 /「重新检测」同一口径；全量跨 Harness 扫描与单 Harness 过滤载荷逐字段一致，
 // 仅 updated_at 不同，见 collectEnvHealthPayload 注释），显式 harness 原样透传不覆盖；
 // 活动工作区缺失时保持空串回退全量，不误配其它 Harness。
 func TestEnvHealthHandlerDefaultsToActiveHarness(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	stateDir := filepath.Join(home, ".local", "state", "rolling-memory")
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	stateDir := rollingMemoryStateDir(home)
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "active_workspace.json"), []byte(`{"carrier":"harness:zcode"}`), 0o644); err != nil {
+	ledger := fmt.Sprintf(`{"version":2,"sessions":{"zcode:s1":{"host":"zcode","label":"ZCode","session_id":"s1","lease_until":%d,"last_seen_at":%d}}}`,
+		time.Now().Add(time.Minute).Unix(), time.Now().Unix())
+	if err := os.WriteFile(filepath.Join(stateDir, "active_workspace.json"), []byte(ledger), 0o644); err != nil {
 		t.Fatalf("write active workspace: %v", err)
 	}
 	prevExec := executeAdminSyncCLI

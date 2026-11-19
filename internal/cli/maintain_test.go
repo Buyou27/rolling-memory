@@ -383,3 +383,127 @@ func TestMaintainCompactPreviewThenApply(t *testing.T) {
 		t.Fatalf("after_bytes must be smaller: after=%d before=%v", after, result["before_bytes"])
 	}
 }
+
+func maintainTestDir(t *testing.T, dir, name string, age time.Duration, size int) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "index.html"), bytes.Repeat([]byte("x"), size), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	stamp := time.Now().Add(-age)
+	if err := os.Chtimes(path, stamp, stamp); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+	return path
+}
+
+func TestMaintainScanVaultBackupsGroupsSidecars(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	oldest := maintainTestWrite(t, dir, "memory.db.bak-0101", 72*time.Hour, 10)
+	oldestWAL := maintainTestWrite(t, dir, "memory.db.bak-0101-wal", 72*time.Hour, 0)
+	mid := maintainTestWrite(t, dir, "memory.db.bak-0202", 48*time.Hour, 10)
+	midSHM := maintainTestWrite(t, dir, "memory.db.bak-0202-shm", 48*time.Hour, 1)
+	newest := maintainTestWrite(t, dir, "memory.db.bak-0303", time.Hour, 10)
+	manual := maintainTestWrite(t, dir, "memory.db.bak-cutover-0119", 2*time.Hour, 10)
+	byPath := map[string]maintainItem{}
+	for _, item := range maintainScanVaultBackups(dir, 2, now) {
+		byPath[item.Path] = item
+	}
+	if byPath[oldest].Action != "delete" || byPath[oldestWAL].Action != "delete" {
+		t.Fatalf("oldest backup and sidecar must be deleted: main=%q wal=%q", byPath[oldest].Action, byPath[oldestWAL].Action)
+	}
+	if byPath[mid].Action != "keep" || byPath[midSHM].Action != "keep" || byPath[newest].Action != "keep" {
+		t.Fatalf("newest two backups must be kept: mid=%q shm=%q newest=%q", byPath[mid].Action, byPath[midSHM].Action, byPath[newest].Action)
+	}
+	if byPath[manual].Action != "keep" {
+		t.Fatalf("semantic checkpoint must be kept, got %q", byPath[manual].Action)
+	}
+}
+
+func TestMaintainScanWebDistBackupsKeepsNewest(t *testing.T) {
+	adminDir := t.TempDir()
+	now := time.Now()
+	oldest := maintainTestDir(t, adminDir, "web-dist.bak-0101", 72*time.Hour, 10)
+	mid := maintainTestDir(t, adminDir, "web-dist.bak-0202", 48*time.Hour, 10)
+	newest := maintainTestDir(t, adminDir, "web-dist.bak-0303", time.Hour, 10)
+	unrelated := maintainTestDir(t, adminDir, "other.bak-0101", 72*time.Hour, 10)
+	byPath := map[string]maintainItem{}
+	for _, item := range maintainScanWebDistBackups(adminDir, 2, now) {
+		byPath[item.Path] = item
+	}
+	if byPath[oldest].Action != "delete" || byPath[mid].Action != "keep" || byPath[newest].Action != "keep" {
+		t.Fatalf("web-dist actions: oldest=%q mid=%q newest=%q", byPath[oldest].Action, byPath[mid].Action, byPath[newest].Action)
+	}
+	if _, listed := byPath[unrelated]; listed {
+		t.Fatalf("unrelated directory must not be listed")
+	}
+}
+
+func TestMaintainScanBinaryBackupsOnlyKnownFamilies(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	oldest := maintainTestWrite(t, dir, "rolling-memory.bak-0101", 72*time.Hour, 10)
+	newest := maintainTestWrite(t, dir, "rolling-memory.bak-0303", time.Hour, 10)
+	foreign := maintainTestWrite(t, dir, "other-tool.bak-0101", time.Hour, 10)
+	manual := maintainTestWrite(t, dir, "rolling-memory.bak-20261110-wirev1", time.Hour, 10)
+	byPath := map[string]maintainItem{}
+	for _, item := range maintainScanBinaryBackups(home, 1, now) {
+		byPath[item.Path] = item
+	}
+	if byPath[oldest].Action != "delete" || byPath[newest].Action != "keep" {
+		t.Fatalf("binary actions: oldest=%q newest=%q", byPath[oldest].Action, byPath[newest].Action)
+	}
+	if _, listed := byPath[foreign]; listed {
+		t.Fatalf("foreign family must not be listed")
+	}
+	if _, listed := byPath[manual]; listed {
+		t.Fatalf("semantic manual backup must not enter the delete plan")
+	}
+}
+
+func TestMaintainApplyCleanRemovesDirectoryBackups(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := t.TempDir()
+	backupDir := maintainTestDir(t, dir, "web-dist.bak-0101", time.Hour, 10)
+	keepFile := maintainTestWrite(t, dir, "rolling-memory.bak-0303", time.Hour, 4)
+	result, err := maintainApplyClean([]maintainItem{
+		{Path: backupDir, Bytes: 10, Action: "delete", Dir: true},
+		{Path: keepFile, Bytes: 4, Action: "keep"},
+	}, stateDir, time.Now())
+	if err != nil {
+		t.Fatalf("apply clean: %v", err)
+	}
+	if _, err := os.Stat(backupDir); !os.IsNotExist(err) {
+		t.Fatalf("directory backup must be removed")
+	}
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("kept file must remain: %v", err)
+	}
+	if got := result["freed_bytes"].(int64); got != 10 {
+		t.Fatalf("freed_bytes=%d, want 10", got)
+	}
+}
+
+func TestMaintainScanUserHistoryReportsOnly(t *testing.T) {
+	stateDir := t.TempDir()
+	now := time.Now()
+	evalDir := maintainTestDir(t, stateDir, "eval", 2*time.Hour, 20)
+	atmDir := maintainTestDir(t, stateDir, "atmbench", 2*time.Hour, 10)
+	byPath := map[string]maintainItem{}
+	for _, item := range maintainScanUserHistory(stateDir, now) {
+		byPath[item.Path] = item
+	}
+	for _, path := range []string{evalDir, atmDir} {
+		if byPath[path].Action != "report" {
+			t.Fatalf("history %s action=%q, want report", path, byPath[path].Action)
+		}
+	}
+}

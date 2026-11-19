@@ -287,7 +287,7 @@ func TestEpisodicBackfillResumeAfterError(t *testing.T) {
 	if _, err := v.BackfillEpisodicIndexes(context.Background(), "mem:test", "", 0); err == nil {
 		t.Fatal("zero page size accepted")
 	}
-	if _, err := db.Exec(`DROP TABLE thin_vault_docs`); err != nil {
+	if _, err := db.Exec(`DROP VIEW thin_vault_docs`); err != nil {
 		t.Fatal(err)
 	}
 	page, err = v.BackfillEpisodicIndexes(context.Background(), "mem:test", "cursor", 1)

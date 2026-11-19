@@ -747,7 +747,7 @@ func (a *application) runMCP() int {
 		return 0
 	}
 	if mcp.ShouldUseUnixDaemon(a.args.String("db")) {
-		if err := mcp.ServeWithDaemonProxy(a.stdin, a.stdout); err != nil {
+		if err := mcp.ServeWithDaemonProxyAt(a.stdin, a.stdout, config.DefaultStateDir()); err != nil {
 			if isBrokenPipe(err) {
 				return 0
 			}
@@ -757,7 +757,7 @@ func (a *application) runMCP() int {
 		return 0
 	}
 	go a.backgroundMCPAutoWatch(watchCtx)
-	if err := mcp.Serve(a.stdin, a.stdout, nil); err != nil {
+	if err := mcp.ServeAt(a.stdin, a.stdout, nil, config.DefaultStateDir()); err != nil {
 		if isBrokenPipe(err) {
 			return 0
 		}

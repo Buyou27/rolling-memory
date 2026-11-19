@@ -94,14 +94,17 @@ func TestSyncStatusCountsDSHSessionsFromRealLayout(t *testing.T) {
 	if got, ok := dsh["last_active_at"].(float64); !ok || got <= 0 {
 		t.Fatalf("dsh last_active_at = %v, want the newest transcript mtime", dsh["last_active_at"])
 	}
-	if dsh["active"] != true {
-		t.Fatalf("dsh item = %+v, want active: the newest activity on this machine is a DSH transcript", dsh)
+	if dsh["active"] != false {
+		t.Fatalf("dsh item = %+v, want inactive: a transcript is recent activity, not a live attachment", dsh)
 	}
-	if payload["active_harness_id"] != "dsh" {
-		t.Fatalf("active_harness_id = %v, want dsh", payload["active_harness_id"])
+	if payload["active_harness_id"] != "" {
+		t.Fatalf("active_harness_id = %v, want empty (no live client lease)", payload["active_harness_id"])
 	}
-	if payload["detection_source"] != "recent_activity" {
-		t.Fatalf("detection_source = %v, want recent_activity", payload["detection_source"])
+	if payload["recent_harness_id"] != "dsh" {
+		t.Fatalf("recent_harness_id = %v, want dsh", payload["recent_harness_id"])
+	}
+	if payload["detection_source"] != "none" {
+		t.Fatalf("detection_source = %v, want none", payload["detection_source"])
 	}
 
 	if got := harnessItem(t, payload, "claude-code")["sessions_count"]; got != float64(1) {
@@ -123,6 +126,7 @@ func TestSyncStatusCountsDSHSessionsFromRealLayout(t *testing.T) {
 func TestSyncStatusPrefersDSHSessionMarkerOverInheritedHostEnv(t *testing.T) {
 	t.Run("dsh session marker wins over inherited zcode export", func(t *testing.T) {
 		env := newEnv(t)
+		t.Setenv("ROLLING_MEMORY_CONSOLE_STATUS", "")
 		t.Setenv("DSH_SESSION_ID", "0ab8902b-726b-431f-ab01-30c524e9794e")
 		t.Setenv("DSH_SHELL", "1")
 		t.Setenv("ZCODE_PROJECT_DIR", "/tmp/demo-workspace")
@@ -137,21 +141,23 @@ func TestSyncStatusPrefersDSHSessionMarkerOverInheritedHostEnv(t *testing.T) {
 		}
 	})
 
-	t.Run("zcode export still wins when no dsh marker is present", func(t *testing.T) {
+	t.Run("bare zcode export is not identity", func(t *testing.T) {
 		env := newEnv(t)
+		t.Setenv("ROLLING_MEMORY_CONSOLE_STATUS", "")
 		t.Setenv("ZCODE_PROJECT_DIR", "/tmp/demo-workspace")
 
 		payload := runStatusJSON(t, filepath.Join(env.base, "zcode-env.db"))
-		if payload["active_harness_id"] != "zcode" {
-			t.Fatalf("active_harness_id = %v, want zcode", payload["active_harness_id"])
+		if payload["active_harness_id"] != "" {
+			t.Fatalf("a project export must not name the current host: %v", payload["active_harness_id"])
 		}
-		if payload["detection_source"] != "env:ZCODE_PROJECT_DIR" {
-			t.Fatalf("detection_source = %v, want env:ZCODE_PROJECT_DIR", payload["detection_source"])
+		if payload["detection_source"] != "none" {
+			t.Fatalf("detection_source = %v, want none", payload["detection_source"])
 		}
 	})
 
 	t.Run("explicit identity stamp outranks inference", func(t *testing.T) {
 		env := newEnv(t)
+		t.Setenv("ROLLING_MEMORY_CONSOLE_STATUS", "")
 		t.Setenv("ROLLING_MEMORY_HARNESS", "codex")
 		t.Setenv("ZCODE_PROJECT_DIR", "/tmp/demo-workspace")
 

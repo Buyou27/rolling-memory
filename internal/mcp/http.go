@@ -343,7 +343,7 @@ func (s *HTTPServer) dispatch(message any, requestMemory *facade.Memory) any {
 	if batch, ok := message.([]any); ok {
 		responses := make([]any, 0, len(batch))
 		for _, item := range batch {
-			if response := handleWithMemoryMode(item, memory, s.lazy(), s.debugWriter(), liveDaemon); response != nil {
+			if response := handleWithMemoryMode(item, memory, s.lazy(), s.debugWriter(), liveDaemon, false); response != nil {
 				responses = append(responses, response)
 			}
 		}
@@ -352,7 +352,7 @@ func (s *HTTPServer) dispatch(message any, requestMemory *facade.Memory) any {
 		}
 		return responses
 	}
-	return handleWithMemoryMode(message, memory, s.lazy(), s.debugWriter(), liveDaemon)
+	return handleWithMemoryMode(message, memory, s.lazy(), s.debugWriter(), liveDaemon, false)
 }
 
 // initialized reports whether a message is the initialize request, whose result

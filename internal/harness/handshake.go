@@ -47,6 +47,7 @@ func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 		"ROLLING_MEMORY_LOG="+filepath.Join(temp, "rolling-memory.log"),
 		"ROLLING_MEMORY_MODE=local",
 		"ROLLING_MEMORY_SCOPE="+handshakeScope(options),
+		"ROLLING_MEMORY_DISABLE_ATTACHMENT=1",
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

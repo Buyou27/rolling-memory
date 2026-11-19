@@ -283,6 +283,27 @@ func (v *Vault) ingestCanonicalText(unitID string, occurredAt int64, text string
 	if meta.Layer == LayerBackground {
 		occurredAt = 0
 	}
+	if v.db != nil {
+		var existingOccurred int64
+		var existingAssistant, existingIncarnation, existingLocus string
+		if err := v.db.QueryRow(`
+			SELECT d.occurred_at, COALESCE(m.assistant_id, ''), COALESCE(m.incarnation_id, ''), COALESCE(m.locus, '')
+			  FROM rm_docs d LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id
+			 WHERE d.unit_id = ?`, unitID).Scan(&existingOccurred, &existingAssistant, &existingIncarnation, &existingLocus); err == nil {
+			if occurredAt <= 0 && existingOccurred > 0 {
+				occurredAt = existingOccurred
+			}
+			if existingAssistant != "" {
+				meta.AssistantID = existingAssistant
+			}
+			if existingIncarnation != "" {
+				meta.IncarnationID = existingIncarnation
+			}
+			if existingLocus != "" {
+				meta.Locus = existingLocus
+			}
+		}
+	}
 	te := v.newVaultTermExtractor()
 	doc := te.ExtractDoc(unitID, occurredAt, text)
 	doc.Layer = meta.Layer
@@ -324,9 +345,9 @@ func (v *Vault) ingestCanonicalText(unitID string, occurredAt int64, text string
 			coord64 = excluded.coord64,
 			waveform_bar = excluded.waveform_bar,
 			doc_macro_wave = excluded.doc_macro_wave,
-			assistant_id = excluded.assistant_id,
-			incarnation_id = excluded.incarnation_id,
-			locus = excluded.locus,
+			assistant_id = CASE WHEN rm_unit_meta.assistant_id <> '' THEN rm_unit_meta.assistant_id ELSE excluded.assistant_id END,
+			incarnation_id = CASE WHEN rm_unit_meta.incarnation_id <> '' THEN rm_unit_meta.incarnation_id ELSE excluded.incarnation_id END,
+			locus = CASE WHEN rm_unit_meta.locus <> '' THEN rm_unit_meta.locus ELSE excluded.locus END,
 			inserted_at = CASE WHEN rm_unit_meta.inserted_at > 0 THEN rm_unit_meta.inserted_at ELSE excluded.inserted_at END,
 			meta_rev = rm_unit_meta.meta_rev + 1`,
 		unitID, meta.Layer, meta.RefPointer, sentences, kept,

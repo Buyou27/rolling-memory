@@ -114,10 +114,10 @@ func TestHarnessClaimsSources(t *testing.T) {
 			},
 		},
 		{
-			name:     "env signal is timestamped now",
-			signalID: "zcode", detectSrc: "env:ZCODE_PROJECT_DIR", presenceAt: 0,
+			name:     "signal keeps its last-seen time",
+			signalID: "zcode", detectSrc: "env:ZCODE_SESSION_ID", presenceAt: 999,
 			want: []activeHarnessClaim{
-				{"zcode", 999, "env:ZCODE_PROJECT_DIR"},
+				{"zcode", 999, "env:ZCODE_SESSION_ID"},
 				{"zcode", 400, "recent_activity"},
 			},
 		},

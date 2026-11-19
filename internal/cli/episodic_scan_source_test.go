@@ -417,7 +417,14 @@ func TestEpisodicDSHCompressedDiscoveryAndHydration(t *testing.T) {
 func TestEpisodicSourceUnverifiedLegacyDoesNotStarveOtherSources(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	t.Setenv("DSH_HOME", filepath.Join(home, ".dsh"))
+	// This test calls the status collector in-process; it must not inherit the
+	// developer's host markers or the real attachment ledger.
+	t.Setenv("ROLLING_MEMORY_CONSOLE_STATUS", "1")
+	t.Setenv("ROLLING_MEMORY_DISABLE_PROCESS_ANCESTRY", "1")
+	t.Setenv("OPENCODE_SESSION_ID", "")
+	t.Setenv("AI_AGENT", "")
 	dir := filepath.Join(home, ".claude", "projects", "demo")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

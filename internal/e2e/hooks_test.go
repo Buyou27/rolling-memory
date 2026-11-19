@@ -22,7 +22,7 @@ var hookTimeouts = map[string]float64{
 // SessionStart 引导注入与 Stop 收尾已随事件面停用（现役仅 UserPromptSubmit）。
 func TestHooksContractReplay(t *testing.T) {
 	sb := newSandbox(t)
-	// boot_context is off by default; turn it on so SessionStart injects.
+	// A legacy boot_context key must not add a second event: only UserPromptSubmit is wired.
 	writeFile(t, sb.config, "[hooks]\nboot_context = true\n")
 
 	installed := sb.run("install", "zcode", "--binary", binaryPath,

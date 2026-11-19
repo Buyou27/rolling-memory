@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
@@ -62,6 +63,9 @@ func TestSyncStatusAndReconcileAllLayersAndPurgeLegacyTables(t *testing.T) {
 
 	// Historical database shape: the legacy tables exist before the app opens it.
 	ensureLegacyGraphDB(t, dbPath)
+
+	// A live claude-code attachment is the current environment for this run.
+	writeActiveWorkspacePresence(t, "harness:claude-code", "s1", time.Now().Unix())
 
 	// 1. Check status before reconcile: should report pending harness turns.
 	stRes := run(t, "sync", "status", "--db", dbPath, "--harness", "claude-code", "--json")

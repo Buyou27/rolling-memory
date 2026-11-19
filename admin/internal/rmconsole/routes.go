@@ -480,7 +480,7 @@ func collectStatus(home, hostVer, hostAPIVer string) StatusResponse {
 
 	switches := parseConfigSwitches(filepath.Join(home, ".config", "rolling-memory", "config.toml"), wEnabled)
 	dbPath := resolveMemoryDBPath(home)
-	logPath := filepath.Join(home, ".local", "state", "rolling-memory", "rolling-memory.log")
+	logPath := rollingMemoryLogPath(home)
 	events, lastMS := readHookEvents(logPath, 20)
 	if ledger := loadRecallLedgerStat(home, dbPath, UserScope, time.Now().AddDate(0, 0, -7).Unix()); ledger != nil {
 		if len(ledger.recentEvents) > 0 {

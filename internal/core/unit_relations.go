@@ -677,6 +677,48 @@ func (e *Engine) evalPairFromProfilesQ(st *rmClusterState, u int32, profU unitGr
 	}
 }
 
+// evalPairFromProfilesQLocal is the worker-local variant used by the parallel
+// intra-event endorsement pass. It uses the caller's scratch for the explanation
+// pools and the doc-subject cache, so independent workers never share mutable
+// state; the arithmetic is identical to evalPairFromProfilesQ.
+func (e *Engine) evalPairFromProfilesQLocal(st *rmClusterState, u int32, profU unitGroupProfile, v int32, profV unitGroupProfile, qSet map[uint64]struct{}, sc *rmQueryScratch) UnitRelationPeer {
+	idx := e.Index
+	ix := intersectGroupProfiles(profU, profV, true)
+
+	subjCos := st.docSubjectCosLocal(idx, sc, u, v)
+	tempAff := st.temporalAffinity(idx, u, v)
+	if st.hasCitationEdge(u, v) || st.hasCoCitationEdge(u, v) {
+		tempAff = math.Max(tempAff, transmissionPerHop)
+	} else if st.refTimes[u] <= 0 || st.refTimes[v] <= 0 {
+		if int(u) < len(idx.UnitMeta) && int(v) < len(idx.UnitMeta) {
+			mu, mv := idx.UnitMeta[u], idx.UnitMeta[v]
+			if (mu.DocHash != 0 && mu.DocHash == mv.DocHash) ||
+				(mu.BlockHash != 0 && mu.BlockHash == mv.BlockHash) {
+				tempAff = math.Max(tempAff, transmissionPerHop)
+			}
+		}
+	}
+
+	selfExplain := computeDirectedLocalExplainWork(sc, st, profU, ix.sharedMaskU, ix.SharedMinNats, ix.PeerSalientExcessNats, profV.muMass, qSet)
+	peerExplain := computeDirectedLocalExplainWork(sc, st, profV, ix.sharedMaskV, ix.SharedMinNats, ix.SelfSalientExcessNats, profU.muMass, qSet)
+
+	return UnitRelationPeer{
+		UnitID:              idx.UnitIDs[v],
+		Unit:                v,
+		SharedNats:          ix.SharedMinNats,
+		SelfExcessNats:      ix.SelfExcessNats,
+		PeerExcessNats:      ix.PeerExcessNats,
+		SelfSalientExcess:   ix.SelfSalientExcessNats,
+		PeerSalientExcess:   ix.PeerSalientExcessNats,
+		SelfCoverage:        ix.SelfCoverage,
+		PeerCoverage:        ix.PeerCoverage,
+		SubjectCosine:       subjCos,
+		TemporalAffinity:    tempAff,
+		SelfExplainWorkNats: selfExplain,
+		PeerExplainWorkNats: peerExplain,
+	}
+}
+
 // InspectUnitRelations answers the five fundamental autonoetic questions for any
 // unit u in the system using a single unified Nats energy framework (100%
 // rank-index-blind, zero magic numbers, O(nnz) candidate discovery).
@@ -1115,8 +1157,43 @@ func sortScoredEventUnits(s []scoredEventUnit) {
 //   - Pass 2 (Intra-Event Directional Explanation Endorsement): within that
 //     primary event cluster, a leading seed s endorses a co-event member u that
 //     performs net upward explanatory work W(u ▷ s) > √e * W(s ▷ u).
+//
+// endorsePairEval evaluates one event-unit index with worker-local scratch.
+type endorsePairEval func(i int, local *rmQueryScratch) float64
+
+// endorsePairDispatch optionally parallelizes the independent event-unit
+// evaluations. It is installed by the adapter build; the portable core keeps a
+// serial fallback so the computational subset remains adapter-free.
+var endorsePairDispatch func(n int, eval endorsePairEval) []float64
+
+// queryHasSpecificTerm reports whether the query carries at least one term
+// below the specific-anchor cut N/e³ (one e-fold below the N/e² posting-list
+// cut). The intra-event endorsement pass amplifies a specific event cluster; a
+// query made only of terms at or above the anchor cut has no term that can
+// anchor such a cluster, so the pass is not applicable. The same e^-3 fraction
+// already gates specific proper-noun anchors.
+func queryHasSpecificTerm(idx *Index, qTerms map[uint64]Term, highDFThresh int) bool {
+	if idx == nil || len(qTerms) == 0 {
+		return false
+	}
+	anchorDFMax := int(float64(highDFThresh) / eulerNumber)
+	if anchorDFMax < 1 {
+		anchorDFMax = 1
+	}
+	for h := range qTerms {
+		df := idx.TermDF(h)
+		if df > 0 && df <= anchorDFMax {
+			return true
+		}
+	}
+	return false
+}
+
+// applyIntraEventExplanatoryEndorsement amplifies a specific event cluster
+// around the strongest candidate. A query with no term below the specific-anchor
+// cut has no event anchor, so the pass is skipped structurally.
 func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmClusterState, sc *rmQueryScratch, candidates []rmCandidate, unitStructGate []float64, corefByEpisode map[int32][]int32, groups map[uint64]float64, total float64, highDFThresh int, qTerms map[uint64]Term) {
-	if e == nil || idx == nil || st == nil || sc == nil || len(sc.coreUnits) < 2 || total <= 0 {
+	if e == nil || idx == nil || st == nil || sc == nil || len(sc.coreUnits) < 2 || total <= 0 || !queryHasSpecificTerm(idx, qTerms, highDFThresh) {
 		return
 	}
 	evalStage2E := func(u int32) float64 {
@@ -1233,11 +1310,11 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 	// endorsement pass is query-conditioned (3-body), counting only unknown
 	// payload terms u \ Q as explanation.
 	qSet := buildQueryGroundSetInto(sc, qTerms)
-	for i := 1; i < len(eventUnits); i++ {
+	eval := func(i int, local *rmQueryScratch) float64 {
 		u := eventUnits[i].unit
 		profU := eventUnits[i].prof
 		if len(profU.items) == 0 {
-			continue
+			return 0
 		}
 		microOcc := eventUnits[i].microOcc
 		satDecay := math.Exp(-math.Max(0, microOcc-burstFreeQuota) * eulerNumber)
@@ -1260,14 +1337,27 @@ func (e *Engine) applyIntraEventExplanatoryEndorsement(idx *Index, st *rmCluster
 			if aff < subFloor {
 				continue
 			}
-			rel := e.evalPairFromProfilesQ(st, s, eventUnits[k].prof, u, profU, qSet)
+			rel := e.evalPairFromProfilesQLocal(st, s, eventUnits[k].prof, u, profU, qSet, local)
 			harmCov := harmonicCoverage(rel.SelfCoverage, rel.PeerCoverage)
 			if gain := intraEventEndorseGain(rel, aff, harmCov, eventUnits[k].energy/maxE, satDecay, eventUnits[k].energy-eventUnits[i].energy, microOcc, eventUnits[k].microOcc); gain > best {
 				best = gain
 			}
 		}
-		if best > 0 {
-			candidates[u].stCorrob += best
+		return best
+	}
+	var bestByI []float64
+	if endorsePairDispatch != nil {
+		bestByI = endorsePairDispatch(len(eventUnits), eval)
+	} else {
+		bestByI = make([]float64, len(eventUnits))
+		local := &rmQueryScratch{}
+		for i := 1; i < len(eventUnits); i++ {
+			bestByI[i] = eval(i, local)
+		}
+	}
+	for i := 1; i < len(eventUnits); i++ {
+		if bestByI[i] > 0 {
+			candidates[eventUnits[i].unit].stCorrob += bestByI[i]
 		}
 	}
 }
