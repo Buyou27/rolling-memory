@@ -140,6 +140,18 @@ func skillOwned(target string, raw []byte) bool {
 	return err == nil && string(owner) == skillDigest(raw)
 }
 
+func pluginSkillCurrent(plugin zcodePluginInfo, options InstallOptions) bool {
+	if !plugin.HasSkill || plugin.SkillMD == "" {
+		return false
+	}
+	expected, err := skillText(options)
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(plugin.SkillMD)
+	return err == nil && string(raw) == expected
+}
+
 func installSkill(harness Harness, options InstallOptions, report *Report) {
 	targets := skillTargets(harness, options)
 	if len(targets) == 0 {
@@ -148,8 +160,14 @@ func installSkill(harness Harness, options InstallOptions, report *Report) {
 	}
 	if plugin, ok := activeNativePlugin(harness, options); ok && plugin.HasSkill {
 		target := targets[0]
+		current := pluginSkillCurrent(plugin, options)
 		if _, err := os.Lstat(target); err == nil {
 			if options.Dedupe {
+				if !current {
+					report.Add(harness.ID, "skill", target, StatusConflict,
+						"plugin "+plugin.ID+" skill differs from the current release; update the plugin or keep this copy")
+					return
+				}
 				start := len(report.Actions)
 				uninstallSkill(harness, options, report)
 				for index := start; index < len(report.Actions); index++ {
@@ -163,6 +181,11 @@ func installSkill(harness Harness, options InstallOptions, report *Report) {
 			report.Add(harness.ID, "skill", target, StatusConflict,
 				"plugin "+plugin.ID+" also declares this skill; run `rolling-memory install "+harness.ID+" --dedupe` to remove this tool's copy")
 		} else if errors.Is(err, os.ErrNotExist) {
+			if !current {
+				report.Add(harness.ID, "skill", plugin.SkillMD, StatusOutdated,
+					"plugin "+plugin.ID+" skill differs from the current release; update the plugin")
+				return
+			}
 			report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" provides this skill; host loading is not verified")
 		} else {
 			report.Add(harness.ID, "skill", target, StatusError, "cannot inspect: "+err.Error())
@@ -312,6 +335,11 @@ func checkSkill(harness Harness, options InstallOptions, report *Report) {
 		if fileExists(target) {
 			report.Add(harness.ID, "skill", target, StatusConflict,
 				"duplicate skill: both user skill and plugin "+plugin.ID+" present; unowned files require manual review")
+			return
+		}
+		if !pluginSkillCurrent(plugin, options) {
+			report.Add(harness.ID, "skill", plugin.SkillMD, StatusOutdated,
+				"plugin "+plugin.ID+" skill differs from the current release; update the plugin")
 			return
 		}
 		report.Add(harness.ID, "skill", plugin.SkillMD, StatusSkipped, "plugin "+plugin.ID+" declares this skill; host loading is not verified")

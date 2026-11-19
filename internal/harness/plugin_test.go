@@ -39,7 +39,7 @@ func setupZCodePluginCache(t *testing.T, fx *fixture, version string) string {
 }`); err != nil {
 		t.Fatalf("writeText plugin.json: %v", err)
 	}
-	if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"), "---\nname: rolling-memory\ndescription: plugin skill\n---\n"); err != nil {
+	if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"), "---\nname: "+DefaultName+"\ndescription: synthetic test skill\n---\n\n# body\n"); err != nil {
 		t.Fatalf("writeText SKILL.md: %v", err)
 	}
 	if _, err := writeText(filepath.Join(pluginDir, "hooks", "hooks.json"), `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall"}]}]}}`); err != nil {
@@ -419,7 +419,7 @@ func TestClaudePluginPreservesExistingInstallUntilVerified(t *testing.T) {
 }`); err != nil {
 		t.Fatalf("writeText plugin.json: %v", err)
 	}
-	if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"), "---\nname: rolling-memory\ndescription: plugin skill\n---\n"); err != nil {
+	if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"), "---\nname: "+DefaultName+"\ndescription: synthetic test skill\n---\n\n# body\n"); err != nil {
 		t.Fatalf("writeText SKILL.md: %v", err)
 	}
 	if _, err := writeText(filepath.Join(pluginDir, "hooks", "hooks.json"), `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/bin/rolling-memory-hook recall"}]}]}}`); err != nil {
@@ -668,7 +668,7 @@ func TestWorkBuddyPluginPreservesExistingInstall(t *testing.T) {
 }`); err != nil {
 		t.Fatalf("writeText plugin.json: %v", err)
 	}
-	if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"), "---\nname: rolling-memory\ndescription: plugin skill\n---\n"); err != nil {
+	if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"), "---\nname: "+DefaultName+"\ndescription: synthetic test skill\n---\n\n# body\n"); err != nil {
 		t.Fatalf("writeText SKILL.md: %v", err)
 	}
 	if _, err := writeText(filepath.Join(pluginDir, ".mcp.json"), `{"mcpServers":{"rolling-memory":{"type":"stdio","command":"/bin/sh","args":["-c","true"]}}}`); err != nil {
@@ -711,7 +711,7 @@ func TestWorkBuddyMarketplacePluginPreservesExistingInstall(t *testing.T) {
 }`); err != nil {
 		t.Fatalf("writeText plugin.json: %v", err)
 	}
-	if _, err := writeText(filepath.Join(marketDir, "skills", DefaultName, "SKILL.md"), "---\nname: rolling-memory\ndescription: plugin skill\n---\n"); err != nil {
+	if _, err := writeText(filepath.Join(marketDir, "skills", DefaultName, "SKILL.md"), "---\nname: "+DefaultName+"\ndescription: synthetic test skill\n---\n\n# body\n"); err != nil {
 		t.Fatalf("writeText SKILL.md: %v", err)
 	}
 	if _, err := writeText(filepath.Join(marketDir, ".mcp.json"), `{"mcpServers":{"rolling-memory":{"type":"stdio","command":"node","args":["-e","0"]}}}`); err != nil {
@@ -1001,4 +1001,52 @@ func TestDedupeKeepsWorkingMCPWhenPluginCommandUnavailable(t *testing.T) {
 	if _, found := jsonLookup(data, []string{"mcp", "servers", DefaultName}); !found {
 		t.Fatalf("working MCP entry was removed for an unusable plugin command")
 	}
+}
+
+func TestPluginSkillMustMatchReleaseBeforeDedupe(t *testing.T) {
+	t.Run("check reports an old plugin copy", func(t *testing.T) {
+		fx := newFixture(t)
+		options := fx.options()
+		options.Name = DefaultName
+		options.SkillName = DefaultName
+		zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pluginDir := setupZCodePluginCache(t, fx, "0.7.4")
+		enableZCodePlugin(t, fx)
+		if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"),
+			"---\nname: "+DefaultName+"\ndescription: old plugin skill\n---\n"); err != nil {
+			t.Fatal(err)
+		}
+		action := firstAction(t, Check(zcode, options, false), "zcode", "skill")
+		if action.Status != StatusOutdated || !strings.Contains(action.Detail, "plugin") {
+			t.Fatalf("old plugin skill check = %#v", action)
+		}
+	})
+	t.Run("dedupe keeps the current CLI copy", func(t *testing.T) {
+		fx := newFixture(t)
+		options := fx.options()
+		options.Name = DefaultName
+		options.SkillName = DefaultName
+		zcode, err := SelectHarnesses(fx.registry(), []string{"zcode"}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertNoFailures(t, Install(zcode, options))
+		pluginDir := setupZCodePluginCache(t, fx, "0.7.4")
+		enableZCodePlugin(t, fx)
+		if _, err := writeText(filepath.Join(pluginDir, "skills", DefaultName, "SKILL.md"),
+			"---\nname: "+DefaultName+"\ndescription: old plugin skill\n---\n"); err != nil {
+			t.Fatal(err)
+		}
+		options.Dedupe = true
+		action := firstAction(t, Install(zcode, options), "zcode", "skill")
+		if action.Status != StatusConflict || !strings.Contains(action.Detail, "differs") {
+			t.Fatalf("dedupe with an old plugin skill = %#v", action)
+		}
+		if !fileExists(filepath.Join(fx.home, ".zcode", "skills", DefaultName, "SKILL.md")) {
+			t.Fatalf("dedupe removed the CLI skill while the plugin copy was old")
+		}
+	})
 }
