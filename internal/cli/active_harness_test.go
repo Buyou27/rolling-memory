@@ -151,6 +151,9 @@ func TestHarnessClaimsSources(t *testing.T) {
 // 宿主时进入清单 —— 既不失明用户真正所在的环境，也不给无关宿主占版面。
 func TestHarnessEnvDefinitionsExtendsOnFootprintOrActive(t *testing.T) {
 	home := t.TempDir()
+	// The inventory resolves OpenCode from XDG_CONFIG_HOME; pin it to the bare
+	// fixture home so a developer's or runner's real config never joins the list.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	core := len(harness.BuildHarnesses(home, ""))
 
 	ids := func(defs []harness.Harness) map[string]bool {

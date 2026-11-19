@@ -48,6 +48,9 @@ func Handshake(options InstallOptions, timeout time.Duration) map[string]any {
 		"ROLLING_MEMORY_MODE=local",
 		"ROLLING_MEMORY_SCOPE="+handshakeScope(options),
 		"ROLLING_MEMORY_DISABLE_ATTACHMENT=1",
+		// The probe must not write the update cache: the handshake only checks
+		// that the server starts and answers.
+		"ROLLING_MEMORY_UPDATE_CHECK=off",
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

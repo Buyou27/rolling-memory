@@ -57,12 +57,21 @@ bands[, c("score", "title", "content")]
 | [`rmemory.R`](rmemory.R) | Thin `source()`-able layer: `rm_init` / `rm_import` / `rm_status` / `rm_doctor` / `rm_recall` / `rm_bands` |
 | [`demo.R`](demo.R) | End to end on a throwaway vault: init, import four turns, two queries, print hits (never touches your real vault) |
 | [`occupancy-null.R`](occupancy-null.R) | Base-R reproduction: occupancy null distribution, the $\le 1/M$ tail bound, a Monte Carlo check, and a figure |
+| [`half-life.R`](half-life.R) | Base-R: the closed-form self-explanation half-life, the integer median, and why a censored corpus biases a naive estimate (censored MLE + bootstrap CI) |
 
 ```bash
 Rscript demo.R            # cleans up its temp vault when done
 Rscript demo.R --keep     # keeps the temp vault for inspection
 Rscript occupancy-null.R  # prints the bound check and writes a figure
+Rscript half-life.R       # closed form vs integer median, censoring bias, bootstrap CI
 ```
+
+`half-life.R` deliberately separates two things that are easy to conflate: the
+arithmetic ($\ln 2 / -\ln(1-\beta)$, and the integer median, which is 5 rather
+than 4.46 at $\beta = 0.144$) and the estimation problem (a corpus is
+right-censored, so a naive bridge share is biased upward; the censored MLE
+recovers $\beta$, and a bootstrap over gaps gives an interval). Replace the
+simulated gaps with your own to estimate $\beta$ on a real corpus.
 
 ## Importing your own transcripts
 

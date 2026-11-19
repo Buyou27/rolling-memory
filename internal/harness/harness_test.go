@@ -49,6 +49,7 @@ func newFixture(t *testing.T) *fixture {
 		}
 	}
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("DSH_HOME", "")
 	return fx
 }

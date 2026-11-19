@@ -58,12 +58,16 @@ bands[, c("score", "title", "content")]
 | [`rmemory.R`](rmemory.R) | 可 `source()` 的薄封装：`rm_init` / `rm_import` / `rm_status` / `rm_doctor` / `rm_recall` / `rm_bands` |
 | [`demo.R`](demo.R) | 端到端演示：建临时库 → 导入 4 轮对话 → 2 个查询 → 打印命中（不碰你的真实库） |
 | [`occupancy-null.R`](occupancy-null.R) | 纯 base R 复算：占据天数零分布、$\le 1/M$ 尾界、Monte Carlo 对拍与作图 |
+| [`half-life.R`](half-life.R) | 纯 base R：自解释半衰期的闭式值、整数中位数，以及"语料右删失会让朴素估计偏到离谱"（删失 MLE + bootstrap 区间） |
 
 ```bash
 Rscript demo.R            # 跑完自动清理临时库
 Rscript demo.R --keep     # 保留临时库，便于继续检查
 Rscript occupancy-null.R  # 打印尾界核对结果，并生成一张图
+Rscript half-life.R       # 闭式值 vs 整数中位数、删失偏差、bootstrap 区间
 ```
+
+`half-life.R` 刻意把两件容易混为一谈的事分开：一是算术（$\ln2/-\ln(1-\beta)$ 的连续半衰点，以及 $\beta=0.144$ 时的整数中位数其实是 5 而不是 4.46），二是估计问题（语料右删失，朴素的"桥接比例"会严重高估；删失 MLE 能拉回来，bootstrap 给出区间）。把你自己的空洞表替换掉模拟数据，就能在真实语料上估 $\beta$。
 
 ## 导入自己的对话
 

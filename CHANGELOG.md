@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- An R entry point for researchers: `research/r/` ships a thin shell-out layer (`rmemory.R`: `rm_init`, `rm_import`, `rm_recall`, `rm_bands` and friends), an end-to-end demo on a throwaway vault, and a base-R reproduction of the occupancy-null distribution and its tail bound. R needs only `jsonlite`; the CLI plus JSON stays the whole interface. The notes cover the two things that bite first — `system2()` does not quote arguments, and a vault only answers for the scope it was created with — and the JSONL sample carries the `stop_reason` completion marker that `import` requires.
+- An R entry point for researchers: `research/r/` ships a thin shell-out layer (`rmemory.R`: `rm_init`, `rm_import`, `rm_recall`, `rm_bands` and friends), an end-to-end demo on a throwaway vault, a base-R reproduction of the occupancy-null distribution and its tail bound, and a half-life script that separates the closed form from the estimation problem (right-censored corpora bias a naive bridge share; the censored MLE and a bootstrap interval are worked through on simulated gaps). R needs only `jsonlite`; the CLI plus JSON stays the whole interface. The notes cover the two things that bite first — `system2()` does not quote arguments, and a vault only answers for the scope it was created with — and the JSONL sample carries the `stop_reason` completion marker that `import` requires.
+
+
+### Removed
+
+- The legacy JSON export import path and the assertion-graph FTS rebuild helper are gone. JSONL and plain-text transcripts are the only supported import formats, and recall receipts no longer carry a `vector` provider block.
 
 ## [0.0.7] - 2026-11-19
 
@@ -22,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rolling-memory install --check` now probes the server without running a background version check, so the check leaves no update cache behind and never reaches the network.
 - OpenCode environments are now included in the turn-scanning capability set, so the console reports episodic alignment for them instead of leaving the layer marked as unknown whenever an OpenCode configuration directory is present.
 - Prompt hooks and the console now agree on where runtime presence lives when `XDG_STATE_HOME` is set or the engine log is redirected: the attachment ledger is written beside the rest of the runtime state and read from the same directory, so the console no longer reports an idle environment while a session is live.
 - Re-running `rolling-memory install` after the binary moved no longer stops on its own generated launcher: an owned launcher is updated in place with a backup, while a foreign script still reports a conflict.
