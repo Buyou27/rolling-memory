@@ -323,6 +323,45 @@ func (s focalTermWeightSort) Len() int           { return len(s) }
 func (s focalTermWeightSort) Less(i, j int) bool { return s[i].group < s[j].group }
 func (s focalTermWeightSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
+// lessFeatureMatchByMassGroup orders matches by ascending mass, then ascending
+// group, matching the previous canonical-order comparator exactly.
+func lessFeatureMatchByMassGroup(a, b rmFeatureMatch) bool {
+	if a.mass != b.mass {
+		return a.mass < b.mass
+	}
+	return a.group < b.group
+}
+
+// sortFeatureMatchesByMassGroup puts a candidate's matches into canonical
+// accumulation order without the reflection-based sort.Slice path on short
+// slices. upsertMatch merges by group, so a candidate holds at most one match
+// per group and the (mass, group) key is a strict total order: every correct
+// sort yields the same permutation, hence the same float accumulation order.
+func sortFeatureMatchesByMassGroup(ms []rmFeatureMatch) {
+	if len(ms) < 2 {
+		return
+	}
+	if len(ms) <= 32 {
+		for i := 1; i < len(ms); i++ {
+			v := ms[i]
+			j := i - 1
+			for j >= 0 && lessFeatureMatchByMassGroup(v, ms[j]) {
+				ms[j+1] = ms[j]
+				j--
+			}
+			ms[j+1] = v
+		}
+		return
+	}
+	sort.Sort(rmFeatureMatchSort(ms))
+}
+
+type rmFeatureMatchSort []rmFeatureMatch
+
+func (s rmFeatureMatchSort) Len() int           { return len(s) }
+func (s rmFeatureMatchSort) Less(i, j int) bool { return lessFeatureMatchByMassGroup(s[i], s[j]) }
+func (s rmFeatureMatchSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
 // rmUnitStrength pairs a unit with its precomputed event strength for the
 // per-episode strength ordering.
 type rmUnitStrength struct {
@@ -1787,7 +1826,10 @@ func (st *rmClusterState) buildFastDocs(idx *Index) {
 			w2 := w * w
 			st.subjIDsPool = append(st.subjIDsPool, entry.id)
 			st.subjWeightsPool = append(st.subjWeightsPool, w2)
-			subjNormSq += w2
+			// Explicit FMA keeps the norm bit-identical across architectures:
+			// arm64 otherwise fuses this accumulation on its own and drifts one
+			// ULP from the amd64 rounding, which breaks cross-platform parity.
+			subjNormSq = math.FMA(w, w, subjNormSq)
 			g := effectiveEntryGroup(entry, idx, highDFThresh)
 			docGW = append(docGW, rmStructGroupW{group: g, weight: w})
 		}

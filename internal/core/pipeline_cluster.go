@@ -943,15 +943,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	// different group ids differ in the last bits. Sorting by (mass, group) makes
 	// the accumulation order independent of the discovery order.
 	for _, u := range sc.lexUnits {
-		ms := candidates[u].matches
-		if len(ms) > 1 {
-			sort.Slice(ms, func(i, j int) bool {
-				if ms[i].mass != ms[j].mass {
-					return ms[i].mass < ms[j].mass
-				}
-				return ms[i].group < ms[j].group
-			})
-		}
+		sortFeatureMatchesByMassGroup(candidates[u].matches)
 	}
 	groupKeys := sc.groupKeys[:0]
 	for g := range groups {
