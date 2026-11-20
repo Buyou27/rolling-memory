@@ -330,16 +330,7 @@ func (a *application) tryDaemonRecall() (int, bool) {
 	if cue == "" && a.args.String("result_mode") != "recent" {
 		return a.fail(errors.New("recall requires --q")), true
 	}
-	var asOf, windowStart, windowEnd, timeRef any
-	if value, ok := a.args.LookupString("asof"); ok {
-		asOf = value
-	}
-	if value, ok := a.args.LookupString("window_start"); ok {
-		windowStart = value
-	}
-	if value, ok := a.args.LookupString("window_end"); ok {
-		windowEnd = value
-	}
+	var timeRef any
 	if value, ok := a.args.LookupString("time_ref"); ok {
 		timeRef = value
 	}
@@ -379,9 +370,6 @@ func (a *application) tryDaemonRecall() (int, bool) {
 		Scope:          scopePtr,
 		Reader:         readerPtr,
 		Mode:           a.args.String("result_mode"),
-		AsOf:           asOf,
-		WindowStart:    windowStart,
-		WindowEnd:      windowEnd,
 		CapsBands:      a.args.IntPtr("bands"),
 		CapsNodes:      a.args.IntPtr("nodes"),
 		CapsChars:      a.args.IntPtr("chars"),
@@ -389,7 +377,6 @@ func (a *application) tryDaemonRecall() (int, bool) {
 		IncludeRaw:     a.args.FlagPtr("include_raw"),
 		BudgetMS:       a.args.IntPtr("budget_ms"),
 		RawLimit:       a.args.Int("raw_limit"),
-		Session:        a.args.StringPtr("session"),
 		TimeRef:        timeRef,
 		Presence:       presence,
 		NoCrystallize:  a.args.Flag("no_crystallize"),
@@ -435,16 +422,7 @@ func (a *application) runRecall(memory *facade.Memory) (int, error) {
 	if cue == "" && a.args.String("result_mode") != "recent" {
 		return 1, errors.New("recall requires --q")
 	}
-	var asOf, windowStart, windowEnd, timeRef any
-	if value, ok := a.args.LookupString("asof"); ok {
-		asOf = value
-	}
-	if value, ok := a.args.LookupString("window_start"); ok {
-		windowStart = value
-	}
-	if value, ok := a.args.LookupString("window_end"); ok {
-		windowEnd = value
-	}
+	var timeRef any
 	if value, ok := a.args.LookupString("time_ref"); ok {
 		timeRef = value
 	}
@@ -467,9 +445,6 @@ func (a *application) runRecall(memory *facade.Memory) (int, error) {
 		Cue:           cue,
 		Reader:        a.args.StringPtr("reader"),
 		Mode:          a.args.String("result_mode"),
-		AsOf:          asOf,
-		WindowStart:   windowStart,
-		WindowEnd:     windowEnd,
 		CapsBands:     a.args.IntPtr("bands"),
 		CapsNodes:     a.args.IntPtr("nodes"),
 		CapsChars:     a.args.IntPtr("chars"),
@@ -477,7 +452,6 @@ func (a *application) runRecall(memory *facade.Memory) (int, error) {
 		IncludeRaw:    a.args.FlagPtr("include_raw"),
 		BudgetMS:      a.args.IntPtr("budget_ms"),
 		RawLimit:      a.args.Int("raw_limit"),
-		Session:       a.args.StringPtr("session"),
 		TimeRef:       timeRef,
 		Presence:      presence,
 		NoCrystallize: a.args.Flag("no_crystallize"),

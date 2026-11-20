@@ -65,7 +65,6 @@ func TestNewVaultBootstrapTableSet(t *testing.T) {
 		"rm_unit_meta",
 		"rm_units",
 		"sqlite_sequence",
-		"transcript_cursor",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("released user database table set changed:\n got: %v\nwant: %v", got, want)

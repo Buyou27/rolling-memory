@@ -105,26 +105,6 @@ func TestAbbreviatedOptionErrorsNameTheFullOption(t *testing.T) {
 	}
 }
 
-func TestRecallHelpReportsUnsupportedFilters(t *testing.T) {
-	newEnv(t)
-	result := run(t, "recall", "--help")
-	if result.code != 0 {
-		t.Fatalf("recall help exit %d: %s", result.code, result.stderr)
-	}
-	for _, name := range []string{"--session", "--asof", "--window-start", "--window-end"} {
-		found := false
-		for _, line := range strings.Split(result.stdout, "\n") {
-			if strings.Contains(line, name+" ") && strings.Contains(line, "reserved; specifying this filter currently fails closed") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("recall help does not disclose unsupported %s: %s", name, result.stdout)
-		}
-	}
-}
-
 // TestHelpMatchesArgparse pins the two CLI parser help rules the port had to
 // adopt: a subparser has no description of its own (the root one is not
 // repeated), and only subcommands with help= are listed under the choices.

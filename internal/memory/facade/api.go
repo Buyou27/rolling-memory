@@ -19,20 +19,16 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode/utf8"
 
-	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
-	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
 	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/text"
-	"github.com/rocareer/rolling-memory/internal/transcript"
 	"github.com/rocareer/rolling-memory/internal/version"
 )
 
@@ -161,231 +157,9 @@ func (req RememberRequest) effectivePresence() *text.PresenceCoordinates {
 	return nil
 }
 
-// Remember runs a localvault remember on vault-only stores or seeds structured test assertions on legacy graph stores.
+// Remember writes one memory unit to the local vault.
 func (m *Memory) Remember(req RememberRequest) (map[string]any, error) {
-	if m.Store == nil || !m.Store.HasLegacyGraph() {
-		return m.localVaultRemember(req)
-	}
-	return m.seedStructuredAssertion(req)
-}
-
-func (m *Memory) seedStructuredAssertion(req RememberRequest) (map[string]any, error) {
-	effScope := m.Config.Scope
-	if req.Scope != nil && *req.Scope != "" {
-		effScope = *req.Scope
-	}
-	session := req.Session
-	if session == "" {
-		session = "default"
-	}
-	audience := req.Audience
-	if audience == "" {
-		audience = "shared"
-	}
-	author := req.Author
-	if author == "" {
-		author = "user"
-	}
-	now := clock.Unix()
-	timeRef := int64Ptr(req.TimeRef)
-	if timeRef == nil {
-		timeRef = &now
-	}
-	occurredAt := ids.ParseTime(req.OccurredAt, ids.ParseTimeOptions{TimeRef: timeRef, Default: now})
-	content := ids.DerefString(req.Content)
-	if content == "" {
-		content = ids.DerefString(req.SourceText)
-	}
-	items := req.Assertions
-	if items == nil && req.Assertion != nil {
-		items = []map[string]any{req.Assertion}
-	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("assertions must be a non-empty list")
-	}
-	if req.Dry {
-		return map[string]any{
-			"ok": true, "dry": true, "scope": effScope, "extractor": "structured",
-			"written": []any{}, "skipped": []any{}, "supplemented": []any{}, "superseded": []any{},
-		}, nil
-	}
-	traceHash, traceInserted, err := m.Store.AddTrace(effScope, content, store.TraceOptions{
-		Session: session, Turn: req.Turn, Kind: "remember", Author: author, Audience: audience, OccurredAt: &occurredAt,
-	})
-	if err != nil {
-		return nil, err
-	}
-	resolveSlot := func(val any) (*string, *string, string, error) {
-		switch v := val.(type) {
-		case string:
-			lbl := strings.TrimSpace(v)
-			if lbl == "" {
-				return nil, nil, "", nil
-			}
-			id, e := m.Store.EnsureNode(effScope, "referent", lbl, store.NodeOptions{Audience: audience})
-			return &id, nil, lbl, e
-		case map[string]any:
-			if lbl := strings.TrimSpace(asString(v["label"])); lbl != "" {
-				id, e := m.Store.EnsureNode(effScope, "referent", lbl, store.NodeOptions{Audience: audience})
-				return &id, nil, lbl, e
-			}
-			if lit, ok := v["literal"]; ok {
-				s := asString(lit)
-				return nil, &s, s, nil
-			}
-		}
-		return nil, nil, "", nil
-	}
-	presence := req.effectivePresence()
-	written := []any{}
-	skipped := []any{}
-	totalConflicts := 0
-	for _, item := range items {
-		relLabel := strings.TrimSpace(asString(item["x"]))
-		if relLabel == "" {
-			relLabel = strings.TrimSpace(asString(item["rel"]))
-		}
-		relID, rErr := m.Store.EnsureNode(effScope, "relation_type", relLabel, store.NodeOptions{Audience: audience})
-		if rErr != nil {
-			return nil, rErr
-		}
-		subjID, subjLit, subjLabel, sErr := resolveSlot(item["s"])
-		if sErr != nil {
-			return nil, sErr
-		}
-		if subjID == nil && subjLit == nil && truthy(item["subject_absent"]) {
-			empty := ""
-			subjLit = &empty
-		}
-		objID, objLit, objLabel, oErr := resolveSlot(item["o"])
-		if oErr != nil {
-			return nil, oErr
-		}
-		if objID == nil && objLit == nil {
-			empty := ""
-			objLit = &empty
-		}
-		anchorText := strings.TrimSpace(asString(item["anchor_text"]))
-		if anchorText == "" {
-			anchorText = strings.TrimSpace(ids.DerefString(req.AnchorText))
-		}
-		if anchorText == "" {
-			anchorText = content
-		}
-		start, end := 0, utf8.RuneCountInString(content)
-		if idx := strings.Index(content, anchorText); idx >= 0 && anchorText != "" {
-			start = utf8.RuneCountInString(content[:idx])
-			end = start + utf8.RuneCountInString(anchorText)
-		}
-		warrant := defaultString(asString(item["warrant"]), "referential")
-		conf := 0.8
-		if c, ok := item["confidence"].(float64); ok && c > 0 {
-			conf = c
-		}
-		tFrom := ids.ParseTime(item["t_valid_from"], ids.ParseTimeOptions{TimeRef: &occurredAt, Default: 0})
-		var world, carrier, locus *string
-		if w := strings.TrimSpace(asString(item["world"])); w != "" {
-			world = &w
-		} else if presence != nil && presence.World != "" {
-			w := presence.World
-			world = &w
-		}
-		if c := strings.TrimSpace(asString(item["carrier"])); c != "" {
-			carrier = &c
-		} else if presence != nil && presence.Carrier != "" {
-			c := presence.Carrier
-			carrier = &c
-		}
-		if l := strings.TrimSpace(asString(item["locus"])); l != "" {
-			locus = &l
-		} else if presence != nil && presence.Locus != "" {
-			l := presence.Locus
-			locus = &l
-		}
-		var leafLocusID string
-		if locus != nil && *locus != "" {
-			leafLocusID, _, _ = m.Store.EnsureDualTrackLocus(effScope, *locus, audience)
-		}
-		appended, aErr := m.Store.AppendAssertion(store.AppendAssertionRequest{
-			Scope: effScope, RelID: relID, AnchorTraceHash: traceHash,
-			AnchorStart: start, AnchorEnd: end,
-			SubjectID: subjID, SubjectLiteral: subjLit,
-			ObjectID: objID, ObjectLiteral: objLit,
-			Bare:    truthy(item["bare"]),
-			Warrant: warrant, Audience: audience, Confidence: conf,
-			TValidFrom: tFrom, TSource: &occurredAt,
-			World: world, Carrier: carrier, Locus: locus, CreatedBy: author,
-		})
-		if aErr != nil {
-			return nil, aErr
-		}
-		newAID := asString(appended["id"])
-		if locus != nil && *locus != "" && newAID != "" {
-			_ = leafLocusID
-			m.Store.ObserveSpatialEpisode(effScope, newAID, ids.DerefString(world), ids.DerefString(carrier), *locus, session, tFrom, occurredAt)
-		}
-		if truthy(item["closes_prior"]) && subjID != nil && *subjID != "" {
-			stop := now
-			if tFrom > 0 {
-				stop = tFrom
-			}
-			var oldIDs []string
-			if rows, qErr := m.Store.DB().Query(
-				`SELECT node_id FROM assertion WHERE scope = ? AND subject_id = ? AND rel_id = ? AND node_id <> ? AND status = 'active'`,
-				effScope, *subjID, relID, newAID,
-			); qErr == nil {
-				for rows.Next() {
-					var oid string
-					if rows.Scan(&oid) == nil && oid != "" {
-						oldIDs = append(oldIDs, oid)
-					}
-				}
-				rows.Close()
-			}
-			for _, oldID := range oldIDs {
-				_, _ = m.Store.DB().Exec(`UPDATE assertion SET status = 'superseded', t_valid_to = ? WHERE node_id = ?`, stop, oldID)
-				_, _ = m.Store.DB().Exec(
-					`INSERT INTO meta_edge(scope, meta_kind, lhs_id, rhs_id, status, evidence_anchor, created_at, created_by) VALUES (?, 'supersedes', ?, ?, 'active', 'closes_prior', ?, 'remember')`,
-					effScope, newAID, oldID, now,
-				)
-				_, _ = m.Store.DB().Exec(
-					`UPDATE meta_edge SET status = 'reverted' WHERE scope = ? AND meta_kind = 'conflicts-with' AND status = 'proposed' AND (lhs_id = ? OR rhs_id = ?)`,
-					effScope, oldID, oldID,
-				)
-				_, _ = m.Store.Event(effScope, "assert.closes_prior", map[string]any{"new": newAID, "old": oldID, "valid_to": stop}, "closes_prior", "remember")
-			}
-		}
-		if subjID != nil && subjLabel != "" {
-			_ = m.Store.AddMention(effScope, traceHash, subjLabel, start, end, subjID)
-		}
-		if objID != nil && objLabel != "" {
-			_ = m.Store.AddMention(effScope, traceHash, objLabel, start, end, objID)
-		}
-		totalConflicts += asInt(appended["conflicts"])
-		entry := map[string]any{"id": newAID, "s": subjLabel, "x": relLabel, "o": objLabel, "anchor": appended["anchor"]}
-		if asString(appended["action"]) == "written" {
-			written = append(written, entry)
-		} else {
-			skipped = append(skipped, entry)
-		}
-	}
-	_ = m.Store.MarkProcessed(traceHash)
-	_ = m.Store.UpdateReplayState(effScope, occurredAt, traceHash)
-	_ = m.Store.UpdateSessionCursor(effScope, session, int64(asInt(req.Turn)))
-	recall.DecisionCacheBumpScope(effScope)
-	return map[string]any{
-		"ok": true, "dry": false, "scope": effScope, "extractor": "structured",
-		"written": written, "skipped": skipped, "supplemented": []any{}, "superseded": []any{},
-		"conflicts": totalConflicts,
-		"trace":     map[string]any{"hash": traceHash, "session": session, "inserted": traceInserted},
-	}, nil
-}
-
-func defaultString(val, fallback string) string {
-	if strings.TrimSpace(val) != "" {
-		return strings.TrimSpace(val)
-	}
-	return fallback
+	return m.localVaultRemember(req)
 }
 
 // RecallRequest carries the read-side keyword arguments.
@@ -394,132 +168,39 @@ type RecallRequest struct {
 	Scope          *string
 	Reader         *string
 	Mode           string
-	AsOf           any
-	WindowStart    any
-	WindowEnd      any
 	CapsBands      *int
 	CapsNodes      *int
 	CapsChars      *int
 	DeliveryWindow string
-	// CapsChains / CapsRows bound delivery breadth: chains per band and rows per
-	// chain. Unset/0 keeps the configured default (QA-shaped folding), so only
-	// enumeration-shaped callers raise them.
-	CapsChains *int
-	CapsRows   *int
-	// ResultUnit selects the delivery unit: ""/"band" (default subject-band
-	// folding) or "item" (source-item ranked delivery). Unset/"" keeps the default
-	// for callers that do not care.
-	ResultUnit string
-	// Rank controls item-mode grouping (distinct from any rerank stage):
-	// nil/true = grouped delivery (sxo -> unit -> parse -> block); false = pure relevance order without grouping.
-	Rank *bool
-	// AttachFiles controls whether original multimodal/file parts (`memory_part_parse.file`) are attached
-	// to delivered items.
-	AttachFiles *bool
-	Offset      int
-	Depth       int
-	IncludeRaw  *bool
-	BudgetMS    *int
-	RawLimit    int
-	Session     *string
+	Offset         int
+	IncludeRaw     *bool
+	BudgetMS       *int
+	RawLimit       int
 	// IncarnationID stamps the calling lifetime instance onto the L3 Noetic record this
 	// recall crystallizes. Identity-only: it never narrows the search scope.
 	IncarnationID string
 	// NoCrystallize suppresses L3 Noetic auto-crystallization for passive or read-only
 	// callers (such as harness hooks) where the query is an unverified user prompt rather
 	// than an agent-initiated retrieval cue.
-	NoCrystallize   bool
-	TimeRef         any
-	TokenCorrect    *bool
-	AliasExpand     *bool
-	RelativeTag     *bool
-	MentionBackfill *bool
-	PresenceLocus   string
-	Presence        *text.PresenceCoordinates
-	ReaderSubject   string
-	SearchEngine    string
+	NoCrystallize bool
+	TimeRef       any
+	PresenceLocus string
+	Presence      *text.PresenceCoordinates
 }
 
-// Recall assembles one recall result, including the optional deep hint leg.
+// Recall assembles one recall result from the local vault.
 func (m *Memory) Recall(req RecallRequest) (*recall.Result, error) {
 	if m.Config == nil {
 		return nil, fmt.Errorf("recall requires a configured scope")
 	}
-	if err := m.checkLocalVaultScope(pickString(req.Scope, m.Config.Scope)); err != nil {
+	scope := pickString(req.Scope, m.Config.Scope)
+	if err := m.checkLocalVaultScope(scope); err != nil {
 		return nil, err
 	}
-	if m.Store != nil && m.Store.HasLegacyGraph() && (req.Session != nil || req.AsOf != nil || req.WindowStart != nil || req.WindowEnd != nil) {
-		// Graph supplementary traces can bypass the requested filters.
-		return nil, fmt.Errorf("graph recall cannot enforce session, asof or window filters across all sources")
-	}
-	// Databases without the legacy assertion table serve recall from the local
-	// plaintext vault only (the dual-cluster retrieval kernel). Fresh databases
-	// bootstrap thin and take this fast path (store.TestLegacyGraphLivenessOnFreshDatabase);
-	// for historical databases that still carry the graph, the legacy body below
-	// runs and the local-mode fallback further down stays the load-bearing path
-	// for empty graphs.
-	if m.Store != nil && !m.Store.HasLegacyGraph() {
-		return m.localVaultRecall(req)
-	}
-	now := clock.Unix()
-	// The legacy graph's cue hints came from a model-driven query rewrite; the
-	// public s/x/o hint slots were removed with the structured memory assertion contract
-	// (2026-11-06) and the runtime model leg is retired — the local client never
-	// calls a model, so the hint set stays empty.
-	hints := map[string]string{}
-	scope := m.Config.Scope
-	if req.Scope != nil && *req.Scope != "" {
-		scope = *req.Scope
-	}
-	reader := m.Config.Reader
-	if req.Reader != nil && *req.Reader != "" {
-		reader = *req.Reader
-	}
-	mode := req.Mode
-	if mode == "" {
-		mode = "full"
-	}
-	timeRef := now
-	result, err := recall.Recall(m.Store, m.Config, recall.Options{
-		Cue: req.Cue, Scope: scope, Reader: reader, Mode: mode,
-		AsOf:        ids.ParseTime(req.AsOf, ids.ParseTimeOptions{TimeRef: &now, Default: 0}),
-		WindowStart: ids.ParseTime(req.WindowStart, ids.ParseTimeOptions{TimeRef: &now, Default: 0}),
-		WindowEnd:   ids.ParseTime(req.WindowEnd, ids.ParseTimeOptions{TimeRef: &now, Default: 0}),
-		CapsBands:   req.CapsBands, CapsNodes: req.CapsNodes, CapsChars: req.CapsChars,
-		CapsChains: req.CapsChains, CapsRows: req.CapsRows,
-		Offset: req.Offset, Depth: req.Depth, IncludeRaw: req.IncludeRaw,
-		BudgetMS: req.BudgetMS, RawLimit: req.RawLimit, Session: req.Session,
-		Structured:   hints,
-		TimeRef:      ids.ParseTime(req.TimeRef, ids.ParseTimeOptions{TimeRef: &timeRef, Default: 0}),
-		TokenCorrect: req.TokenCorrect, AliasExpand: req.AliasExpand,
-		RelativeTag: req.RelativeTag, MentionBackfill: req.MentionBackfill,
-		PresenceLocus: req.PresenceLocus, Presence: req.Presence,
-		ReaderSubject: req.ReaderSubject, SearchEngine: req.SearchEngine,
-		ResultUnit: req.ResultUnit, Rank: req.Rank, AttachFiles: req.AttachFiles,
-	})
-	if err != nil {
-		return nil, err
-	}
-	// Local mode: the legacy assertion graph may be empty for transcript imports,
-	// while the thin plaintext vault has the indexed source text. Fall back to the
-	// local localvault recall (the dual-cluster retrieval kernel) instead of returning
-	// empty — but never for explicit session or time filters, which the vault path
-	// does not reconstruct.
-	noFilters := req.Session == nil && req.AsOf == nil && req.WindowStart == nil && req.WindowEnd == nil
-	if noFilters && m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") && len(result.Bands) == 0 {
-		local, localErr := m.localVaultRecall(req)
-		if localErr != nil {
-			return nil, localErr
-		}
-		if local != nil && (len(local.Bands) > 0 || len(local.RawHits) > 0 || local.Gaps["source_unavailable"] > 0 || local.Gaps["index_incomplete"] > 0) {
-			return local, nil
-		}
-	}
-	return result, nil
+	return m.localVaultRecall(req)
 }
 
-// Recent lists the newest memory entries: legacy assertions when the assertion graph
-// still exists, otherwise the time-ordered local vault view (identical to `recent`).
+// Recent lists the newest local-vault entries in time order.
 func (m *Memory) Recent(scope, reader *string, limit int) ([]map[string]any, error) {
 	if limit == 0 {
 		limit = 10
@@ -528,26 +209,7 @@ func (m *Memory) Recent(scope, reader *string, limit int) ([]map[string]any, err
 	if err := m.checkLocalVaultScope(effectiveScope); err != nil {
 		return nil, err
 	}
-	// Serve the newest-entries view from the local plaintext vault when the legacy
-	// assertion table is absent. Fresh databases bootstrap thin and take this
-	// fast path (store.TestLegacyGraphLivenessOnFreshDatabase).
-	if m.Store != nil && !m.Store.HasLegacyGraph() {
-		return m.recentVaultItems(limit)
-	}
-	items, err := m.Store.Recent(effectiveScope, pickString(reader, m.Config.Reader), limit)
-	if err != nil {
-		return nil, err
-	}
-	if len(items) == 0 && m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") {
-		vaultItems, vErr := m.recentVaultItems(limit)
-		if vErr != nil {
-			return nil, vErr
-		}
-		if len(vaultItems) > 0 {
-			return vaultItems, nil
-		}
-	}
-	return items, nil
+	return m.recentVaultItems(limit)
 }
 
 // Status returns the canonical corpus counters plus version and config.
@@ -685,6 +347,28 @@ func (m *Memory) Doctor() (map[string]any, error) {
 	if deployOK, deployDetail := deploymentConsistency(); !deployOK {
 		warnings = append(warnings, deployDetail)
 	}
+	backgroundStates, bgErr := localvault.ReadBackgroundSyncStates(m.Store.DB())
+	if bgErr == nil {
+		neverSynced, failed := 0, 0
+		for _, st := range backgroundStates {
+			if st.LastError != "" {
+				failed++
+			}
+			if st.LastSuccessAt == 0 {
+				neverSynced++
+			}
+		}
+		detail := "no mounted directories"
+		if len(backgroundStates) > 0 {
+			detail = fmt.Sprintf("%d mount(s) · %d never synced · %d last pass failed", len(backgroundStates), neverSynced, failed)
+		}
+		// A failed pass is an alarm; a mount that has not synced yet is expected on the
+		// first run and only stated in the detail.
+		check("background_freshness", failed == 0, detail)
+		if failed > 0 {
+			warnings = append(warnings, fmt.Sprintf("%d background mount(s) failed their last sync; recall serves rows from the last successful pass", failed))
+		}
+	}
 	integrity, err := m.Store.Check()
 	if err != nil {
 		return nil, err
@@ -693,7 +377,7 @@ func (m *Memory) Doctor() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	result := map[string]any{
 		"version":   version.Version,
 		"python":    "",
 		"sqlite":    sqliteVersion,
@@ -701,7 +385,11 @@ func (m *Memory) Doctor() (map[string]any, error) {
 		"warnings":  warnings,
 		"integrity": integrity,
 		"config":    m.Config.PublicDict(),
-	}, nil
+	}
+	if bgErr == nil && len(backgroundStates) > 0 {
+		result["background"] = backgroundStates
+	}
+	return result, nil
 }
 
 // deploymentConsistency compares the running image with the deployed path. Writing
@@ -760,9 +448,9 @@ func fileSHA256(path string) (string, error) {
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
-// ImportFile imports a JSONL or plain-text transcript. JSONL transcripts in
-// local plain mode go through the canonical pipeline shared with the background
-// scanner; plain-text transcripts keep the text adapter.
+// ImportFile imports a JSONL transcript through the canonical pipeline shared
+// with the background scanner. Other formats are refused instead of being
+// translated by a retired reader.
 func (m *Memory) ImportFile(path string, scope, session *string, audience string, replay bool) (map[string]any, error) {
 	if audience != "" && audience != "shared" && audience != "public" {
 		return nil, fmt.Errorf("restricted or unknown audience file import is unavailable: background transcript scanning cannot enforce file privacy; keep sensitive files outside scanned directories until source-level access controls are supported")
@@ -777,63 +465,10 @@ func (m *Memory) ImportFile(path string, scope, session *string, audience string
 			return nil, err
 		}
 	}
-	drainPending := func(capCount int) (map[string]any, error) {
-		limit := m.Config.Hooks.MaxTraces
-		if capCount > 0 {
-			limit = capCount
-		}
-		traces, err := m.Store.PendingTraces(effectiveScope, limit, session)
-		if err != nil {
-			return nil, err
-		}
-		for _, tr := range traces {
-			_ = m.Store.MarkProcessed(tr.Hash)
-			_ = m.Store.UpdateReplayState(effectiveScope, tr.RecordedAt, tr.Hash)
-			_ = m.Store.UpdateSessionCursor(effectiveScope, tr.Session, tr.Turn)
-		}
-		return map[string]any{
-			"ok": true, "scope": effectiveScope, "processed": len(traces),
-			"written": 0, "skipped": 0, "anchor_failed": 0, "resolve_failed": 0,
-			"llm_calls": 0, "warnings": []any{},
-		}, nil
+	if !canonicalJSONLTranscript(target) {
+		return nil, fmt.Errorf("import supports JSONL transcripts only: %s", filepath.Base(target))
 	}
-	if m.Config != nil && strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") &&
-		(canonicalJSONLTranscript(target) || !m.Store.HasLegacyGraph()) {
-		// Fresh databases bootstrap thin: every local file ingests through the
-		// plaintext-vault path (JSONL turn units), and formats the path cannot
-		// parse fail closed there instead of writing legacy graph rows.
-		return m.importCanonicalJSONL(target, effectiveScope, session, replay)
-	}
-	var result map[string]any
-	messages, inserted, offset := 0, 0, 0
-	for {
-		page, err := transcript.ImportTranscript(m.Store, target, effectiveScope, session,
-			audience, offset, transcript.DefaultImportLines)
-		if err != nil {
-			return nil, err
-		}
-		messages += asInt(page["messages"])
-		inserted += asInt(page["inserted"])
-		result = page
-		next := asInt(page["offset"])
-		if next <= offset || next >= asInt(page["total_lines"]) {
-			break
-		}
-		offset = next
-	}
-	result["messages"] = messages
-	result["inserted"] = inserted
-	if err := m.rememberImportedTracesToVault(effectiveScope, nil); err != nil {
-		return nil, err
-	}
-	if replay {
-		rep, err := drainPending(asInt(result["messages"]))
-		if err != nil {
-			return nil, err
-		}
-		result["replay"] = rep
-	}
-	return result, nil
+	return m.importCanonicalJSONL(target, effectiveScope, session, replay)
 }
 
 // canonicalJSONLTranscript reports whether the path carries a JSONL transcript
@@ -980,7 +615,7 @@ func (m *Memory) importCanonicalJSONL(target, scope string, session *string, rep
 	if info, statErr := os.Stat(target); statErr == nil {
 		size = info.Size()
 	}
-	sessionName := transcript.SessionStem(target)
+	sessionName := sessionStem(target)
 	if session != nil && *session != "" {
 		sessionName = *session
 	}
@@ -1015,10 +650,9 @@ func (m *Memory) Efficacy(scope *string, harnessID string, limit, budgetSeconds 
 	if m.Store == nil || m.Store.DB() == nil {
 		return nil, fmt.Errorf("efficacy: no memory database to evaluate")
 	}
-	// Per-turn settlement formerly relied on retired trace/assertion tables.
-	// Current evaluation (efficacy.Evaluate) now aggregates from the .efficacy.sqlite
-	// fact ledger directly, which acts as the canonical source for recall provenance.
-	return efficacy.Evaluate(m.Store, m.Config, efficacy.Options{
+	// Evaluation aggregates from the .efficacy.sqlite fact ledger plus vault
+	// corpus counters; no retired trace/assertion replay is involved.
+	return efficacy.Evaluate(m.Store.DB(), m.Config, efficacy.Options{
 		Scope:         effectiveScope,
 		Harness:       harnessID,
 		Limit:         limit,
@@ -1123,4 +757,14 @@ func truthy(value any) bool {
 		return typed != 0
 	}
 	return value != nil
+}
+
+// sessionStem mirrors the transcript file stem used as the default import
+// session: the last suffix is dropped, dotfiles keep their name.
+func sessionStem(path string) string {
+	base := filepath.Base(path)
+	if index := strings.LastIndex(base, "."); index > 0 {
+		base = base[:index]
+	}
+	return base
 }

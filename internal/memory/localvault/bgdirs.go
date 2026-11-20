@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -74,13 +75,16 @@ type BackgroundSkippedFile struct {
 
 // BackgroundSyncReport summarizes a delta synchronization pass across all mounted directories.
 type BackgroundSyncReport struct {
-	MountedDirs          int                     `json:"mounted_dirs"`
-	ScannedFiles         int                     `json:"scanned_files"`
-	UnchangedFiles       int                     `json:"unchanged_files"`
-	IngestedFiles        int                     `json:"ingested_files"`
-	IngestedChunks       int                     `json:"ingested_chunks"`
-	DeletedFiles         int                     `json:"deleted_files"`
-	DeletedChunks        int                     `json:"deleted_chunks"`
+	MountedDirs    int `json:"mounted_dirs"`
+	ScannedFiles   int `json:"scanned_files"`
+	UnchangedFiles int `json:"unchanged_files"`
+	IngestedFiles  int `json:"ingested_files"`
+	IngestedChunks int `json:"ingested_chunks"`
+	DeletedFiles   int `json:"deleted_files"`
+	DeletedChunks  int `json:"deleted_chunks"`
+	// UnchangedByFileHash counts files whose mtime moved but whose raw bytes did not, so
+	// the pass stopped before extraction. UnchangedFiles also counts them.
+	UnchangedByFileHash  int                     `json:"unchanged_by_file_hash,omitempty"`
 	SkippedFiles         []BackgroundSkippedFile `json:"skipped_files,omitempty"`
 	UnreadableDirs       []string                `json:"unreadable_dirs,omitempty"`
 	InvalidatedNoeticIDs []string                `json:"invalidated_noetic_ids,omitempty"`
@@ -127,6 +131,7 @@ type backgroundTrackedFile struct {
 	mtimeNS           int64
 	fileSize          int64
 	contentSHA256     string
+	rawSHA256         string
 	chunkerGeneration string
 	unitIDs           []string
 	chunkHashes       []string
@@ -146,16 +151,24 @@ type backgroundSyncUpload struct {
 	hadPrev    bool
 
 	contentsUnchanged bool
-	contentSHA256     string
-	chunks            []DocumentChunk
-	newUnitIDs        []string
-	chunkHashes       []string
-	changed           []bool
-	packets           []BlindPulsePacket
-	responses         []IngestResponse
-	changedChunks     int
-	skipReason        string // non-empty: per-file skip (unreadable, oversized, no extractable text)
-	err               error
+	// unchangedByRaw records that the whole-file hash matched before extraction, so the
+	// pass cost one sequential read instead of a parse plus token-budget chunking.
+	unchangedByRaw bool
+	rawSHA256      string
+	contentSHA256  string
+	// chunksDeletedByUser mirrors the stat fast path: when every chunk of this file was
+	// deleted locally, a touched-but-unedited file stays out of the index until its own
+	// bytes change, so a touch cannot resurrect deleted chunks.
+	chunksDeletedByUser bool
+	chunks              []DocumentChunk
+	newUnitIDs          []string
+	chunkHashes         []string
+	changed             []bool
+	packets             []BlindPulsePacket
+	responses           []IngestResponse
+	changedChunks       int
+	skipReason          string // non-empty: per-file skip (unreadable, oversized, no extractable text)
+	err                 error
 }
 
 func (v *Vault) ensureBackgroundTables() error {
@@ -180,8 +193,11 @@ func (v *Vault) ensureBackgroundTables() error {
 			'idx_rm_bg_chunks_path', 'idx_rm_bg_chunks_occurred_at',
 			'idx_rm_bg_chunks_inserted_at', 'idx_rm_bg_chunks_meta'
 		)
-	`).Scan(&readyCnt); err == nil && readyCnt == 7 {
-		return nil
+	`).Scan(&readyCnt); err == nil && readyCnt == 7 && v.hasBackgroundColumn("rm_bg_files", "raw_sha256") {
+		var stateReady int
+		if err := v.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_bg_sync_state'`).Scan(&stateReady); err == nil && stateReady == 1 {
+			return nil
+		}
 	}
 	ddl := `
 	CREATE TABLE IF NOT EXISTS rm_bg_dirs (
@@ -197,10 +213,23 @@ func (v *Vault) ensureBackgroundTables() error {
 		mtime_ns INTEGER NOT NULL DEFAULT 0,
 		file_size INTEGER NOT NULL DEFAULT 0,
 		content_sha256 TEXT NOT NULL DEFAULT '',
+		raw_sha256 TEXT NOT NULL DEFAULT '',
 		chunk_count INTEGER NOT NULL DEFAULT 0,
 		unit_ids_json TEXT NOT NULL DEFAULT '[]',
 		chunk_hashes_json TEXT NOT NULL DEFAULT '[]',
 		chunker_generation TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE IF NOT EXISTS rm_bg_sync_state (
+		dir_id TEXT PRIMARY KEY,
+		last_attempt_at INTEGER NOT NULL DEFAULT 0,
+		last_success_at INTEGER NOT NULL DEFAULT 0,
+		tracked_files INTEGER NOT NULL DEFAULT 0,
+		scanned_files INTEGER NOT NULL DEFAULT 0,
+		ingested_files INTEGER NOT NULL DEFAULT 0,
+		unchanged_files INTEGER NOT NULL DEFAULT 0,
+		deleted_files INTEGER NOT NULL DEFAULT 0,
+		skipped_files INTEGER NOT NULL DEFAULT 0,
+		last_error TEXT NOT NULL DEFAULT ''
 	);
 	CREATE TABLE IF NOT EXISTS rm_bg_chunks (
 		unit_id TEXT PRIMARY KEY,
@@ -239,6 +268,13 @@ func (v *Vault) ensureBackgroundTables() error {
 	// re-chunks them under the current rule instead of trusting a stale boundary set.
 	if !v.hasBackgroundColumn("rm_bg_files", "chunker_generation") {
 		if _, err := v.db.Exec(`ALTER TABLE rm_bg_files ADD COLUMN chunker_generation TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	// Rows from a vault that predates the pre-extraction content hash carry '' here, so the
+	// next pass hashes them once and then skips touched-but-unedited files before parsing.
+	if !v.hasBackgroundColumn("rm_bg_files", "raw_sha256") {
+		if _, err := v.db.Exec(`ALTER TABLE rm_bg_files ADD COLUMN raw_sha256 TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
@@ -301,6 +337,22 @@ func canonicalDirPath(dirPath string) (string, error) {
 		return "", fmt.Errorf("localvault: path is not a directory: %s", abs)
 	}
 	return filepath.Clean(abs), nil
+}
+
+// hashLocalFileContent streams one file through SHA-256 without parsing or extracting it.
+// It answers "did the bytes change at all?" before the reader pays a parse plus
+// token-budget chunking for a file whose mtime alone moved (git checkout, rsync, touch).
+func hashLocalFileContent(absPath string) (string, error) {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func computeDirID(cleanRoot string) string {
@@ -1242,6 +1294,27 @@ func (v *Vault) previewBackgroundDirRemoval(plan backgroundDirRemovalPlan) (Back
 // about one unreadable file says the rest of the tree is untrustworthy, so it must never abort
 // the whole mount. Only transport errors keep the fail-fast contract of the pool.
 func (c *Client) uploadBackgroundFile(ctx context.Context, up *backgroundSyncUpload) error {
+	if limit, family := localFileSizeLimit(up.absPath); up.fileSize > limit {
+		up.skipReason = fmt.Sprintf("%s file exceeds %d bytes cap", family, limit)
+		return nil
+	}
+	// Whole-file content hash before extraction: a touched but byte-identical file stops
+	// here instead of paying a parse plus token-budget chunking. A hash failure falls
+	// through so the reader still reports the real error (permissions, vanished file).
+	if rawSHA, hashErr := hashLocalFileContent(up.absPath); hashErr == nil {
+		up.rawSHA256 = rawSHA
+		// The raw tier only stands in for the stat fast path on a row that is otherwise
+		// current: a chunking-rule change or a user-deleted chunk set must still be
+		// reconciled from the file itself.
+		rowCurrent := up.prev.chunkerGeneration == backgroundChunkerGeneration &&
+			len(up.prev.chunkHashes) == len(up.prev.unitIDs) &&
+			(len(up.prev.unitIDs) > 0 || up.chunksDeletedByUser)
+		if up.hadPrev && rowCurrent && up.prev.rawSHA256 != "" && up.prev.rawSHA256 == rawSHA {
+			up.contentsUnchanged = true
+			up.unchangedByRaw = true
+			return nil
+		}
+	}
 	chunks, err := ReadAndChunkLocalFile(up.absPath, up.relPath)
 	if err != nil {
 		var sizeErr *FileSizeLimitError
@@ -1333,9 +1406,15 @@ func (c *Client) uploadBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 // write lock is never held for a whole monster file and interrupted passes remain idempotent.
 func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpload, getCitations func() (*localNoeticCitationIndex, error)) (map[string]bool, int, error) {
 	affectedNoetic := make(map[string]bool)
+	// A hash read that failed (permission flip between the hash and the parse) must not
+	// blank a known-good receipt; the next pass re-hashes once the read works again.
+	rawSHA := up.rawSHA256
+	if rawSHA == "" {
+		rawSHA = up.prev.rawSHA256
+	}
 	if up.contentsUnchanged {
-		if _, err := c.Vault.db.Exec(`UPDATE rm_bg_files SET mtime_ns = ?, file_size = ?, dir_id = ?, rel_path = ?, chunker_generation = ? WHERE abs_path = ?`,
-			up.mtimeNS, up.fileSize, up.dirID, up.relPath, backgroundChunkerGeneration, up.absPath); err != nil {
+		if _, err := c.Vault.db.Exec(`UPDATE rm_bg_files SET mtime_ns = ?, file_size = ?, dir_id = ?, rel_path = ?, chunker_generation = ?, raw_sha256 = ? WHERE abs_path = ?`,
+			up.mtimeNS, up.fileSize, up.dirID, up.relPath, backgroundChunkerGeneration, rawSHA, up.absPath); err != nil {
 			return nil, 0, fmt.Errorf("localvault: update unchanged background content %s: %w", up.absPath, err)
 		}
 		return affectedNoetic, 0, nil
@@ -1480,9 +1559,9 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 		if lastBatch {
 			if _, err := tx.Exec(`
 				INSERT OR REPLACE INTO rm_bg_files(
-					abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, chunk_count, unit_ids_json, chunk_hashes_json, chunker_generation
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				up.absPath, up.dirID, up.relPath, up.mtimeNS, up.fileSize, up.contentSHA256, len(up.newUnitIDs), string(uidsJSON), string(hashesJSON), backgroundChunkerGeneration,
+					abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, raw_sha256, chunk_count, unit_ids_json, chunk_hashes_json, chunker_generation
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				up.absPath, up.dirID, up.relPath, up.mtimeNS, up.fileSize, up.contentSHA256, rawSHA, len(up.newUnitIDs), string(uidsJSON), string(hashesJSON), backgroundChunkerGeneration,
 			); err != nil {
 				return rollback(fmt.Errorf("localvault: save synced background file %s: %w", up.absPath, err))
 			}
@@ -1559,9 +1638,9 @@ func (c *Client) commitBackgroundFile(ctx context.Context, up *backgroundSyncUpl
 		if lastBatch {
 			if _, err := c.Vault.db.Exec(`
 				INSERT OR REPLACE INTO rm_bg_files(
-					abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, chunk_count, unit_ids_json, chunk_hashes_json, chunker_generation
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				up.absPath, up.dirID, up.relPath, up.mtimeNS, up.fileSize, up.contentSHA256, len(up.newUnitIDs), string(uidsJSON), string(hashesJSON), backgroundChunkerGeneration,
+					abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, raw_sha256, chunk_count, unit_ids_json, chunk_hashes_json, chunker_generation
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				up.absPath, up.dirID, up.relPath, up.mtimeNS, up.fileSize, up.contentSHA256, rawSHA, len(up.newUnitIDs), string(uidsJSON), string(hashesJSON), backgroundChunkerGeneration,
 			); err != nil {
 				return nil, 0, fmt.Errorf("localvault: save canonical background file %s: %w", up.absPath, err)
 			}
@@ -1750,14 +1829,14 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 
 	// Load existing tracked files from `rm_bg_files`.
 	existingFiles := make(map[string]backgroundTrackedFile)
-	rows, err := c.Vault.db.Query(`SELECT abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, unit_ids_json, chunk_hashes_json, chunker_generation FROM rm_bg_files`)
+	rows, err := c.Vault.db.Query(`SELECT abs_path, dir_id, rel_path, mtime_ns, file_size, content_sha256, raw_sha256, unit_ids_json, chunk_hashes_json, chunker_generation FROM rm_bg_files`)
 	if err != nil {
 		return report, err
 	}
 	for rows.Next() {
 		var tf backgroundTrackedFile
 		var uidsJSON, hashesJSON string
-		if err := rows.Scan(&tf.absPath, &tf.dirID, &tf.relPath, &tf.mtimeNS, &tf.fileSize, &tf.contentSHA256, &uidsJSON, &hashesJSON, &tf.chunkerGeneration); err != nil {
+		if err := rows.Scan(&tf.absPath, &tf.dirID, &tf.relPath, &tf.mtimeNS, &tf.fileSize, &tf.contentSHA256, &tf.rawSHA256, &uidsJSON, &hashesJSON, &tf.chunkerGeneration); err != nil {
 			_ = rows.Close()
 			return report, err
 		}
@@ -1796,12 +1875,21 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 		return cachedCitations, nil
 	}
 	for _, m := range sortedMounts {
+		// The receipt is written per mount: `last_success_at` is the only proof that this
+		// mount's rows reflect the files on disk, so an empty pass and a pass that never
+		// ran must not look the same to a caller.
+		attemptAt := time.Now().Unix()
+		mountBase := report
+		failMount := func(err error) (BackgroundSyncReport, error) {
+			c.recordBackgroundSyncFailure(m.DirID, attemptAt, err)
+			return report, err
+		}
 		mountInfo, err := os.Stat(m.RootPath)
 		if err != nil {
-			return report, fmt.Errorf("localvault: stat background mount %s: %w", m.RootPath, err)
+			return failMount(fmt.Errorf("localvault: stat background mount %s: %w", m.RootPath, err))
 		}
 		if !mountInfo.IsDir() {
-			return report, fmt.Errorf("localvault: background mount is not a directory: %s", m.RootPath)
+			return failMount(fmt.Errorf("localvault: background mount is not a directory: %s", m.RootPath))
 		}
 
 		// Stage 1: the walk only scans and stages. It keeps the O(1) stat fast path (unchanged
@@ -1911,14 +1999,15 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 
 			prev, hadPrev := existingFiles[absFile]
 			uploads = append(uploads, backgroundSyncUpload{
-				absPath:    absFile,
-				dirID:      m.DirID,
-				relPath:    relPath,
-				mtimeNS:    mtimeNS,
-				fileSize:   fileSize,
-				occurredAt: info.ModTime().Unix(),
-				prev:       prev,
-				hadPrev:    hadPrev,
+				absPath:             absFile,
+				dirID:               m.DirID,
+				relPath:             relPath,
+				mtimeNS:             mtimeNS,
+				fileSize:            fileSize,
+				occurredAt:          info.ModTime().Unix(),
+				prev:                prev,
+				hadPrev:             hadPrev,
+				chunksDeletedByUser: deletedBGUnits[computeChunkUnitID(absFile, 0)],
 			})
 			return nil
 		})
@@ -1969,9 +2058,9 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 			up := &uploads[i]
 			if up.err != nil {
 				if rollbackErr := c.rollbackPostFailureUploads(ctx, uploads[i+1:]); rollbackErr != nil {
-					return report, fmt.Errorf("localvault: walk background mount %s: %w (post-failure upload rollback failed: %v)", m.RootPath, up.err, rollbackErr)
+					return failMount(fmt.Errorf("localvault: walk background mount %s: %w (post-failure upload rollback failed: %v)", m.RootPath, up.err, rollbackErr))
 				}
-				return report, fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, up.err)
+				return failMount(fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, up.err))
 			}
 			if up.skipReason != "" {
 				// Skipped files are excluded from the mount index. If an earlier pass indexed this
@@ -1980,7 +2069,7 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 				if up.hadPrev {
 					affectedNoetic, err := c.purgeTrackedBackgroundFile(ctx, up.absPath, up.prev, getCitations)
 					if err != nil {
-						return report, fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, err)
+						return failMount(fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, err))
 					}
 					for noeticID := range affectedNoetic {
 						invalidatedSet[noeticID] = true
@@ -1996,15 +2085,18 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 			affectedNoetic, changedChunks, err := c.commitBackgroundFile(ctx, up, getCitations)
 			if err != nil {
 				if rollbackErr := c.rollbackPostFailureUploads(ctx, uploads[i+1:]); rollbackErr != nil {
-					return report, fmt.Errorf("localvault: walk background mount %s: %w (post-failure upload rollback failed: %v)", m.RootPath, err, rollbackErr)
+					return failMount(fmt.Errorf("localvault: walk background mount %s: %w (post-failure upload rollback failed: %v)", m.RootPath, err, rollbackErr))
 				}
-				return report, fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, err)
+				return failMount(fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, err))
 			}
 			for noeticID := range affectedNoetic {
 				invalidatedSet[noeticID] = true
 			}
 			if changedChunks == 0 {
 				report.UnchangedFiles++
+				if up.unchangedByRaw {
+					report.UnchangedByFileHash++
+				}
 			} else {
 				report.IngestedFiles++
 			}
@@ -2015,8 +2107,14 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 		// there, so nothing past it was ever staged), and it still keeps the deletion phase below
 		// from running on an incomplete scan.
 		if walkErr != nil {
-			return report, fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, walkErr)
+			return failMount(fmt.Errorf("localvault: walk background mount %s: %w", m.RootPath, walkErr))
 		}
+		c.recordBackgroundSyncSuccess(m.DirID, attemptAt,
+			report.ScannedFiles-mountBase.ScannedFiles,
+			report.IngestedFiles-mountBase.IngestedFiles,
+			report.UnchangedFiles-mountBase.UnchangedFiles,
+			report.DeletedFiles-mountBase.DeletedFiles,
+			len(report.SkippedFiles)-len(mountBase.SkippedFiles))
 	}
 
 	// A mount-root scan error returns above, so deletion never runs on a scan that failed
@@ -2044,4 +2142,94 @@ func (c *Client) SyncBackgroundDirs(ctx context.Context) (report BackgroundSyncR
 		report.DeletedChunks += len(prev.unitIDs)
 	}
 	return report, nil
+}
+
+// BackgroundSyncState is one mount's last sync receipt, paired with the mount root. Without
+// a receipt an empty pass and a pass that never ran look identical; `last_success_at` is the
+// only evidence that a mount's rows reflect the files currently on disk.
+type BackgroundSyncState struct {
+	DirID          string `json:"dir_id"`
+	RootPath       string `json:"root_path"`
+	LastAttemptAt  int64  `json:"last_attempt_at"`
+	LastSuccessAt  int64  `json:"last_success_at"`
+	TrackedFiles   int    `json:"tracked_files"`
+	ScannedFiles   int    `json:"scanned_files"`
+	IngestedFiles  int    `json:"ingested_files"`
+	UnchangedFiles int    `json:"unchanged_files"`
+	DeletedFiles   int    `json:"deleted_files"`
+	SkippedFiles   int    `json:"skipped_files"`
+	LastError      string `json:"last_error,omitempty"`
+}
+
+// ReadBackgroundSyncStates returns one receipt per mounted directory. Both tables hold a
+// single row per mount, so the join stays O(mounts) on the recall delivery path.
+func ReadBackgroundSyncStates(db *sql.DB) ([]BackgroundSyncState, error) {
+	rows, err := db.Query(`
+		SELECT d.dir_id, d.root_path,
+			COALESCE(s.last_attempt_at, 0), COALESCE(s.last_success_at, 0), COALESCE(s.tracked_files, 0),
+			COALESCE(s.scanned_files, 0), COALESCE(s.ingested_files, 0), COALESCE(s.unchanged_files, 0),
+			COALESCE(s.deleted_files, 0), COALESCE(s.skipped_files, 0), COALESCE(s.last_error, '')
+		FROM rm_bg_dirs d
+		LEFT JOIN rm_bg_sync_state s ON s.dir_id = d.dir_id
+		ORDER BY d.root_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BackgroundSyncState
+	for rows.Next() {
+		var st BackgroundSyncState
+		if err := rows.Scan(&st.DirID, &st.RootPath, &st.LastAttemptAt, &st.LastSuccessAt, &st.TrackedFiles,
+			&st.ScannedFiles, &st.IngestedFiles, &st.UnchangedFiles, &st.DeletedFiles, &st.SkippedFiles, &st.LastError); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// BackgroundSyncStates returns one sync receipt per mounted directory.
+func (v *Vault) BackgroundSyncStates() ([]BackgroundSyncState, error) {
+	if v == nil || v.db == nil {
+		return nil, errors.New("localvault: nil Vault db")
+	}
+	return ReadBackgroundSyncStates(v.db)
+}
+
+// recordBackgroundSyncSuccess stores one completed mount pass and clears a prior error.
+// Receipt writes are observability only: a failure here must not fail a sync whose files
+// already committed, so the error is dropped by design.
+func (c *Client) recordBackgroundSyncSuccess(dirID string, attemptAt int64, scanned, ingested, unchanged, deleted, skipped int) {
+	var tracked int
+	_ = c.Vault.db.QueryRow(`SELECT COUNT(*) FROM rm_bg_files WHERE dir_id = ?`, dirID).Scan(&tracked)
+	_, _ = c.Vault.db.Exec(`
+		INSERT INTO rm_bg_sync_state(
+			dir_id, last_attempt_at, last_success_at, tracked_files,
+			scanned_files, ingested_files, unchanged_files, deleted_files, skipped_files, last_error
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+		ON CONFLICT(dir_id) DO UPDATE SET
+			last_attempt_at = excluded.last_attempt_at,
+			last_success_at = excluded.last_success_at,
+			tracked_files = excluded.tracked_files,
+			scanned_files = excluded.scanned_files,
+			ingested_files = excluded.ingested_files,
+			unchanged_files = excluded.unchanged_files,
+			deleted_files = excluded.deleted_files,
+			skipped_files = excluded.skipped_files,
+			last_error = ''`,
+		dirID, attemptAt, attemptAt, tracked, scanned, ingested, unchanged, deleted, skipped)
+}
+
+// recordBackgroundSyncFailure records the attempt and its error while leaving the last
+// successful counters intact, so a persistent failure stays visible until a pass succeeds.
+func (c *Client) recordBackgroundSyncFailure(dirID string, attemptAt int64, syncErr error) {
+	if syncErr == nil {
+		return
+	}
+	_, _ = c.Vault.db.Exec(`
+		INSERT INTO rm_bg_sync_state(dir_id, last_attempt_at, last_error) VALUES (?, ?, ?)
+		ON CONFLICT(dir_id) DO UPDATE SET
+			last_attempt_at = excluded.last_attempt_at,
+			last_error = excluded.last_error`,
+		dirID, attemptAt, syncErr.Error())
 }

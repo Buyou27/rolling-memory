@@ -20,14 +20,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//go:embed schema.sql
-var schemaSQL string
-
 //go:embed schema_vault.sql
 var schemaThinSQL string
-
-//go:embed schema_delivery.sql
-var schemaDeliverySQL string
 
 // StorageProfile is a set of connection-level PRAGMAs.
 type StorageProfile struct {
@@ -181,126 +175,7 @@ func Connect(path string, profile StorageProfile) (*sql.DB, error) {
 	return connection, nil
 }
 
-// LoadSchema returns the embedded schema.sql text.
-func LoadSchema() string {
-	return schemaSQL
-}
-
-// EnsureLegacyGraphSchema idempotently applies the canonical v1 schema and its
-// 1:1 extension tables. Fresh production databases no longer create the legacy
-// assertion graph; this entry point exists for historical-database maintenance
-// and for the graph regression fixtures that deliberately exercise it.
-func EnsureLegacyGraphSchema(connection *sql.DB) error {
-	for _, statement := range splitSchemaStatements(schemaSQL) {
-		if _, err := connection.Exec(statement); err != nil {
-			return err
-		}
-	}
-	return EnsureDeliverySchema(connection)
-}
-
-// EnsureDeliverySchema idempotently creates the 1:1 isomorphic extension tables
-// (node_ext, assertion_ext, participant, node_vector, episode, episode_member,
-// memory_hot, restate) on any new or existing SQLite database.
-// Fast-path: if the extension tables and indexes already exist in sqlite_master,
-// return immediately with a single read-only query to avoid running 15 DDL statements
-// on every short-lived hook subprocess open.
-func EnsureDeliverySchema(connection *sql.DB) error {
-	var hasLegacyNode int
-	if err := connection.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'node'`).Scan(&hasLegacyNode); err != nil {
-		return err
-	}
-	if hasLegacyNode == 0 {
-		// Extension tables may contain historical data even without node.
-		return nil
-	}
-	var existing int
-	var metaDDL string
-	_ = connection.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'meta_edge'`).Scan(&metaDDL)
-	hasEightKinds := strings.Contains(metaDDL, "'part-of'")
-	if hasEightKinds {
-		if err := connection.QueryRow(`
-			SELECT COUNT(*) FROM sqlite_master
-			WHERE (type = 'table' AND name IN ('node_ext', 'assertion_ext', 'participant', 'node_vector', 'episode', 'episode_member', 'memory_hot', 'restate', 'noetic'))
-			   OR (type = 'index' AND name IN ('assertion_scope_subj_all', 'assertion_scope_obj_all'))
-		`).Scan(&existing); err == nil && existing == 11 {
-			return nil
-		}
-	}
-	for _, statement := range splitSchemaStatements(schemaDeliverySQL) {
-		if _, err := connection.Exec(statement); err != nil {
-			return err
-		}
-	}
-	if !hasEightKinds && isStandardV1MetaEdgeDDL(metaDDL) {
-		var hasV2 int
-		if err := connection.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta_edge_v2'`).Scan(&hasV2); err != nil {
-			return err
-		}
-		if hasV2 == 0 {
-			if err := upgradeMetaEdgeEightKinds(connection); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func isStandardV1MetaEdgeDDL(ddl string) bool {
-	return strings.Contains(ddl, "evidence_anchor") &&
-		strings.Contains(ddl, "revert_of") &&
-		strings.Contains(ddl, "'same-as'") &&
-		strings.Contains(ddl, "'supplement'")
-}
-
-func upgradeMetaEdgeEightKinds(connection *sql.DB) error {
-	_, _ = connection.Exec(`PRAGMA foreign_keys = OFF`)
-	defer func() {
-		_, _ = connection.Exec(`PRAGMA foreign_keys = ON`)
-	}()
-	return WithImmediateTx(connection, func(tx *sql.Tx) error {
-		stmts := []string{
-			`CREATE TABLE meta_edge_v2 (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope           TEXT NOT NULL,
-  meta_kind       TEXT NOT NULL
-                  CHECK (meta_kind IN (
-                    'same-as', 'inverse-of', 'subtype-of', 'part-of',
-                    'derived-from', 'causes', 'supersedes', 'conflicts-with', 'supplement',
-                    'same_as', 'inverse_of', 'subtype_of', 'part_of',
-                    'derived_from', 'conflicts_with'
-                  )),
-  lhs_id          TEXT NOT NULL REFERENCES node(id),
-  rhs_id          TEXT NOT NULL REFERENCES node(id),
-  status          TEXT NOT NULL DEFAULT 'active'
-                  CHECK (status IN ('active', 'proposed', 'reverted')),
-  evidence_anchor TEXT,
-  created_at      INTEGER NOT NULL,
-  created_by      TEXT NOT NULL DEFAULT 'system',
-  revert_of       INTEGER REFERENCES meta_edge(id),
-  UNIQUE (scope, meta_kind, lhs_id, rhs_id, status)
-)`,
-			`INSERT INTO meta_edge_v2(id, scope, meta_kind, lhs_id, rhs_id, status, evidence_anchor, created_at, created_by, revert_of)
-			 SELECT id, scope, meta_kind, lhs_id, rhs_id, status, evidence_anchor, created_at, created_by, revert_of FROM meta_edge`,
-			`DROP TABLE meta_edge`,
-			`ALTER TABLE meta_edge_v2 RENAME TO meta_edge`,
-			`CREATE INDEX IF NOT EXISTS meta_lhs ON meta_edge(lhs_id)`,
-			`CREATE INDEX IF NOT EXISTS meta_rhs ON meta_edge(rhs_id)`,
-			`CREATE INDEX IF NOT EXISTS meta_kind_status ON meta_edge(scope, meta_kind, status)`,
-		}
-		for _, s := range stmts {
-			if _, err := tx.Exec(s); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// Migrate creates the bootstrap schema for a new database and writes db_meta
-// rows, then ensures the 1:1 delivery extension tables exist for databases that
-// still carry the legacy graph. Fresh databases start with the vault schema (schema_vault.sql):
-// vault tables + shared bookkeeping only, no legacy assertion graph.
+// Migrate creates the bootstrap schema for a new database and writes db_meta rows.
 func Migrate(connection *sql.DB) (int, error) {
 	current, err := userVersion(connection)
 	if err != nil {
@@ -335,9 +210,6 @@ func Migrate(connection *sql.DB) (int, error) {
 			}
 		}
 	}
-	if err := EnsureDeliverySchema(connection); err != nil {
-		return 0, err
-	}
 	return version.SchemaVersion, nil
 }
 
@@ -365,74 +237,6 @@ func WithImmediateTx(connection *sql.DB, fn func(*sql.Tx) error) error {
 	return nil
 }
 
-// HasFTS reports whether both FTS virtual tables exist.
-func HasFTS(connection *sql.DB) (bool, error) {
-	var count int
-	err := connection.QueryRow(
-		"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('node_fts', 'trace_fts')",
-	).Scan(&count)
-	return count == 2, err
-}
-
-// TableCounts returns the fixed table counts and schema_version.
-func TableCounts(connection *sql.DB, scope string) (map[string]int, error) {
-	var hasLegacy int
-	_ = connection.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'assertion'`).Scan(&hasLegacy)
-	if hasLegacy == 0 {
-		var docsCnt, noeticCnt int
-		_ = connection.QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docsCnt)
-		_ = connection.QueryRow(`SELECT COUNT(*) FROM rm_noetic WHERE status = 'active'`).Scan(&noeticCnt)
-		schemaVersion, _ := userVersion(connection)
-		return map[string]int{
-			"trace":          docsCnt,
-			"node":           docsCnt + noeticCnt,
-			"node_alias":     0,
-			"assertion":      docsCnt + noeticCnt,
-			"mention":        0,
-			"meta_edge":      0,
-			"event":          0,
-			"vector":         0,
-			"rm_docs":        docsCnt,
-			"rm_noetic":      noeticCnt,
-			"schema_version": schemaVersion,
-		}, nil
-	}
-	tables := []string{
-		"trace",
-		"node",
-		"node_alias",
-		"assertion",
-		"mention",
-		"meta_edge",
-		"event",
-		"vector",
-	}
-	scoped := map[string]bool{
-		"node": true, "assertion": true, "mention": true,
-		"meta_edge": true, "event": true, "trace": true,
-	}
-	counts := map[string]int{}
-	for _, table := range tables {
-		query := "SELECT count(*) FROM " + table
-		args := []any{}
-		if scope != "" && scoped[table] {
-			query += " WHERE scope = ?"
-			args = append(args, scope)
-		}
-		var count int
-		if err := connection.QueryRow(query, args...).Scan(&count); err != nil {
-			return nil, err
-		}
-		counts[table] = count
-	}
-	schemaVersion, err := userVersion(connection)
-	if err != nil {
-		return nil, err
-	}
-	counts["schema_version"] = schemaVersion
-	return counts, nil
-}
-
 // GetMeta returns db_meta[key] or defaultValue.
 func GetMeta(connection *sql.DB, key, defaultValue string) (string, error) {
 	var value string
@@ -444,15 +248,6 @@ func GetMeta(connection *sql.DB, key, defaultValue string) (string, error) {
 		return "", err
 	}
 	return value, nil
-}
-
-// SetMeta upserts db_meta[key].
-func SetMeta(connection *sql.DB, key, value string) error {
-	_, err := connection.Exec(
-		"INSERT OR REPLACE INTO db_meta(key, value) VALUES (?, ?)",
-		key, value,
-	)
-	return err
 }
 
 // DBSize sums the database, -wal and -shm files.
@@ -538,17 +333,6 @@ func SQLiteVersion(connection *sql.DB) (string, error) {
 	return value, err
 }
 
-// FTS5Available probes FTS5 with the trigram tokenizer.
-func FTS5Available() bool {
-	connection, err := sql.Open("sqlite", ":memory:?_txlock=immediate")
-	if err != nil {
-		return false
-	}
-	defer connection.Close()
-	_, err = connection.Exec("CREATE VIRTUAL TABLE probe USING fts5(x, tokenize='trigram')")
-	return err == nil
-}
-
 // JSONExtractAvailable probes the JSON1 extension.
 func JSONExtractAvailable() bool {
 	connection, err := sql.Open("sqlite", ":memory:?_txlock=immediate")
@@ -561,20 +345,15 @@ func JSONExtractAvailable() bool {
 	return err == nil && value == 1
 }
 
-// JournalMode returns the live journal_mode.
-func JournalMode(connection *sql.DB) (string, error) {
-	return pragmaString(connection, "PRAGMA journal_mode")
+func userVersion(connection *sql.DB) (int, error) {
+	var value int
+	err := connection.QueryRow("PRAGMA user_version").Scan(&value)
+	return value, err
 }
 
 func pragmaString(connection *sql.DB, statement string) (string, error) {
 	var value string
 	err := connection.QueryRow(statement).Scan(&value)
-	return value, err
-}
-
-func userVersion(connection *sql.DB) (int, error) {
-	var value int
-	err := connection.QueryRow("PRAGMA user_version").Scan(&value)
 	return value, err
 }
 

@@ -6,8 +6,6 @@ package recall
 import (
 	"regexp"
 	"strings"
-
-	"github.com/rocareer/rolling-memory/internal/store"
 )
 
 // 检索范围锚（cue 首部 `[<工作区>]`）——「问当前工作区、召回其他工作区」的端侧消歧。
@@ -26,31 +24,6 @@ func locusAnchor(cue string) string {
 		return ""
 	}
 	return strings.TrimSpace(match[1])
-}
-
-// orderCandidatesByLocusAnchor 把命中锚的工作区候选稳定置前，其余候选原序压后。
-func orderCandidatesByLocusAnchor(candidates []store.Candidate, cue string) []store.Candidate {
-	want := locusAnchor(cue)
-	if want == "" || len(candidates) < 2 {
-		return candidates
-	}
-	same := make([]store.Candidate, 0, len(candidates))
-	other := make([]store.Candidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		locus := ""
-		if candidate.Data.Locus != nil {
-			locus = strings.TrimSpace(*candidate.Data.Locus)
-		}
-		if strings.EqualFold(locus, want) {
-			same = append(same, candidate)
-		} else {
-			other = append(other, candidate)
-		}
-	}
-	if len(same) == 0 || len(other) == 0 {
-		return candidates
-	}
-	return append(same, other...)
 }
 
 // promoteBandsByLocusAnchor 再次在交付面保证「带锚者排最前」。

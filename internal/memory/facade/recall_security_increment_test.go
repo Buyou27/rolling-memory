@@ -12,143 +12,66 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/localvault"
-	"github.com/rocareer/rolling-memory/internal/store"
 )
 
 func TestSecurityScopeRejectedBeforeImportAndGraphRecall(t *testing.T) {
 	memory := newMemory(t)
+	if _, err := memory.LocalVault(); err != nil {
+		t.Fatal(err)
+	}
 	other := "mem:other"
 	path := writeTranscript(t, "scope.txt", "scope witness\n")
 	var before int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace`).Scan(&before); err != nil {
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_docs`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := memory.ImportFile(path, &other, nil, "shared", false); err == nil {
 		t.Fatal("cross-scope import accepted")
 	}
 	var after int
-	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM trace`).Scan(&after); err != nil || after != before {
-		t.Fatalf("rejected import changed traces: before=%d after=%d err=%v", before, after, err)
+	if err := memory.Store.DB().QueryRow(`SELECT count(*) FROM rm_docs`).Scan(&after); err != nil || after != before {
+		t.Fatalf("rejected import changed docs: before=%d after=%d err=%v", before, after, err)
 	}
 	if result, err := memory.Recall(facade.RecallRequest{Cue: "scope witness", Scope: &other}); err == nil || result != nil {
-		t.Fatalf("cross-scope graph recall = %#v, %v", result, err)
+		t.Fatalf("cross-scope recall = %#v, %v", result, err)
 	}
 }
 
 func TestSecurityRestrictedFileImportFailsBeforeWrites(t *testing.T) {
 	memory := newMemory(t)
+	if _, err := memory.LocalVault(); err != nil {
+		t.Fatal(err)
+	}
 	path := writeTranscript(t, "private.txt", "private imported witness\n")
+	jsonlPath := writeTranscript(t, "private.jsonl",
+		`{"type":"user","message":{"role":"user","content":"private imported witness"}}`+"\n"+
+			`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"noted"}}`+"\n")
 	for _, audience := range []string{"private", " PRIVATE ", "group", " GROUP ", "unknown", " ", "SHARED"} {
 		result, err := memory.ImportFile(path, nil, nil, audience, false)
 		if err == nil || result != nil || !strings.Contains(err.Error(), "background transcript scanning cannot enforce file privacy") {
 			t.Fatalf("private import = %#v, %v", result, err)
 		}
 	}
-	var traces, cursors, vaultTables int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor), (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rm_units')`).Scan(&traces, &cursors, &vaultTables); err != nil {
+	var docs int
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&docs); err != nil {
 		t.Fatal(err)
 	}
-	if traces != 0 || cursors != 0 || vaultTables != 0 {
-		t.Fatalf("private import wrote data: traces=%d cursors=%d vault_tables=%d", traces, cursors, vaultTables)
+	if docs != 0 {
+		t.Fatalf("private import wrote data: docs=%d", docs)
 	}
-	if _, err := memory.ImportFile(path, nil, nil, "shared", false); err != nil {
+	if _, err := memory.ImportFile(jsonlPath, nil, nil, "shared", false); err != nil {
 		t.Fatal(err)
 	}
-	var beforeTrace, beforeDocs, beforeCursors int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM rm_units), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&beforeTrace, &beforeDocs, &beforeCursors); err != nil {
+	var beforeDocs int
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&beforeDocs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.ImportFile(path, nil, nil, "private", false); err == nil {
+	if _, err := memory.ImportFile(jsonlPath, nil, nil, "private", false); err == nil {
 		t.Fatal("private import accepted an existing shared source")
 	}
-	var afterTrace, afterDocs, afterCursors int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM rm_units), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&afterTrace, &afterDocs, &afterCursors); err != nil || beforeTrace != afterTrace || beforeDocs != afterDocs || beforeCursors != afterCursors || beforeDocs != 1 {
-		t.Fatalf("private rejection altered existing data: before=%d/%d/%d after=%d/%d/%d err=%v", beforeTrace, beforeDocs, beforeCursors, afterTrace, afterDocs, afterCursors, err)
-	}
-}
-
-func TestSecurityImportedTracesDoNotInheritCurrentPersona(t *testing.T) {
-	t.Setenv("ROLLING_MEMORY_ASSISTANT_ID", "current-assistant")
-	t.Setenv("ROLLING_MEMORY_INCARNATION_ID", "current-session")
-	t.Setenv("ROLLING_MEMORY_LOCUS", "current-workspace")
-	memory := newMemory(t)
-	for _, fixture := range []struct {
-		name, text, session, audience string
-	}{
-		{"first.txt", "quartz old source one", "old-session-one", "shared"},
-		{"second.txt", "sapphire old source two", "old-session-two", "public"},
-	} {
-		path := writeTranscript(t, fixture.name, fixture.text+"\n")
-		if _, err := memory.ImportFile(path, nil, &fixture.session, fixture.audience, false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, fixture := range []struct{ text, session string }{
-		{"quartz old source one", "old-session-one"},
-		{"sapphire old source two", "old-session-two"},
-	} {
-		var session, assistant, incarnation, locus string
-		err := memory.Store.DB().QueryRow(`SELECT t.session, d.assistant_id, d.incarnation_id, d.locus
-			FROM trace t JOIN rm_units d ON d.doc_id = 'ep_' || t.hash WHERE t.text = ?`, fixture.text).
-			Scan(&session, &assistant, &incarnation, &locus)
-		if err != nil || session != fixture.session || assistant != "" || incarnation != "" || locus != "" {
-			t.Fatalf("import identity for %q: session=%q assistant=%q incarnation=%q locus=%q err=%v", fixture.text, session, assistant, incarnation, locus, err)
-		}
-	}
-	privateHash, created, err := memory.Store.AddTrace(memory.Config.Scope, "private trace must stay private", store.TraceOptions{Session: "private-session", Audience: "private", Meta: map[string]any{"source": "stop_payload"}})
-	if err != nil || !created {
-		t.Fatalf("seed private payload: %v, %v", created, err)
-	}
-	if err := memory.MirrorSessionTracesToVault("private-session"); err != nil {
-		t.Fatal(err)
-	}
-	var privateCount int
-	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_units WHERE doc_id = ?`, "ep_"+privateHash).Scan(&privateCount); err != nil || privateCount != 0 {
-		t.Fatalf("private trace mirrored: count=%d err=%v", privateCount, err)
-	}
-	untrustedHash, created, err := memory.Store.AddTrace(memory.Config.Scope, "untrusted locus witness", store.TraceOptions{
-		Session: "untrusted-session", Audience: "shared", Meta: map[string]any{
-			"source": "/external/session.jsonl", "locus": "untrusted-workspace",
-		},
-	})
-	if err != nil || !created {
-		t.Fatalf("seed untrusted trace: %v, %v", created, err)
-	}
-	if err := memory.MirrorSessionTracesToVault("untrusted-session"); err != nil {
-		t.Fatal(err)
-	}
-	var untrustedLocus string
-	if err := memory.Store.DB().QueryRow(`SELECT locus FROM rm_units WHERE doc_id = ?`, "ep_"+untrustedHash).Scan(&untrustedLocus); err != nil || untrustedLocus != "" {
-		t.Fatalf("untrusted locus attributed: %q %v", untrustedLocus, err)
-	}
-	for _, fixture := range []struct {
-		source, session, locus string
-	}{
-		{"stop_payload", "hook-one", "hook-workspace-one"},
-		{"user_prompt_submit", "hook-two", "hook-workspace-two"},
-	} {
-		hash, created, err := memory.Store.AddTrace(memory.Config.Scope, "hook witness "+fixture.session, store.TraceOptions{
-			Session: fixture.session, Audience: "shared", Meta: map[string]any{
-				"source": fixture.source, "locus": fixture.locus, "incarnation": "coding/harness/main",
-			},
-		})
-		if err != nil || !created {
-			t.Fatalf("seed hook trace: %v, %v", created, err)
-		}
-		if err := memory.MirrorSessionTracesToVault(fixture.session); err != nil {
-			t.Fatal(err)
-		}
-		var assistant, incarnation, locus string
-		if err := memory.Store.DB().QueryRow(`SELECT assistant_id, incarnation_id, locus FROM rm_units WHERE doc_id = ?`, "ep_"+hash).Scan(&assistant, &incarnation, &locus); err != nil || assistant != "" || incarnation != "" || locus != fixture.locus {
-			t.Fatalf("hook source identity: assistant=%q incarnation=%q locus=%q err=%v", assistant, incarnation, locus, err)
-		}
-	}
-	tc, err := memory.LocalVault()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tc.AssistantID != "current-assistant" || tc.IncarnationID != "current-session" || tc.Locus != "current-workspace" {
-		t.Fatalf("current identity changed: %q %q %q", tc.AssistantID, tc.IncarnationID, tc.Locus)
+	var afterDocs int
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&afterDocs); err != nil || beforeDocs != afterDocs || beforeDocs != 2 {
+		t.Fatalf("private rejection altered existing data: before=%d after=%d err=%v", beforeDocs, afterDocs, err)
 	}
 }
 

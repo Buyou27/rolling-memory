@@ -239,9 +239,6 @@ type UnixRecallPayload struct {
 	Scope          *string                   `json:"scope,omitempty"`
 	Reader         *string                   `json:"reader,omitempty"`
 	Mode           string                    `json:"mode,omitempty"`
-	AsOf           any                       `json:"asof,omitempty"`
-	WindowStart    any                       `json:"window_start,omitempty"`
-	WindowEnd      any                       `json:"window_end,omitempty"`
 	CapsBands      *int                      `json:"caps_bands,omitempty"`
 	CapsNodes      *int                      `json:"caps_nodes,omitempty"`
 	CapsChars      *int                      `json:"caps_chars,omitempty"`
@@ -249,7 +246,6 @@ type UnixRecallPayload struct {
 	IncludeRaw     *bool                     `json:"include_raw,omitempty"`
 	BudgetMS       *int                      `json:"budget_ms,omitempty"`
 	RawLimit       int                       `json:"raw_limit,omitempty"`
-	Session        *string                   `json:"session,omitempty"`
 	TimeRef        any                       `json:"time_ref,omitempty"`
 	Presence       *text.PresenceCoordinates `json:"presence,omitempty"`
 	NoCrystallize  bool                      `json:"no_crystallize,omitempty"`
@@ -1568,9 +1564,6 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *facade.Mem
 		Scope:         payload.Scope,
 		Reader:        payload.Reader,
 		Mode:          payload.Mode,
-		AsOf:          payload.AsOf,
-		WindowStart:   payload.WindowStart,
-		WindowEnd:     payload.WindowEnd,
 		CapsBands:     payload.CapsBands,
 		CapsNodes:     payload.CapsNodes,
 		CapsChars:     payload.CapsChars,
@@ -1578,7 +1571,6 @@ func handleUnixRecall(w http.ResponseWriter, r *http.Request, memory *facade.Mem
 		IncludeRaw:    payload.IncludeRaw,
 		BudgetMS:      payload.BudgetMS,
 		RawLimit:      payload.RawLimit,
-		Session:       payload.Session,
 		TimeRef:       payload.TimeRef,
 		Presence:      presence,
 		NoCrystallize: payload.NoCrystallize,

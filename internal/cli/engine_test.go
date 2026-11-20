@@ -208,10 +208,10 @@ func TestEngineRecallRelaysEngineLevelFailure(t *testing.T) {
 	newEnv(t)
 	engineStartVerifiedDaemon(t)
 
-	// A reserved filter the engine fails closed on: the daemon answers with its
+	// A request the engine fails closed on: the daemon answers with its
 	// engine-level envelope, which must be relayed instead of being reported as an
 	// unreachable daemon (callers branch on engine_error).
-	result := runInput(t, `{"cue":"fixture question","asof":"2026-01-01"}`, "engine", "recall", "--json")
+	result := runInput(t, `{"cue":"fixture question","scope":"mem:other"}`, "engine", "recall", "--json")
 	if result.code != 1 {
 		t.Fatalf("engine-level failure must exit 1: %+v", result)
 	}

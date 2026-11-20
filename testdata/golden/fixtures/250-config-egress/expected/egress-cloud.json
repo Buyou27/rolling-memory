@@ -1,5 +1,0 @@
-{
-  "error": "ConfigError",
-  "message": "mode must be one of ('local'), got 'cloud'",
-  "ok": false
-}

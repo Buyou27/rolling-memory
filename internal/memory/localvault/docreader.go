@@ -205,6 +205,18 @@ func ShouldSkipBackgroundDir(dirName string) bool {
 	}
 }
 
+// localFileSizeLimit returns the reader's byte ceiling and the family label carried in
+// FileSizeLimitError for one path. The pre-extraction content hash and the reader share
+// this ceiling, so a hashed file is never one the reader would refuse outright.
+func localFileSizeLimit(absPath string) (limit int64, family string) {
+	switch strings.ToLower(filepath.Ext(absPath)) {
+	case ".docx", ".xlsx", ".pptx", ".pdf":
+		return MaxOfficeFileSizeBytes, "office/pdf"
+	default:
+		return MaxTextFileSizeBytes, "text"
+	}
+}
+
 // ReadAndChunkLocalFile reads a local file on demand according to its extension and splits it into
 // deterministic `DocumentChunk`s. Each chunk opens with the reader coordinate
 // `[rel_path#anchor] (abs_path)`: the relative path plus section/page/row/line anchor names the
@@ -220,15 +232,9 @@ func ReadAndChunkLocalFile(absPath string, relDisplayPath string) ([]DocumentChu
 		return nil, fmt.Errorf("localvault: %s is a directory", absPath)
 	}
 	ext := strings.ToLower(filepath.Ext(absPath))
-	switch ext {
-	case ".docx", ".xlsx", ".pptx", ".pdf":
-		if info.Size() > MaxOfficeFileSizeBytes {
-			return nil, &FileSizeLimitError{AbsPath: absPath, Family: "office/pdf", Cap: MaxOfficeFileSizeBytes}
-		}
-	default:
-		if info.Size() > MaxTextFileSizeBytes {
-			return nil, &FileSizeLimitError{AbsPath: absPath, Family: "text", Cap: MaxTextFileSizeBytes}
-		}
+	limit, family := localFileSizeLimit(absPath)
+	if info.Size() > limit {
+		return nil, &FileSizeLimitError{AbsPath: absPath, Family: family, Cap: limit}
 	}
 
 	// Chunk sizing needs the tokenz-r counter. `tokenzr.Count` returns 0 when the embedded

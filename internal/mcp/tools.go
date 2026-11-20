@@ -42,18 +42,6 @@ var recallTool = map[string]any{
 				"enum":        []any{"full", "probe", "recent"},
 				"description": "full returns the complete recall result; probe returns a compact existence receipt; recent lists the newest memory entries in pure time order (cue ignored).",
 			},
-			"asof": map[string]any{
-				"type":        []any{"string", "integer"},
-				"description": "Reserved; do not use (fail closed).",
-			},
-			"window": map[string]any{
-				"type":        "object",
-				"description": "Reserved; do not use (fail closed).",
-				"properties": map[string]any{
-					"start": map[string]any{"type": []any{"string", "integer"}},
-					"end":   map[string]any{"type": []any{"string", "integer"}},
-				},
-			},
 			"caps": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -76,8 +64,7 @@ var recallTool = map[string]any{
 				"enum":        []any{"auto", "0-16", "0-32", "0-64"},
 				"description": "Smart adaptive delivery window (default `auto` uses the console setting, `0-16` by default): delivers 0 to N memories within the natural physical information energy envelope E(u_k) >= E(u_1)/e without a minimum floor. Omit or pass `auto` for normal turns; pass `0-32` or `0-64` only for cross-session history audits or broad multi-event synthesis.",
 			},
-			"offset":  map[string]any{"type": "integer", "description": "Result pagination offset."},
-			"session": map[string]any{"type": "string", "description": "Reserved; do not use (fail closed)."},
+			"offset": map[string]any{"type": "integer", "description": "Result pagination offset."},
 		},
 	},
 }

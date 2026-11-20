@@ -16,6 +16,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/cli"
 	"github.com/rocareer/rolling-memory/internal/db"
+	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/version"
 
 	_ "modernc.org/sqlite"
@@ -108,9 +109,8 @@ func newEnv(t *testing.T) *cliEnv {
 	return &cliEnv{base: base}
 }
 
-// ensureLegacyGraphDB applies the canonical assertion-graph schema to a test
-// database. Fresh production databases bootstrap thin; the graph-era command
-// tests below deliberately exercise the historical surfaces.
+// ensureLegacyGraphDB writes the table names an old release left behind, so the
+// current build refuses the database before any schema work.
 func ensureLegacyGraphDB(t *testing.T, path string) {
 	t.Helper()
 	connection, err := db.Connect(path, db.LocalProfile())
@@ -118,18 +118,9 @@ func ensureLegacyGraphDB(t *testing.T, path string) {
 		t.Fatalf("connect %s: %v", path, err)
 	}
 	defer connection.Close()
-	if _, err := db.Migrate(connection); err != nil {
-		t.Fatalf("migrate %s: %v", path, err)
+	if _, err := connection.Exec(`CREATE TABLE node (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("legacy table %s: %v", path, err)
 	}
-	if err := db.EnsureLegacyGraphSchema(connection); err != nil {
-		t.Fatalf("legacy graph schema %s: %v", path, err)
-	}
-}
-
-// ensureLegacyGraphEnv is ensureLegacyGraphDB for the env's default database.
-func ensureLegacyGraphEnv(t *testing.T, env *cliEnv) {
-	t.Helper()
-	ensureLegacyGraphDB(t, filepath.Join(env.base, "memory.db"))
 }
 
 type cliResult struct {
@@ -594,22 +585,18 @@ func asInt64(value any) int64 {
 
 func TestCheckExitsOneOnError(t *testing.T) {
 	env := newEnv(t)
-	ensureLegacyGraphEnv(t, env)
-	seedTranscript(t)
-
-	// 注入可被 check 检出的不一致：悬挂断言行（测试自身连接的 SQLite 默认 FKs OFF，
-	// 故可写入不存在 node/trace 的引用；check 的 foreign_key_check + assertion_node 会判 error）。
 	db, err := sql.Open("sqlite", filepath.Join(env.base, "memory.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO assertion
-		(node_id, scope, subject_literal, rel_id, object_literal, bare, t_valid_from, t_valid_to,
-		 t_record, t_source, anchor_trace_hash, anchor_start, anchor_end, source_trace_hash,
-		 audience, confidence, status, hash, created_at)
-		VALUES ('n_orphan','mem:test','subj','n_rel','obj',0,0,0,0,0,'h',0,1,'h2','shared',0.9,'active','deadbeef',0)`); err != nil {
-		db.Close()
-		t.Fatalf("insert dangling assertion: %v", err)
+	if _, err := localvault.NewVault(db, []byte("check-seed")); err != nil {
+		_ = db.Close()
+		t.Fatalf("bootstrap vault: %v", err)
+	}
+	// An orphan term posting is a corpus inconsistency the check gate must flag.
+	if _, err := db.Exec(`INSERT INTO rm_terms(term_hash, unit_id, bits_x10) VALUES (1, 'missing-unit', 10)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert orphan term: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close db: %v", err)

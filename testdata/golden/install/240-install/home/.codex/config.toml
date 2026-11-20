@@ -1,5 +1,0 @@
-model = "gpt-5"
-
-[mcp_servers.rolling-memory]
-command = "/usr/local/bin/other-tool"
-args = ["serve"]

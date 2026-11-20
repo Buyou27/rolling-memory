@@ -13,7 +13,6 @@ import (
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/memory/recall"
-	"github.com/rocareer/rolling-memory/internal/transcript"
 )
 
 // A RAME database keeps only the canonical `rm_*` schema (the retired
@@ -34,9 +33,6 @@ func TestLocalModeRecallServesVaultOnlyDatabase(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed local vault: %v", err)
 	}
-	if memory.Store.HasLegacyGraph() {
-		t.Fatal("legacy graph must be retired before the vault recall path is exercised")
-	}
 
 	result, err := memory.Recall(facade.RecallRequest{Cue: "登录页 预置账号"})
 	if err != nil {
@@ -44,12 +40,6 @@ func TestLocalModeRecallServesVaultOnlyDatabase(t *testing.T) {
 	}
 	if len(result.RawHits) == 0 && len(result.Bands) == 0 {
 		t.Fatalf("expected vault delivery, got bands=%d raw=%d", len(result.Bands), len(result.RawHits))
-	}
-
-	// The vault path cannot reconstruct time filters: an explicit as-of must fail loudly
-	// instead of silently returning unfiltered rows.
-	if _, err := memory.Recall(facade.RecallRequest{Cue: "登录页", AsOf: "2026-01-01"}); err == nil {
-		t.Fatal("as-of recall on a local-vault database must report that time filters are unsupported")
 	}
 }
 
@@ -318,7 +308,7 @@ func TestLocalVaultImportRejectsScopeBeforeWrites(t *testing.T) {
 				other, err := facade.New(&cfg)
 				if err != nil {
 					var traces int
-					if qErr := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM trace`).Scan(&traces); qErr != nil || traces != 0 {
+					if qErr := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&traces); qErr != nil || traces != 0 {
 						t.Fatalf("rejected reopen wrote %d traces: %v", traces, qErr)
 					}
 					return
@@ -326,17 +316,18 @@ func TestLocalVaultImportRejectsScopeBeforeWrites(t *testing.T) {
 				defer other.Close()
 				memory = other
 			}
+			var beforeDocs int
+			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&beforeDocs); err != nil {
+				t.Fatal(err)
+			}
 			path := writeTranscript(t, "scope.txt", "quartz import isolation witness\n")
 			result, err := memory.ImportFile(path, scope, nil, "shared", true)
 			if err == nil || result != nil {
 				t.Errorf("import = %#v, %v; want rejection", result, err)
 			}
-			var traces int
-			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM trace`).Scan(&traces); err != nil || traces != 0 {
-				t.Fatalf("rejected import wrote %d traces: %v", traces, err)
-			}
-			if _, found, err := transcript.CursorFor(memory.Store, path, "scope"); err != nil || found {
-				t.Fatalf("rejected import advanced cursor: found=%v err=%v", found, err)
+			var afterDocs int
+			if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&afterDocs); err != nil || afterDocs != beforeDocs {
+				t.Fatalf("rejected import wrote %d docs (before=%d): %v", afterDocs, beforeDocs, err)
 			}
 		})
 	}

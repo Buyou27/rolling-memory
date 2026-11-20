@@ -70,9 +70,8 @@ func TestRecallStdinBatchServesMultipleRequestsOnOneProcess(t *testing.T) {
 	}
 }
 
-func TestRecallStdinBatchBypassesDaemonGateAndEnforcesFailClosedFilters(t *testing.T) {
+func TestRecallStdinBatchBypassesDaemonGate(t *testing.T) {
 	env := newEnv(t)
-	seedTranscript(t)
 
 	// Force ShouldUseUnixDaemon to return true even inside *.test binary.
 	t.Setenv("ROLLING_MEMORY_DAEMON_SOCKET", filepath.Join(env.base, "nonexistent-daemon.sock"))
@@ -88,15 +87,5 @@ func TestRecallStdinBatchBypassesDaemonGateAndEnforcesFailClosedFilters(t *testi
 	}
 	if _, hasErr := row["error"]; hasErr {
 		t.Fatalf("unexpected batch error: %s", batch.stdout)
-	}
-
-	// Filters unsupported by local_plain (--asof, --session) must fail closed in batch mode too.
-	filtered := runInput(t, input, "recall", "--stdin-batch", "--asof", "2026-01-01", "--no-crystallize")
-	if filtered.code != 0 {
-		t.Fatalf("filtered stdin-batch exit %d: %s%s", filtered.code, filtered.stdout, filtered.stderr)
-	}
-	errRow := jsonObject(t, strings.TrimSpace(filtered.stdout))
-	if msg, _ := errRow["error"].(string); !strings.Contains(msg, "session, asof or window filters") {
-		t.Fatalf("expected fail-closed filter error in batch mode, got: %s", filtered.stdout)
 	}
 }

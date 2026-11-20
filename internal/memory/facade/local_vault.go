@@ -6,7 +6,6 @@ package facade
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -356,71 +355,6 @@ func (m *Memory) localVaultRemember(req RememberRequest) (map[string]any, error)
 	}, nil
 }
 
-// MirrorSessionTracesToVault mirrors this session's not-yet-vaulted traces into the
-// local plaintext vault. Hook-captured payload-only turns (hosts that hand the hook
-// a prompt/last_assistant_message but no transcript file) land in `trace` as their
-// only copy; without this session-scoped mirror they stay stranded there forever —
-// the transcript scanners never see them and the full mirror only runs on CLI
-// `import`. Session scoping keeps the hook-time cost bounded to the turn's own
-// session instead of sweeping the whole trace table.
-func (m *Memory) MirrorSessionTracesToVault(session string) error {
-	if m == nil || m.Config == nil {
-		return nil
-	}
-	session = strings.TrimSpace(session)
-	if session == "" {
-		return nil
-	}
-	return m.rememberImportedTracesToVault(m.Config.Scope, &session)
-}
-
-// rememberImportedTracesToVault mirrors freshly imported transcript traces into the
-// local plaintext vault so recall can retrieve the local sources.
-func (m *Memory) rememberImportedTracesToVault(scope string, session *string) error {
-	if m == nil || m.Store == nil || m.Config == nil || !strings.EqualFold(strings.TrimSpace(m.Config.Mode), "local") {
-		return nil
-	}
-	if err := m.checkLocalVaultScope(scope); err != nil {
-		return err
-	}
-	tc, err := m.LocalVault()
-	if err != nil {
-		return err
-	}
-	traces, err := m.Store.PendingVaultTraces(scope, session)
-	if err != nil {
-		return err
-	}
-	for _, tr := range traces {
-		// The vault cannot preserve the trace audience. Never mirror private or
-		// unknown-audience imports into a store that would lose that restriction.
-		if tr.Audience != "shared" && tr.Audience != "public" {
-			continue
-		}
-		text := strings.TrimSpace(ids.StripInjected(tr.Text))
-		if text == "" {
-			continue
-		}
-		var meta struct {
-			Source string `json:"source"`
-			Locus  string `json:"locus"`
-		}
-		locus := ""
-		if json.Unmarshal([]byte(tr.MetaJSON), &meta) == nil && (meta.Source == "stop_payload" || meta.Source == "user_prompt_submit") {
-			locus = strings.TrimSpace(meta.Locus)
-		}
-		// File imports and hook traces do not establish the current process persona.
-		// Hook-captured locus is retained only when it was recorded with that trace.
-		tc.SetIdentity("", "", locus)
-		if _, err := tc.RememberEpisodic(context.Background(), "ep_"+tr.Hash, text, tr.OccurredAt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// recentVaultItems renders the time-ordered vault view in the flat receipt shape the
-// legacy `recent` command and the boot pulse already consume (`time`/`rendered`/
 // `anchor`/`confidence`/`status`), so both paths agree on one source of truth.
 func (m *Memory) recentVaultItems(limit int) ([]map[string]any, error) {
 	tc, err := m.LocalVault()
@@ -769,10 +703,6 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	if err := m.checkLocalVaultScope(scope); err != nil {
 		return nil, err
 	}
-	// The local vault cannot enforce these restrictions across all delivered sources.
-	if req.Session != nil || req.AsOf != nil || req.WindowStart != nil || req.WindowEnd != nil {
-		return nil, fmt.Errorf("local_plain recall does not support session, asof or window filters")
-	}
 	started := clock.MonotonicMS()
 	if strings.EqualFold(strings.TrimSpace(req.Mode), "recent") {
 		return m.recentVaultRecall(req)
@@ -837,10 +767,9 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	}
 	now := clock.Unix()
 	timeRef := ids.ParseTime(req.TimeRef, ids.ParseTimeOptions{TimeRef: &now, Default: now})
-	asOf := ids.ParseTime(req.AsOf, ids.ParseTimeOptions{TimeRef: &timeRef, Default: 0})
 	hits, err := tc.RecallWithOptions(queryCtx, query, localvault.BlindQueryOptions{
 		TopK:    recallFetchK,
-		AsOf:    asOf,
+		AsOf:    0,
 		TimeRef: timeRef,
 	})
 	if err != nil {
@@ -1497,6 +1426,12 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 			}
 			indexIncomplete = index.Missing + index.Incompatible + index.Corrupt + index.NeedsRebuild
 		}
+		// Mounted directories carry their own ingestion clock: a pass that failed leaves the
+		// rows at the last successful sync, so the caller needs the receipt to know whether
+		// "absent" reflects a fresh look or a stalled mount.
+		if states, bgErr := tc.Vault.BackgroundSyncStates(); bgErr == nil && len(states) > 0 {
+			meta["background"] = backgroundFreshnessPayload(states, clock.Unix())
+		}
 	}
 	gaps := map[string]int{"source_unavailable": len(sourceUnavailable)}
 	if indexIncomplete > 0 {
@@ -1522,6 +1457,53 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 		truncated["chars"] = true
 	}
 	return result, nil
+}
+
+// backgroundFreshnessPayload projects per-mount sync receipts for delivery: ages are
+// measured against the recall clock, and a mount without a successful pass or with a
+// recorded error is named instead of silently looking fresh. Counts only — no threshold
+// and no gate: the caller decides what a stale mount means for its answer.
+func backgroundFreshnessPayload(states []localvault.BackgroundSyncState, now int64) map[string]any {
+	mounts := make([]map[string]any, 0, len(states))
+	neverSynced, failed := 0, 0
+	lastSuccess := int64(0)
+	for _, st := range states {
+		entry := map[string]any{
+			"root":          st.RootPath,
+			"tracked_files": st.TrackedFiles,
+		}
+		switch {
+		case st.LastError != "":
+			entry["status"] = "error"
+			entry["last_error"] = st.LastError
+			failed++
+		case st.LastSuccessAt == 0:
+			entry["status"] = "never_synced"
+			neverSynced++
+		default:
+			entry["status"] = "ok"
+		}
+		if st.LastSuccessAt > 0 {
+			entry["last_success_at"] = st.LastSuccessAt
+			entry["age_seconds"] = max(now-st.LastSuccessAt, int64(0))
+			if st.LastSuccessAt > lastSuccess {
+				lastSuccess = st.LastSuccessAt
+			}
+		}
+		mounts = append(mounts, entry)
+	}
+	out := map[string]any{"mounts": mounts}
+	if lastSuccess > 0 {
+		out["last_success_at"] = lastSuccess
+		out["age_seconds"] = max(now-lastSuccess, int64(0))
+	}
+	if neverSynced > 0 {
+		out["never_synced_mounts"] = neverSynced
+	}
+	if failed > 0 {
+		out["error_mounts"] = failed
+	}
+	return out
 }
 
 // voidCertificatePayload projects SDK certificate structs into the plain JSON

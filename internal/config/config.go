@@ -105,13 +105,6 @@ budget_ms = 500
 # raw_limit = 原文腿交付条数上限（判分面的主要旋钮：在字符预算内多给原文；5 = 旧行为）。
 # Tier-100 实测（冻结答题/判官）：5 → 判对 0.45 · 20 → 0.60 · 30 → 0.62。
 raw_limit = 5
-raw_when_sparse = true
-token_correct = false
-alias_expand = true
-relative_tag = false
-mention_backfill = true
-activation_record = true
-activation_rank = false
 
 [hooks]
 max_traces = 60
@@ -202,25 +195,12 @@ type EvalConfig struct {
 
 // RecallConfig holds read-chain caps and leg toggles.
 type RecallConfig struct {
-	DeliveryWindow   string
-	Bands            int
-	Nodes            int
-	Chars            int
-	Chains           int
-	Rows             int
-	BudgetMS         int
-	RawLimit         int
-	RawWhenSparse    bool
-	Vector           bool
-	TokenCorrect     bool
-	AliasExpand      bool
-	RelativeTag      bool
-	MentionBackfill  bool
-	ActivationRecord bool
-	ActivationRank   bool
-	AdvancedOps      bool
-	SearchEngine     string
-	MaskDeliverable  string
+	DeliveryWindow string
+	Bands          int
+	Nodes          int
+	Chars          int
+	BudgetMS       int
+	RawLimit       int
 }
 
 // NormalizeDeliveryWindow normalizes an adaptive delivery window preset ("auto", "0-16",
@@ -359,25 +339,12 @@ func Load(opts LoadOptions) (*Config, error) {
 		recallWindowNorm = strings.TrimSpace(recallWindowRaw)
 	}
 	recallConfig := RecallConfig{
-		DeliveryWindow:   recallWindowNorm,
-		Bands:            asInt(recallTable["bands"], 8),
-		Nodes:            asInt(recallTable["nodes"], 50),
-		Chars:            asInt(recallTable["chars"], 16000),
-		Chains:           asInt(recallTable["chains"], 8),
-		Rows:             asInt(recallTable["rows"], 12),
-		BudgetMS:         asInt(recallTable["budget_ms"], 500),
-		RawLimit:         asInt(recallTable["raw_limit"], 5),
-		RawWhenSparse:    asBool(recallTable["raw_when_sparse"], true),
-		Vector:           asBool(recallTable["vector"], true),
-		TokenCorrect:     asBool(recallTable["token_correct"], false),
-		AliasExpand:      asBool(recallTable["alias_expand"], true),
-		RelativeTag:      asBool(recallTable["relative_tag"], false),
-		MentionBackfill:  asBool(recallTable["mention_backfill"], true),
-		ActivationRecord: asBool(recallTable["activation_record"], true),
-		ActivationRank:   asBool(recallTable["activation_rank"], false),
-		AdvancedOps:      asBool(envOr(env, "ROLLING_MEMORY_ADVANCED_OPS", getDefault(recallTable, "advanced_ops", false)), false),
-		SearchEngine:     strings.ToLower(strings.TrimSpace(pyString(envOr(env, "ROLLING_MEMORY_SEARCH_ENGINE", getDefault(recallTable, "search_engine", "hybrid"))))),
-		MaskDeliverable:  strings.ToLower(strings.TrimSpace(pyString(envOr(env, "ROLLING_MEMORY_MASK_DELIVERABLE", getDefault(recallTable, "mask_deliverable", "off"))))),
+		DeliveryWindow: recallWindowNorm,
+		Bands:          asInt(recallTable["bands"], 8),
+		Nodes:          asInt(recallTable["nodes"], 50),
+		Chars:          asInt(recallTable["chars"], 16000),
+		BudgetMS:       asInt(recallTable["budget_ms"], 500),
+		RawLimit:       asInt(recallTable["raw_limit"], 5),
 	}
 	hooksConfig := HooksConfig{
 		MaxTraces: asInt(hooksTable["max_traces"], 60),
@@ -468,9 +435,6 @@ func (c *Config) Validate() error {
 	if !slices.Contains(validModes, c.Mode) {
 		return newConfigError("mode must be one of ('local'), got %s", pyRepr(c.Mode))
 	}
-	if c.Mode == "local" && c.Recall.AdvancedOps {
-		return newConfigError("advanced operators (recall.advanced_ops) are not allowed in local mode")
-	}
 	if !slices.Contains(validReader, c.Reader) {
 		return newConfigError("reader must be one of ('owner', 'deliverable'), got %s", pyRepr(c.Reader))
 	}
@@ -494,8 +458,6 @@ func (c *Config) Validate() error {
 		c.Recall.Bands,
 		c.Recall.Nodes,
 		c.Recall.Chars,
-		c.Recall.Chains,
-		c.Recall.Rows,
 		c.Hooks.MaxTraces,
 		c.Eval.Workers,
 	} {
@@ -655,16 +617,10 @@ func (c *Config) PublicDict() map[string]any {
 		"egress": "loopback-only",
 		"log":    c.Log,
 		"recall": map[string]any{
-			"bands":             c.Recall.Bands,
-			"nodes":             c.Recall.Nodes,
-			"chars":             c.Recall.Chars,
-			"budget_ms":         c.Recall.BudgetMS,
-			"token_correct":     c.Recall.TokenCorrect,
-			"alias_expand":      c.Recall.AliasExpand,
-			"relative_tag":      c.Recall.RelativeTag,
-			"mention_backfill":  c.Recall.MentionBackfill,
-			"activation_record": c.Recall.ActivationRecord,
-			"activation_rank":   c.Recall.ActivationRank,
+			"bands":     c.Recall.Bands,
+			"nodes":     c.Recall.Nodes,
+			"chars":     c.Recall.Chars,
+			"budget_ms": c.Recall.BudgetMS,
 		},
 		"daemon": map[string]any{
 			"memory_limit": c.Daemon.MemoryLimit,

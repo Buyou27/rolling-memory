@@ -54,7 +54,6 @@ func TestSyncWatchOnceCommand(t *testing.T) {
 // TestImportTranscriptCommand verifies the `import` CLI subcommand on a JSONL transcript.
 func TestImportTranscriptCommand(t *testing.T) {
 	env := newEnv(t)
-	ensureLegacyGraphEnv(t, env)
 	// The assistant row carries the completion evidence the canonical pipeline
 	// shares with the background scanner; the meta row must stay skipped.
 	transcript := writeFile(t, filepath.Join(env.base, "chat.jsonl"), strings.Join([]string{
@@ -84,12 +83,9 @@ func TestImportTranscriptCommand(t *testing.T) {
 	}
 
 	second := writeFile(t, filepath.Join(env.base, "notes.txt"), "老张养了一只猫。\n")
-	human := run(t, "import", second)
-	if human.code != 0 {
-		t.Fatalf("human import exit %d: %s", human.code, human.stderr)
-	}
-	if !strings.HasPrefix(human.stdout, "import: 1 messages · 1 new traces · session notes · offset 1/1\n") {
-		t.Fatalf("human import = %q", human.stdout)
+	rejected := run(t, "import", second)
+	if rejected.code == 0 || !strings.Contains(rejected.stderr, "JSONL transcripts only") {
+		t.Fatalf("non-JSONL import must be refused: %d %s%s", rejected.code, rejected.stdout, rejected.stderr)
 	}
 
 	// The canonical JSONL path reports content-addressed units, not traces.

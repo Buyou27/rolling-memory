@@ -33,11 +33,14 @@ func applyThinDeliveryCaps(result *recall.Result, req RecallRequest) {
 		bands = bands[offset:]
 	}
 	bandsTrimmed := offset > 0 && len(result.Bands) > 0
+	droppedBands := 0
 	if req.CapsBands != nil && *req.CapsBands >= 0 && len(bands) > *req.CapsBands {
+		droppedBands = len(bands) - *req.CapsBands
 		bands = bands[:*req.CapsBands]
 		bandsTrimmed = true
 	}
 	nodesTrimmed := false
+	droppedNodes := 0
 	remaining := -1
 	if req.CapsNodes != nil && *req.CapsNodes >= 0 {
 		remaining = *req.CapsNodes
@@ -46,6 +49,7 @@ func applyThinDeliveryCaps(result *recall.Result, req RecallRequest) {
 	for _, band := range bands {
 		nodes, _ := band["nodes"].([]map[string]any)
 		if remaining >= 0 && len(nodes) > remaining {
+			droppedNodes += len(nodes) - remaining
 			nodes = nodes[:remaining]
 			band["nodes"] = nodes
 			nodesTrimmed = true
@@ -67,16 +71,25 @@ func applyThinDeliveryCaps(result *recall.Result, req RecallRequest) {
 		}
 	}
 	rawTrimmed := false
+	droppedRaw := 0
 	if req.IncludeRaw != nil && !*req.IncludeRaw {
 		rawTrimmed = len(raw) > 0
 		raw = raw[:0]
 	} else if req.RawLimit > 0 && len(raw) > req.RawLimit {
+		droppedRaw = len(raw) - req.RawLimit
 		raw = raw[:req.RawLimit]
 		rawTrimmed = true
 	}
 	result.RawHits = raw
 	if bandsTrimmed || nodesTrimmed || rawTrimmed {
-		result.Meta["truncated"] = map[string]any{"bands": bandsTrimmed, "nodes": nodesTrimmed, "raw": rawTrimmed, "chars": false}
+		// Counts, not just flags: a boolean says "something was cut" but not how much, so
+		// a caller cannot tell whether another page exists. has_more only counts results a
+		// cap cut; IncludeRaw=false is a request, not a cut.
+		result.Meta["truncated"] = map[string]any{
+			"bands": bandsTrimmed, "nodes": nodesTrimmed, "raw": rawTrimmed, "chars": false,
+			"dropped_bands": droppedBands, "dropped_nodes": droppedNodes, "dropped_raw": droppedRaw,
+			"has_more": droppedBands+droppedNodes+droppedRaw > 0,
+		}
 		result.Gaps["budget_exceeded"]++
 	}
 }

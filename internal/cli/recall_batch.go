@@ -42,16 +42,7 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 	mode := a.args.String("result_mode")
 	readerOpt := a.args.StringPtr("reader")
 	scopeOpt := a.args.StringPtr("scope")
-	var asOf, windowStart, windowEnd, timeRef any
-	if value, ok := a.args.LookupString("asof"); ok {
-		asOf = value
-	}
-	if value, ok := a.args.LookupString("window_start"); ok {
-		windowStart = value
-	}
-	if value, ok := a.args.LookupString("window_end"); ok {
-		windowEnd = value
-	}
+	var timeRef any
 	if value, ok := a.args.LookupString("time_ref"); ok {
 		timeRef = value
 	}
@@ -61,7 +52,6 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 	offset := a.args.Int("offset")
 	includeRaw := a.args.FlagPtr("include_raw")
 	budgetMS := a.args.IntPtr("budget_ms")
-	sessionOpt := a.args.StringPtr("session")
 	noCrystallize := a.args.Flag("no_crystallize")
 	defaultRawLimit := a.args.Int("raw_limit")
 	var presence *text.PresenceCoordinates
@@ -119,9 +109,6 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 					Scope:         scopeOpt,
 					Reader:        readerOpt,
 					Mode:          mode,
-					AsOf:          asOf,
-					WindowStart:   windowStart,
-					WindowEnd:     windowEnd,
 					CapsBands:     capsBands,
 					CapsNodes:     capsNodes,
 					CapsChars:     capsChars,
@@ -129,7 +116,6 @@ func (a *application) runRecallStdinBatch(memory *facade.Memory) (int, error) {
 					IncludeRaw:    includeRaw,
 					BudgetMS:      budgetMS,
 					RawLimit:      rawLimit,
-					Session:       sessionOpt,
 					TimeRef:       timeRef,
 					Presence:      presence,
 					NoCrystallize: noCrystallize,

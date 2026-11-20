@@ -20,7 +20,6 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
-	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/text"
 	"github.com/rocareer/rolling-memory/internal/version"
@@ -178,6 +177,10 @@ func TestMain(m *testing.M) {
 type rawLine string
 
 func newMemory(t *testing.T) *facade.Memory {
+	return newVaultMemory(t)
+}
+
+func newVaultMemory(t *testing.T) *facade.Memory {
 	t.Helper()
 	restore := clock.SetForTest(time.Unix(testNow, 0), 1_000_000_000)
 	t.Cleanup(restore)
@@ -198,12 +201,6 @@ func newMemory(t *testing.T) *facade.Memory {
 	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
-	}
-	// Fresh production databases bootstrap thin; the graph-path tests below
-	// deliberately exercise the legacy assertion-graph surfaces, so apply its
-	// schema on the test database.
-	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
-		t.Fatalf("legacy graph schema: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
 	return memory
@@ -466,8 +463,7 @@ func assertRecallSchema(t *testing.T, schema map[string]any) {
 	t.Helper()
 	properties := asMap(t, schema["properties"])
 	assertKeys(t, "recall properties", properties, []string{
-		"cue", "scope", "reader", "mode", "asof", "window", "caps", "delivery_window",
-		"offset", "session",
+		"cue", "scope", "reader", "mode", "caps", "delivery_window", "offset",
 	})
 	if keys := stringList(t, asMap(t, properties["mode"])["enum"]); strings.Join(keys, ",") != "full,probe,recent" {
 		t.Fatalf("mode enum: %v", keys)
@@ -475,7 +471,6 @@ func assertRecallSchema(t *testing.T, schema map[string]any) {
 	if keys := stringList(t, asMap(t, properties["reader"])["enum"]); strings.Join(keys, ",") != "owner,deliverable" {
 		t.Fatalf("reader enum: %v", keys)
 	}
-	assertKeys(t, "window properties", asMap(t, asMap(t, properties["window"])["properties"]), []string{"start", "end"})
 	assertKeys(t, "caps properties", asMap(t, asMap(t, properties["caps"])["properties"]), []string{"delivery_window", "bands", "nodes", "chars", "raw"})
 }
 
@@ -616,8 +611,8 @@ func TestRecallRetiredDeliverySwitchesIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recallRequest: %v", err)
 	}
-	if request.ResultUnit != "" || request.Rank != nil || request.CapsChains != nil || request.CapsRows != nil {
-		t.Fatalf("retired delivery switches must not reach the request: %#v", request)
+	if request.Cue != "x" {
+		t.Fatalf("cue = %q", request.Cue)
 	}
 }
 
@@ -1173,11 +1168,6 @@ func TestLiveDaemonRecallFullOmitsDuplicateStructuredContent(t *testing.T) {
 	memory, err := lazy.Get()
 	if err != nil {
 		t.Fatalf("lazy get: %v", err)
-	}
-	// Fresh production databases bootstrap thin; this test exercises the
-	// legacy assertion-graph surfaces, so apply its schema.
-	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
-		t.Fatalf("legacy graph schema: %v", err)
 	}
 	content := "老张养了一只猫。"
 	anchor := "老张养了一只猫"

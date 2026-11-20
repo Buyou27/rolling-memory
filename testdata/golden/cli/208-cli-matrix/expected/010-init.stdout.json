@@ -1,8 +1,0 @@
-{
-  "config": "<CFG>",
-  "db": "<DB>",
-  "mode": "local",
-  "ok": true,
-  "schema_version": 1,
-  "scope": "mem:golden:208"
-}

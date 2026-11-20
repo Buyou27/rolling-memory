@@ -131,30 +131,14 @@ type MemoriesQueryResponse struct {
 	Items    []MemoryItem    `json:"items"`
 }
 
-// MemoryMetaEdgeItem 元边关系详情（冲突/取代/同义等）。
-type MemoryMetaEdgeItem struct {
-	ID             int64   `json:"id"`
-	MetaKind       string  `json:"meta_kind"`
-	Direction      string  `json:"direction"` // outgoing | incoming
-	PeerID         string  `json:"peer_id"`
-	PeerRendered   string  `json:"peer_rendered"`
-	PeerStatus     string  `json:"peer_status"`
-	PeerConfidence float64 `json:"peer_confidence"`
-	Status         string  `json:"status"`
-	EvidenceAnchor string  `json:"evidence_anchor"`
-	CreatedBy      string  `json:"created_by"`
-	CreatedAtText  string  `json:"created_at_text"`
-}
-
 // MemoryDetailResponse 单条记忆完整溯源响应。
 type MemoryDetailResponse struct {
-	Item          MemoryItem           `json:"item"`
-	TraceText     string               `json:"trace_text"`
-	TraceBefore   string               `json:"trace_before"`
-	TraceAnchor   string               `json:"trace_anchor"`
-	TraceAfter    string               `json:"trace_after"`
-	TraceOccurred string               `json:"trace_occurred"`
-	MetaEdges     []MemoryMetaEdgeItem `json:"meta_edges"`
+	Item          MemoryItem `json:"item"`
+	TraceText     string     `json:"trace_text"`
+	TraceBefore   string     `json:"trace_before"`
+	TraceAnchor   string     `json:"trace_anchor"`
+	TraceAfter    string     `json:"trace_after"`
+	TraceOccurred string     `json:"trace_occurred"`
 }
 
 // RecallQueryRequest 独立检索召回工作台请求。
@@ -1200,7 +1184,6 @@ func queryMemoryDetailFromDB(dbPath, id string) (MemoryDetailResponse, error) {
 			TraceAnchor:   rawTxt,
 			TraceAfter:    "",
 			TraceOccurred: tText,
-			MetaEdges:     []MemoryMetaEdgeItem{},
 		}, nil
 	}
 	if tnRows, err := sqliteQueryJSON(dbPath, `
@@ -1247,7 +1230,6 @@ func queryMemoryDetailFromDB(dbPath, id string) (MemoryDetailResponse, error) {
 			TraceAnchor:   aTxt,
 			TraceAfter:    "\nCited Units: " + asString(r["cited_unit_ids_json"]),
 			TraceOccurred: tText,
-			MetaEdges:     []MemoryMetaEdgeItem{},
 		}, nil
 	}
 	if bgRows, err := sqliteQueryJSON(dbPath, `
@@ -1309,7 +1291,6 @@ func queryMemoryDetailFromDB(dbPath, id string) (MemoryDetailResponse, error) {
 			TraceAnchor:   preview,
 			TraceAfter:    "",
 			TraceOccurred: tText,
-			MetaEdges:     []MemoryMetaEdgeItem{},
 		}, nil
 	}
 

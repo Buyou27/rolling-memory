@@ -1096,12 +1096,6 @@ func computeAdminDBFingerprint(memoryPath, scope string) string {
 	if strings.TrimSpace(firstDocID) == "" {
 		_ = db.QueryRow(`SELECT coalesce(noetic_id, '') FROM rm_noetic ORDER BY occurred_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
 	}
-	if strings.TrimSpace(firstDocID) == "" {
-		_ = db.QueryRow(`SELECT coalesce(hash, '') FROM trace ORDER BY recorded_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
-		if strings.TrimSpace(firstDocID) == "" {
-			_ = db.QueryRow(`SELECT coalesce(id, '') FROM node ORDER BY created_at ASC, rowid ASC LIMIT 1`).Scan(&firstDocID)
-		}
-	}
 	if strings.TrimSpace(createdAt) == "" || strings.TrimSpace(firstDocID) == "" {
 		return ""
 	}

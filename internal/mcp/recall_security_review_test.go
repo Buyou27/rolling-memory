@@ -28,7 +28,7 @@ func TestRecallDeliverySecurity(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
 					var lazy *LazyMemory
-					memory := newMemory(t)
+					memory := newVaultMemory(t)
 					if live {
 						lazy = NewLazyMemory()
 						lazy.memory = memory
@@ -99,7 +99,7 @@ func TestRecallDeliverySecurity(t *testing.T) {
 
 func TestRecallDeliveryReportsUpstreamTextTruncation(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
-	memory := newMemory(t)
+	memory := newVaultMemory(t)
 	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)

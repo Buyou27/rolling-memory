@@ -45,6 +45,13 @@ func VaultScopePreflight(path, scope string) error {
 	}
 	defer connection.Close()
 	_, _ = connection.Exec("PRAGMA busy_timeout = 15000")
+	// A database from an older release is refused before the writable connection
+	// is opened, so its bytes stay untouched and the user gets the upgrade path.
+	if exists, err := legacyGraphTables(connection); err != nil {
+		return err
+	} else if exists {
+		return fmt.Errorf("database %s was created by an older Rolling-Memory release and is no longer supported; download the latest release and re-import your transcripts into a new vault (https://github.com/rocareer/rolling-memory/releases/latest)", path)
+	}
 	tx, err := connection.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("vault scope preflight: %w", err)
@@ -59,6 +66,13 @@ func BindVaultScope(connection *sql.DB, scope string) error {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		return fmt.Errorf("vault requires a scope")
+	}
+	// A database from an older release is refused by store.Open with the
+	// download-and-re-import message; do not attempt to bind its scope.
+	if exists, err := legacyGraphTables(connection); err != nil {
+		return err
+	} else if exists {
+		return nil
 	}
 	var metaExists int
 	if err := connection.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rm_meta')`).Scan(&metaExists); err == nil && metaExists != 0 {
@@ -222,4 +236,14 @@ func checkVaultScope(tx *sql.Tx, scope string) error {
 		return fmt.Errorf("local_plain vault scope is unbound; existing data is preserved; Back up the database and referenced sources, independently verify the ownership of all records, and obtain explicit authorization before a non-destructive scope binding")
 	}
 	return nil
+}
+
+func legacyGraphTables(connection *sql.DB) (bool, error) {
+	var count int
+	if err := connection.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('node', 'assertion', 'trace')`,
+	).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

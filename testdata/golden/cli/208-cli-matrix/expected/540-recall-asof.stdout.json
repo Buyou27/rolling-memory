@@ -1,4 +1,0 @@
-{
-  "error": "local_plain recall does not support session, asof or window filters",
-  "ok": false
-}

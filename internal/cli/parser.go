@@ -705,14 +705,11 @@ func BuildParser() *Parser {
 	}
 
 	recallCmd := &command{
-		Name: "recall", Path: []string{"recall"}, Help: "read local memory as subject bands with ranked evidence",
+		Name: "recall", Path: []string{"recall"}, Help: "read memory as bands x chains",
 		Options: append(commonOptions(),
 			stringOption([]string{"--q", "--cue"}, "cue", "", ""),
 			choiceOption([]string{"--reader"}, "reader", []string{"owner", "deliverable"}, nil, ""),
 			choiceOption([]string{"--result-mode"}, "result_mode", []string{"full", "probe", "recent"}, "full", ""),
-			stringOption([]string{"--asof"}, "asof", nil, "reserved; specifying this filter currently fails closed"),
-			stringOption([]string{"--window-start"}, "window_start", nil, "reserved; specifying this filter currently fails closed"),
-			stringOption([]string{"--window-end"}, "window_end", nil, "reserved; specifying this filter currently fails closed"),
 			&Option{Names: []string{"--bands"}, Dest: "bands", Kind: kindInt, Default: nil,
 				Help: "maximum delivered bands (also raises the candidate depth when larger than --raw-limit)"},
 			&Option{Names: []string{"--nodes"}, Dest: "nodes", Kind: kindInt, Default: nil,
@@ -723,8 +720,6 @@ func BuildParser() *Parser {
 			flagOption([]string{"--include-raw"}, "include_raw", nil, "include raw source hits in the result"),
 			&Option{Names: []string{"--no-raw"}, Dest: "include_raw", Kind: kindFlagFalse, Help: "omit raw source hits"},
 			intOption([]string{"--raw-limit"}, "raw_limit", 10, "raw-hit limit (default 10, maximum 64)"),
-			stringOption([]string{"--session"}, "session", nil,
-				"reserved; specifying this filter currently fails closed"),
 			stringOption([]string{"--time-ref"}, "time_ref", nil,
 				"reference time for relative expressions (ISO date or epoch)"),
 			&Option{Names: []string{"--budget-ms"}, Dest: "budget_ms", Kind: kindInt, Default: nil, Help: ""},

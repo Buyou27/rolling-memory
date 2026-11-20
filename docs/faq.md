@@ -92,3 +92,9 @@ Beyond the local plane, a separate **cloud memory service** is offered on an **a
    - As noted in the README, our ranking weights and heuristics were iterated through error analysis on these benchmarks and should not be read as blind zero-shot generalization or an official leaderboard submission.
 3. **Built-in evaluation hooks & our real 7-day dogfooding ledger**:
    - Local mode enables experience-evaluation hooks and evaluation cards by default (disable anytime via `rolling-memory install --mcp-only` or `rolling-memory config set hooks.ledger false`). For the exact turn-elimination math, counterexamples, and our own development machine's audited 24-hour and 7-day token/dollar ledger, see [Token Math & Falsification (`token-economics.md`)](token-economics.md).
+
+---
+
+## Q7: I am upgrading from an older version — will my existing vault still work?
+
+This release carries the vault-only corpus. A database created by an older release uses a retired storage format and is refused at open with a download-and-re-import message; the file is not modified or deleted. Download the latest release, create a new vault, and re-import your JSONL transcripts with `rmem import`. Older non-JSONL exports are not accepted.

@@ -383,7 +383,7 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 		t.Fatalf("unexpected public dict: %+v", public)
 	}
 	recall, ok := public["recall"].(map[string]any)
-	if !ok || len(recall) != 10 {
+	if !ok || len(recall) != 4 {
 		t.Fatalf("recall public shape = %#v", public["recall"])
 	}
 	if _, ok := public["llm"]; ok {
@@ -560,6 +560,8 @@ func TestConfigReadError(t *testing.T) {
 func TestBooleanCapsAndStorage(t *testing.T) {
 	isolateHome(t)
 	path := filepath.Join(t.TempDir(), "config.toml")
+	// Legacy recall keys are ignored: the clean-install surface reads only the
+	// live caps. Unknown TOML keys never fail a load.
 	writeConfig(t, path, `[mode]
 allow_loopback_llm = "no"
 
@@ -584,10 +586,11 @@ profile = "usb"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.AllowLoopbackLLM || cfg.Recall.RawWhenSparse || cfg.Recall.Vector ||
-		!cfg.Recall.TokenCorrect || !cfg.Recall.AliasExpand || cfg.Recall.RelativeTag ||
-		!cfg.Recall.MentionBackfill {
-		t.Fatalf("unexpected recall booleans: %+v allow=%v", cfg.Recall, cfg.AllowLoopbackLLM)
+	if cfg.AllowLoopbackLLM {
+		t.Fatalf("unexpected allow_loopback_llm: %+v", cfg)
+	}
+	if cfg.Recall.Bands != 8 || cfg.Recall.Nodes != 50 || cfg.Recall.Chars != 16000 || cfg.Recall.RawLimit != 5 {
+		t.Fatalf("recall caps = %+v", cfg.Recall)
 	}
 	if cfg.Hooks.Ledger {
 		t.Fatalf("unexpected hooks booleans: %+v", cfg.Hooks)
@@ -732,11 +735,12 @@ func TestRetiredEmbeddingAndRerankTablesIgnoredAndEgressBlocked(t *testing.T) {
 		t.Fatalf("SecretStatus must not expose retired embedding key: %#v", cfgStale.SecretStatus())
 	}
 
-	// 2. Local mode rejects advanced_ops = true, and retired cloud mode is also rejected
+	// 2. Retired advanced_ops is ignored instead of being a local-mode switch;
+	// retired cloud mode is still rejected.
 	advLocalPath := filepath.Join(tmp, "adv-local.toml")
 	writeConfig(t, advLocalPath, "[mode]\nname = \"local\"\n\n[recall]\nadvanced_ops = true\n")
-	if _, err := Load(LoadOptions{Path: &advLocalPath, Env: map[string]string{}}); err == nil {
-		t.Fatalf("expected local mode to reject recall.advanced_ops = true")
+	if _, err := Load(LoadOptions{Path: &advLocalPath, Env: map[string]string{}}); err != nil {
+		t.Fatalf("expected retired recall.advanced_ops to be ignored, got: %v", err)
 	}
 
 	advCloudPath := filepath.Join(tmp, "adv-cloud.toml")

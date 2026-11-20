@@ -49,12 +49,12 @@ func TestImportJSONLCanonicalReceiptShape(t *testing.T) {
 	if replayed["processed"] != 0 {
 		t.Fatalf("canonical import must queue no traces: %#v", replayed)
 	}
-	var traces, cursors int
-	if err := memory.Store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM trace), (SELECT COUNT(*) FROM transcript_cursor)`).Scan(&traces, &cursors); err != nil {
+	var imported int
+	if err := memory.Store.DB().QueryRow(`SELECT COUNT(*) FROM rm_docs`).Scan(&imported); err != nil {
 		t.Fatal(err)
 	}
-	if traces != 0 || cursors != 0 {
-		t.Fatalf("canonical import wrote trace rows: traces=%d cursors=%d", traces, cursors)
+	if imported == 0 {
+		t.Fatalf("canonical import wrote no docs")
 	}
 	for _, fixture := range []struct{ text, role string }{
 		{"老张养了一只猫。", "user"},

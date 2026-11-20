@@ -5,7 +5,6 @@ dist/
 dist-verify/
 *.log
 *.db
-!testdata/golden/db/*.db
 *.db-shm
 *.db-wal
 autoresearch-dashboard.html

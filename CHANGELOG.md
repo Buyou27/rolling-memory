@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-11-20
+
 ### Changed
 
 - Memory-graph phrase nodes now require two terms whose text spans do not overlap. Adjacent sliding windows of one Han run are the dual track that keeps retrieval recall, but they are one text run projected twice, so they are no longer projected as phrases; disjoint tilings of the same run are recovered instead, which keeps genuine Chinese pairs such as 推进·继续 visible. Every phrase fragment now carries the pair df, both member dfs, `lift` against the independence expectation, and how much of the rarer member the pair covers, and the detail drawer shows them next to the binding energy. Retrieval postings, word families and the tokenizer are untouched.
-- The `recall` surface now matches what the local vault can deliver: `--bands` / `--nodes` / `--chars` and `--offset` are documented in the CLI, and the MCP schema advertises `delivery_window` plus `caps{delivery_window,bands,nodes,chars,raw}`. Filters the local vault cannot enforce (`asof`, `window`, `session`) stay fail-closed, and the console no longer sends a graph-walk depth it cannot use.
+- The `recall` surface now matches what the local vault can deliver: `--bands` / `--nodes` / `--chars` and `--offset` are documented in the CLI, and the MCP schema advertises `delivery_window` plus `caps{delivery_window,bands,nodes,chars,raw}`. The retired `asof` / `window` / `session` filters are gone instead of being accepted and rejected, and the console no longer sends a graph-walk depth it cannot use.
 
 ### Added
 
@@ -19,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- The legacy JSON export import path and the assertion-graph FTS rebuild helper are gone. JSONL and plain-text transcripts are the only supported import formats, and recall receipts no longer carry a `vector` provider block.
+- The legacy JSON export import path and the assertion-graph FTS rebuild helper are gone. `import` accepts JSONL transcripts only; other formats are refused instead of being translated by a retired reader, and recall receipts no longer carry a `vector` provider block.
+- Databases created by an older release (any database that still carries the retired assertion graph) are refused at open with a message to download the latest release and re-import the transcripts into a new vault; they are never served through the legacy reader.
+- The retired assertion-graph engine is deleted: the legacy graph store operators, the old recall read path, the delivery primitives, and the transcript reader are gone, together with the golden corpus that replayed them. The binary now links only the canonical `rm_*` vault, the local delivery result renderer, and the hook fact ledger. The efficacy report therefore covers the hook ledger and vault counters; its old per-turn adoption replay no longer exists.
+- The retired recall config keys (`chains`, `rows`, `vector`, `search_engine`, `token_correct`, `alias_expand`, `relative_tag`, `mention_backfill`, `raw_when_sparse`, `hook_bands` / `hook_nodes` / `hook_chars`, `activation_record` / `activation_rank`, `mask_deliverable`, `advanced_ops`) are ignored instead of being parsed and exposed, and `asof` / `window` / `session` are no longer accepted by the CLI or MCP.
 - The `wave` command, the `recall` / `status` `--wave` flags, and the Braille oscilloscope renderer are gone. The command was never part of the documented surface.
 - The legacy-only item and breadth switches (`--depth`, `--caps-chains`, `--caps-rows`, `--result-unit`, `--rank` / `--no-rank`, `--token-correct`, `--no-alias-expand`, `--relative-tag`, `--no-mention-backfill`) no longer parse. The MCP schema also dropped `deep`, `result_unit`, `rank`, `caps.chains` and `caps.rows` instead of accepting switches the local vault ignores.
 - `hook_bands` / `hook_nodes` / `hook_chars` are gone from `[recall]` — the prompt hook captures and reminds but does not recall — and the generated config template no longer writes the retired `vector` switch.
@@ -169,7 +174,8 @@ Initial public release.
 - **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
 - **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
 
-[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/rocareer/rolling-memory/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/rocareer/rolling-memory/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/rocareer/rolling-memory/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/rocareer/rolling-memory/compare/v0.0.4...v0.0.5

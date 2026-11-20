@@ -6,7 +6,7 @@ package version
 
 const (
 	// Version is the software release version (tracks repository VERSION).
-	Version = "0.0.7"
+	Version = "0.0.8"
 
 	// CoreVersion is the memory core engine version.
 	CoreVersion = "1.0.1"

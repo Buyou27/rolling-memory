@@ -47,9 +47,6 @@ func newVaultOnlyMemory(t *testing.T) *facade.Memory {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { memory.Close() })
-	if memory.Store.HasLegacyGraph() {
-		t.Fatal("vault-only fixture unexpectedly contains a legacy graph")
-	}
 	return memory
 }
 

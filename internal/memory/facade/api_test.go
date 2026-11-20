@@ -12,7 +12,6 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
-	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
 	"github.com/rocareer/rolling-memory/internal/memory/localvault"
 	"github.com/rocareer/rolling-memory/internal/version"
@@ -54,11 +53,6 @@ func newMemory(t *testing.T) *facade.Memory {
 	memory, err := facade.New(cfg)
 	if err != nil {
 		t.Fatalf("api: %v", err)
-	}
-	// Fresh production databases bootstrap thin; this suite exercises the
-	// legacy assertion-graph surfaces, so apply its schema on the test database.
-	if err := db.EnsureLegacyGraphSchema(memory.Store.DB()); err != nil {
-		t.Fatalf("legacy graph schema: %v", err)
 	}
 	t.Cleanup(func() { memory.Close() })
 	return memory
@@ -149,7 +143,7 @@ func TestRecentOrdersAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recent: %v", err)
 	}
-	if len(rows) != 2 || rows[0]["id"] != newID || rows[1]["id"] != oldID {
+	if len(rows) != 2 || rows[0]["anchor"] != newID || rows[1]["anchor"] != oldID {
 		t.Fatalf("recent = %#v", rows)
 	}
 	if _, err := memory.Remember(facade.RememberRequest{
@@ -172,7 +166,9 @@ func TestRecentOrdersAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recent owner: %v", err)
 	}
-	if len(owner) != len(deliverable)+1 {
+	// The local vault is single-user: reader/audience no longer splits the
+	// newest-entries view.
+	if len(owner) != len(deliverable) {
 		t.Fatalf("owner=%d deliverable=%d", len(owner), len(deliverable))
 	}
 }

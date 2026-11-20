@@ -24,7 +24,7 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
-			memory := newMemory(t)
+			memory := newVaultMemory(t)
 			client, err := memory.LocalVault()
 			if err != nil {
 				t.Fatal(err)
@@ -65,7 +65,7 @@ func TestLocalRecallMCPTextReportsIndexAndSourceGaps(t *testing.T) {
 
 func TestLocalRecallMCPTextReportsCharacterTruncation(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
-	memory := newMemory(t)
+	memory := newVaultMemory(t)
 	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestLocalRecallMCPTextReportsCharacterTruncation(t *testing.T) {
 
 func TestLocalRecallMCPTextReportsDeliveryCaps(t *testing.T) {
 	t.Setenv("ROLLING_MEMORY_BRAIN_URL", "")
-	memory := newMemory(t)
+	memory := newVaultMemory(t)
 	client, err := memory.LocalVault()
 	if err != nil {
 		t.Fatal(err)

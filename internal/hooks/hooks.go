@@ -16,7 +16,6 @@ package hooks
 
 import (
 	"bufio"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,9 +31,7 @@ import (
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/memory/facade"
-	"github.com/rocareer/rolling-memory/internal/store"
 	"github.com/rocareer/rolling-memory/internal/text"
-	"github.com/rocareer/rolling-memory/internal/transcript"
 )
 
 const (
@@ -111,138 +108,6 @@ func additionalContext(text string, jsonOutput bool, eventName string) (string, 
 	return ids.PyJSONDump(payload, false, false, false)
 }
 
-// importTurns resolves the payload's transcript path and
-// imports the next slice at the stored cursor. A missing file keeps the
-// missing-file receipt shape instead of failing the hook.
-func importTurns(memory *facade.Memory, payload map[string]any) (map[string]any, error) {
-	rawPath := firstTruthy(payload["transcript_path"], payload["transcriptPath"])
-	if rawPath == nil {
-		return importFallbackAssistantTurn(memory, payload, map[string]any{"messages": 0, "inserted": 0})
-	}
-	path := config.ExpandUserPath(pyStr(rawPath))
-	if !filepath.IsAbs(path) {
-		base := ""
-		if cwd := firstTruthy(payload["cwd"]); cwd != nil {
-			base = config.ExpandUserPath(pyStr(cwd))
-		}
-		if base == "" {
-			directory, err := os.Getwd()
-			if err != nil {
-				return nil, err
-			}
-			base = directory
-		}
-		path = pyJoin(base, path)
-	}
-	if info, err := os.Stat(path); err != nil || info == nil {
-		return importFallbackAssistantTurn(memory, payload, map[string]any{"messages": 0, "inserted": 0, "missing": path})
-	}
-	session := pyStr(firstTruthy(payload["session_id"], payload["sessionId"], pathStem(path)))
-	offset, err := transcript.CurrentOffset(memory.Store, path, session)
-	if err != nil {
-		return nil, err
-	}
-	result, err := transcript.ImportTranscript(
-		memory.Store, path, memory.Config.Scope, &session, "shared", offset, maxImportLine)
-	if err != nil {
-		return nil, err
-	}
-	if asIntDefault(result["inserted"], 0) == 0 {
-		return importFallbackAssistantTurn(memory, payload, result)
-	}
-	// Fix W2 (Stop Ephemeral Transcript Turn Collapse & Missing Presence):
-	// When a harness passes a single-turn temporary transcript file (e.g. zcode-hook-*/transcript.jsonl
-	// with offset==0 and total_lines<=2), ImportTranscript numbers that isolated line as turn=1.
-	// Re-align the newly inserted row's turn to the session's monotonic turn counter and stamp
-	// workspace 4D Presence into meta_json so session timeline & locus filtering stay intact.
-	if offset == 0 && asIntDefault(result["total_lines"], 0) <= 2 && session != "" && session != "default" {
-		realignImportedEphemeralTurn(memory, session, path, workspacePresence(payload))
-	}
-	return result, nil
-}
-
-func realignImportedEphemeralTurn(memory *facade.Memory, session, path string, presence *text.PresenceCoordinates) {
-	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
-		return
-	}
-	var latestHash, metaRaw, textRaw string
-	var currentTurn int64
-	err := memory.Store.DB().QueryRow(
-		`SELECT hash, turn, meta_json, text FROM trace
-		 WHERE scope = ? AND session = ?
-		 ORDER BY recorded_at DESC, rowid DESC LIMIT 1`,
-		memory.Config.Scope, session,
-	).Scan(&latestHash, &currentTurn, &metaRaw, &textRaw)
-	if err != nil || latestHash == "" {
-		return
-	}
-	var maxPriorTurn sql.NullInt64
-	_ = memory.Store.DB().QueryRow(
-		`SELECT MAX(turn) FROM trace WHERE scope = ? AND session = ? AND hash != ?`,
-		memory.Config.Scope, session, latestHash,
-	).Scan(&maxPriorTurn)
-	newTurn := currentTurn
-	if maxPriorTurn.Valid && maxPriorTurn.Int64 >= currentTurn {
-		newTurn = maxPriorTurn.Int64 + 1
-	}
-	meta := map[string]any{"source": path}
-	_ = json.Unmarshal([]byte(metaRaw), &meta)
-	if presence != nil && !presence.IsEmpty() {
-		meta["world"] = presence.World
-		meta["carrier"] = presence.Carrier
-		meta["locus"] = presence.Locus
-		meta["incarnation"] = presence.Incarnation
-	}
-	cleanedText := stripMemoryAttributionLine(stripDegenerateTail(textRaw))
-	if encoded, mErr := json.Marshal(meta); mErr == nil {
-		_, _ = memory.Store.DB().Exec(
-			`UPDATE trace SET turn = ?, meta_json = ?, text = ? WHERE hash = ?`,
-			newTurn, string(encoded), cleanedText, latestHash,
-		)
-	}
-}
-
-func importFallbackAssistantTurn(memory *facade.Memory, payload map[string]any, base map[string]any) (map[string]any, error) {
-	lastMsg := firstTruthy(payload["last_assistant_message"], payload["lastAssistantMessage"])
-	if lastMsg == nil {
-		return base, nil
-	}
-	text := stripMemoryAttributionLine(stripDegenerateTail(ids.StripInjected(pyStrip(pyStr(lastMsg)))))
-	if utf8.RuneCountInString(text) < 4 {
-		return base, nil
-	}
-	session := "default"
-	if value := firstTruthy(payload["session_id"], payload["sessionId"]); value != nil {
-		session = pyStr(value)
-	}
-	now := ids.UTCNow()
-	meta := map[string]any{"source": "stop_payload"}
-	if presence := workspacePresence(payload); presence != nil {
-		meta["world"] = presence.World
-		meta["carrier"] = presence.Carrier
-		meta["locus"] = presence.Locus
-		meta["incarnation"] = presence.Incarnation
-	}
-	_, created, err := memory.Store.AddTrace(memory.Config.Scope, text, store.TraceOptions{
-		Session:    session,
-		Turn:       nextSessionTurn(memory, memory.Config.Scope, session),
-		Kind:       "message",
-		Author:     "assistant",
-		Audience:   "shared",
-		OccurredAt: &now,
-		Meta:       meta,
-	})
-	if err != nil {
-		return base, nil
-	}
-	base["messages"] = asIntDefault(base["messages"], 0) + 1
-	if created {
-		base["inserted"] = asIntDefault(base["inserted"], 0) + 1
-	}
-	return base, nil
-}
-
-// renderIntError writes the ValueError text the way cli.main does.
 func renderIntError(err error, jsonOutput bool, stdout, stderr io.Writer) {
 	message := ids.Redact(err.Error())
 	if jsonOutput {
@@ -747,24 +612,9 @@ func saveActiveWorkspacePresence(coords text.PresenceCoordinates, session string
 	_ = text.SavePresenceFile(config.DefaultStateDir(), coords, session, ids.UTCNow())
 }
 
-func nextSessionTurn(memory *facade.Memory, scope, session string) int64 {
-	var maxTurn sql.NullInt64
-	_ = memory.Store.DB().QueryRow(
-		"SELECT MAX(turn) FROM trace WHERE scope = ? AND session = ?",
-		scope, session,
-	).Scan(&maxTurn)
-	if maxTurn.Valid && maxTurn.Int64 >= 0 {
-		return maxTurn.Int64 + 1
-	}
-	return 1
-}
-
-// captureUserPrompt records the user's raw prompt into trace for episodic
-// continuity, but intentionally does NOT run Replay/extraction at prompt-submit
-// time so unexecuted requests, questions, or hypotheses are never prematurely
-// materialized into factual assertions before work is actually performed.
-// Moreover, we set Processed: true on the trace row so Stop/Start replay sweeps
-// do not turn raw user questions/commands into fake factual assertions either.
+// captureUserPrompt advances the per-session turn counter used by the four-turn
+// cadence reminder. The prompt itself is not stored here; transcripts remain
+// the source of episodic history.
 func captureUserPrompt(memory *facade.Memory, cfg *config.Config, session, prompt string, presence *text.PresenceCoordinates) int {
 	cleaned := ids.StripInjected(pyStrip(prompt))
 	if cleaned == "" {
@@ -773,47 +623,20 @@ func captureUserPrompt(memory *facade.Memory, cfg *config.Config, session, promp
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return 0
 	}
-	if !memory.Store.HasLegacyGraph() {
-		if session != "" && session != "default" {
-			db := memory.Store.DB()
-			_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
-			key := "hook_cadence_turns:" + cfg.Scope + ":" + session
-			var raw []byte
-			turns := 0
-			if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw); err == nil {
-				if n, pErr := strconv.Atoi(strings.TrimSpace(string(raw))); pErr == nil && n > 0 {
-					turns = n
-				}
+	if session != "" && session != "default" {
+		db := memory.Store.DB()
+		_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`)
+		key := "hook_cadence_turns:" + cfg.Scope + ":" + session
+		var raw []byte
+		turns := 0
+		if err := db.QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw); err == nil {
+			if n, pErr := strconv.Atoi(strings.TrimSpace(string(raw))); pErr == nil && n > 0 {
+				turns = n
 			}
-			turns++
-			_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, key, []byte(strconv.Itoa(turns)))
 		}
-		return 0
+		turns++
+		_, _ = db.Exec(`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, key, []byte(strconv.Itoa(turns)))
 	}
-	now := ids.UTCNow()
-	meta := map[string]any{"source": "user_prompt_submit"}
-	if presence != nil {
-		meta["world"] = presence.World
-		meta["carrier"] = presence.Carrier
-		meta["locus"] = presence.Locus
-		meta["incarnation"] = presence.Incarnation
-	}
-	traceHash, created, err := memory.Store.AddTrace(cfg.Scope, cleaned, store.TraceOptions{
-		Session:    session,
-		Turn:       nextSessionTurn(memory, cfg.Scope, session),
-		Kind:       "message",
-		Author:     "user",
-		Audience:   "shared",
-		OccurredAt: &now,
-		Meta:       meta,
-	})
-	if err != nil || !created {
-		return 0
-	}
-	// Mark raw prompt capture as processed for rule-v1 replay so unverified user
-	// prompts are kept in trace for episodic history & anchor verification without
-	// being auto-extracted as settled facts before the agent verifies them.
-	_, _ = memory.Store.DB().Exec(`UPDATE trace SET processed = 1 WHERE hash = ?`, traceHash)
 	return 0
 }
 
@@ -845,35 +668,22 @@ func isCadenceReminderDue(memory *facade.Memory, scope, session string) bool {
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil || session == "" || session == "default" {
 		return false
 	}
-	var userTurns int
-	if !memory.Store.HasLegacyGraph() {
-		key := "hook_cadence_turns:" + scope + ":" + session
-		var raw []byte
-		if err := memory.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw); err != nil {
-			return false
-		}
-		n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-		if err != nil || n < 4 {
-			return false
-		}
-		return n%4 == 0
-	}
-	err := memory.Store.DB().QueryRow(
-		`SELECT COUNT(*) FROM trace
-		 WHERE scope = ? AND session = ? AND author IN ('user', 'albert')
-		   AND meta_json NOT LIKE '%"synthetic_anchor"%'`,
-		scope, session,
-	).Scan(&userTurns)
-	if err != nil || userTurns < 4 {
+	key := "hook_cadence_turns:" + scope + ":" + session
+	var raw []byte
+	if err := memory.Store.DB().QueryRow(`SELECT v FROM rm_meta WHERE k = ?`, key).Scan(&raw); err != nil {
 		return false
 	}
-	return userTurns%4 == 0
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || n < 4 {
+		return false
+	}
+	return n%4 == 0
 }
 
 // stripMemoryAttributionLine removes the single-line natural memory impact
 // attribution sentence (containing "Rolling-Memory 记忆") from the opening of an
-// assistant reply before persisting to `trace`, preventing self-referential
-// attribution lines from polluting episodic history or future assertions.
+// assistant reply, preventing self-referential attribution lines from
+// polluting episodic history or future assertions.
 func stripMemoryAttributionLine(s string) string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {

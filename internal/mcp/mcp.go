@@ -790,13 +790,8 @@ func toolError(requestID any, err error, debugOut io.Writer) any {
 	})
 }
 
-// recallRequest maps the tool arguments onto facade.RecallRequest. Depth and
-// RawLimit carry api.recall's keyword defaults, which mcp never passes.
+// recallRequest maps the tool arguments onto facade.RecallRequest.
 func recallRequest(arguments map[string]any) (facade.RecallRequest, error) {
-	window := map[string]any{}
-	if typed, ok := arguments["window"].(map[string]any); ok {
-		window = typed
-	}
 	caps := map[string]any{}
 	if typed, ok := arguments["caps"].(map[string]any); ok {
 		caps = typed
@@ -818,11 +813,6 @@ func recallRequest(arguments map[string]any) (facade.RecallRequest, error) {
 	}
 	if bands := intOrNil(caps["bands"]); bands != nil && (*bands < 0 || *bands > 64) {
 		return facade.RecallRequest{}, fmt.Errorf("caps.bands must be between 0 and 64")
-	}
-	var sessionPtr *string
-	if value, ok := arguments["session"]; ok && value != nil {
-		session := pyStr(value)
-		sessionPtr = &session
 	}
 	mode := "full"
 	if pyTruthy(arguments["mode"]) {
@@ -850,16 +840,12 @@ func recallRequest(arguments map[string]any) (facade.RecallRequest, error) {
 		Scope:          scope,
 		Reader:         reader,
 		Mode:           mode,
-		AsOf:           arguments["asof"],
-		WindowStart:    window["start"],
-		WindowEnd:      window["end"],
 		CapsBands:      intOrNil(caps["bands"]),
 		CapsNodes:      intOrNil(caps["nodes"]),
 		CapsChars:      intOrNil(caps["chars"]),
 		DeliveryWindow: deliveryWindow,
 		Offset:         offset,
 		RawLimit:       rawLimit,
-		Session:        sessionPtr,
 	}, nil
 }
 

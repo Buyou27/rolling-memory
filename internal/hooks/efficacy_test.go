@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/rocareer/rolling-memory/internal/efficacy"
-	"github.com/rocareer/rolling-memory/internal/store"
 )
 
 type hookOutputWriter struct {
@@ -58,12 +57,14 @@ func TestHookEfficacyBoundLedgerAndPrivacy(t *testing.T) {
 			// four-turn cadence reminder: three prior user turns put this prompt on
 			// the cadence.
 			seeded := openMemory(t)
-			for turn := 1; turn <= 3; turn++ {
-				if _, _, err := seeded.Store.AddTrace("mem:hooks", fmt.Sprintf("先前第 %d 轮用户输入", turn), store.TraceOptions{
-					Session: "sensitive-session", Turn: int64(turn), Kind: "message", Author: "user", Audience: "shared",
-				}); err != nil {
-					t.Fatalf("seed trace: %v", err)
-				}
+			if _, err := seeded.Store.DB().Exec(`CREATE TABLE IF NOT EXISTS rm_meta (k TEXT PRIMARY KEY, v BLOB NOT NULL)`); err != nil {
+				t.Fatalf("seed meta: %v", err)
+			}
+			if _, err := seeded.Store.DB().Exec(
+				`INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`,
+				"hook_cadence_turns:mem:hooks:sensitive-session", []byte("3"),
+			); err != nil {
+				t.Fatalf("seed cadence: %v", err)
 			}
 			_ = seeded.Close()
 			writer := &hookOutputWriter{limit: tc.limit, writeErr: tc.writeErr, flushErr: tc.flushErr}
