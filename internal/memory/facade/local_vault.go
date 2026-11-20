@@ -1073,6 +1073,17 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 		})
 		nextOrder++
 	}
+	// One batched coordinate lookup for the delivered set: a per-hit lookup would turn a
+	// single recall into O(hits) statements, which is exactly what the small-vault path did
+	// before the cache threshold kicked in.
+	var backgroundLocations map[string]localvault.BackgroundLocation
+	if tc.Vault != nil && len(standalone) > 0 {
+		ids := make([]string, 0, len(standalone))
+		for _, h := range standalone {
+			ids = append(ids, h.UnitID)
+		}
+		backgroundLocations = tc.Vault.BackgroundChunkLocations(ids)
+	}
 	for _, h := range standalone {
 		delivered := h.DistilledPlaintext
 		if strings.TrimSpace(delivered) == "" {
@@ -1095,13 +1106,11 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 			}
 		}
 		spaceLabel := ""
-		if tc.Vault != nil {
-			if relPath, _, locAnchor, ok := tc.Vault.BackgroundChunkLocation(h.UnitID); ok {
-				if locAnchor != "" {
-					spaceLabel = relPath + "#" + locAnchor
-				} else {
-					spaceLabel = relPath
-				}
+		if location, ok := backgroundLocations[h.UnitID]; ok {
+			if location.Anchor != "" {
+				spaceLabel = location.RelPath + "#" + location.Anchor
+			} else {
+				spaceLabel = location.RelPath
 			}
 		}
 		locus := locusByDoc[h.UnitID]

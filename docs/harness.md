@@ -34,7 +34,7 @@ MCP stdio · CLI · Hooks      ← Mechanical core: zero harness coupling, stand
 SQLite (WAL)                 ← Storage layer: local plaintext vault
 ```
 
-- **Zero Harness Coupling in the Core (`api` / `mcp` / `cli` / `hooks`)**: Communicates strictly over standard process pipes (newline-delimited JSON-RPC 2.0 for MCP, argv/stdin for CLI, JSON stdin → JSON stdout for Hooks).
+- **Zero Harness Coupling in the Core (`facade` / `mcp` / `cli` / `hooks`)**: Communicates strictly over standard process pipes (newline-delimited JSON-RPC 2.0 for MCP, argv/stdin for CLI, JSON stdin → JSON stdout for Hooks).
 - **Conservative Wiring in the Adapter (`internal/harness`)**: Writes launcher commands into harness configs, copies `SKILL.md`, and optionally attaches hooks and instruction blocks without touching memory semantics.
 - **Reminder Hooks and Agent-Driven Retrieval**: The optional per-prompt hook (`--with-hooks`) does not automatically retrieve memory. The agent decides when to call `recall`. Hooks and background scanning can import supported local sources; they do not guarantee that every conversation is captured.
 - **Turn-End Recall Review & Customizing `SKILL.md`**: At the very bottom of `SKILL.md` (`§5 Wrap-up Review`), a standalone optional section instructs the agent to append a brief wrap-up note whenever `recall` was called in that turn — reporting how many times `recall` was called, estimated round-trips saved with concrete basis, and whether the recalled memory actually helped. You can edit or delete that bottom section in `<skill_root>/rolling-memory/SKILL.md` directly (or pass `--skill-file <path>` to `rolling-memory install`) at any time.

@@ -1551,7 +1551,7 @@ func evalVaultDSN(path string) string {
 // recallLocalProduct uses the localvault recall layer without the full Memory.Recall delivery pipeline.
 func (e *LocalEngine) recallLocalProduct(ctx context.Context, v *localvault.Vault, query string, topK int) ([]local.ResolvedHit, error) {
 	tc := localvault.NewLocalClient(v)
-	// 评测查询不注入墙钟 TimeRef：产品 API 默认用 now，但该读数不可复现；Hard-31 对照
+	// 评测查询不注入墙钟 TimeRef：产品默认路径使用 now，但该读数不可复现；Hard-31 对照
 	// TimeRef=0 与 now 同分，故固定 0（相对日期题如需 now 需显式登记）。
 	hits, err := tc.RecallWithOptions(ctx, query, localvault.BlindQueryOptions{TopK: topK})
 	if err != nil {

@@ -16,8 +16,8 @@
 //
 // Outbound objects are canonically encoded with sorted keys: standard preserves
 // dict insertion order, but ordered nesting is not part of the wire contract and
-// the receipt maps come from api as unordered Go maps. Object keys inside a
-// probe text therefore sort as well.
+// the receipt maps come from the memory facade as unordered Go maps. Object keys
+// inside a probe text therefore sort as well.
 //
 // Deviations are limited to arguments that violate the published inputSchema.
 // standard passes them through and fails deeper (AttributeError) or echoes the
@@ -650,7 +650,7 @@ func pythonParseMessage(text string, err error) string {
 
 // normalizeJSONValue turns json.Number literals into the values json.loads
 // produces: int64 when the literal is integral and fits, float64 otherwise.
-// Downstream packages expect those Go types (api/remember read confidence,
+// Downstream packages expect those Go types (facade/remember read confidence,
 // turn and time slots through typed switches), so the adapter must not leak
 // json.Number past the protocol boundary.
 func normalizeJSONValue(value any) any {

@@ -543,6 +543,9 @@ func (v *Vault) checkExternalDBMutation() bool {
 	}
 	v.snapRef.noeticReady = false
 	v.slotCacheMu.Unlock()
+	// A chunk coordinate committed by another process must not stay cached here; the local
+	// write paths clear the same caches, so both invalidation classes are covered.
+	clearBackgroundChunkCaches()
 	return true
 }
 

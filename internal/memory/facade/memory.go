@@ -145,18 +145,6 @@ type RememberRequest struct {
 	Presence      *text.PresenceCoordinates
 }
 
-func (req RememberRequest) effectivePresence() *text.PresenceCoordinates {
-	if req.Presence != nil && !req.Presence.IsEmpty() {
-		norm := req.Presence.Normalized()
-		return &norm
-	}
-	if strings.TrimSpace(req.PresenceLocus) != "" {
-		norm := text.PresenceCoordinates{Locus: req.PresenceLocus}.Normalized()
-		return &norm
-	}
-	return nil
-}
-
 // Remember writes one memory unit to the local vault.
 func (m *Memory) Remember(req RememberRequest) (map[string]any, error) {
 	return m.localVaultRemember(req)
@@ -669,30 +657,6 @@ func pickString(value *string, fallback string) string {
 	return fallback
 }
 
-func int64Ptr(value any) *int64 {
-	if value == nil {
-		return nil
-	}
-	var result int64
-	switch typed := value.(type) {
-	case int:
-		result = int64(typed)
-	case int64:
-		result = typed
-	case float64:
-		result = int64(typed)
-	case string:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
-		if err != nil {
-			return nil
-		}
-		result = parsed
-	default:
-		return nil
-	}
-	return &result
-}
-
 func writable(directory string) bool {
 	file, err := os.CreateTemp(directory, ".rm-write-check-*")
 	if err != nil {
@@ -702,61 +666,6 @@ func writable(directory string) bool {
 	file.Close()
 	_ = os.Remove(name)
 	return true
-}
-func asInt(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	case bool:
-		if typed {
-			return 1
-		}
-		return 0
-	}
-	return 0
-}
-
-func asString(value any) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	case bool:
-		if typed {
-			return "True"
-		}
-		return "False"
-	case int:
-		return strconv.Itoa(typed)
-	case int64:
-		return strconv.FormatInt(typed, 10)
-	case float64:
-		return strconv.FormatFloat(typed, 'g', -1, 64)
-	}
-	return fmt.Sprint(value)
-}
-
-func truthy(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case int:
-		return typed != 0
-	case int64:
-		return typed != 0
-	case float64:
-		return typed != 0
-	}
-	return value != nil
 }
 
 // sessionStem mirrors the transcript file stem used as the default import

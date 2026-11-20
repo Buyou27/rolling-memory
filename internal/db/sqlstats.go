@@ -6,6 +6,8 @@ package db
 import (
 	"context"
 	"database/sql/driver"
+	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -16,6 +18,63 @@ type SQLStats struct {
 	executes atomic.Int64
 	queries  atomic.Int64
 	prepares atomic.Int64
+
+	mu     sync.Mutex
+	record bool
+	groups map[string]int64
+}
+
+// EnableGroups turns on per-statement attribution and clears any previous sample. It is a
+// measurement aid: every statement is bucketed by its leading words, so a hot path can be
+// attributed without guessing from wall clock. Keep it off outside a measured window.
+func (s *SQLStats) EnableGroups(record bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.record = record
+	s.groups = nil
+}
+
+// Groups returns the recorded statement buckets, highest count first is left to the caller.
+func (s *SQLStats) Groups() map[string]int64 {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int64, len(s.groups))
+	for key, count := range s.groups {
+		out[key] = count
+	}
+	return out
+}
+
+// observe buckets one statement by its leading words when attribution is enabled.
+func (s *SQLStats) observe(query string) {
+	s.mu.Lock()
+	if !s.record {
+		s.mu.Unlock()
+		return
+	}
+	if s.groups == nil {
+		s.groups = make(map[string]int64, 16)
+	}
+	s.groups[statementBucket(query)]++
+	s.mu.Unlock()
+}
+
+// statementBucket keeps a stable, low-cardinality key: the leading words of the statement.
+func statementBucket(query string) string {
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return "(empty)"
+	}
+	if len(fields) > 3 {
+		fields = fields[:3]
+	}
+	return strings.Join(fields, " ")
 }
 
 // SQLStatsSnapshot is the counter set at one moment.
@@ -71,27 +130,30 @@ type countingConn struct {
 
 func (c *countingConn) Prepare(query string) (driver.Stmt, error) {
 	c.stats.prepares.Add(1)
+	c.stats.observe(query)
 	stmt, err := c.Conn.Prepare(query)
 	if err != nil {
 		return nil, err
 	}
-	return &countingStmt{Stmt: stmt, stats: c.stats}, nil
+	return &countingStmt{Stmt: stmt, stats: c.stats, query: query}, nil
 }
 
 func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if prep, ok := c.Conn.(driver.ConnPrepareContext); ok {
 		c.stats.prepares.Add(1)
+		c.stats.observe(query)
 		stmt, err := prep.PrepareContext(ctx, query)
 		if err != nil {
 			return nil, err
 		}
-		return &countingStmt{Stmt: stmt, stats: c.stats}, nil
+		return &countingStmt{Stmt: stmt, stats: c.stats, query: query}, nil
 	}
 	return c.Prepare(query)
 }
 
 func (c *countingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.stats.executes.Add(1)
+	c.stats.observe(query)
 	if exec, ok := c.Conn.(driver.ExecerContext); ok {
 		return exec.ExecContext(ctx, query, args)
 	}
@@ -100,6 +162,7 @@ func (c *countingConn) ExecContext(ctx context.Context, query string, args []dri
 
 func (c *countingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	c.stats.queries.Add(1)
+	c.stats.observe(query)
 	if queryer, ok := c.Conn.(driver.QueryerContext); ok {
 		return queryer.QueryContext(ctx, query, args)
 	}
@@ -130,20 +193,24 @@ func (c *countingConn) IsValid() bool {
 type countingStmt struct {
 	driver.Stmt
 	stats *SQLStats
+	query string
 }
 
 func (s *countingStmt) Exec(args []driver.Value) (driver.Result, error) {
 	s.stats.executes.Add(1)
+	s.stats.observe(s.query)
 	return s.Stmt.Exec(args)
 }
 
 func (s *countingStmt) Query(args []driver.Value) (driver.Rows, error) {
 	s.stats.queries.Add(1)
+	s.stats.observe(s.query)
 	return s.Stmt.Query(args)
 }
 
 func (s *countingStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
 	s.stats.executes.Add(1)
+	s.stats.observe(s.query)
 	if exec, ok := s.Stmt.(driver.StmtExecContext); ok {
 		return exec.ExecContext(ctx, args)
 	}
@@ -152,6 +219,7 @@ func (s *countingStmt) ExecContext(ctx context.Context, args []driver.NamedValue
 
 func (s *countingStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
 	s.stats.queries.Add(1)
+	s.stats.observe(s.query)
 	if queryer, ok := s.Stmt.(driver.StmtQueryContext); ok {
 		return queryer.QueryContext(ctx, args)
 	}

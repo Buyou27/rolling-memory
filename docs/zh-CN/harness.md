@@ -34,7 +34,7 @@ MCP stdio · CLI · Hooks      ← 机械记忆核：零宿主耦合，标准进
 SQLite 明文金库 (WAL)         ← 本地存储层：本地明文金库
 ```
 
-- **机械核（`api` / `mcp` / `cli` / `hooks`）零宿主耦合**：不依赖任何特定宿主 SDK，仅通过标准进程协议通信（MCP 为逐行 JSON-RPC 2.0，CLI 为 argv/stdin，Hooks 为 JSON stdin → JSON stdout）。
+- **机械核（`facade` / `mcp` / `cli` / `hooks`）零宿主耦合**：不依赖任何特定宿主 SDK，仅通过标准进程协议通信（MCP 为逐行 JSON-RPC 2.0，CLI 为 argv/stdin，Hooks 为 JSON stdin → JSON stdout）。
 - **适配层（`internal/harness`）只做保守接线**：负责将启动器路径写入宿主配置文件、同步 `SKILL.md`、按需挂载 Hooks 与指令块，不介入任何记忆语义。
 - **提醒型钩子与 Agent 主动检索**：可选的逐轮钩子（`--with-hooks`）不自动检索记忆，由 Agent 决定何时调用 `recall`。钩子和后台扫描可导入受支持的本地来源，但不保证捕获全部对话。
 - **收口 `recall` 自评与自定义 `SKILL.md`**：`SKILL.md` 最末尾设有独立可选区块（`§5 收口如实评价`），约定 Agent 在本轮调用过 `recall` 时，于最终回复收尾附一行简短复盘（报告本轮调用次数、预计节省的盲搜/排障往返及具体依据、以及召回内容是否真正有帮助）。用户可随时打开已安装的 `<技能根>/rolling-memory/SKILL.md` 直接修改或删去末尾这一区块（或在 `rolling-memory install` 时传入 `--skill-file <路径>`）。

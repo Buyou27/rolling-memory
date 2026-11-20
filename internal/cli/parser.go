@@ -972,6 +972,14 @@ func BuildParser() *Parser {
 		{
 			Name: "slope", Path: []string{"perf", "slope"}, Options: append(commonOptions(),
 				stringOption([]string{"--files"}, "files", "100,300,600", "comma-separated corpus sizes measured on throwaway vaults"),
+				stringOption([]string{"--ablate"}, "ablate", "", "ablation applied inside the throwaway vault only (revision-triggers)"),
+				stringOption([]string{"--dir"}, "dir", nil, "keep measurement artifacts in this directory")),
+		},
+		{
+			Name: "recall", Path: []string{"perf", "recall"}, Options: append(commonOptions(),
+				stringOption([]string{"--files"}, "files", "100,300,600", "comma-separated corpus sizes measured on throwaway vaults"),
+				intOption([]string{"--queries"}, "queries", 20, "queries per scale (1-200)"),
+				stringOption([]string{"--profile"}, "profile", "", "storage profile for the throwaway vault (local, cache64, mmap256, cache64+mmap256)"),
 				stringOption([]string{"--dir"}, "dir", nil, "keep measurement artifacts in this directory")),
 		},
 	}

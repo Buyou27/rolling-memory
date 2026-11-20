@@ -30,11 +30,11 @@ const episodicRescanMaxTurns = 1024
 //
 // Same-source only: the candidate coordinate must live in the same jsonl file, so no
 // cross-session substitution ever happens here (delivery keeps rejecting unattributed
-// alternates; this API only repairs the record to the coordinate its own content now
-// occupies). zcode rows carry stable message identities and no ordinal drift, so they
-// are answered with no candidate. This API never deletes. apply=false probes without
-// writing; an empty returned pointer means no candidate (or the row moved underneath
-// the caller).
+// alternates; this repair path only rewrites the record to the coordinate its own
+// content now occupies). zcode rows carry stable message identities and no ordinal
+// drift, so they are answered with no candidate. This path never deletes.
+// apply=false probes without writing; an empty returned pointer means no candidate
+// (or the row moved underneath the caller).
 func (v *Vault) ReanchorSameSourceByDigest(scope, docID, refPointer string, occurredAt int64, apply bool) (string, error) {
 	if v == nil || v.db == nil {
 		return "", errors.New("localvault: nil Vault db")

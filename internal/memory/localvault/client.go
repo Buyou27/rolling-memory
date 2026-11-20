@@ -217,14 +217,19 @@ func (c *Client) RememberEpisodicByRef(ctx context.Context, docID, refPointer, t
 		return nil
 	}
 	localResp := localIngestResponse(docID, LayerEpisodic, len(sents))
-	if err := saveLocal(localResp); err != nil {
-		return IngestResponse{}, err
-	}
 	if c.Transport == nil {
+		if err := saveLocal(localResp); err != nil {
+			return IngestResponse{}, err
+		}
 		return localResp, nil
 	}
 	resp, err := c.Transport.IngestBlindPulse(ctx, pkt)
 	if err != nil {
+		// The transport could not produce the kept-sentence set, so the local
+		// vault keeps every sentence rather than dropping the unit.
+		if saveErr := saveLocal(localResp); saveErr != nil {
+			return IngestResponse{}, saveErr
+		}
 		return localResp, err
 	}
 	if strings.TrimSpace(resp.Layer) == "" {
@@ -252,14 +257,19 @@ func (c *Client) RememberWithLayer(ctx context.Context, docID string, plaintext 
 	}
 	c.stampIdentity(&pkt)
 	localResp := localIngestResponse(docID, pkt.Layer, len(sents))
-	if err := st.SaveLocalPlaintext(docID, occurredAt, plaintext, sents, localResp); err != nil {
-		return IngestResponse{}, err
-	}
 	if c.Transport == nil {
+		if err := st.SaveLocalPlaintext(docID, occurredAt, plaintext, sents, localResp); err != nil {
+			return IngestResponse{}, err
+		}
 		return localResp, nil
 	}
 	resp, err := c.Transport.IngestBlindPulse(ctx, pkt)
 	if err != nil {
+		// The transport could not produce the kept-sentence set, so the local
+		// vault keeps every sentence rather than dropping the unit.
+		if saveErr := st.SaveLocalPlaintext(docID, occurredAt, plaintext, sents, localResp); saveErr != nil {
+			return IngestResponse{}, saveErr
+		}
 		return localResp, err
 	}
 	if strings.TrimSpace(resp.Layer) == "" {

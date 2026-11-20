@@ -1000,14 +1000,14 @@ func clearBackgroundChunkCaches() {
 }
 
 func (v *Vault) lookupBackgroundChunkMeta(unitID string) (bgChunkMetaEntry, error) {
-	var cacheKey string
-	if v.slotCacheMu != nil && v.snapRef != nil {
-		v.slotCacheMu.RLock()
-		snap := v.snapRef.snap
-		if snap != nil && len(snap.docs) >= 2048 {
-			cacheKey = fmt.Sprintf("%d:%d:%d:%d:%s", snap.bgCnt, snap.bgMaxRowID, snap.bgOccSum, snap.bgSlotsLen, unitID)
-		}
-		v.slotCacheMu.RUnlock()
+	// The coordinate is stable until the chunk row changes, so it is cached for every corpus
+	// size, not just large vaults: delivery reads one chunk per delivered hit, and a per-hit
+	// statement is the hottest SQL on the read path. Invalidation is covered twice — local
+	// writes clear these caches, and the data_version probe clears them when another process
+	// commits — so the key only has to separate vaults.
+	cacheKey := ""
+	if dbPath := v.mainDBPath(); dbPath != "" {
+		cacheKey = dbPath + "\x00" + unitID
 	}
 	if cacheKey != "" {
 		bgChunkMetaMu.RLock()
@@ -1044,6 +1044,50 @@ func (v *Vault) lookupBackgroundChunkMeta(unitID string) (bgChunkMetaEntry, erro
 		bgChunkMetaMu.Unlock()
 	}
 	return entry, nil
+}
+
+// BackgroundLocation is one chunk's reader coordinate, without the chunk payload.
+type BackgroundLocation struct {
+	RelPath string
+	Anchor  string
+}
+
+// BackgroundChunkLocations resolves many chunk coordinates in one query. Delivery renders a
+// label per hit, so a per-hit lookup turns one recall into O(hits) statements; batching the
+// same lookup for the whole delivered set keeps the query path bounded. Unknown IDs are
+// simply absent from the map.
+func (v *Vault) BackgroundChunkLocations(unitIDs []string) map[string]BackgroundLocation {
+	if v == nil || v.db == nil || len(unitIDs) == 0 {
+		return nil
+	}
+	const maxBatch = 256
+	if len(unitIDs) > maxBatch {
+		unitIDs = unitIDs[:maxBatch]
+	}
+	args := make([]any, len(unitIDs))
+	for i, id := range unitIDs {
+		args[i] = strings.TrimSpace(id)
+	}
+	placeholders := strings.Repeat("?,", len(unitIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	rows, err := v.db.Query(`SELECT unit_id, rel_path, anchor FROM rm_bg_chunks WHERE unit_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := make(map[string]BackgroundLocation, len(unitIDs))
+	for rows.Next() {
+		var unitID string
+		var location BackgroundLocation
+		if err := rows.Scan(&unitID, &location.RelPath, &location.Anchor); err != nil {
+			return nil
+		}
+		out[unitID] = location
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+	return out
 }
 
 // loadBackgroundChunkLive reads the chunk LIVE on-demand from the original file on disk using `abs_path` and `chunk_index`,
