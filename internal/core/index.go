@@ -558,6 +558,24 @@ func cloneSnapshotDocMeta(m DocMeta) DocMeta {
 	return m
 }
 
+// docTermMass carries the precomputed (hash, mass) pair used to order one document's
+// term list without repeated map lookups inside the comparator.
+type docTermMass struct {
+	h    uint64
+	mass float64
+}
+
+type docTermMassSort []docTermMass
+
+func (s docTermMassSort) Len() int { return len(s) }
+func (s docTermMassSort) Less(i, j int) bool {
+	if s[i].mass != s[j].mass {
+		return s[i].mass > s[j].mass
+	}
+	return s[i].h < s[j].h
+}
+func (s docTermMassSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
 func (idx *Index) finalizeMasses() {
 	for h, df := range idx.DF {
 		var mass float64
@@ -587,16 +605,24 @@ func (idx *Index) finalizeMasses() {
 		}
 	}
 	const flagCompanion uint8 = 1 << 4
+	// Per-document term order is (mass desc, hash asc); mass is a strict monotone
+	// function of df, so precomputing {hash, mass} once per term avoids two map
+	// lookups per comparison. The reuse scratch keeps the pass allocation-free.
+	docTermScratch := make([]docTermMass, 0, 2048)
 	for unit := range idx.DocTerms {
 		atoms := idx.DocTerms[unit]
-		sort.Slice(atoms, func(a, b int) bool {
-			if idx.Mass[atoms[a]] == idx.Mass[atoms[b]] {
-				return atoms[a] < atoms[b]
-			}
-			return idx.Mass[atoms[a]] > idx.Mass[atoms[b]]
-		})
-		for _, h := range atoms {
-			idx.DocMass[unit] += idx.Mass[h]
+		if cap(docTermScratch) < len(atoms) {
+			docTermScratch = make([]docTermMass, len(atoms))
+		} else {
+			docTermScratch = docTermScratch[:len(atoms)]
+		}
+		for i, h := range atoms {
+			docTermScratch[i] = docTermMass{h: h, mass: idx.Mass[h]}
+		}
+		sort.Sort(docTermMassSort(docTermScratch))
+		for i := range docTermScratch {
+			atoms[i] = docTermScratch[i].h
+			idx.DocMass[unit] += docTermScratch[i].mass
 		}
 		if unit < len(idx.UnitGroups) && idx.UnitGroups[unit] == nil && unit < len(idx.UnitPositions) && len(idx.UnitPositions[unit]) > 0 {
 			posMap := idx.UnitPositions[unit]

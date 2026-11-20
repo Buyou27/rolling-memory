@@ -22,11 +22,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/rocareer/rolling-memory/internal/core"
+	"github.com/rocareer/rolling-memory/internal/core"
 	"github.com/rocareer/rolling-memory/internal/episodic"
 	"github.com/rocareer/rolling-memory/internal/episodicunit"
 	"github.com/rocareer/rolling-memory/internal/ids"
-	"github.com/rocareer/rolling-memory/internal/text"
 	plain "github.com/rocareer/rolling-memory/sdk/go/pulse/plain"
 )
 
@@ -246,6 +245,16 @@ type LocalNoeticRecord struct {
 	// empty values fall back to the vault identity at save time.
 	AssistantID   string `json:"assistant_id,omitempty"`
 	IncarnationID string `json:"incarnation_id,omitempty"`
+	// ActivatedAt / ActivationCount record real use: the last delivery that
+	// actually took part, and how often that has happened. TraceKey is the
+	// evidence-set identity; QueryVariants are the retained cue handles.
+	ActivatedAt     int64    `json:"activated_at,omitempty"`
+	ActivationCount int      `json:"activation_count,omitempty"`
+	TraceKey        string   `json:"trace_key,omitempty"`
+	QueryVariants   []string `json:"query_variants,omitempty"`
+	SupersededBy    string   `json:"superseded_by,omitempty"`
+	// MatchedCue is the handle that matched the current query (not persisted).
+	MatchedCue string `json:"matched_cue,omitempty"`
 }
 
 // VerificationGain delegates the continuous logarithmic reinforcement multiplier
@@ -354,6 +363,16 @@ type vaultCorpusSnapshot struct {
 	coreLoadMu         sync.Mutex
 	coreMu             sync.Mutex
 	coreEngine         *core.Engine
+	// noeticEngine is the base engine with the active recollections' citation
+	// records folded into its co-citation CSR. It is derived, immutable and
+	// cached by the noetic fingerprint; the base engine stays untouched.
+	noeticEngine   *core.Engine
+	noeticEdgesKey string
+	// coreWarm marks that one search has materialised the lazily built cluster
+	// state. Until then every search runs under coreMu; afterwards the state is
+	// immutable for this snapshot and each caller works on a shallow engine copy
+	// with its own query scratch.
+	coreWarm bool
 	// stale marks a snapshot served from the last published cluster while the
 	// delta exceeded the in-memory cap; the background builder will republish.
 	stale bool
@@ -453,6 +472,10 @@ type vaultSnapshotRef struct {
 	noeticMaxRowID   int64
 	noeticOccSum     int64
 	activeNoetics    []LocalNoeticRecord
+	// noeticCueIndex is the cue inverted index for the cached recollections:
+	// blind atom hash -> record positions. A query only scores traces that
+	// share at least one cue atom, which keeps cue variants affordable.
+	noeticCueIndex   map[uint64][]int32
 	lastDataVersion  int64
 	lastDataVerCheck time.Time
 	// canonicalStore handle wrapping the shared connection pool; the core schema
@@ -586,7 +609,9 @@ func (v *Vault) noeticBlindPacket(noeticID, queryText string, occurredAt int64) 
 	if v == nil {
 		return BlindPulsePacket{UnitID: noeticID, OccurredAt: occurredAt}
 	}
-	cacheKey := "@noetic:" + noeticID
+	// One trace keeps several cue handles; the cache key therefore includes the
+	// cue, not just the row id, so alternating variants do not evict each other.
+	cacheKey := "@noetic:" + noeticID + ":" + ids.SHA256Hex(queryText)[:12]
 	if v.slotCacheMu != nil {
 		v.slotCacheMu.RLock()
 		if entry, ok := v.slotCache[cacheKey]; ok && entry.rawText == queryText && entry.pktSlots != nil {
@@ -979,7 +1004,12 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 						coord64 INTEGER NOT NULL DEFAULT 0,
 						waveform_bar TEXT NOT NULL DEFAULT '',
 						assistant_id TEXT NOT NULL DEFAULT '',
-						incarnation_id TEXT NOT NULL DEFAULT ''
+						incarnation_id TEXT NOT NULL DEFAULT '',
+						activated_at INTEGER NOT NULL DEFAULT 0,
+						activation_count INTEGER NOT NULL DEFAULT 0,
+						trace_key TEXT NOT NULL DEFAULT '',
+						query_variants_json TEXT NOT NULL DEFAULT '[]',
+						superseded_by TEXT NOT NULL DEFAULT ''
 					);
 				CREATE INDEX IF NOT EXISTS idx_rm_noetic_status_ts ON rm_noetic(status, occurred_at DESC);`
 	if _, err := db.Exec(ddl); err != nil {
@@ -1008,6 +1038,7 @@ func NewVault(db *sql.DB, explicitSecret []byte) (*Vault, error) {
 		_, _ = db.Exec(stmt)
 	}
 	ensureInsertedAtColumns(db)
+	ensureNoeticTraceColumns(db)
 
 	v := &Vault{
 		db:                   db,
@@ -1146,21 +1177,44 @@ func (v *Vault) packBlindPacketWithKey(key [32]byte, docID, text string, occurre
 	}, sents
 }
 
-// SaveLocalPlaintext persists the document's plaintext and assigned metadata in local SQLite.
-func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error {
+// canonicalMetaForResponse derives the persisted metadata for one plaintext
+// save from the transport receipt.
+func canonicalMetaForResponse(sents []string, resp IngestResponse, identity VaultIdentity, insertedAt int64) (canonicalUnitMeta, error) {
 	sentsJSON, err := json.Marshal(sents)
 	if err != nil {
-		return err
+		return canonicalUnitMeta{}, err
 	}
 	keptJSON, err := json.Marshal(resp.KeptSentenceIndices)
 	if err != nil {
-		return err
+		return canonicalUnitMeta{}, err
 	}
 	layer := strings.ToLower(strings.TrimSpace(resp.Layer))
 	if layer != "background" && layer != "noetic" {
 		layer = "episodic"
 	}
-	if layer == LayerEpisodic {
+	return canonicalUnitMeta{
+		Layer:           layer,
+		SentencesJSON:   string(sentsJSON),
+		KeptIndicesJSON: string(keptJSON),
+		AddressURI:      resp.AddressURI,
+		Coord64:         int64(resp.AddressCoord64),
+		WaveformBar:     resp.WaveformBar,
+		DocMacroWave:    resp.DocMacroWaveform,
+		AssistantID:     identity.AssistantID,
+		IncarnationID:   identity.IncarnationID,
+		Locus:           identity.Locus,
+		InsertedAt:      insertedAt,
+		StoreRawText:    true,
+	}, nil
+}
+
+// SaveLocalPlaintext persists the document's plaintext and assigned metadata in local SQLite.
+func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText string, sents []string, resp IngestResponse) error {
+	meta, err := canonicalMetaForResponse(sents, resp, v.identity, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	if meta.Layer == LayerEpisodic {
 		var deleted int
 		if err := v.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM rm_deleted_units WHERE unit_id = ? AND (layer = 'episodic' OR layer = ''))`, strings.TrimSpace(docID)).Scan(&deleted); err != nil {
 			return fmt.Errorf("localvault: check episodic tombstone: %w", err)
@@ -1169,21 +1223,7 @@ func (v *Vault) SaveLocalPlaintext(docID string, occurredAt int64, rawText strin
 			return fmt.Errorf("%w: %s", ErrEpisodicUnitDeleted, docID)
 		}
 	}
-	insertedAt := time.Now().Unix()
-	if err := v.ingestCanonicalText(docID, occurredAt, rawText, canonicalUnitMeta{
-		Layer:           layer,
-		SentencesJSON:   string(sentsJSON),
-		KeptIndicesJSON: string(keptJSON),
-		AddressURI:      resp.AddressURI,
-		Coord64:         int64(resp.AddressCoord64),
-		WaveformBar:     resp.WaveformBar,
-		DocMacroWave:    resp.DocMacroWaveform,
-		AssistantID:     v.identity.AssistantID,
-		IncarnationID:   v.identity.IncarnationID,
-		Locus:           v.identity.Locus,
-		InsertedAt:      insertedAt,
-		StoreRawText:    true,
-	}); err != nil {
+	if err := v.ingestCanonicalText(docID, occurredAt, rawText, meta); err != nil {
 		return err
 	}
 	if v.slotCacheMu != nil {
@@ -1471,7 +1511,7 @@ func (v *Vault) DocTimes(docIDs []string) map[string]int64 {
 	return times
 }
 
-// LoadLocalDocument retrieves the locally stored plaintext and cloud-distilled dry sentences for docID
+// LoadLocalDocument retrieves the locally stored plaintext and distilled dry sentences for docID
 // (supporting `background` mounted directory files read LIVE on-demand from disk via `rm_bg_chunks`,
 // zero-copy `episodic` pointers `@ref:...` read LIVE on-demand from the Harness DB/JSONL,
 // `episodic`/`background` in `rm_units`, and local `noetic` records in `rm_noetic`).
@@ -1991,75 +2031,6 @@ func (v *Vault) hydrateRecentPointer(entry *RecentDoc) {
 	} else {
 		entry.Text = "[来源缺口：指针身份未验证或内容不可用]"
 	}
-}
-
-// SaveLocalNoetic persists a downstream L3 Noetic record (Query + Retrieved Sentences + Answer)
-// into the client's own `rm_noetic` table without sending it to the cloud engine.
-func (v *Vault) SaveLocalNoetic(rec LocalNoeticRecord) error {
-	if strings.TrimSpace(rec.NoeticID) == "" {
-		return errors.New("localvault: noetic_id is required")
-	}
-	if strings.TrimSpace(rec.QueryText) == "" && strings.TrimSpace(rec.AnswerText) == "" {
-		return errors.New("localvault: query_text or answer_text is required")
-	}
-	status := strings.TrimSpace(rec.Status)
-	if status == "" {
-		status = "active"
-	}
-	// If CitedSentences is empty but CitedUnitIDs are provided, automatically hydrate distilled sentences from rm_units
-	citedSents := rec.CitedSentences
-	if len(citedSents) == 0 && len(rec.CitedUnitIDs) > 0 {
-		for _, uid := range rec.CitedUnitIDs {
-			_, distTxt, _, err := v.LoadLocalDocument(uid)
-			if err == nil && strings.TrimSpace(distTxt) != "" {
-				citedSents = append(citedSents, distTxt)
-			}
-		}
-	}
-	unitIDsJSON, err := json.Marshal(rec.CitedUnitIDs)
-	if err != nil {
-		return err
-	}
-	sentsJSON, err := json.Marshal(citedSents)
-	if err != nil {
-		return err
-	}
-	insertAt := rec.InsertedAt
-	if insertAt <= 0 {
-		insertAt = rec.OccurredAt
-	}
-	_, err = v.db.Exec(`
-				INSERT INTO rm_noetic(
-					noetic_id, occurred_at, inserted_at, status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json,
-					address_uri, coord64, waveform_bar, assistant_id, incarnation_id
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(noetic_id) DO UPDATE SET
-					occurred_at = CASE
-						WHEN excluded.occurred_at > rm_noetic.occurred_at THEN excluded.occurred_at
-						WHEN rm_noetic.occurred_at > 0 THEN rm_noetic.occurred_at + 1
-						ELSE excluded.occurred_at
-					END,
-					inserted_at = CASE WHEN rm_noetic.inserted_at > 0 THEN rm_noetic.inserted_at ELSE excluded.inserted_at END,
-					status = excluded.status,
-					query_text = excluded.query_text,
-					answer_text = excluded.answer_text,
-					cited_unit_ids_json = excluded.cited_unit_ids_json,
-					cited_sentences_json = excluded.cited_sentences_json,
-					address_uri = excluded.address_uri,
-					coord64 = excluded.coord64,
-					waveform_bar = excluded.waveform_bar,
-					assistant_id = excluded.assistant_id,
-					incarnation_id = excluded.incarnation_id`,
-		rec.NoeticID, rec.OccurredAt, insertAt, status, rec.QueryText, rec.AnswerText, string(unitIDsJSON), string(sentsJSON),
-		rec.AddressURI, rec.Coord64, rec.WaveformBar,
-		text.FirstTrimmedNonEmpty(rec.AssistantID, v.identity.AssistantID), text.FirstTrimmedNonEmpty(rec.IncarnationID, v.identity.IncarnationID),
-	)
-	if err == nil && v.slotCacheMu != nil && v.snapRef != nil {
-		v.slotCacheMu.Lock()
-		v.snapRef.noeticReady = false
-		v.slotCacheMu.Unlock()
-	}
-	return err
 }
 
 // UpdateLocalNoeticManifold updates the engine-allocated manifold address for an existing Noetic record.
@@ -2806,10 +2777,12 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 	}
 
 	// Scan local Layer 3 (`rm_noetic`: Agent retrieval handles `cited_unit_ids[]` + Answer stored locally)
-	// and automatically boost/hydrate any underlying `episodic` or `background` units cited by matched Noetic records!
+	// and apply the cited-set coverage floor to the underlying `episodic` or
+	// `background` units cited by matched Noetic records.
 	noeticHandles, _ := (&Client{Vault: v}).RecallNoetic(queryText, topK)
 	if len(noeticHandles) > 0 {
 		qPkt, _ := v.PackBlindPacket("Q-DEFAULT", queryText, 0)
+		cueHashes := uniqueAtomHashes(qPkt.Slots)
 		hitIdxByID := make(map[string]int, len(hits))
 		for i := range hits {
 			hitIdxByID[hits[i].UnitID] = i
@@ -2825,8 +2798,7 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 				nWeight = blindPacketDice(qPkt, nPkt)
 			}
 			if nWeight > 0 {
-				vGain := rec.VerificationGain()
-				scaledNoeticW := noeticScale * nWeight * vGain
+				scaledNoeticW := noeticScale * nWeight * rec.ActivationGain()
 				hits = append(hits, QueryHit{
 					UnitID:       rec.NoeticID,
 					Layer:        LayerNoetic,
@@ -2835,9 +2807,20 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 					WaveScore:    scaledNoeticW,
 					FinalWeight:  scaledNoeticW,
 				})
+				// The recollection's own evidence may tie the current top score
+				// when the cited set jointly covers the cue. Coverage is a
+				// physical fraction, not a rank-slot rule: it neither binds a
+				// position nor exceeds the corpus top.
+				coverage := v.noeticEvidenceCoverageByHashes(rec.CitedUnitIDs, cueHashes)
+				target := noeticScale * nWeight * coverage
 				for _, cid := range rec.CitedUnitIDs {
+					if target <= 0 {
+						break
+					}
 					if idx, exists := hitIdxByID[cid]; exists {
-						hits[idx].FinalWeight += scaledNoeticW * 0.35
+						if hits[idx].FinalWeight < target {
+							hits[idx].FinalWeight = target
+						}
 					} else if di, ok := docIdxMap[cid]; ok {
 						d := docs[di]
 						hitIdxByID[cid] = len(hits)
@@ -2848,8 +2831,8 @@ func (v *Vault) SearchClientSDKDefault(queryText string, topK int) ([]QueryHit, 
 							AddressURI:     d.addrURI,
 							AddressCoord64: d.coord64,
 							WaveformBar:    d.waveBar,
-							WaveScore:      scaledNoeticW * 0.35,
-							FinalWeight:    scaledNoeticW * 0.35,
+							WaveScore:      target,
+							FinalWeight:    target,
 						})
 					}
 				}

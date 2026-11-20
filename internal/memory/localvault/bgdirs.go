@@ -1737,6 +1737,9 @@ func (c *Client) rollbackPostFailureUploads(ctx context.Context, tail []backgrou
 // written in bounded batches. It returns the invalidated Noetic IDs and is shared by the
 // deletion phase and the skipped-file path so both leave the index in exactly the same state.
 func (c *Client) purgeTrackedBackgroundFile(ctx context.Context, absPath string, prev backgroundTrackedFile, getCitations func() (*localNoeticCitationIndex, error)) (map[string]bool, error) {
+	if err := c.Vault.BumpPurgeEpoch(ctx); err != nil {
+		return nil, fmt.Errorf("localvault: bump purge epoch before background file purge %s: %w", absPath, err)
+	}
 	if err := c.deleteBackgroundUnits(ctx, prev.unitIDs); err != nil {
 		return nil, fmt.Errorf("localvault: purge background file %s: %w", absPath, err)
 	}
@@ -1748,11 +1751,7 @@ func (c *Client) purgeTrackedBackgroundFile(ctx context.Context, absPath string,
 			return nil, fmt.Errorf("localvault: load Noetic citation index for %s: %w", absPath, err)
 		}
 	}
-	invalidated, err := c.Vault.purgeBackgroundFileBatchedWithStaled(ctx, absPath, prev.unitIDs, citations)
-	if err == nil && len(prev.unitIDs) > 0 {
-		_ = c.Vault.BumpPurgeEpoch(ctx)
-	}
-	return invalidated, err
+	return c.Vault.purgeBackgroundFileBatchedWithStaled(ctx, absPath, prev.unitIDs, citations)
 }
 
 // pathUnderAnyDir reports whether absPath lies inside one of dirs (or equals it).

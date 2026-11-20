@@ -34,13 +34,21 @@ type episodicScanSource struct {
 	Locus      string
 	LocusKnown bool
 	RawDir     string
+	// LastActivity is the source's last write in unix seconds (0 = unknown).
+	// Discovery drops sources older than sync.since so the crawl stays
+	// proportional to the bound instead of reading every historical transcript.
+	LastActivity int64
 }
 
 type episodicSourceCursor struct {
-	Source       string `json:"source"`
-	Index        int    `json:"index"`
-	Stamp        string `json:"stamp"`
-	LastDocID    string `json:"last_doc_id,omitempty"`
+	Source    string `json:"source"`
+	Index     int    `json:"index"`
+	Stamp     string `json:"stamp"`
+	LastDocID string `json:"last_doc_id,omitempty"`
+	// Skipped counts turns dropped by the sync.since bound in this cycle. They
+	// advance Index without consuming the page budget, so browsing the back
+	// catalogue costs reads, not one pass per fifty turns.
+	Skipped      int    `json:"skipped,omitempty"`
 	Grew         bool   `json:"grew,omitempty"`
 	RetrySources bool   `json:"retry_sources,omitempty"`
 	ItemErrors   int    `json:"item_errors,omitempty"`
@@ -92,9 +100,10 @@ func discoverEpisodicScanSources(ctx context.Context, home, harnessID string) ([
 			}
 			seen[path] = true
 			sources = append(sources, episodicScanSource{
-				HarnessID: harnessID,
-				Kind:      "jsonl",
-				Path:      path,
+				HarnessID:    harnessID,
+				Kind:         "jsonl",
+				Path:         path,
+				LastActivity: info.ModTime().Unix(),
 			})
 		}
 	}
@@ -108,6 +117,40 @@ func discoverEpisodicScanSources(ctx context.Context, home, harnessID string) ([
 			db, err := sql.Open("sqlite", ids.SQLiteFileURI(path)+"?mode=ro&_pragma=busy_timeout(1500)")
 			if err != nil {
 				return nil, err
+			}
+			// One cheap read of each session's last write drives the sync.since
+			// source filter; the message table is far too large to scan per session.
+			// A read failure aborts the pass because an empty map would leave every
+			// source eligible, which is exactly the backfill the bound exists to
+			// stop. A schema without time_updated is the one exception: it cannot
+			// date a session, so every source stays eligible rather than being
+			// wrongly dropped.
+			activity := map[string]int64{}
+			actRows, actErr := db.QueryContext(ctx, `SELECT id, COALESCE(time_updated, 0) FROM session`)
+			if actErr != nil {
+				if !strings.Contains(strings.ToLower(actErr.Error()), "no such column") {
+					_ = db.Close()
+					return nil, fmt.Errorf("zcode session activity: %w", actErr)
+				}
+			} else {
+				for actRows.Next() {
+					var id string
+					var updated int64
+					if scanErr := actRows.Scan(&id, &updated); scanErr != nil {
+						_ = actRows.Close()
+						_ = db.Close()
+						return nil, fmt.Errorf("zcode session activity: %w", scanErr)
+					}
+					if updated > 0 {
+						activity[id] = updated / 1000
+					}
+				}
+				if rowsErr := actRows.Err(); rowsErr != nil {
+					_ = actRows.Close()
+					_ = db.Close()
+					return nil, fmt.Errorf("zcode session activity: %w", rowsErr)
+				}
+				_ = actRows.Close()
 			}
 			hasDirCol := true
 			rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(directory, '') FROM session WHERE COALESCE(parent_id, '') = '' AND COALESCE(task_type, '') != 'subagent_child' ORDER BY id`)
@@ -133,11 +176,12 @@ func discoverEpisodicScanSources(ctx context.Context, home, harnessID string) ([
 					return nil, scanErr
 				}
 				sources = append(sources, episodicScanSource{
-					HarnessID: harnessID,
-					Kind:      "zcode",
-					Path:      path,
-					SessionID: session,
-					RawDir:    dir,
+					HarnessID:    harnessID,
+					Kind:         "zcode",
+					Path:         path,
+					SessionID:    session,
+					RawDir:       dir,
+					LastActivity: activity[session],
 				})
 			}
 			err = rows.Err()
@@ -517,9 +561,32 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 		}
 		sources = append(sources, found...)
 	}
-	next, more, scanErr := visitEpisodicSourcesVerified(ctx, sources, scope, cursor, reconcileDefaultLimit, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+	// A configured lower bound keeps an existing history out of the vault: the
+	// turn is skipped without being stored, while the cursor still advances past
+	// it, so a machine with a large transcript store can start collecting from
+	// now on instead of rewriting everything first.
+	since, sinceErr := EpisodicScanSince(memory.Config.Path)
+	if sinceErr != nil {
+		return sinceErr
+	}
+	// The turn filter below only saves writes: the walk would still read every
+	// historical transcript and the page budget is 50 turns, so reaching today
+	// through the back catalogue would take hours. Drop whole sources older than
+	// the bound first; the turn filter then trims the boundary session, whose
+	// activity is current but whose older turns must stay out.
+	sources = filterEpisodicScanSourcesSince(sources, since)
+	next, more, scanErr := visitEpisodicSourcesVerified(ctx, sources, scope, cursor, reconcileDefaultLimit, since, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+		// Second line: the walker already drops out-of-bound turns, but the write
+		// itself must never persist one if a future caller reaches this point.
+		if episodicOccurredBefore(turn.OccurredAt, since) {
+			return nil
+		}
 		return saveEpisodicSourceTurnVerified(ctx, db, tc.Vault, scope, deletedEpi, turn, snapshot)
 	})
+	skippedBeforeSince := next.Skipped
+	if err := saveEpisodicScanSkipped(db, scope, skippedBeforeSince); err != nil {
+		return err
+	}
 	if discoveryErr != nil {
 		next.RetrySources = true
 		if !more {
@@ -546,6 +613,63 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 		}
 	}
 	return errors.Join(discoveryErr, scanErr)
+}
+
+// saveEpisodicScanSkipped records how many turns the sync.since bound kept out
+// of the vault during the last pass, so `scan status` can show that the skip is
+// working rather than looking like a stalled scanner.
+func saveEpisodicScanSkipped(db *sql.DB, scope string, skipped int) error {
+	key := "episodic_source_scan_skipped:" + scope
+	if skipped <= 0 {
+		_, err := db.ExecContext(context.Background(), `DELETE FROM rm_meta WHERE k = ?`, key)
+		return err
+	}
+	_, err := db.ExecContext(context.Background(), `INSERT OR REPLACE INTO rm_meta(k, v) VALUES (?, ?)`, key, strconv.Itoa(skipped))
+	return err
+}
+
+// readEpisodicScanSkipped reports the skip count recorded by the last pass.
+func readEpisodicScanSkipped(db *sql.DB, scope string) int {
+	var raw string
+	if err := db.QueryRow(`SELECT CAST(v AS TEXT) FROM rm_meta WHERE k = ?`, "episodic_source_scan_skipped:"+scope).Scan(&raw); err != nil {
+		return 0
+	}
+	skipped, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0
+	}
+	return skipped
+}
+
+// filterEpisodicScanSourcesSince drops sources whose last activity is older than
+// the bound. A source with unknown activity is kept: it cannot be proven old, and
+// dropping it would hide new turns.
+func filterEpisodicScanSourcesSince(sources []episodicScanSource, since int64) []episodicScanSource {
+	if since <= 0 {
+		return sources
+	}
+	kept := sources[:0]
+	for _, source := range sources {
+		if source.LastActivity > 0 && source.LastActivity < since {
+			continue
+		}
+		kept = append(kept, source)
+	}
+	return kept
+}
+
+// episodicOccurredBefore reports whether a turn predates the bound. Some readers
+// keep millisecond timestamps while the bound is seconds, so the comparison
+// normalises first; without it a millisecond value reads as "far future" and the
+// turn slips through. An unknown time is out of bound when a bound is set.
+func episodicOccurredBefore(occurredAt, since int64) bool {
+	if since <= 0 {
+		return false
+	}
+	if occurredAt > 1e11 {
+		occurredAt /= 1000
+	}
+	return occurredAt <= 0 || occurredAt < since
 }
 
 // saveEpisodicSourceTurn stores one scanned turn with the live pointer
@@ -650,7 +774,7 @@ func saveEpisodicSourceTurnVerified(ctx context.Context, db *sql.DB, base *local
 // visitEpisodicSources advances only after each successful visit. Changes during
 // a page are retried, and completed cycles revisit earlier source occurrences.
 func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, visit func(candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
-	return visitEpisodicSourcePages(ctx, sources, scope, cursor, limit, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+	return visitEpisodicSourcePages(ctx, sources, scope, cursor, limit, 0, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
 		return visit(turn)
 	})
 }
@@ -661,11 +785,11 @@ func visitEpisodicSources(ctx context.Context, sources []episodicScanSource, sco
 // the transcript per unit. The snapshot is non-nil exactly for JSONL turns whose
 // source parse was constructed for this page; a nil snapshot means the streaming
 // fallback produced the turn.
-func visitEpisodicSourcesVerified(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, visit func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
-	return visitEpisodicSourcePages(ctx, sources, scope, cursor, limit, visit)
+func visitEpisodicSourcesVerified(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, since int64, visit func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
+	return visitEpisodicSourcePages(ctx, sources, scope, cursor, limit, since, visit)
 }
 
-func visitEpisodicSourcePages(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, visit func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
+func visitEpisodicSourcePages(ctx context.Context, sources []episodicScanSource, scope string, cursor episodicSourceCursor, limit int, since int64, visit func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error) (episodicSourceCursor, bool, error) {
 	if limit <= 0 {
 		return cursor, false, fmt.Errorf("episodic scan page requires a positive limit")
 	}
@@ -765,6 +889,20 @@ func visitEpisodicSourcePages(ctx context.Context, sources []episodicScanSource,
 		stoppedForLimit := false
 		_, sErr := episodicScanUnits(ctx, source, scope, snapshot, startTurnRef, startTurnIdx, func(i int, turnStart int, turn candidateEpisodicTurn) error {
 			if i < start {
+				return nil
+			}
+			// Turns older than the bound advance the cursor but do not consume the
+			// page budget: a back catalogue of tens of thousands of turns must not
+			// cost one pass per fifty of them.
+			if episodicOccurredBefore(turn.OccurredAt, since) {
+				lastVisitedIdx = i + 1
+				cursor.Source = key
+				cursor.Index = lastVisitedIdx
+				cursor.Stamp = stamp
+				cursor.LastDocID = turn.DocID
+				cursor.TurnRef = turn.TurnRef
+				cursor.TurnStartIdx = turnStart
+				cursor.Skipped++
 				return nil
 			}
 			if visited == limit {

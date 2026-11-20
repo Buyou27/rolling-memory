@@ -13,11 +13,6 @@ import (
 // CanonicalPhraseJoint is the language-agnostic canonical single-space phrase delimiter.
 const CanonicalPhraseJoint = shaping.CanonicalPhraseJoint
 
-// CanonicalPhrase joins term faces with the canonical single-space joint.
-func CanonicalPhrase(parts ...string) string {
-	return shaping.CanonicalPhrase(parts...)
-}
-
 // SpaceElision is the result of one O(K) single-pass space-elision scan.
 type SpaceElision = shaping.SpaceElision
 

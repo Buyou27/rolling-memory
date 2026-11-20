@@ -40,39 +40,10 @@ const (
 	defaultEvalUserID = "10"
 )
 
-// NormalizePulseMode 归一化评测脉冲模式：唯一合法值 = local_plain（空值默认 local_plain）；
-// 其它值原样返回，由上层 fail-closed 拒绝。
-func NormalizePulseMode(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", PulseModeLocalPlain:
-		return PulseModeLocalPlain
-	default:
-		return strings.ToLower(strings.TrimSpace(raw))
-	}
-}
-
-// IsValidPulseMode reports whether raw is empty (default) or the sole canonical
-// pulse mode name (local_plain). Retired cloud arm names are deliberately rejected.
-func IsValidPulseMode(raw string) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", PulseModeLocalPlain:
-		return true
-	default:
-		return false
-	}
-}
-
 // IsValidEvalTransport 判定 manifest / summary 的 transport 是否属于合法的评测传输通道。
 // 唯一合法通道 = 本地明文。
 func IsValidEvalTransport(tr string) bool {
 	return strings.TrimSpace(tr) == LocalPlainTransport
-}
-
-// TransportForPulseMode returns the provenance transport label for an evaluation
-// pulse mode. 现役唯一通道 = 本地明文，故对任何输入都返回 LocalPlainTransport
-// （脉冲云端通道已移除，不再存在其它通道标签）。
-func TransportForPulseMode(raw string) string {
-	return LocalPlainTransport
 }
 
 // 盲态脉冲的切词器（本地评测臂的三种诊断切词）：
@@ -103,20 +74,12 @@ type LocalEngineOption func(*localEngineConfig)
 
 type localEngineConfig struct {
 	pulseTokenizer string
-	pulseMode      string
 }
 
 // WithPulseTokenizer 指定盲态脉冲切词器（空/未知值回落到 PulseTokenizerProduct 默认臂）。
 func WithPulseTokenizer(mode string) LocalEngineOption {
 	return func(cfg *localEngineConfig) {
 		cfg.pulseTokenizer = normalizePulseTokenizer(mode)
-	}
-}
-
-// WithPulseMode 指定评测脉冲运行模式（现役唯一合法值 = local_plain）。
-func WithPulseMode(mode string) LocalEngineOption {
-	return func(cfg *localEngineConfig) {
-		cfg.pulseMode = NormalizePulseMode(mode)
 	}
 }
 
@@ -393,19 +356,10 @@ type LocalEngine struct {
 }
 
 // ScopeForSuite derives a dedicated benchmark scope below the configured tenant.
-func ScopeForSuite(suite, userID string) string {
-	return ScopeForSuiteAndMode(suite, userID, PulseModeLocalPlain)
-}
-
-// ScopeForSuiteAndMode derives a dedicated benchmark scope isolated by both suite and pulse mode.
 // 现役唯一模式 = 本地明文（local_plain）:
 //
 //	<user>-mem-eval-<locomo|atmbench>-local-plain
-//
-// 历史脉冲云端命名空间已随「评测层去云端」移除；pulseMode 参数仅为旧调用签名保留，
-// 任何取值都生成 local_plain 独立 scope。
-func ScopeForSuiteAndMode(suite, userID, pulseMode string) string {
-	_ = pulseMode
+func ScopeForSuite(suite, userID string) string {
 	part := strings.Map(func(r rune) rune {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			return unicode.ToLower(r)
@@ -437,13 +391,7 @@ func ScopeForSuiteAndMode(suite, userID, pulseMode string) string {
 // <user>-mem-eval-<suite>-local-plain-<generation>. 每次新评测独立 scope，天然与其它运行（含上一次
 // 评测的残留）隔离；不带世代号时退化为固定 scope 的历史形态。
 func ScopeForGeneration(suite, userID, generation string) string {
-	return ScopeForModeGeneration(suite, userID, PulseModeLocalPlain, generation)
-}
-
-// ScopeForModeGeneration derives a dedicated generation scope isolated by pulse mode:
-// 现役唯一模式 = local_plain => <user>-mem-eval-<suite>-local-plain-<generation>。
-func ScopeForModeGeneration(suite, userID, pulseMode, generation string) string {
-	base := ScopeForSuiteAndMode(suite, userID, pulseMode)
+	base := ScopeForSuite(suite, userID)
 	segment := strings.Map(func(r rune) rune {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			return unicode.ToLower(r)
@@ -540,17 +488,13 @@ func evalKeyFingerprint(apiKey string) string {
 func NewLocalEngine(cfg *config.Config, suite, storePath string, options ...LocalEngineOption) (*LocalEngine, error) {
 	opt := localEngineConfig{
 		pulseTokenizer: PulseTokenizerProduct,
-		pulseMode:      NormalizePulseMode(os.Getenv("ROLLING_MEMORY_EVAL_PULSE_MODE")),
 	}
 	for _, apply := range options {
 		if apply != nil {
 			apply(&opt)
 		}
 	}
-	if !IsValidPulseMode(opt.pulseMode) {
-		return nil, fmt.Errorf("invalid pulse_mode %q (only %q is supported)", opt.pulseMode, PulseModeLocalPlain)
-	}
-	pulseMode := NormalizePulseMode(opt.pulseMode)
+	pulseMode := PulseModeLocalPlain
 	suite = strings.ToLower(strings.TrimSpace(suite))
 	if suite != SuiteLoCoMo && suite != SuiteATM {
 		return nil, fmt.Errorf("unsupported evaluation suite %q", suite)
@@ -570,7 +514,7 @@ func NewLocalEngine(cfg *config.Config, suite, storePath string, options ...Loca
 	applyPulseTokenizer(store, opt.pulseTokenizer, evalLocalVaultKey(userID))
 	return &LocalEngine{
 		Store: store, Endpoint: endpoint, TenantID: tenantID, UserID: userID,
-		Scope: ScopeForSuiteAndMode(suite, userID, pulseMode), Suite: suite, StorePath: storePath,
+		Scope: ScopeForSuite(suite, userID), Suite: suite, StorePath: storePath,
 		PulseTokenizer: opt.pulseTokenizer, PulseMode: pulseMode, cfg: cfg,
 		credentialFP: evalKeyFingerprint(string(evalLocalVaultKey(userID))),
 	}, nil
@@ -585,17 +529,10 @@ func NewLocalEngineForScope(cfg *config.Config, scope, storePath string, options
 	if !ok {
 		return nil, fmt.Errorf("scope %q is not an isolated evaluation scope", scope)
 	}
-	checkOpt := localEngineConfig{pulseMode: pulseMode}
-	for _, apply := range options {
-		if apply != nil {
-			apply(&checkOpt)
-		}
+	if pulseMode != PulseModeLocalPlain {
+		return nil, fmt.Errorf("evaluation scope %q pulse mode %s is not the local plaintext mode", scope, pulseMode)
 	}
-	if !IsValidPulseMode(checkOpt.pulseMode) || NormalizePulseMode(checkOpt.pulseMode) != NormalizePulseMode(pulseMode) {
-		return nil, fmt.Errorf("evaluation scope %q pulse mode %s does not match requested option mode %s", scope, pulseMode, checkOpt.pulseMode)
-	}
-	opts := append([]LocalEngineOption{WithPulseMode(pulseMode)}, options...)
-	engine, err := NewLocalEngine(cfg, suite, storePath, opts...)
+	engine, err := NewLocalEngine(cfg, suite, storePath, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +555,7 @@ func (e *LocalEngine) BindScope(scope string) error {
 		return fmt.Errorf("evaluation scope %q does not belong to suite %q", scope, e.Suite)
 	}
 	// 本地模式只认 local_plain：任何非本地模式在此 fail-closed 拒绝。
-	if pulseMode != NormalizePulseMode(e.PulseMode) {
+	if pulseMode != e.PulseMode {
 		return fmt.Errorf("evaluation scope %q pulse mode %s does not match engine mode %s", scope, pulseMode, e.PulseMode)
 	}
 	if scope != e.Scope {
@@ -646,7 +583,7 @@ func (e *LocalEngine) CheckHealth(_ context.Context) error {
 // Metadata returns non-secret runtime provenance persisted with every summary.
 func (e *LocalEngine) Metadata() map[string]any {
 	meta := map[string]any{
-		"transport":              TransportForPulseMode(e.PulseMode),
+		"transport":              LocalPlainTransport,
 		"endpoint":               e.Endpoint,
 		"tenant_id":              e.TenantID,
 		"user_id":                e.UserID,
@@ -656,7 +593,7 @@ func (e *LocalEngine) Metadata() map[string]any {
 		"store_path":             e.StorePath,
 		"credential_fingerprint": e.credentialFP,
 		"pulse_tokenizer":        normalizePulseTokenizer(e.PulseTokenizer),
-		"pulse_mode":             NormalizePulseMode(e.PulseMode),
+		"pulse_mode":             e.PulseMode,
 		"local_fallback":         false,
 	}
 	if e.localIndexSurface() == LocalIndexSurfaceProduct {
@@ -759,7 +696,7 @@ func evalManifestIdentityError(format string, args ...any) error {
 }
 
 func (e *LocalEngine) validateManifestPulseMode(manifest EvalManifest) error {
-	if strings.TrimSpace(manifest.PulseMode) == "" || !IsValidPulseMode(manifest.PulseMode) || manifest.PulseMode != e.PulseMode {
+	if strings.TrimSpace(manifest.PulseMode) == "" || manifest.PulseMode != e.PulseMode {
 		return fmt.Errorf("evaluation manifest pulse mode %q does not match the active client %q (rebuild required)",
 			manifest.PulseMode, e.PulseMode)
 	}
@@ -1060,11 +997,11 @@ func writeEvalResumeState(storePath string, state evalResumeState) {
 // the explicit unit IDs belonging to this corpus and isolated scope.
 func (e *LocalEngine) Ingest(ctx context.Context, documents []EvalDocument, rebuild bool, workers int, logf func(string, ...any)) (EvalManifest, error) {
 	manifest := EvalManifest{
-		Transport: TransportForPulseMode(e.PulseMode), Endpoint: e.Endpoint, UserID: e.UserID,
+		Transport: LocalPlainTransport, Endpoint: e.Endpoint, UserID: e.UserID,
 		Scope: e.Scope, Suite: e.Suite, Documents: len(documents), LocalFallback: false,
 		Generation: e.Generation, RetiredScopes: e.retired,
 		PulseTokenizer: normalizePulseTokenizer(e.PulseTokenizer),
-		PulseMode:      NormalizePulseMode(e.PulseMode),
+		PulseMode:      e.PulseMode,
 	}
 	if len(documents) == 0 {
 		return manifest, errors.New("evaluation requires at least one source document")
@@ -1111,7 +1048,7 @@ func (e *LocalEngine) Ingest(ctx context.Context, documents []EvalDocument, rebu
 		Endpoint: e.Endpoint, Scope: e.Scope,
 		CredentialFP:   evalKeyFingerprint(string(evalLocalVaultKey(e.UserID))),
 		PulseTokenizer: normalizePulseTokenizer(e.PulseTokenizer),
-		PulseMode:      NormalizePulseMode(e.PulseMode),
+		PulseMode:      e.PulseMode,
 		CorpusSHA256:   manifest.CorpusSHA256, Documents: len(documents),
 	}
 	resumable := false
@@ -1175,7 +1112,7 @@ func (e *LocalEngine) Ingest(ctx context.Context, documents []EvalDocument, rebu
 	}
 	// 租约登记本世代语料身份：Admin/审计据此判断「这个 scope 里装的是哪份语料、有多少条」。
 	recordGenerationCorpus(e.Scope, e.StorePath, manifest)
-	logf("[eval] local ingest complete (%s): suite=%s scope=%s documents=%d", NormalizePulseMode(e.PulseMode), e.Suite, e.Scope, len(documents))
+	logf("[eval] local ingest complete (%s): suite=%s scope=%s documents=%d", e.PulseMode, e.Suite, e.Scope, len(documents))
 	return manifest, nil
 }
 

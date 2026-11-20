@@ -2733,7 +2733,6 @@ watch(pluginChannels, (list) => {
 
 const evalConfig = reactive({
     arm_mode: 'sdk-local-plain' as 'sdk-local-plain' | 'oracle',
-    pulse_mode: 'local_plain' as 'local_plain',
     top_k: 50,
     workers: 2,
     category: '',
@@ -2751,7 +2750,6 @@ const evalArmLabel = computed(() => {
 
 watch(() => evalConfig.arm_mode, () => {
     overview.value = { ...overview.value, manifest: null, readiness: undefined, store_path: '' }
-    evalConfig.pulse_mode = 'local_plain'
     void loadOverview()
 }, { flush: 'sync' })
 
@@ -2839,16 +2837,15 @@ const query = reactive({
     page_size: 20,
 })
 
-// scope 必须同时匹配套件和所选模式；世代后缀由服务端分配。
-const evalScopeMatches = (scope: unknown, suite: string, pulseMode: string): boolean => {
+// scope 必须匹配套件与本地明文通道；世代后缀由服务端分配。
+const evalScopeMatches = (scope: unknown, suite: string): boolean => {
     const text = String(scope || '').trim().toLowerCase()
     if (/\s|:/.test(text)) return false
     const index = text.lastIndexOf('-mem-eval-')
     if (index <= 0) return false
     const parts = text.slice(index + '-mem-eval-'.length).split('-')
     if (parts.some((part) => !part) || parts[0] !== (suite === 'atm' ? 'atmbench' : 'locomo')) return false
-    const mode = parts[1] === 'local' && parts[2] === 'plain' ? 'local_plain' : ''
-    return mode === pulseMode
+    return parts[1] === 'local' && parts[2] === 'plain'
 }
 
 const expectedEvalScope = computed(() => {
@@ -2860,7 +2857,7 @@ const evalManifest = computed<EvalManifest | null>(() => overview.value.manifest
 const evalScopeText = computed(() => {
     if (evalConfig.arm_mode === 'oracle') return '—'
     const actual = String(evalManifest.value?.scope || '').trim()
-    if (evalScopeMatches(actual, query.suite, evalConfig.pulse_mode)) return actual
+    if (evalScopeMatches(actual, query.suite)) return actual
     return `${expectedEvalScope.value}${isEn.value ? ' · generation auto-allocated per run' : ' · 每次评测自动分配世代'}`
 })
 const manifestTransport = computed(() => String(evalManifest.value?.transport || '') || '—')
@@ -2887,15 +2884,12 @@ const evalCorpusReady = computed(() => {
     const manifest = evalManifest.value
     if (overview.value.readiness?.ready !== true || !manifest) return false
     if (evalConfig.arm_mode === 'oracle') return false
-    if (evalConfig.arm_mode !== `sdk-${evalConfig.pulse_mode.replace('_', '-')}`) return false
-    const mode = evalConfig.pulse_mode
-    if (mode !== 'local_plain') return false
     const transport = 'ramesdk.local_plain.offline-v1'
     const endpoint = String(manifest.endpoint || '')
     return (
         manifest.local_fallback === false &&
         String(manifest.suite || '') === query.suite &&
-        evalScopeMatches(manifest.scope, query.suite, mode) &&
+        evalScopeMatches(manifest.scope, query.suite) &&
         String(manifest.user_id || '') === '10' &&
         String(manifest.transport || '') === transport &&
         endpoint.startsWith('local://') &&
@@ -3776,7 +3770,7 @@ const isCurrentReproCli = (value: string) => {
     const cli = String(value || '').trim()
     // 后端落档命令带仓库内二进制前缀（./bin/rmem 或 bin/rmem），验收时两种都算现行 SDK 复现命令。
     if (!/^(?:\.\/)?(?:bin\/)?rmem\s+eval(?:\s|$)/.test(cli)) return false
-    const allowedFlags = new Set(['--suite', '--tier', '--eval-store', '--top-k', '--answerer', '--judge', '--eval-model', '--eval-base-url', '--oracle', '--workers', '--pulse-mode'])
+    const allowedFlags = new Set(['--suite', '--tier', '--eval-store', '--top-k', '--answerer', '--judge', '--eval-model', '--eval-base-url', '--oracle', '--workers'])
     for (const match of cli.matchAll(/(?:^|\s)(--[a-z0-9-]+)/gi)) {
         if (!allowedFlags.has(match[1] || '')) return false
     }
@@ -3846,7 +3840,7 @@ const loadOverview = async () => {
         const res = await request<EvalOverviewResponse>({
             url: '/admin/plugin/rolling-memory/eval/overview',
             method: 'POST',
-            data: { ...query, arm_mode: evalConfig.arm_mode, pulse_mode: evalConfig.pulse_mode },
+            data: { ...query, arm_mode: evalConfig.arm_mode },
             // 首次核验要等待本地金库探针；与控制台 status 子进程的 45s 硬上限一致。
             timeout: 45000,
         })
@@ -4102,7 +4096,7 @@ const runIngest = async (action: 'prepare' | 'verify' | 'rebuild') => {
         }>({
             url: '/admin/plugin/rolling-memory/eval/ingest',
             method: 'POST',
-            data: { suite: query.suite, arm_mode: evalConfig.arm_mode, pulse_mode: evalConfig.pulse_mode, action },
+            data: { suite: query.suite, arm_mode: evalConfig.arm_mode, action },
             timeout: INGEST_TIMEOUT_MS,
         })
         const data = res.data.data

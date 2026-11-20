@@ -456,6 +456,101 @@ func mergePhraseCSR(prev *rmClusterState, remap []int32, delta []dyadPosting) ([
 }
 
 // dyadLess 比较 (a,b) 字典序（与 dyadPostingSort 的 pair 顺序一致）。
+// appendOnlyIncremental reports whether every old unit keeps its index, so the immutable
+// base phrase CSR can be shared and only the delta block needs rebuilding.
+func appendOnlyIncremental(inc *incrementalDelta) bool {
+	if inc == nil || len(inc.dropUnits) != 0 {
+		return false
+	}
+	for i, r := range inc.remap {
+		if r != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeDyadPostings merges two (pair, unit)-sorted posting streams.
+func mergeDyadPostings(a, b []dyadPosting) []dyadPosting {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]dyadPosting, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		x, y := a[i], b[j]
+		if dyadLess(y.pair, x.pair) || (y.pair == x.pair && y.unit < x.unit) {
+			out = append(out, y)
+			j++
+		} else {
+			out = append(out, x)
+			i++
+		}
+	}
+	out = append(out, a[i:]...)
+	out = append(out, b[j:]...)
+	return out
+}
+
+// remapDeltaPostings applies the unit remap to a previous delta block and drops rows whose
+// unit disappeared; the remap is monotonic on the incremental path, so the result stays
+// sorted, and the defensive sort keeps the fallback correct if that ever changes.
+func remapDeltaPostings(prevDelta []dyadPosting, remap []int32) []dyadPosting {
+	if len(prevDelta) == 0 {
+		return nil
+	}
+	out := make([]dyadPosting, 0, len(prevDelta))
+	for _, p := range prevDelta {
+		if int(p.unit) >= len(remap) {
+			continue
+		}
+		nu := remap[p.unit]
+		if nu < 0 {
+			continue
+		}
+		p.unit = nu
+		out = append(out, p)
+	}
+	sort.Sort(dyadPostingSort(out))
+	return out
+}
+
+// mergePhraseCSRWithDelta folds a previous state's delta block into the incoming delta
+// postings before the global CSR merge, so fallback paths never lose appended rows.
+func mergePhraseCSRWithDelta(prev *rmClusterState, remap []int32, delta []dyadPosting) ([]rmDyad, []uint32, []int32) {
+	if prev != nil && len(prev.phraseDelta) > 0 {
+		delta = mergeDyadPostings(remapDeltaPostings(prev.phraseDelta, remap), delta)
+	}
+	return mergePhraseCSR(prev, remap, delta)
+}
+
+// phraseDeltaOverBudget reports whether the append delta has grown past 1/10 of the
+// immutable base CSR bytes (24 B per delta posting vs 16 B/key + 4 B/unit).
+func phraseDeltaOverBudget(deltaLen int, prev *rmClusterState) bool {
+	if prev == nil {
+		return true
+	}
+	baseBytes := len(prev.phraseKeys)*16 + len(prev.phraseUnits)*4
+	return deltaLen*24*10 > baseBytes
+}
+
+// compactPhraseDelta folds the append delta back into the base CSR. The v7 disk format
+// stores a single phrase CSR, so publishers call this before serialization.
+func (st *rmClusterState) compactPhraseDelta() {
+	if len(st.phraseDelta) == 0 {
+		return
+	}
+	remap := make([]int32, len(st.phraseKeys))
+	for i := range remap {
+		remap[i] = int32(i)
+	}
+	st.phraseKeys, st.phraseRowPtr, st.phraseUnits = mergePhraseCSR(st, remap, st.phraseDelta)
+	st.phraseDelta = nil
+}
+
 func dyadLess(x, y rmDyad) bool {
 	if x.a != y.a {
 		return x.a < y.a

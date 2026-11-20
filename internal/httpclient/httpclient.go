@@ -1,8 +1,8 @@
 // Copyright 2026 Rocareer & Rolling & PsychologyLake.org.cn
 // Author: Albert <albert@rocareer.com>
 
-// Package httpclient is the one JSON-over-HTTP client used by the cloud legs
-// (llm, extractor, sync, remote embeddings).
+// Package httpclient is the one JSON-over-HTTP client used by evaluation
+// model calls (answerer and judge).
 //
 // It has zero third-party dependencies and no mode knowledge — every caller
 // must run Config.CheckEgress before invoking it.

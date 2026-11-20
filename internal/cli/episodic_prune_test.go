@@ -171,3 +171,72 @@ func TestEpisodicPruneRetiresAbsentUnitsOnly(t *testing.T) {
 		t.Fatalf("polluted inline trace survived: count=%d err=%v", count, err)
 	}
 }
+
+func TestEpisodicPruneFencesBeforeDeleteAndKeepsAdvancedEpochOnDeleteFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	memory, err := facade.New(&config.Config{DB: filepath.Join(home, "memory.db"), Scope: "mem:prune-fence", Mode: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memory.Close()
+	tc, err := memory.LocalVault()
+	if err != nil || tc == nil || tc.Vault == nil {
+		t.Fatalf("local vault: %v", err)
+	}
+	const docID = "purge-fence"
+	if err := tc.Vault.SaveLocalPlaintext(docID, 1, "[assistant]\n[thinking]\nretire this trace", nil, localvault.IngestResponse{Layer: "episodic"}); err != nil {
+		t.Fatal(err)
+	}
+	db := memory.Store.DB()
+	before, err := tc.Vault.CurrentPurgeEpoch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_prune_epoch
+		BEFORE UPDATE OF purge_epoch ON rm_revision
+		WHEN NEW.purge_epoch > OLD.purge_epoch
+		BEGIN
+			SELECT RAISE(ABORT, 'epoch bump failed');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := pruneEpisodicUnits(context.Background(), memory, 100, true, true); err == nil || !strings.Contains(err.Error(), "epoch bump failed") || report.Removed != 0 {
+		t.Fatalf("bump failure report=%+v err=%v", report, err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM rm_docs WHERE unit_id = ?`, docID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("bump failure deleted candidate: count=%d err=%v", count, err)
+	}
+	afterFailedBump, err := tc.Vault.CurrentPurgeEpoch(context.Background())
+	if err != nil || afterFailedBump != before {
+		t.Fatalf("failed bump changed epoch: before=%d after=%d err=%v", before, afterFailedBump, err)
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_prune_epoch`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_prune_delete
+		BEFORE DELETE ON rm_docs
+		WHEN OLD.unit_id = 'purge-fence'
+		BEGIN
+			SELECT RAISE(ABORT, 'delete failed');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	report, err := pruneEpisodicUnits(context.Background(), memory, 100, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Removed != 0 || len(report.Warnings) == 0 || !strings.Contains(strings.Join(report.Warnings, "\n"), "delete failed") {
+		t.Fatalf("delete failure report=%+v", report)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM rm_docs WHERE unit_id = ?`, docID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("failed delete removed candidate: count=%d err=%v", count, err)
+	}
+	afterFailedDelete, err := tc.Vault.CurrentPurgeEpoch(context.Background())
+	if err != nil || afterFailedDelete != before+1 {
+		t.Fatalf("failed delete epoch: before=%d after=%d err=%v", before, afterFailedDelete, err)
+	}
+}

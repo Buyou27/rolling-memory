@@ -83,7 +83,7 @@ func TestDiskParseRejectsOverflowingSectionCountsAdversarial(t *testing.T) {
 			mut := append([]byte(nil), raw...)
 			orig := binary.LittleEndian.Uint64(mut[tc.off : tc.off+8])
 			binary.LittleEndian.PutUint64(mut[tc.off:tc.off+8], orig+(uint64(1)<<62))
-			binary.LittleEndian.PutUint32(mut[160:164], crc32.Checksum(mut[0:160], table))
+			binary.LittleEndian.PutUint32(mut[zcsrHeaderCRCOffset:zcsrHeaderCRCOffset+4], crc32.Checksum(mut[0:zcsrHeaderCRCOffset], table))
 			if err := os.WriteFile(path, mut, 0o600); err != nil {
 				t.Fatalf("write mutated segment: %v", err)
 			}

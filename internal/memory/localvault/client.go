@@ -281,6 +281,39 @@ func (c *Client) RememberWithLayer(ctx context.Context, docID string, plaintext 
 	return resp, nil
 }
 
+// PrepareQueuedRemember derives the canonical document one queued remember will
+// write without touching the canonical tables, so a worker can commit the
+// document, its metadata and the queue terminal state in one transaction.
+func (c *Client) PrepareQueuedRemember(ctx context.Context, docID string, plaintext string, occurredAt int64, layer string) (PreparedCanonicalIngest, error) {
+	if c == nil || c.Vault == nil {
+		return PreparedCanonicalIngest{}, errors.New("localvault: queued remember requires a local vault")
+	}
+	st := c.activeStore()
+	pkt, sents := st.PackBlindPacket(docID, plaintext, occurredAt)
+	if strings.TrimSpace(layer) != "" {
+		pkt.Layer = strings.TrimSpace(layer)
+	} else {
+		pkt.Layer = "episodic"
+	}
+	c.stampIdentity(&pkt)
+	resp := localIngestResponse(docID, pkt.Layer, len(sents))
+	if c.Transport != nil {
+		got, err := c.Transport.IngestBlindPulse(ctx, pkt)
+		if err != nil {
+			return PreparedCanonicalIngest{}, err
+		}
+		if strings.TrimSpace(got.Layer) == "" {
+			got.Layer = pkt.Layer
+		}
+		resp = got
+	}
+	meta, err := canonicalMetaForResponse(sents, resp, c.Vault.Identity(), time.Now().Unix())
+	if err != nil {
+		return PreparedCanonicalIngest{}, err
+	}
+	return c.Vault.prepareCanonicalIngest(docID, occurredAt, plaintext, meta)
+}
+
 // RecallDiagnostics reports how the last Recall on this client was served. Degraded means
 // retrieval was unavailable and the answer came from the local lexical fallback,
 // so a caller must never read an empty result as "memory holds nothing".
@@ -610,7 +643,14 @@ func (c *Client) RecallDefault(queryPlaintext string, topK int) ([]LocalResolved
 // RememberNoetic stores an L3 Noetic memory record (Query + Retrieved Sentences + Answer)
 // directly in the client's own local SQLite table (`rm_noetic`).
 func (c *Client) RememberNoetic(noeticID string, queryText string, citedUnitIDs []string, citedSentences []string, answerText string, occurredAt int64) error {
-	return c.Vault.SaveLocalNoetic(LocalNoeticRecord{
+	_, err := c.RememberNoeticTrace(noeticID, queryText, citedUnitIDs, citedSentences, answerText, occurredAt)
+	return err
+}
+
+// RememberNoeticTrace is RememberNoetic returning the row that owns the
+// evidence set: a cue that cites an already-known set merges into that trace.
+func (c *Client) RememberNoeticTrace(noeticID string, queryText string, citedUnitIDs []string, citedSentences []string, answerText string, occurredAt int64) (string, error) {
+	return c.Vault.SaveLocalNoeticTrace(LocalNoeticRecord{
 		NoeticID:       noeticID,
 		OccurredAt:     occurredAt,
 		Status:         "active",
@@ -725,6 +765,7 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 				v.snapRef.noeticMaxRowID = 0
 				v.snapRef.noeticOccSum = 0
 				v.snapRef.activeNoetics = nil
+				v.snapRef.noeticCueIndex = nil
 				v.slotCacheMu.Unlock()
 				return nil, nil
 			}
@@ -733,7 +774,9 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 	rows, err := v.db.Query(`
 				SELECT noetic_id, occurred_at, COALESCE(inserted_at, occurred_at), status, query_text, answer_text, cited_unit_ids_json, cited_sentences_json,
 				       COALESCE(address_uri, ''), COALESCE(coord64, 0), COALESCE(waveform_bar, ''),
-				       COALESCE(assistant_id, ''), COALESCE(incarnation_id, '')
+				       COALESCE(assistant_id, ''), COALESCE(incarnation_id, ''),
+				       COALESCE(activated_at, 0), COALESCE(activation_count, 0),
+				       COALESCE(trace_key, ''), COALESCE(query_variants_json, '[]'), COALESCE(superseded_by, '')
 				FROM rm_noetic
 				WHERE status = 'active'
 				ORDER BY occurred_at DESC
@@ -748,14 +791,15 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 	inCite := make(map[string]int, 64)
 	for rows.Next() {
 		var rec LocalNoeticRecord
-		var uidsJSON, sentsJSON string
+		var uidsJSON, sentsJSON, variantsJSON string
 		if err := rows.Scan(&rec.NoeticID, &rec.OccurredAt, &rec.InsertedAt, &rec.Status, &rec.QueryText, &rec.AnswerText,
-			&uidsJSON, &sentsJSON, &rec.AddressURI, &rec.Coord64, &rec.WaveformBar, &rec.AssistantID, &rec.IncarnationID); err != nil {
+			&uidsJSON, &sentsJSON, &rec.AddressURI, &rec.Coord64, &rec.WaveformBar, &rec.AssistantID, &rec.IncarnationID,
+			&rec.ActivatedAt, &rec.ActivationCount, &rec.TraceKey, &variantsJSON, &rec.SupersededBy); err != nil {
 			continue
 		}
 		_ = json.Unmarshal([]byte(uidsJSON), &rec.CitedUnitIDs)
 		_ = json.Unmarshal([]byte(sentsJSON), &rec.CitedSentences)
-		_ = v.noeticBlindPacket(rec.NoeticID, rec.QueryText, rec.OccurredAt)
+		_ = json.Unmarshal([]byte(variantsJSON), &rec.QueryVariants)
 		idxByID[rec.NoeticID] = len(list)
 		for _, cid := range rec.CitedUnitIDs {
 			cid = strings.TrimSpace(cid)
@@ -799,6 +843,9 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 		}
 	}
 	if hasFP && v.slotCacheMu != nil && v.snapRef != nil {
+		// Build the index outside the cache lock: packing cues is the expensive
+		// part and must not block concurrent recall readers.
+		cueIndex := buildNoeticCueIndex(v, list)
 		v.slotCacheMu.Lock()
 		v.snapRef.noeticReady = true
 		v.snapRef.lastNoeticTime = time.Now()
@@ -806,12 +853,14 @@ func (v *Vault) queryAndCacheActiveNoeticRecords() ([]LocalNoeticRecord, error) 
 		v.snapRef.noeticMaxRowID = maxRowID
 		v.snapRef.noeticOccSum = occSum
 		v.snapRef.activeNoetics = list
+		v.snapRef.noeticCueIndex = cueIndex
 		v.slotCacheMu.Unlock()
 	}
 	return list, nil
 }
 
-// RecallNoetic searches the client's local `rm_noetic` table using keyed HMAC root commitments.
+// RecallNoetic searches the client's local `rm_noetic` table by matching the
+// query against every cue handle of each recollection trace.
 func (c *Client) RecallNoetic(queryPlaintext string, topK int) ([]LocalNoeticRecord, error) {
 	if c.Vault == nil || c.Vault.db == nil {
 		return nil, nil
@@ -825,18 +874,61 @@ func (c *Client) RecallNoetic(queryPlaintext string, topK int) ([]LocalNoeticRec
 	if err != nil || len(records) == 0 {
 		return nil, err
 	}
-
-	var hits []LocalNoeticRecord
-	for i := range records {
-		rec := records[i]
-		nPkt := c.Vault.noeticBlindPacket(rec.NoeticID, rec.QueryText, rec.OccurredAt)
-		rec.MatchScore = blindPacketDice(qPkt, nPkt)
-		if rec.MatchScore > 0 {
-			hits = append(hits, rec)
+	// Records and index must come from the same cache generation: a background
+	// refresh may replace both while the loader is returning.
+	var cueIndex map[uint64][]int32
+	if cached, index, ok := c.Vault.noeticCacheSnapshot(); ok {
+		records = cached
+		cueIndex = index
+	}
+	// The cue inverted index narrows the scan to traces sharing at least one
+	// cue atom; a trace with no shared atom has Dice zero by construction.
+	candidates := make([]int32, 0, len(records))
+	if cueIndex != nil {
+		seen := make([]bool, len(records))
+		for _, atom := range qPkt.Slots {
+			for _, idx := range cueIndex[atom.H] {
+				if int(idx) < 0 || int(idx) >= len(records) || seen[idx] {
+					continue
+				}
+				seen[idx] = true
+				candidates = append(candidates, idx)
+			}
+		}
+	} else {
+		for i := range records {
+			candidates = append(candidates, int32(i))
 		}
 	}
+	var hits []LocalNoeticRecord
+	for _, idx := range candidates {
+		rec := records[idx]
+		// A trace keeps several handles for the same evidence set. The strongest
+		// handle is the one this recall used, and it is the cue the delivery
+		// renders — the recollection itself stays singular.
+		best := 0.0
+		matched := ""
+		for _, cue := range rec.CueTexts() {
+			nPkt := c.Vault.noeticBlindPacket(rec.NoeticID, cue, rec.OccurredAt)
+			if d := blindPacketDice(qPkt, nPkt); d > best {
+				best = d
+				matched = cue
+			}
+			// Dice cannot exceed 1: an exact handle match already proves the
+			// maximum, so a repeatedly asked question pays for one packet only.
+			if best >= 1.0 {
+				break
+			}
+		}
+		if best <= 0 {
+			continue
+		}
+		rec.MatchScore = best
+		rec.MatchedCue = matched
+		hits = append(hits, rec)
+	}
 	effScore := func(r LocalNoeticRecord) float64 {
-		return r.MatchScore * r.VerificationGain()
+		return r.MatchScore * r.ActivationGain()
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		ei, ej := effScore(hits[i]), effScore(hits[j])

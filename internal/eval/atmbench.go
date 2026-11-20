@@ -990,9 +990,6 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 		logf = func(string, ...any) {}
 	}
 	started := time.Now()
-	if !IsValidPulseMode(opts.PulseMode) {
-		return nil, fmt.Errorf("invalid pulse_mode %q (only %q is supported)", opts.PulseMode, PulseModeLocalPlain)
-	}
 	if err := VerifyATMOfficialProtocol(); err != nil {
 		return nil, err
 	}
@@ -1012,12 +1009,11 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 	if tier == "" {
 		return nil, ErrATMTierRetired
 	}
-	opts.PulseMode = NormalizePulseMode(opts.PulseMode)
-	scope := ScopeForSuiteAndMode(SuiteATM, evalUserID(), opts.PulseMode)
+	scope := ScopeForSuite(SuiteATM, evalUserID())
 	opts.Scope = scope
 	var engine *LocalEngine
 	if !opts.Oracle {
-		engine, err = NewLocalEngine(cfg, SuiteATM, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
+		engine, err = NewLocalEngine(cfg, SuiteATM, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer))
 		if err != nil {
 			return nil, err
 		}
@@ -1046,7 +1042,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 		scope = engine.Scope
 		opts.Scope = scope
 		verification := map[string]any{
-			"verified": true, "transport": TransportForPulseMode(opts.PulseMode), "scope": scope,
+			"verified": true, "transport": LocalPlainTransport, "scope": scope,
 			"local_fallback": false, "engine": engine.Metadata(),
 			"ingest": map[string]any{"manifest": verified, "reused": true, "inserted": 0},
 		}
@@ -1115,13 +1111,13 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 		}
 	}
 
-	armMode := ArmModeForPulseMode(opts.PulseMode)
+	armMode := EvalArmSDKLocalPlain
 	if opts.Oracle {
 		armMode = "oracle"
 	}
 	arm := "atm-" + tier + "-" + armMode + "-" + answererName(opts)
 	logf("[atm-eval] suite=atm pulse_mode=%s tier=%s questions=%d sgm_items=%d raw_limit=%d answerer=%s judge=%s",
-		opts.PulseMode, tier, len(qas), len(items), rawLimit, answererName(opts), judgeName(opts))
+		PulseModeLocalPlain, tier, len(qas), len(items), rawLimit, answererName(opts), judgeName(opts))
 
 	results := make([]map[string]any, len(qas))
 	var doneCount int64
@@ -1258,7 +1254,7 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 				failureBucket := ClassifyFailureBucket(
 					evHit, aic || r25 >= 0.5, r50, f1, r25, verdictStr,
 				)
-				rowTransport := TransportForPulseMode(opts.PulseMode)
+				rowTransport := LocalPlainTransport
 				if opts.Oracle {
 					rowTransport = "oracle-gold"
 				}
@@ -1396,9 +1392,9 @@ func RunATM(cfg *config.Config, opts Options) (map[string]any, error) {
 		// retired_scopes = 本次回收的过期世代回执（独立世代 scope，回收不阻塞本次运行）。
 		"retired_scopes": prepared.RetiredScopes,
 	}
-	summary["mode"] = ArmModeForPulseMode(opts.PulseMode)
-	summary["pulse_mode"] = NormalizePulseMode(opts.PulseMode)
-	summary["transport"] = TransportForPulseMode(opts.PulseMode)
+	summary["mode"] = EvalArmSDKLocalPlain
+	summary["pulse_mode"] = PulseModeLocalPlain
+	summary["transport"] = LocalPlainTransport
 	summary["scope"] = scope
 	summary["local_fallback"] = false
 	if opts.Oracle {

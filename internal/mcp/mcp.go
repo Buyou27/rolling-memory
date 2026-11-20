@@ -895,9 +895,9 @@ func renderMaxChars(arguments map[string]any, fallback int) (int, error) {
 	return pyInt(chars)
 }
 
-// optionalText maps a slot standard stringifies at first use (anchor_text goes
-// through str(), scope/reader flow into text comparisons): falsy values fall
-// through to the caller's default, everything else becomes pyStr.
+// optionalText maps a slot the standard client may pass as a non-string value
+// (scope/reader go through str()): falsy values fall through to the caller's
+// default, everything else becomes pyStr.
 func optionalText(value any) *string {
 	if !pyTruthy(value) {
 		return nil
@@ -1026,34 +1026,7 @@ func resolveMCPPresence(active *facade.Memory, arguments map[string]any, clientP
 			}
 		}
 	}
-	if inferred := calibrateLocusFromArguments(arguments, coords.Locus); inferred != "" {
-		coords.Locus = inferred
-	}
 	return mergeExplicit(coords)
-}
-
-// calibrateLocusFromArguments honors an explicit assertion locus. The former
-// implementation also scanned $HOME directory names for any repository whose
-// name appeared in the JSON payload; a prompt that mentioned another
-// repository could then move the call to that workspace. Workspace now comes
-// from the client process, so only explicit coordinates may override it.
-func calibrateLocusFromArguments(arguments map[string]any, fallbackLocus string) string {
-	if arguments == nil {
-		return fallbackLocus
-	}
-	if aMap, ok := arguments["assertion"].(map[string]any); ok {
-		if rawLoc := pyStr(aMap["locus"]); strings.Contains(rawLoc, "/") {
-			return text.NormalizeHierarchicalPath(rawLoc)
-		}
-	}
-	if aList, ok := arguments["assertions"].([]any); ok && len(aList) > 0 {
-		if aMap, ok := aList[0].(map[string]any); ok {
-			if rawLoc := pyStr(aMap["locus"]); strings.Contains(rawLoc, "/") {
-				return text.NormalizeHierarchicalPath(rawLoc)
-			}
-		}
-	}
-	return fallbackLocus
 }
 
 // resolveZCodeInFlightToolDirectory recovers the directory of the ZCode

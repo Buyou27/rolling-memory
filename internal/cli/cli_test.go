@@ -335,14 +335,14 @@ func TestConfigAndMode(t *testing.T) {
 	if path.code != 0 || strings.TrimSpace(path.stdout) != filepath.Join(env.base, "config.toml") {
 		t.Fatalf("config path = %d %q", path.code, path.stdout)
 	}
-	set := run(t, "config", "set", "recall.bands", "6")
+	set := run(t, "config", "set", "recall.chars", "12000")
 	if set.code != 0 || !strings.Contains(set.stdout, "updated ") {
 		t.Fatalf("config set = %d %q %s", set.code, set.stdout, set.stderr)
 	}
 	afterSet := jsonObject(t, run(t, "config", "show").stdout)
 	recall, _ := afterSet["recall"].(map[string]any)
-	if recall["bands"] != float64(6) {
-		t.Fatalf("recall.bands = %#v", recall["bands"])
+	if recall["chars"] != float64(12000) {
+		t.Fatalf("recall.chars = %#v", recall["chars"])
 	}
 }
 

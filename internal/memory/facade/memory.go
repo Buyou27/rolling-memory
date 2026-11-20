@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/rocareer/rolling-memory/internal/clock"
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/db"
 	"github.com/rocareer/rolling-memory/internal/efficacy"
@@ -209,6 +210,12 @@ func (m *Memory) Status(scope string) (map[string]any, error) {
 	result["version"] = version.Version
 	result["config"] = m.Config.PublicDict()
 	result["snapshot"] = m.snapshotStatus()
+	// Mounted directories carry their own ingestion clock, and a stalled mount is invisible
+	// in corpus counts alone; status is where an operator looks before asking why a file is
+	// not recalled.
+	if states, err := localvault.ReadBackgroundSyncStates(m.Store.DB()); err == nil && len(states) > 0 {
+		result["background"] = backgroundFreshnessPayload(states, clock.Unix())
+	}
 	return result, nil
 }
 
@@ -303,6 +310,16 @@ func (m *Memory) Doctor() (map[string]any, error) {
 		return nil, err
 	}
 	check("corpus", true, fmt.Sprintf("%d memory units · %d term postings", corpus.MemoryUnits(), terms))
+	// A collapsed event timeline is not a correctness problem, but it multiplies
+	// storage: the cluster pipeline pairs units that share a spacetime bucket.
+	if concentration, err := db.ReadTimeConcentration(m.Store.DB()); err == nil && concentration.Docs > 0 {
+		check("event_time", !concentration.Collapsed(), fmt.Sprintf(
+			"%d units · %d distinct instants · largest group %d · %.0f same-instant peers per unit",
+			concentration.Docs, concentration.DistinctInstants, concentration.LargestGroup, concentration.PairsPerDoc))
+		if concentration.Collapsed() {
+			warnings = append(warnings, "most units share their occurred_at second; the cluster pipeline pairs units inside a bucket, so the snapshot grows with that multiplier — ingest with real event times")
+		}
+	}
 	var docsCnt, changeSeq int64
 	_ = m.Store.DB().QueryRow(`SELECT docs_cnt, change_seq FROM rm_revision WHERE id = 1`).Scan(&docsCnt, &changeSeq)
 	snapshotOK := docsCnt == 0 || localvault.PublishedSnapshotExists(m.Config.DB)
@@ -437,8 +454,7 @@ func fileSHA256(path string) (string, error) {
 }
 
 // ImportFile imports a JSONL transcript through the canonical pipeline shared
-// with the background scanner. Other formats are refused instead of being
-// translated by a retired reader.
+// with the background scanner. Other formats are refused.
 func (m *Memory) ImportFile(path string, scope, session *string, audience string, replay bool) (map[string]any, error) {
 	if audience != "" && audience != "shared" && audience != "public" {
 		return nil, fmt.Errorf("restricted or unknown audience file import is unavailable: background transcript scanning cannot enforce file privacy; keep sensitive files outside scanned directories until source-level access controls are supported")

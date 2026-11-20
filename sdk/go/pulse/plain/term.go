@@ -573,8 +573,6 @@ func (a *TermExtractor) KeyedCompanionCount(text string) int {
 	return n
 }
 
-func ClampPosU16(v int) uint16 { return clampPosU16(v) }
-
 // mergeQueryOrdinalSpanBeacons resolves ordinal span-polarity questions
 // ("first/earliest ... in <Anchor>" / "last/latest ... in <Anchor>") into a
 // concrete calendar-day beacon, reusing the natural-date beacon carrier.

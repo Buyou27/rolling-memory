@@ -96,7 +96,6 @@ func (a *application) runEval() int {
 	} else if a.args.Flag("fetch_only") {
 		return a.fail(errors.New("--fetch-only 需要同时指定 --fetch atm"))
 	}
-	pulseMode := eval.NormalizePulseMode(firstNonEmptyString(a.args.String("pulse_mode"), os.Getenv("ROLLING_MEMORY_EVAL_PULSE_MODE"), eval.PulseModeLocalPlain))
 	storePath := a.args.String("eval_store")
 	if storePath == "" {
 		baseName := "eval-locomo"
@@ -162,7 +161,6 @@ func (a *application) runEval() int {
 		DenoiseRatio:    a.args.Float("denoise_ratio"),
 		NoVerify:        a.args.Flag("no_verify"),
 		PulseTokenizer:  firstNonEmptyString(a.args.String("pulse_tokenizer"), eval.PulseTokenizerProduct),
-		PulseMode:       pulseMode,
 		Log: evalLogWriter(a.args.Flag("json"), a.printf, func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		}),

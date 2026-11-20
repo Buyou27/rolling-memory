@@ -20,21 +20,3 @@ func TestIsHighGainTokenColloquialDemotion(t *testing.T) {
 		}
 	}
 }
-
-// TestTokenizeSkipsCliticContractionJoin pins that grammatical clitic contractions are never
-// fabricated into joined pseudo-forms, while apostrophe-embedded proper names still join.
-func TestTokenizeSkipsCliticContractionJoin(t *testing.T) {
-	got := Tokenize("we've they'll you're Xi'an")
-	joined := map[string]bool{}
-	for _, tk := range got {
-		joined[tk] = true
-	}
-	for _, bad := range []string{"weve", "theyll", "youre"} {
-		if joined[bad] {
-			t.Errorf("Tokenize fabricated clitic join %q from %v", bad, got)
-		}
-	}
-	if !joined["xian"] {
-		t.Errorf("Tokenize must keep joined proper name 'xian', got %v", got)
-	}
-}

@@ -791,8 +791,6 @@ func BuildParser() *Parser {
 		flagOption([]string{"--verify-prepare"}, "verify_prepare", false, "verify exact manifest/corpus-unit equality without ingesting or scoring"),
 		choiceOption([]string{"--pulse-tokenizer"}, "pulse_tokenizer", []string{"product", "standard", "trigram"}, "product",
 			"evaluation tokenizer arm: product = default max-capability product tokenizer (128k BPE substring pieces + companion-word expansion + unit/date beacons; default) | standard = SDK native surface+subword (diagnostic) | trigram = trigram-window segmenter (diagnostic)"),
-		choiceOption([]string{"--pulse-mode"}, "pulse_mode", []string{"local_plain"}, "local_plain",
-			"evaluation arm: local_plain (本地明文, default and the only supported arm)"),
 		flagOption([]string{"--no-verify"}, "no_verify", false,
 			"skip the sha256 check of the bundled data files"),
 		floatOption([]string{"--denoise-ratio"}, "denoise_ratio", 0.0,
@@ -839,6 +837,7 @@ func BuildParser() *Parser {
 			stringOption([]string{"--layer"}, "layer", "all", "layer to reconcile (all|episodic|background|noetic)"),
 			stringOption([]string{"--harness"}, "harness", nil, "optional harness id filter (zcode/claude-code/codex/all)"),
 			intOption([]string{"--limit"}, "limit", 50, "max units to reconcile per layer in one pass"),
+			intOption([]string{"--scan-limit"}, "scan_limit", 2000, "max harness turns scanned per harness in one foreground pass (1-50000)"),
 			flagOption([]string{"--rebuild-episodic"}, "rebuild_episodic", false, "rebuild L2 episodic as one unit per speech segment (dry-run unless --yes)"),
 			flagOption([]string{"--yes"}, "yes", false, "confirm the episodic rebuild (purges superseded units)")),
 	}
@@ -914,6 +913,15 @@ func BuildParser() *Parser {
 		{Name: "pause", Path: []string{"scan", "pause"}, Options: commonOptions()},
 		{Name: "resume", Path: []string{"scan", "resume"}, Options: commonOptions()},
 		{Name: "status", Path: []string{"scan", "status"}, Options: commonOptions()},
+	}
+
+	recoverCmd := &command{
+		Name: "recover", Path: []string{"recover"},
+		Help: "internal: additive episodic source scan (no reconcile or prune)",
+		Options: append(commonOptions(),
+			intOption([]string{"--passes"}, "passes", 10, "scan passes"),
+			intOption([]string{"--limit"}, "limit", 500, "max turns per pass"),
+			intOption([]string{"--budget-sec"}, "budget_sec", 60, "per-pass wall budget in seconds")),
 	}
 
 	hookCmd := &command{
@@ -1136,7 +1144,7 @@ func BuildParser() *Parser {
 
 	root.Subcommands = []*command{
 		initCmd, modeCmd, configCmd, recallCmd, recentCmd,
-		importCmd, syncCmd, backgroundCmd, mcpCmd, buildCmd, ingestdCmd, scanCmd, hookCmd,
+		importCmd, syncCmd, backgroundCmd, mcpCmd, buildCmd, ingestdCmd, scanCmd, recoverCmd, hookCmd,
 		statusCmd, doctorCmd, checkCmd, installCmd, evalCmd,
 		ejectCmd, efficacyCmd, panelCmd, updateCmd,
 		maintainCmd, perfCmd, daemonCmd, engineCmd,

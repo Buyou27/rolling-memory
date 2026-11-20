@@ -204,8 +204,47 @@ func (s *vaultCorpusSnapshot) searchSnapshotCoreEngines(v *Vault, queryText stri
 	if eng == nil {
 		return nil
 	}
+	// Fold the active recollections' declared citation records into the
+	// co-citation CSR. The derived engine is immutable and cached by the noetic
+	// fingerprint, so the base engine and concurrent readers are untouched.
+	eng = s.coreEngineWithNoeticCitations(v, eng)
+	// The first search materialises the lazily built cluster state, so it runs
+	// under the lock; two cold callers must not build that state twice. After it
+	// returns, the state is immutable for this snapshot and callers no longer
+	// contend.
 	s.coreMu.Lock()
-	defer s.coreMu.Unlock()
+	if !s.coreWarm {
+		hits := searchCoreEngine(eng, v, queryText, queryPkt, topK)
+		s.coreWarm = true
+		s.coreMu.Unlock()
+		return hits
+	}
+	s.coreMu.Unlock()
+
+	// A delta overlay carries a child engine whose query scratch is shared, so
+	// that path keeps serialising. The product read path opens the immutable disk
+	// cluster and never carries a delta.
+	if eng.HasDelta() {
+		s.coreMu.Lock()
+		defer s.coreMu.Unlock()
+		return searchCoreEngine(eng, v, queryText, queryPkt, topK)
+	}
+
+	// One Engine instance owns one query scratch. A shallow copy plus ResetScratch
+	// gives the caller its own, which is the contract the engine documents for
+	// parallel callers; the copied fields point at the same shared index and
+	// cluster state. Pooling the copies was measured on the same corpus and made
+	// no difference at 10k documents (3.09x vs 3.20x over eight callers), so the
+	// per-query allocation stays: the limit there is memory bandwidth, not GC.
+	worker := *eng
+	worker.ResetScratch()
+	return searchCoreEngine(&worker, v, queryText, queryPkt, topK)
+}
+
+// searchCoreEngine runs one search on the given engine instance. It owns no
+// shared state beyond the engine it is handed, so the caller decides whether
+// that engine is the shared instance or a per-query copy.
+func searchCoreEngine(eng *core.Engine, v *Vault, queryText string, queryPkt *BlindPulsePacket, topK int) []core.Hit {
 	if queryPkt != nil {
 		qTerms, qPos := v.extractQueryFromBlindPacket(eng.Index, *queryPkt)
 		if len(qTerms) == 0 {

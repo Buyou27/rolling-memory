@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 const (
@@ -485,107 +484,11 @@ func FTS5TrigramSegmenter(sentence string) []string {
 	return out
 }
 
-// ExtractInlineSymbolUnits scans a sentence for currency/percentage/temperature symbols attached
-// to digits (such as "$480", "€9.10", "£655.59", "¥100", "95%", "25°C") that standard alphanumeric
-// word splitters skip, returning their canonical common-core symbols in order of appearance.
-func ExtractInlineSymbolUnits(sentence string) []string {
-	if len(sentence) < 2 {
-		return nil
-	}
-	var out []string
-	seen := make(map[string]bool, 2)
-	add := func(tok string) {
-		if !seen[tok] {
-			seen[tok] = true
-			out = append(out, tok)
-		}
-	}
-	var prevR rune
-	hasPrev := false
-	for i := 0; i < len(sentence); {
-		r, w := utf8.DecodeRuneInString(sentence[i:])
-		var nextR rune
-		hasNext := false
-		if i+w < len(sentence) {
-			nextR, _ = utf8.DecodeRuneInString(sentence[i+w:])
-			hasNext = true
-		}
-		prevDigit := hasPrev && unicode.IsDigit(prevR)
-		nextDigit := hasNext && unicode.IsDigit(nextR)
-		if prevDigit || nextDigit {
-			switch r {
-			case '$':
-				add("usd")
-			case '€':
-				add("eur")
-			case '£':
-				add("gbp")
-			case '¥', '￥':
-				add("cny")
-			case '₩':
-				add("krw")
-			case '₹':
-				add("inr")
-			case '₽':
-				add("rub")
-			case '₪':
-				add("ils")
-			case '₺':
-				add("try")
-			case '฿':
-				add("thb")
-			case '₱':
-				add("php")
-			case '₫':
-				add("vnd")
-			case '%', '％':
-				add("pct")
-			case '‰':
-				add("ppm")
-			case '℃':
-				add("degc")
-			case '°':
-				if hasNext && (nextR == 'C' || nextR == 'c' || nextR == 'F' || nextR == 'f') {
-					add("degc")
-				}
-			}
-		}
-		prevR = r
-		hasPrev = true
-		i += w
-	}
-	return out
-}
-
 var seAsianUnitWords = []string{
 	"กิโลกรัม", "กรัม", "กิโลเมตร", "เซนติเมตร", "เมตร", "มิลลิลิตร", "ลิตร",
 	"ชั่วโมง", "สัปดาห์", "วินาที", "นาที", "เดือน", "วัน", "ปี", "บาท", "องศา", "เปอร์เซ็นต์", "กิโลวัตต์",
 	"ກິໂລກຣາມ", "ກຣາມ", "ກິໂລແມັດ", "ແມັດ", "ລິດ", "ຊົ່ວໂມງ", "ອາທິດ", "ວິນາທີ", "ນາທີ", "ເດືອນ", "ມື້", "ປີ", "ກີບ", "ເປີເຊັນ",
 	"គីឡូក្រាម", "ក្រាម", "គីឡូម៉ែត្រ", "ម៉ែត្រ", "លីត្រ", "ម៉ោង", "សប្តាហ៍", "វិនាទី", "នាទី", "ខែ", "ថ្ងៃ", "ឆ្នាំ", "ភាគរយ",
-}
-
-// ExtractSEAsianUnitWords scans unspaced SEA text for companion unit words (longest-first).
-func ExtractSEAsianUnitWords(sentence string) []string {
-	if strings.TrimSpace(sentence) == "" {
-		return nil
-	}
-	var out []string
-	for _, w := range seAsianUnitWords {
-		if !strings.Contains(sentence, w) {
-			continue
-		}
-		absorbed := false
-		for _, prev := range out {
-			if strings.Contains(prev, w) {
-				absorbed = true
-				break
-			}
-		}
-		if !absorbed {
-			out = append(out, w)
-		}
-	}
-	return out
 }
 
 const (

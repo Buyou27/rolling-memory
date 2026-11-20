@@ -142,7 +142,7 @@ func TestEpisodicScanSnapshotStalePageDoesNotAdvanceCursor(t *testing.T) {
 	sources := []episodicScanSource{{HarnessID: "claude-code", Kind: "jsonl", Path: path}}
 	seen := map[string]bool{}
 	changed := false
-	cursor, more, err := visitEpisodicSourcesVerified(context.Background(), sources, "mem:stale", episodicSourceCursor{}, 10, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+	cursor, more, err := visitEpisodicSourcesVerified(context.Background(), sources, "mem:stale", episodicSourceCursor{}, 10, 0, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
 		seen[turn.Text] = true
 		if !changed {
 			changed = true
@@ -160,7 +160,7 @@ func TestEpisodicScanSnapshotStalePageDoesNotAdvanceCursor(t *testing.T) {
 		t.Fatalf("stale page visited nothing: %v", seen)
 	}
 	resumed := map[string]bool{}
-	cursor, _, err = visitEpisodicSourcesVerified(context.Background(), sources, "mem:stale", cursor, 10, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+	cursor, _, err = visitEpisodicSourcesVerified(context.Background(), sources, "mem:stale", cursor, 10, 0, func(_ *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
 		resumed[turn.Text] = true
 		return nil
 	})
@@ -195,7 +195,7 @@ func TestEpisodicScanSnapshotFallbackKeepsStreamingBehavior(t *testing.T) {
 		t.Fatal("streaming reader did not report the corrupt source")
 	}
 	visited := 0
-	cursor, more, err := visitEpisodicSourcesVerified(context.Background(), []episodicScanSource{source}, "mem:fallback", episodicSourceCursor{}, 10, func(*episodic.SourceSnapshot, candidateEpisodicTurn) error {
+	cursor, more, err := visitEpisodicSourcesVerified(context.Background(), []episodicScanSource{source}, "mem:fallback", episodicSourceCursor{}, 10, 0, func(*episodic.SourceSnapshot, candidateEpisodicTurn) error {
 		visited++
 		return nil
 	})
@@ -289,7 +289,7 @@ func TestEpisodicSourceScanSnapshotAndStreamingSaveIdenticalRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifiedDeleted := verifiedClient.Vault.DeletedUnitSet("episodic")
-	cursor, more, err := visitEpisodicSourcesVerified(context.Background(), sources, scope, episodicSourceCursor{}, 100, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+	cursor, more, err := visitEpisodicSourcesVerified(context.Background(), sources, scope, episodicSourceCursor{}, 100, 0, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
 		if snapshot == nil {
 			t.Fatal("JSONL page produced a turn without its frozen parse")
 		}

@@ -94,3 +94,63 @@ func CountCorpusTerms(connection *sql.DB) (int, error) {
 	}
 	return count, nil
 }
+
+// TimeConcentration describes how many memory units share one occurred_at
+// second. The cluster pipeline pairs units inside a spacetime bucket, so a
+// corpus whose event times collapse onto a few seconds carries a quadratic
+// neighbour bill: SameInstantPairs is the exact number of pairs such a corpus
+// presents to the bucket step, and PairsPerDoc is the multiplier it puts on the
+// neighbour layer.
+type TimeConcentration struct {
+	Docs             int64   `json:"docs"`
+	DistinctInstants int64   `json:"distinct_instants"`
+	LargestGroup     int64   `json:"largest_group"`
+	SameInstantPairs int64   `json:"same_instant_pairs"`
+	PairsPerDoc      float64 `json:"pairs_per_doc"`
+}
+
+// Collapsed reports whether the corpus concentrates on one instant hard enough
+// to dominate storage. The 100x line is the point where the neighbour layer is
+// already two orders of magnitude larger than the unit count; below it the
+// absolute pair count stays in the thousands and cannot move a snapshot.
+func (c TimeConcentration) Collapsed() bool {
+	return c.PairsPerDoc >= 100
+}
+
+// ReadTimeConcentration reads the occurred_at distribution. A database without
+// the canonical table reports a zero value.
+func ReadTimeConcentration(connection *sql.DB) (TimeConcentration, error) {
+	var out TimeConcentration
+	if connection == nil {
+		return out, nil
+	}
+	var present int
+	if err := connection.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_docs'`,
+	).Scan(&present); err != nil {
+		return out, err
+	}
+	if present == 0 {
+		return out, nil
+	}
+	if err := connection.QueryRow(
+		`SELECT COUNT(*), COUNT(DISTINCT occurred_at) FROM rm_docs`,
+	).Scan(&out.Docs, &out.DistinctInstants); err != nil {
+		return out, err
+	}
+	if out.Docs == 0 {
+		return out, nil
+	}
+	if err := connection.QueryRow(
+		`SELECT COALESCE(MAX(group_size), 0) FROM (SELECT COUNT(*) AS group_size FROM rm_docs GROUP BY occurred_at)`,
+	).Scan(&out.LargestGroup); err != nil {
+		return out, err
+	}
+	if err := connection.QueryRow(
+		`SELECT COALESCE(SUM(group_size * (group_size - 1) / 2), 0) FROM (SELECT COUNT(*) AS group_size FROM rm_docs GROUP BY occurred_at)`,
+	).Scan(&out.SameInstantPairs); err != nil {
+		return out, err
+	}
+	out.PairsPerDoc = float64(out.SameInstantPairs) / float64(out.Docs)
+	return out, nil
+}

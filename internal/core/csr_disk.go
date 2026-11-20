@@ -19,11 +19,14 @@ import (
 const (
 	zcsrMagic = "ZCSR"
 	// zcsrVersion is incremented whenever the serialized CSR layout or precomputed warm-domain values change.
-	// v6 adds the high-13-bit ExtFlags sidecar records (roleExt in docEntriesFlat carries only Role + low 3 bits).
-	zcsrVersion      = uint16(6)
-	zcsrKindRM       = uint16(2)
-	zcsrRMHeaderSize = 168
-	zcsrMaxBytes     = int64(4) << 30
+	// v7 persists exact timestamp-bucket membership and sparse extra bucket edges;
+	// expanded per-unit neighbor rows are no longer part of the format.
+	zcsrVersion         = uint16(7)
+	zcsrKindRM          = uint16(2)
+	zcsrRMHeaderSize    = 184
+	zcsrHeaderCRCOffset = 176
+	zcsrBodyCRCOffset   = 180
+	zcsrMaxBytes        = uint64(1) << 32
 )
 
 var (
@@ -37,6 +40,143 @@ var (
 
 func align8(n int) int {
 	return (n + 7) &^ 7
+}
+
+const (
+	zcsrMaxUint32 = (uint64(1) << 32) - 1
+	zcsrMaxInt32  = (uint64(1) << 31) - 1
+)
+
+type zcsrRMCounts struct {
+	n                       uint64
+	v                       uint64
+	numEntries              uint64
+	numPos                  uint64
+	numPhrases              uint64
+	numPhraseUnits          uint64
+	numBuckets              uint64
+	numBucketUnits          uint64
+	numExtraNeighborBuckets uint64
+	numSubj                 uint64
+	numDayCos               uint64
+	idBlobLen               uint64
+}
+
+func (c zcsrRMCounts) validateRepresentable(fileBytes, clusterN uint64) error {
+	for _, item := range [...]struct {
+		name  string
+		value uint64
+	}{
+		{"documents", c.n},
+		{"terms", c.v},
+		{"entries", c.numEntries},
+		{"positions", c.numPos},
+		{"phrases", c.numPhrases},
+		{"phrase units", c.numPhraseUnits},
+		{"buckets", c.numBuckets},
+		{"bucket units", c.numBucketUnits},
+		{"extra neighbor buckets", c.numExtraNeighborBuckets},
+		{"subject entries", c.numSubj},
+		{"day cosine pairs", c.numDayCos},
+		{"ID blob bytes", c.idBlobLen},
+	} {
+		if item.value > zcsrMaxUint32 || item.value > fileBytes {
+			return fmt.Errorf("%w: %s count %d is not representable", ErrInvalidZCSR, item.name, item.value)
+		}
+	}
+	if c.n > zcsrMaxInt32 || clusterN > zcsrMaxInt32 {
+		return fmt.Errorf("%w: document or cluster count exceeds int32 references", ErrInvalidZCSR)
+	}
+	if clusterN > c.n || c.numBuckets > clusterN || c.numBucketUnits > c.n {
+		return fmt.Errorf("%w: inconsistent bucket/cluster counts", ErrInvalidZCSR)
+	}
+	return nil
+}
+
+func (c zcsrRMCounts) payloadSize() (uint64, error) {
+	var total uint64
+	add := func(name string, count, width uint64, aligned bool) error {
+		if count != 0 && width > ^uint64(0)/count {
+			return fmt.Errorf("%w: %s section size overflow", ErrInvalidZCSR, name)
+		}
+		size := count * width
+		if aligned {
+			if size > ^uint64(0)-7 {
+				return fmt.Errorf("%w: %s alignment overflow", ErrInvalidZCSR, name)
+			}
+			size = (size + 7) &^ 7
+		}
+		if size > zcsrMaxBytes || total > zcsrMaxBytes-size {
+			return fmt.Errorf("%w: payload exceeds uint32/4 GiB segment limit at %s", ErrInvalidZCSR, name)
+		}
+		total += size
+		return nil
+	}
+	plusOne := func(name string, value uint64) (uint64, error) {
+		if value == ^uint64(0) {
+			return 0, fmt.Errorf("%w: %s row count overflow", ErrInvalidZCSR, name)
+		}
+		return value + 1, nil
+	}
+	n1, err := plusOne("document", c.n)
+	if err != nil {
+		return 0, err
+	}
+	v1, err := plusOne("term", c.v)
+	if err != nil {
+		return 0, err
+	}
+	p1, err := plusOne("phrase", c.numPhrases)
+	if err != nil {
+		return 0, err
+	}
+	b1, err := plusOne("bucket", c.numBuckets)
+	if err != nil {
+		return 0, err
+	}
+	sections := []struct {
+		name    string
+		count   uint64
+		width   uint64
+		aligned bool
+	}{
+		{"docRowPtr", n1, 4, true},
+		{"docEntriesFlat", c.numEntries, 32, false},
+		{"posPool", c.numPos, 4, true},
+		{"termKeys", c.v, 8, false},
+		{"termRowPtr", v1, 4, true},
+		{"postingPool", c.numEntries, 8, false},
+		{"termDF", c.v, 4, true},
+		{"termMass", c.v, 8, false},
+		{"termBits", c.v, 2, true},
+		{"termFlags", c.v, 1, true},
+		{"termAttributes", c.v, 24, false},
+		{"termIsPrimary", c.v, 1, true},
+		{"phraseKeys", c.numPhrases, 16, false},
+		{"phraseRowPtr", p1, 4, true},
+		{"phraseUnits", c.numPhraseUnits, 4, true},
+		{"clusters", c.n, 4, true},
+		{"bucketTimes", c.numBuckets, 8, false},
+		{"bucketRowPtr", b1, 4, true},
+		{"bucketUnits", c.numBucketUnits, 4, true},
+		{"extraNeighborRowPtr", n1, 4, true},
+		{"extraNeighborBuckets", c.numExtraNeighborBuckets, 4, true},
+		{"refTimes", c.n, 8, false},
+		{"ordPos", c.n, 4, true},
+		{"fastDocs", c.n, 24, false},
+		{"subjRowPtr", n1, 4, true},
+		{"subjectPools", c.numSubj, 16, false},
+		{"dayCos", c.numDayCos, 16, false},
+		{"unitMeta", c.n, 64, false},
+		{"unitIDOffsets", n1, 4, true},
+		{"unitIDBlob", c.idBlobLen, 1, true},
+	}
+	for _, section := range sections {
+		if err := add(section.name, section.count, section.width, section.aligned); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
 func isNativeLittleEndian() bool {
@@ -280,6 +420,9 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 		return fmt.Errorf("%w: nil Engine or Index", ErrInvalidZCSR)
 	}
 	st := eng.ensureClusterState()
+	// The v7 segment stores one phrase CSR; fold the append delta into the base before
+	// serialization. Chunked persistence is the 2d scope.
+	st.compactPhraseDelta()
 	idx := eng.Index
 	n := idx.N
 	v := len(st.termKeys)
@@ -287,11 +430,14 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 	numPos := len(st.posPool)
 	numPhrases := len(st.phraseKeys)
 	numPhraseUnits := len(st.phraseUnits)
-	numNeighbors := len(st.neighborPool)
+	numBuckets := len(st.bucketTimes)
+	numBucketUnits := len(st.bucketUnits)
+	numExtraNeighborBuckets := len(st.extraNeighborBuckets)
 	numSubj := len(st.subjIDsPool)
 
 	if len(st.docRowPtr) != n+1 || len(st.termRowPtr) != v+1 || len(st.postingPool) != numEntries ||
-		len(st.phraseRowPtr) != numPhrases+1 || len(st.neighborRowPtr) != n+1 || len(st.subjRowPtr) != n+1 ||
+		len(st.phraseRowPtr) != numPhrases+1 || len(st.bucketRowPtr) != numBuckets+1 ||
+		len(st.extraNeighborRowPtr) != n+1 || len(st.subjRowPtr) != n+1 ||
 		len(st.subjWeightsPool) != numSubj || len(st.fastDocs) != n || len(st.clusters) != n ||
 		len(st.refTimes) != n || len(st.ordPos) != n {
 		return fmt.Errorf("%w: inconsistent CSR slice lengths in rmClusterState", ErrInvalidZCSR)
@@ -320,12 +466,12 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 	}
 	numDayCos := len(dayCosList)
 
-	var idBlobLen int
+	var idBlobLen uint64
 	for u, id := range idx.UnitIDs {
-		idBlobLen += len(id)
+		idBlobLen += uint64(len(id))
 		if u < len(idx.UnitMeta) {
 			m := idx.UnitMeta[u]
-			idBlobLen += len(m.Layer)
+			idBlobLen += uint64(len(m.Layer))
 			if m.LineStart != int(int32(m.LineStart)) || m.LineEnd != int(int32(m.LineEnd)) {
 				idBlobLen += 16
 			}
@@ -333,13 +479,13 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 				// citation record: u32 count + per-ID (u32 len + bytes)
 				idBlobLen += 4
 				for _, cid := range m.CitedIDs {
-					idBlobLen += 4 + len(cid)
+					idBlobLen += 4 + uint64(len(cid))
 				}
 			}
 		}
 		if high := highExtByUnit(u, idx.UnitExtFlags); len(high) > 0 {
 			// high ExtFlags record: u32 count + per-pair (u64 hash + u16 ext, padded to 10)
-			idBlobLen += 4 + len(high)*10
+			idBlobLen += 4 + uint64(len(high))*10
 		}
 	}
 	type widePosRecord struct {
@@ -353,45 +499,34 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 			widePosList = append(widePosList, widePosRecord{posIdx: k, pos: wp})
 		}
 		sort.Slice(widePosList, func(i, j int) bool { return widePosList[i].posIdx < widePosList[j].posIdx })
-		idBlobLen += 8 + len(widePosList)*24
+		idBlobLen += 8 + uint64(len(widePosList))*24
 	}
 
-	payloadSize := 0
-	payloadSize += align8((n + 1) * 4)          // docRowPtr []uint32
-	payloadSize += numEntries * 32              // docEntriesFlat []rmDocEntry
-	payloadSize += align8(numPos * 4)           // posPool []uint32
-	payloadSize += v * 8                        // termKeys []uint64
-	payloadSize += align8((v + 1) * 4)          // termRowPtr []uint32
-	payloadSize += numEntries * 8               // postingPool []rmPostingEntry
-	payloadSize += align8(v * 4)                // TermDF []int32
-	payloadSize += v * 8                        // TermMass []float64
-	payloadSize += align8(v * 2)                // TermBits []uint16
-	payloadSize += align8(v)                    // TermFlags []uint8
-	payloadSize += v * 8                        // termEffWeight []float64
-	payloadSize += v * 8                        // termProperRatio []float64
-	payloadSize += v * 8                        // termParentGroup []uint64
-	payloadSize += align8(v)                    // termIsPrimary []uint8
-	payloadSize += numPhrases * 16              // phraseKeys []rmDyad
-	payloadSize += align8((numPhrases + 1) * 4) // phraseRowPtr []uint32
-	payloadSize += align8(numPhraseUnits * 4)   // phraseUnits []int32
-	payloadSize += align8(n * 4)                // clusters []int32
-	payloadSize += align8((n + 1) * 4)          // neighborRowPtr []uint32
-	payloadSize += align8(numNeighbors * 4)     // neighborPool []int32
-	payloadSize += n * 8                        // refTimes []int64
-	payloadSize += align8(n * 4)                // ordPos []int32
-	payloadSize += n * 24                       // fastDocs []rmFastDocStruct
-	payloadSize += align8((n + 1) * 4)          // subjRowPtr []uint32
-	payloadSize += numSubj * 8                  // subjIDsPool []uint64
-	payloadSize += numSubj * 8                  // subjWeightsPool []float64
-	payloadSize += numDayCos * 8                // dayCosKeys []uint64
-	payloadSize += numDayCos * 8                // dayCosVals []float64
-	payloadSize += n * 64                       // unitMetaFull (OccurredAt, NarratedAt, IngestedAt, AuthorHash, DocHash, BlockHash, LineStart, LineEnd, LayerOff, LayerLen)
-	payloadSize += align8((n + 1) * 4)          // unitIDOffsets []uint32
-	payloadSize += align8(idBlobLen)            // unitID + Layer string blob
-
-	if int64(payloadSize) > zcsrMaxBytes {
-		return fmt.Errorf("%w: payload %d exceeds 4 GiB limit", ErrInvalidZCSR, payloadSize)
+	counts := zcsrRMCounts{
+		n:                       uint64(n),
+		v:                       uint64(v),
+		numEntries:              uint64(numEntries),
+		numPos:                  uint64(numPos),
+		numPhrases:              uint64(numPhrases),
+		numPhraseUnits:          uint64(numPhraseUnits),
+		numBuckets:              uint64(numBuckets),
+		numBucketUnits:          uint64(numBucketUnits),
+		numExtraNeighborBuckets: uint64(numExtraNeighborBuckets),
+		numSubj:                 uint64(numSubj),
+		numDayCos:               uint64(numDayCos),
+		idBlobLen:               idBlobLen,
 	}
+	payloadSize64, err := counts.payloadSize()
+	if err != nil {
+		return err
+	}
+	if err := counts.validateRepresentable(payloadSize64, uint64(st.clusterN)); err != nil {
+		return err
+	}
+	if payloadSize64 > uint64(^uint(0)>>1)-uint64(zcsrRMHeaderSize) {
+		return fmt.Errorf("%w: segment size exceeds host int range", ErrInvalidZCSR)
+	}
+	payloadSize := int(payloadSize64)
 
 	buf := make([]byte, zcsrRMHeaderSize+payloadSize)
 	pos := zcsrRMHeaderSize
@@ -508,12 +643,16 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 	writeU32Aligned(st.phraseRowPtr)
 	writeI32Aligned(st.phraseUnits)
 
-	// 4. Spacetime & FastDocs CSR
+	// 4. Spacetime compact neighborhood backing & FastDocs CSR
 	writeI32Aligned(st.clusters)
-	writeU32Aligned(st.neighborRowPtr)
-	writeI32Aligned(st.neighborPool)
+	writeI64(st.bucketTimes)
+	writeU32Aligned(st.bucketRowPtr)
+	writeI32Aligned(st.bucketUnits)
+	writeU32Aligned(st.extraNeighborRowPtr)
+	writeI32Aligned(st.extraNeighborBuckets)
 	writeI64(st.refTimes)
 	writeI32Aligned(st.ordPos)
+
 	for _, fd := range st.fastDocs {
 		binary.LittleEndian.PutUint64(buf[pos:pos+8], math.Float64bits(fd.docTotal))
 		binary.LittleEndian.PutUint64(buf[pos+8:pos+16], uint64(fd.day))
@@ -531,9 +670,9 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 		binary.LittleEndian.PutUint64(buf[pos:pos+8], math.Float64bits(kv.val))
 		pos += 8
 	}
-	var totalUnitIDBytes uint32
+	var totalUnitIDBytes uint64
 	for _, id := range idx.UnitIDs {
-		totalUnitIDBytes += uint32(len(id))
+		totalUnitIDBytes += uint64(len(id))
 	}
 	const (
 		zcsrWideLineSpanFlag uint32 = 1 << 31
@@ -541,8 +680,9 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 		zcsrCitedIDsFlag     uint32 = 1 << 29
 		zcsrHighExtFlag      uint32 = 1 << 28
 	)
-	layerCurOff := totalUnitIDBytes
+	layerCurOff := uint32(totalUnitIDBytes)
 	for u := 0; u < n; u++ {
+
 		var m DocMeta
 		if u < len(idx.UnitMeta) {
 			m = idx.UnitMeta[u]
@@ -642,7 +782,7 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 			pos += 24
 		}
 	}
-	pos = strStart + align8(idBlobLen)
+	pos = strStart + align8(int(idBlobLen))
 
 	if pos != len(buf) {
 		return fmt.Errorf("%w: internal offset mismatch (%d != %d)", ErrInvalidZCSR, pos, len(buf))
@@ -660,28 +800,30 @@ func WriteDiskClusterCSR(path string, eng *Engine) error {
 	copy(buf[0:4], zcsrMagic)
 	binary.LittleEndian.PutUint16(buf[4:6], zcsrVersion)
 	binary.LittleEndian.PutUint16(buf[6:8], zcsrKindRM)
-	binary.LittleEndian.PutUint64(buf[8:16], uint64(n))
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(v))
-	binary.LittleEndian.PutUint64(buf[24:32], uint64(numEntries))
-	binary.LittleEndian.PutUint64(buf[32:40], uint64(numPos))
-	binary.LittleEndian.PutUint64(buf[40:48], uint64(numPhrases))
-	binary.LittleEndian.PutUint64(buf[48:56], uint64(numPhraseUnits))
-	binary.LittleEndian.PutUint64(buf[56:64], uint64(numNeighbors))
-	binary.LittleEndian.PutUint64(buf[64:72], uint64(numSubj))
-	binary.LittleEndian.PutUint64(buf[72:80], uint64(numDayCos))
-	binary.LittleEndian.PutUint64(buf[80:88], uint64(st.clusterN))
-	binary.LittleEndian.PutUint64(buf[88:96], math.Float64bits(st.meanGap))
-	binary.LittleEndian.PutUint64(buf[96:104], math.Float64bits(st.muLogGap))
-	binary.LittleEndian.PutUint64(buf[104:112], math.Float64bits(st.sigLogGap))
-	binary.LittleEndian.PutUint64(buf[112:120], math.Float64bits(st.totalDaysM))
-	binary.LittleEndian.PutUint64(buf[120:128], math.Float64bits(st.entryMeanBits))
-	binary.LittleEndian.PutUint64(buf[128:136], math.Float64bits(st.sentenceEnergyMean))
-	binary.LittleEndian.PutUint64(buf[136:144], uint64(idBlobLen))
-	binary.LittleEndian.PutUint64(buf[144:152], uint64(payloadSize))
-	binary.LittleEndian.PutUint64(buf[152:160], corpusDigest)
-	headCRC := crc32.Checksum(buf[0:160], zcsrCRCTable)
-	binary.LittleEndian.PutUint32(buf[160:164], headCRC)
-	binary.LittleEndian.PutUint32(buf[164:168], bodyCRC)
+	binary.LittleEndian.PutUint64(buf[8:16], counts.n)
+	binary.LittleEndian.PutUint64(buf[16:24], counts.v)
+	binary.LittleEndian.PutUint64(buf[24:32], counts.numEntries)
+	binary.LittleEndian.PutUint64(buf[32:40], counts.numPos)
+	binary.LittleEndian.PutUint64(buf[40:48], counts.numPhrases)
+	binary.LittleEndian.PutUint64(buf[48:56], counts.numPhraseUnits)
+	binary.LittleEndian.PutUint64(buf[56:64], counts.numBuckets)
+	binary.LittleEndian.PutUint64(buf[64:72], counts.numBucketUnits)
+	binary.LittleEndian.PutUint64(buf[72:80], counts.numExtraNeighborBuckets)
+	binary.LittleEndian.PutUint64(buf[80:88], counts.numSubj)
+	binary.LittleEndian.PutUint64(buf[88:96], counts.numDayCos)
+	binary.LittleEndian.PutUint64(buf[96:104], uint64(st.clusterN))
+	binary.LittleEndian.PutUint64(buf[104:112], math.Float64bits(st.meanGap))
+	binary.LittleEndian.PutUint64(buf[112:120], math.Float64bits(st.muLogGap))
+	binary.LittleEndian.PutUint64(buf[120:128], math.Float64bits(st.sigLogGap))
+	binary.LittleEndian.PutUint64(buf[128:136], math.Float64bits(st.totalDaysM))
+	binary.LittleEndian.PutUint64(buf[136:144], math.Float64bits(st.entryMeanBits))
+	binary.LittleEndian.PutUint64(buf[144:152], math.Float64bits(st.sentenceEnergyMean))
+	binary.LittleEndian.PutUint64(buf[152:160], counts.idBlobLen)
+	binary.LittleEndian.PutUint64(buf[160:168], payloadSize64)
+	binary.LittleEndian.PutUint64(buf[168:176], corpusDigest)
+	headCRC := crc32.Checksum(buf[0:zcsrHeaderCRCOffset], zcsrCRCTable)
+	binary.LittleEndian.PutUint32(buf[zcsrHeaderCRCOffset:zcsrHeaderCRCOffset+4], headCRC)
+	binary.LittleEndian.PutUint32(buf[zcsrBodyCRCOffset:zcsrBodyCRCOffset+4], bodyCRC)
 
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
@@ -733,7 +875,7 @@ func OpenDiskClusterEngine(path string) (*Engine, error) {
 
 // AttachDiskClusterCSR 将磁盘上的 .zcsr 段文件通过只读 mmap 零拷贝挂载到 eng 上：
 // 所有大体积 CSR 数组（docEntriesFlat、posPool、postingPool、phraseKeys、phraseRowPtr、
-// phraseUnits、neighborPool、fastDocs、subjIDsPool、subjWeightsPool）直接映射在 OS 页缓存中，
+// phraseUnits、bucket membership、fastDocs、subjIDsPool、subjWeightsPool）直接映射在 OS 页缓存中，
 // 不占用 Go GC 堆；若 releaseHeapDuplicates 为 true，同时释放 Index 上的过渡态逐单元 Map。
 func AttachDiskClusterCSR(path string, eng *Engine, releaseHeapDuplicates bool) error {
 	if eng == nil || eng.Index == nil {
@@ -790,22 +932,103 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 	if ver != zcsrVersion || kind != zcsrKindRM {
 		return nil, fmt.Errorf("%w: unsupported version=%d kind=%d", ErrInvalidZCSR, ver, kind)
 	}
-	wantHeadCRC := binary.LittleEndian.Uint32(data[160:164])
-	if crc32.Checksum(data[0:160], zcsrCRCTable) != wantHeadCRC {
+	wantHeadCRC := binary.LittleEndian.Uint32(data[zcsrHeaderCRCOffset : zcsrHeaderCRCOffset+4])
+	if crc32.Checksum(data[0:zcsrHeaderCRCOffset], zcsrCRCTable) != wantHeadCRC {
 		return nil, fmt.Errorf("%w: header CRC mismatch", ErrCorruptZCSR)
 	}
-	idBlobLen := int(binary.LittleEndian.Uint64(data[136:144]))
-	payloadSize := int(binary.LittleEndian.Uint64(data[144:152]))
-	segCorpusDigest := binary.LittleEndian.Uint64(data[152:160])
-	if payloadSize < 0 || zcsrRMHeaderSize+payloadSize != len(data) {
+
+	counts := zcsrRMCounts{
+		n:                       binary.LittleEndian.Uint64(data[8:16]),
+		v:                       binary.LittleEndian.Uint64(data[16:24]),
+		numEntries:              binary.LittleEndian.Uint64(data[24:32]),
+		numPos:                  binary.LittleEndian.Uint64(data[32:40]),
+		numPhrases:              binary.LittleEndian.Uint64(data[40:48]),
+		numPhraseUnits:          binary.LittleEndian.Uint64(data[48:56]),
+		numBuckets:              binary.LittleEndian.Uint64(data[56:64]),
+		numBucketUnits:          binary.LittleEndian.Uint64(data[64:72]),
+		numExtraNeighborBuckets: binary.LittleEndian.Uint64(data[72:80]),
+		numSubj:                 binary.LittleEndian.Uint64(data[80:88]),
+		numDayCos:               binary.LittleEndian.Uint64(data[88:96]),
+		idBlobLen:               binary.LittleEndian.Uint64(data[152:160]),
+	}
+	payloadSize64 := binary.LittleEndian.Uint64(data[160:168])
+	segCorpusDigest := binary.LittleEndian.Uint64(data[168:176])
+	if payloadSize64 > zcsrMaxBytes || payloadSize64 > uint64(len(data)-zcsrRMHeaderSize) ||
+		uint64(zcsrRMHeaderSize)+payloadSize64 != uint64(len(data)) {
 		return nil, fmt.Errorf("%w: payload size mismatch", ErrInvalidZCSR)
 	}
-	wantBodyCRC := binary.LittleEndian.Uint32(data[164:168])
+	wantBodyCRC := binary.LittleEndian.Uint32(data[zcsrBodyCRCOffset : zcsrBodyCRCOffset+4])
 	if crc32.Checksum(data[zcsrRMHeaderSize:], zcsrCRCTable) != wantBodyCRC {
 		return nil, fmt.Errorf("%w: body CRC mismatch", ErrCorruptZCSR)
 	}
-
-	n := int(binary.LittleEndian.Uint64(data[8:16]))
+	clusterN64 := binary.LittleEndian.Uint64(data[96:104])
+	if err := counts.validateRepresentable(uint64(len(data)), clusterN64); err != nil {
+		return nil, err
+	}
+	if expected, err := counts.payloadSize(); err != nil || expected != payloadSize64 {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: section layout size mismatch (%d != %d)", ErrInvalidZCSR, expected, payloadSize64)
+	}
+	toInt := func(name string, value uint64) (int, error) {
+		if value > uint64(^uint(0)>>1) || value > uint64(len(data)) {
+			return 0, fmt.Errorf("%w: %s count %d is not representable", ErrInvalidZCSR, name, value)
+		}
+		return int(value), nil
+	}
+	n, err := toInt("documents", counts.n)
+	if err != nil {
+		return nil, err
+	}
+	v, err := toInt("terms", counts.v)
+	if err != nil {
+		return nil, err
+	}
+	numEntries, err := toInt("entries", counts.numEntries)
+	if err != nil {
+		return nil, err
+	}
+	numPos, err := toInt("positions", counts.numPos)
+	if err != nil {
+		return nil, err
+	}
+	numPhrases, err := toInt("phrases", counts.numPhrases)
+	if err != nil {
+		return nil, err
+	}
+	numPhraseUnits, err := toInt("phrase units", counts.numPhraseUnits)
+	if err != nil {
+		return nil, err
+	}
+	numBuckets, err := toInt("buckets", counts.numBuckets)
+	if err != nil {
+		return nil, err
+	}
+	numBucketUnits, err := toInt("bucket units", counts.numBucketUnits)
+	if err != nil {
+		return nil, err
+	}
+	numExtraNeighborBuckets, err := toInt("extra neighbor buckets", counts.numExtraNeighborBuckets)
+	if err != nil {
+		return nil, err
+	}
+	numSubj, err := toInt("subject entries", counts.numSubj)
+	if err != nil {
+		return nil, err
+	}
+	numDayCos, err := toInt("day cosine pairs", counts.numDayCos)
+	if err != nil {
+		return nil, err
+	}
+	idBlobLen, err := toInt("ID blob bytes", counts.idBlobLen)
+	if err != nil {
+		return nil, err
+	}
+	clusterN, err := toInt("clusters", clusterN64)
+	if err != nil {
+		return nil, err
+	}
 	if idx.N != 0 && n != idx.N {
 		return nil, fmt.Errorf("%w: doc count mismatch (seg=%d idx=%d)", ErrInvalidZCSR, n, idx.N)
 	}
@@ -814,40 +1037,12 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 			return nil, fmt.Errorf("%w: corpus digest mismatch (seg=%016x idx=%016x)", ErrInvalidZCSR, segCorpusDigest, idxDigest)
 		}
 	}
-	v := int(binary.LittleEndian.Uint64(data[16:24]))
-	numEntries := int(binary.LittleEndian.Uint64(data[24:32]))
-	numPos := int(binary.LittleEndian.Uint64(data[32:40]))
-	numPhrases := int(binary.LittleEndian.Uint64(data[40:48]))
-	numPhraseUnits := int(binary.LittleEndian.Uint64(data[48:56]))
-	numNeighbors := int(binary.LittleEndian.Uint64(data[56:64]))
-	numSubj := int(binary.LittleEndian.Uint64(data[64:72]))
-	numDayCos := int(binary.LittleEndian.Uint64(data[72:80]))
-	clusterN := int(binary.LittleEndian.Uint64(data[80:88]))
-	meanGap := math.Float64frombits(binary.LittleEndian.Uint64(data[88:96]))
-	muLogGap := math.Float64frombits(binary.LittleEndian.Uint64(data[96:104]))
-	sigLogGap := math.Float64frombits(binary.LittleEndian.Uint64(data[104:112]))
-	totalDaysM := math.Float64frombits(binary.LittleEndian.Uint64(data[112:120]))
-	entryMeanBits := math.Float64frombits(binary.LittleEndian.Uint64(data[120:128]))
-	sentenceEnergyMean := math.Float64frombits(binary.LittleEndian.Uint64(data[128:136]))
-
-	// 段头计数先于一切尺寸算术做可代表上界校验（每个元素至少占 1 字节）：
-	// 超界计数直接拒绝，避免长度算术整数溢出绕过布局比对后触发越界切片。
-	for _, cnt := range [...]int{n, v, numEntries, numPos, numPhrases, numPhraseUnits, numNeighbors, numSubj, numDayCos, clusterN, idBlobLen} {
-		if cnt < 0 || cnt > len(data) {
-			return nil, fmt.Errorf("%w: implausible section count %d", ErrInvalidZCSR, cnt)
-		}
-	}
-
-	expectedPayload := align8((n+1)*4) + numEntries*32 + align8(numPos*4) +
-		v*8 + align8((v+1)*4) + numEntries*8 + align8(v*4) + v*8 + align8(v*2) + align8(v) +
-		v*8*3 + align8(v) +
-		numPhrases*16 + align8((numPhrases+1)*4) + align8(numPhraseUnits*4) +
-		align8(n*4) + align8((n+1)*4) + align8(numNeighbors*4) +
-		n*8 + align8(n*4) + n*24 + align8((n+1)*4) + numSubj*16 + numDayCos*16 +
-		n*64 + align8((n+1)*4) + align8(idBlobLen)
-	if expectedPayload != payloadSize {
-		return nil, fmt.Errorf("%w: section layout size mismatch (%d != %d)", ErrInvalidZCSR, expectedPayload, payloadSize)
-	}
+	meanGap := math.Float64frombits(binary.LittleEndian.Uint64(data[104:112]))
+	muLogGap := math.Float64frombits(binary.LittleEndian.Uint64(data[112:120]))
+	sigLogGap := math.Float64frombits(binary.LittleEndian.Uint64(data[120:128]))
+	totalDaysM := math.Float64frombits(binary.LittleEndian.Uint64(data[128:136]))
+	entryMeanBits := math.Float64frombits(binary.LittleEndian.Uint64(data[136:144]))
+	sentenceEnergyMean := math.Float64frombits(binary.LittleEndian.Uint64(data[144:152]))
 
 	pos := zcsrRMHeaderSize
 	zeroCopy := isNativeLittleEndian() && (uintptr(unsafe.Pointer(&data[0]))&7 == 0)
@@ -1037,11 +1232,17 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 	phraseUnits := sliceI32Aligned(numPhraseUnits)
 
 	clusters := sliceI32Aligned(n)
-	neighborRowPtr := sliceU32Aligned(n + 1)
-	if len(neighborRowPtr) != n+1 || neighborRowPtr[0] != 0 || int(neighborRowPtr[n]) != numNeighbors {
-		return nil, fmt.Errorf("%w: invalid neighborRowPtr bounds", ErrInvalidZCSR)
+	bucketTimes := sliceI64(numBuckets)
+	bucketRowPtr := sliceU32Aligned(numBuckets + 1)
+	if len(bucketRowPtr) != numBuckets+1 || bucketRowPtr[0] != 0 || int(bucketRowPtr[numBuckets]) != numBucketUnits {
+		return nil, fmt.Errorf("%w: invalid bucketRowPtr bounds", ErrInvalidZCSR)
 	}
-	neighborPool := sliceI32Aligned(numNeighbors)
+	bucketUnits := sliceI32Aligned(numBucketUnits)
+	extraNeighborRowPtr := sliceU32Aligned(n + 1)
+	if len(extraNeighborRowPtr) != n+1 || extraNeighborRowPtr[0] != 0 || int(extraNeighborRowPtr[n]) != numExtraNeighborBuckets {
+		return nil, fmt.Errorf("%w: invalid extraNeighborRowPtr bounds", ErrInvalidZCSR)
+	}
+	extraNeighborBuckets := sliceI32Aligned(numExtraNeighborBuckets)
 	refTimes := sliceI64(n)
 	ordPos := sliceI32Aligned(n)
 
@@ -1309,12 +1510,56 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 			return nil, fmt.Errorf("%w: phraseUnits[%d] unit=%d out of bounds [0,%d)", ErrInvalidZCSR, i, u, n)
 		}
 	}
+	for i := 1; i < len(bucketTimes); i++ {
+		if bucketTimes[i] <= bucketTimes[i-1] {
+			return nil, fmt.Errorf("%w: bucketTimes not strictly ascending at %d", ErrInvalidZCSR, i)
+		}
+	}
+	for i := 0; i < numBuckets; i++ {
+		if bucketRowPtr[i+1] < bucketRowPtr[i] || int(bucketRowPtr[i+1]) > len(bucketUnits) {
+			return nil, fmt.Errorf("%w: bucketRowPtr out of bounds at %d", ErrInvalidZCSR, i)
+		}
+	}
+	seenBucketUnit := make([]bool, n)
+	for bucket := 0; bucket < numBuckets; bucket++ {
+		for i := bucketRowPtr[bucket]; i < bucketRowPtr[bucket+1]; i++ {
+			u := bucketUnits[i]
+			if u < 0 || int(u) >= n {
+				return nil, fmt.Errorf("%w: bucketUnits[%d] unit=%d out of bounds [0,%d)", ErrInvalidZCSR, i, u, n)
+			}
+			if seenBucketUnit[u] || ordPos[u] != int32(bucket) || refTimes[u] != bucketTimes[bucket] {
+				return nil, fmt.Errorf("%w: inconsistent bucket membership at bucket=%d unit=%d", ErrInvalidZCSR, bucket, u)
+			}
+			seenBucketUnit[u] = true
+		}
+	}
 	for u := 0; u < n; u++ {
-		if neighborRowPtr[u+1] < neighborRowPtr[u] || int(neighborRowPtr[u+1]) > len(neighborPool) {
-			return nil, fmt.Errorf("%w: neighborRowPtr out of bounds at %d", ErrInvalidZCSR, u)
+		if extraNeighborRowPtr[u+1] < extraNeighborRowPtr[u] || int(extraNeighborRowPtr[u+1]) > len(extraNeighborBuckets) {
+			return nil, fmt.Errorf("%w: extraNeighborRowPtr out of bounds at %d", ErrInvalidZCSR, u)
 		}
 		if subjRowPtr[u+1] < subjRowPtr[u] || int(subjRowPtr[u+1]) > len(subjIDsPool) {
 			return nil, fmt.Errorf("%w: subjRowPtr out of bounds at %d", ErrInvalidZCSR, u)
+		}
+	}
+	for u := 0; u < n; u++ {
+		rowStart, rowEnd := extraNeighborRowPtr[u], extraNeighborRowPtr[u+1]
+		for i := rowStart; i < rowEnd; i++ {
+			b := extraNeighborBuckets[i]
+			if b < 0 || int(b) >= numBuckets {
+				return nil, fmt.Errorf("%w: invalid extraNeighborBuckets[%d]=%d for unit %d", ErrInvalidZCSR, i, b, u)
+			}
+			delta := b - ordPos[u]
+			if delta < 0 {
+				delta = -delta
+			}
+			if ordPos[u] < 0 || delta <= 2 {
+				return nil, fmt.Errorf("%w: extra neighbor bucket %d is not outside base span for unit %d", ErrInvalidZCSR, b, u)
+			}
+			for j := rowStart; j < i; j++ {
+				if extraNeighborBuckets[j] == b {
+					return nil, fmt.Errorf("%w: duplicate extra neighbor bucket %d for unit %d", ErrInvalidZCSR, b, u)
+				}
+			}
 		}
 	}
 	if clusterN < 0 || clusterN > n {
@@ -1324,13 +1569,11 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 		if clusters[u] < 0 || int(clusters[u]) >= clusterN {
 			return nil, fmt.Errorf("%w: clusters[%d]=%d out of bounds [0,%d)", ErrInvalidZCSR, u, clusters[u], clusterN)
 		}
-		if ordPos[u] < -1 || int(ordPos[u]) >= clusterN {
-			return nil, fmt.Errorf("%w: ordPos[%d]=%d out of bounds [-1,%d)", ErrInvalidZCSR, u, ordPos[u], clusterN)
+		if ordPos[u] < -1 || int(ordPos[u]) >= numBuckets {
+			return nil, fmt.Errorf("%w: ordPos[%d]=%d out of bounds [-1,%d)", ErrInvalidZCSR, u, ordPos[u], numBuckets)
 		}
-	}
-	for i, u := range neighborPool {
-		if u < 0 || int(u) >= n {
-			return nil, fmt.Errorf("%w: neighborPool[%d] unit=%d out of bounds [0,%d)", ErrInvalidZCSR, i, u, n)
+		if (ordPos[u] >= 0) != seenBucketUnit[u] {
+			return nil, fmt.Errorf("%w: ordPos and bucket membership disagree at unit %d", ErrInvalidZCSR, u)
 		}
 	}
 	for i := 1; i < len(dayCosKeys); i++ {
@@ -1393,45 +1636,36 @@ func parseDiskClusterCSR(data []byte, idx *Index, refreshStrings bool) (*rmClust
 		}
 	}
 
-	var maxOrd int32 = -1
-	for _, o := range ordPos {
-		if o > maxOrd {
-			maxOrd = o
-		}
-	}
-	var bucketTimes []int64
-	if maxOrd >= 0 {
-		bucketTimes = make([]int64, maxOrd+1)
-		for u, o := range ordPos {
-			if o >= 0 {
-				bucketTimes[o] = refTimes[u]
-			}
-		}
+	if len(bucketTimes) == 0 && numBuckets > 0 {
+		return nil, fmt.Errorf("%w: bucketTimes unexpectedly empty", ErrInvalidZCSR)
 	}
 
 	st := &rmClusterState{
-		builtIndex:         idx,
-		builtIndexGen:      idx.stateGen,
-		docRowPtr:          docRowPtr,
-		docEntriesFlat:     docEntriesFlat,
-		posPool:            posPool,
-		termKeys:           termKeys,
-		termRowPtr:         termRowPtr,
-		postingPool:        postingPool,
-		termEffWeight:      termEffW,
-		termProperRatio:    termPropR,
-		termParentGroup:    termParentG,
-		termIsPrimary:      primRaw,
-		phraseKeys:         phraseKeys,
-		phraseRowPtr:       phraseRowPtr,
-		phraseUnits:        phraseUnits,
-		clusters:           clusters,
-		clusterN:           clusterN,
-		bucketTimes:        bucketTimes,
-		neighborRowPtr:     neighborRowPtr,
-		neighborPool:       neighborPool,
-		refTimes:           refTimes,
-		meanGap:            meanGap,
+		builtIndex:           idx,
+		builtIndexGen:        idx.stateGen,
+		docRowPtr:            docRowPtr,
+		docEntriesFlat:       docEntriesFlat,
+		posPool:              posPool,
+		termKeys:             termKeys,
+		termRowPtr:           termRowPtr,
+		postingPool:          postingPool,
+		termEffWeight:        termEffW,
+		termProperRatio:      termPropR,
+		termParentGroup:      termParentG,
+		termIsPrimary:        primRaw,
+		phraseKeys:           phraseKeys,
+		phraseRowPtr:         phraseRowPtr,
+		phraseUnits:          phraseUnits,
+		clusters:             clusters,
+		clusterN:             clusterN,
+		bucketTimes:          bucketTimes,
+		bucketRowPtr:         bucketRowPtr,
+		bucketUnits:          bucketUnits,
+		extraNeighborRowPtr:  extraNeighborRowPtr,
+		extraNeighborBuckets: extraNeighborBuckets,
+		refTimes:             refTimes,
+		meanGap:              meanGap,
+
 		muLogGap:           muLogGap,
 		sigLogGap:          sigLogGap,
 		ordPos:             ordPos,

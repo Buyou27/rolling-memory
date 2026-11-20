@@ -52,26 +52,9 @@ func blindFormFlagMarks(line string, words []string) []uint8 {
 // 头字节相等性由 codec 差分测试双向钉死）。
 const wireFlagWideF uint8 = 1 << 1
 
-func CarrierUnits(r rune) uint16          { return plain.CarrierUnits(r) }
-func SplitSentences(text string) []string { return plain.SplitSentences(text) }
-func SplitWords(sent string) []string     { return plain.SplitWords(sent) }
-func ExtractStructuredDateHarmonics(sent string) []string {
-	return plain.ExtractStructuredDateHarmonics(sent)
-}
+func SplitWords(sent string) []string { return plain.SplitWords(sent) }
 func FormatPlaintextWithMeta(rawText string, meta UnitMeta) string {
 	return plain.FormatPlaintextWithMeta(rawText, meta)
-}
-func ResolveSubUnitIDAndText(parentID string, su SubUnit, kindCounts map[string]int) (subID, kind, txt string, idx int, ok bool) {
-	return plain.ResolveSubUnitIDAndText(parentID, su, kindCounts)
-}
-func ExtractInlineSymbolUnits(sentence string) []string {
-	return plain.ExtractInlineSymbolUnits(sentence)
-}
-func ExtractSEAsianUnitWords(sentence string) []string {
-	return plain.ExtractSEAsianUnitWords(sentence)
-}
-func LookupClosedSetHarmonics(token string) []string {
-	return plain.LookupClosedSetHarmonics(token)
 }
 
 // BlindEncoder 是 plain.BlindEncoder 的传输适配包装：编码、分词与打包语义 100%
@@ -88,26 +71,6 @@ func NewBlindEncoder(secret []byte) *BlindEncoder {
 }
 
 func (e *BlindEncoder) KeyedHash64(token string) uint64 { return e.enc.KeyedHash64(token) }
-
-// CloneWithPepper 以新 pepper 派生编码器并保留 segOpts/harmOpts（唯一实现见 plain）。
-func (e *BlindEncoder) CloneWithPepper(pepper []byte) *BlindEncoder {
-	if e == nil {
-		return NewBlindEncoder(pepper)
-	}
-	clone := &BlindEncoder{enc: e.enc.CloneWithPepper(pepper)}
-	if e.segUserOpts != nil {
-		opts := *e.segUserOpts
-		clone.SetSegmenterOptions(opts)
-	}
-	return clone
-}
-
-func (e *BlindEncoder) SetWordSegmenter(seg WordSegmenter) {
-	if e == nil || e.enc == nil {
-		return
-	}
-	e.enc.SetWordSegmenter(seg)
-}
 
 func (e *BlindEncoder) SetCanonicalHarmonics(opts CanonicalHarmonicOptions) {
 	if e == nil || e.enc == nil {
@@ -211,36 +174,9 @@ func wireReadyPacket(p plain.BlindPulsePacket) BlindPulsePacket {
 	return pkt
 }
 
-func (e *BlindEncoder) PackSentenceAtoms(sent string) []BlindTokenAtom {
-	return atomsFromPlain(e.enc.PackSentenceTerms(sent))
-}
-
-func (e *BlindEncoder) PackBlindPacketWithSegmenter(docID string, text string, occurredAt int64, opts SegmenterPackOptions) (BlindPulsePacket, []string) {
-	pkt, sents := e.enc.PackBlindPacketWithSegmenter(docID, text, occurredAt, e.plainSegmenterOptions(opts))
-	return wireReadyPacket(pkt), sents
-}
-
 func (e *BlindEncoder) PackBlindPacket(docID string, text string, occurredAt int64) (BlindPulsePacket, []string) {
 	pkt, sents := e.enc.PackBlindPacket(docID, text, occurredAt)
 	return wireReadyPacket(pkt), sents
-}
-
-func (e *BlindEncoder) PackBlindPacketWithMeta(docID string, text string, meta UnitMeta) (BlindPulsePacket, []string) {
-	pkt, sents := e.enc.PackBlindPacketWithMeta(docID, text, meta)
-	return wireReadyPacket(pkt), sents
-}
-
-func (e *BlindEncoder) PackCompositePackets(parentID string, parentText string, occurredAt int64, subUnits []SubUnit) ([]BlindPulsePacket, map[string]string) {
-	var pe *plain.BlindEncoder
-	if e != nil {
-		pe = e.enc
-	}
-	pkts, subToParent := pe.PackCompositePackets(parentID, parentText, occurredAt, subUnits)
-	out := make([]BlindPulsePacket, 0, len(pkts))
-	for _, p := range pkts {
-		out = append(out, wireReadyPacket(p))
-	}
-	return out, subToParent
 }
 
 // EncodeWirePayload encodes flat slots and sentence frames into the canonical `atoms_b64` payload.

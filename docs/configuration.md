@@ -45,7 +45,6 @@ rmem config set <section.key> <value>
 | Key | Default | Meaning |
 |---|---|---|
 | `recall.delivery_window` | `auto` (resolves to `0-16`) | Adaptive delivery window: `auto`, `0-16`, `0-32`, or `0-64`. Larger windows give more evidence in one recall |
-| `recall.raw_limit` | `5` | Raw-evidence delivery cap within the character budget |
 | `recall.chars` | `16000` | Character budget per recall |
 | `recall.budget_ms` | `500` | Latency budget hint |
 

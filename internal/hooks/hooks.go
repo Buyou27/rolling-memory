@@ -1,17 +1,12 @@
 // Copyright 2026 Rocareer & Rolling & PsychologyLake.org.cn
 // Author: Albert <albert@rocareer.com>
 
-// Package hooks implements the fail-open harness hooks.
+// Package hooks implements the fail-open UserPromptSubmit hook.
 //
-// Events map to the three useful points of a coding session:
-//
-//   - start  -- import new transcript turns, replay them locally, optional boot line.
-//   - recall -- read-side injection for the current prompt (<rolling-memory-recall>).
-//   - close  -- import the remaining turns, replay them locally and close the
-//     memory; closing is the stop checkpoint (the usb profile truncates the WAL
-//     in store.Close).
-//
-// No hook ever raises into the harness. All failures are logged and exit 0.
+// The hook only observes the prompt: it records the cadence counter used by the
+// four-turn attention anchor. Transcript capture and ingestion belong to the
+// background sync path, so the hook never reads or writes memory content and
+// never raises into the harness. All failures are logged and exit 0.
 package hooks
 
 import (
@@ -492,46 +487,6 @@ func invalidIntLiteral(value string) error {
 	return fmt.Errorf("invalid literal for int() with base 10: '%s'", value)
 }
 
-// pyJoin mirrors pathlib's "base / path": "." components vanish while ".."
-// and repeated separators survive.
-func pyJoin(base, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	prefix := ""
-	if strings.HasPrefix(base, "/") {
-		prefix = "/"
-	}
-	parts := []string{}
-	for _, part := range strings.Split(base, "/") {
-		if part == "" || part == "." {
-			continue
-		}
-		parts = append(parts, part)
-	}
-	for _, part := range strings.Split(path, "/") {
-		if part == "" || part == "." {
-			continue
-		}
-		parts = append(parts, part)
-	}
-	return prefix + strings.Join(parts, "/")
-}
-
-// pathStem mirrors pathlib's Path.stem (a dotfile keeps its leading dot).
-func pathStem(path string) string {
-	base := filepath.Base(path)
-	return base[:len(base)-len(pyPathSuffix(base))]
-}
-
-func pyPathSuffix(name string) string {
-	index := strings.LastIndex(name, ".")
-	if index <= 0 || index == len(name)-1 {
-		return ""
-	}
-	return name[index:]
-}
-
 func workspaceProject(payload map[string]any) string {
 	raw := firstTruthy(payload["cwd"], payload["workspace"], os.Getenv("ROLLING_MEMORY_WORKSPACE"))
 	if raw == nil {
@@ -624,27 +579,6 @@ func captureUserPrompt(memory *facade.Memory, cfg *config.Config, session, promp
 	return 0
 }
 
-// stripDegenerateTail strips LLM streaming degeneration tails where a single
-// non-space character repeats >= 12 times consecutively (e.g. "]]]]]]]]]]]]...").
-func stripDegenerateTail(s string) string {
-	runes := []rune(s)
-	if len(runes) < 16 {
-		return s
-	}
-	// Scan for any run of >= 12 identical non-space characters and truncate from the start of that run
-	runStart := 0
-	for i := 1; i <= len(runes); i++ {
-		if i < len(runes) && runes[i] == runes[runStart] && !unicode.IsSpace(runes[i]) {
-			continue
-		}
-		if i-runStart >= 12 {
-			return strings.TrimSpace(string(runes[:runStart]))
-		}
-		runStart = i
-	}
-	return s
-}
-
 // isCadenceReminderDue reports whether the current session has reached a 4-turn
 // cadence boundary (turn 4, 8, 12, ...) so a lightweight (~40-token) attention
 // anchor can be emitted on otherwise silent turns.
@@ -662,32 +596,4 @@ func isCadenceReminderDue(memory *facade.Memory, scope, session string) bool {
 		return false
 	}
 	return n%4 == 0
-}
-
-// stripMemoryAttributionLine removes the single-line natural memory impact
-// attribution sentence (containing "Rolling-Memory 记忆") from the opening of an
-// assistant reply, preventing self-referential attribution lines from
-// polluting episodic history or future assertions.
-func stripMemoryAttributionLine(s string) string {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
-		return s
-	}
-	lines := strings.Split(trimmed, "\n")
-	checkIdx := 0
-	if len(lines) > 1 && strings.HasPrefix(strings.TrimSpace(lines[0]), "技能判定：") {
-		checkIdx = 1
-		for checkIdx < len(lines) && strings.TrimSpace(lines[checkIdx]) == "" {
-			checkIdx++
-		}
-	}
-	if checkIdx < len(lines) {
-		cand := strings.TrimSpace(lines[checkIdx])
-		if strings.Contains(cand, "Rolling-Memory 记忆") && utf8.RuneCountInString(cand) <= 180 {
-			remaining := append([]string{}, lines[:checkIdx]...)
-			remaining = append(remaining, lines[checkIdx+1:]...)
-			return strings.TrimSpace(strings.Join(remaining, "\n"))
-		}
-	}
-	return s
 }

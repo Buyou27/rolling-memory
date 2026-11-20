@@ -215,14 +215,13 @@ type EvalQuestionItem struct {
 
 // EvalOverviewRequest 测评概览与题集分页请求。
 type EvalOverviewRequest struct {
-	Suite     string `json:"suite"`
-	Tier      string `json:"tier"`
-	ArmMode   string `json:"arm_mode,omitempty"`
-	PulseMode string `json:"pulse_mode,omitempty"`
-	Category  string `json:"category"`
-	Keyword   string `json:"keyword"`
-	Page      int    `json:"page"`
-	PageSize  int    `json:"page_size"`
+	Suite    string `json:"suite"`
+	Tier     string `json:"tier"`
+	ArmMode  string `json:"arm_mode,omitempty"`
+	Category string `json:"category"`
+	Keyword  string `json:"keyword"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
 }
 
 // LeaderboardEntry locomo-backboard 榜单条目（含公开商业榜系统与我方同协议实测对标行）。
@@ -585,19 +584,17 @@ type EvalJobStatus struct {
 }
 
 type evalIngestRequest struct {
-	Suite     string `json:"suite"`
-	ArmMode   string `json:"arm_mode,omitempty"`
-	PulseMode string `json:"pulse_mode,omitempty"`
-	Action    string `json:"action"` // prepare | verify | rebuild
+	Suite   string `json:"suite"`
+	ArmMode string `json:"arm_mode,omitempty"`
+	Action  string `json:"action"` // prepare | verify | rebuild
 }
 
 type evalRunRequest struct {
-	Suite         string         `json:"suite"`                // locomo | atm
-	Mode          string         `json:"mode"`                 // single | batch | status | stop | detail | delete | test_ai | check_ai | ai_channels | ai_apply_channel
-	Action        string         `json:"action"`               // start | attach
-	Tier          string         `json:"tier"`                 // 100 | 200 | 1540
-	ArmMode       string         `json:"arm_mode"`             // sdk-local-plain | oracle
-	PulseMode     string         `json:"pulse_mode,omitempty"` // local_plain
+	Suite         string         `json:"suite"`    // locomo | atm
+	Mode          string         `json:"mode"`     // single | batch | status | stop | detail | delete | test_ai | check_ai | ai_channels | ai_apply_channel
+	Action        string         `json:"action"`   // start | attach
+	Tier          string         `json:"tier"`     // 100 | 200 | 1540
+	ArmMode       string         `json:"arm_mode"` // sdk-local-plain | oracle
 	UseAgents     bool           `json:"use_agents"`
 	Category      string         `json:"category"`
 	RawLimit      int            `json:"raw_limit"`
@@ -1734,7 +1731,7 @@ func currentEvalScope(storePath, suite string) string {
 func normalizeEvalArm(armMode string) (string, error) {
 	arm := strings.ToLower(strings.TrimSpace(armMode))
 	switch arm {
-	case "", EvalArmSDKLocalPlain, EvalPulseModeLocalPlain:
+	case "", EvalArmSDKLocalPlain:
 		return EvalArmSDKLocalPlain, nil
 	case EvalArmOracle:
 		return EvalArmOracle, nil
@@ -1745,9 +1742,6 @@ func normalizeEvalArm(armMode string) (string, error) {
 
 func validateEvalRunRequest(req evalRunRequest) (string, error) {
 	rawArm := req.ArmMode
-	if strings.TrimSpace(rawArm) == "" && strings.TrimSpace(req.PulseMode) != "" {
-		rawArm = req.PulseMode
-	}
 	if strings.TrimSpace(req.Profile) != "" || strings.TrimSpace(req.NoeticMode) != "" {
 		return "", errors.New("profile/noetic_mode 为旧版字段，当前版本不再接受；请移除后重试")
 	}
@@ -2196,8 +2190,6 @@ func buildEvalPrepareArgs(suite, tier, storePath, dataDir string, rebuild bool) 
 	if suite == SuiteATM {
 		args = append(args, "--suite", "atm")
 	}
-	// 现役唯一评测通道 = 本地明文；显式传参（引擎缺省同为 local_plain）。
-	args = append(args, "--pulse-mode", EvalPulseModeLocalPlain)
 	args = append(args,
 		"--tier", tier, "--limit", "1", "--answerer", "none", "--judge", "off", "--json",
 	)
@@ -2550,7 +2542,7 @@ func evalIngestHandler(c *gin.Context) {
 	suite := normalizeSuite(req.Suite)
 	home, _ := os.UserHomeDir()
 	// 现役唯一评测通道 = 本地明文：脉冲臂名一律在任何外部动作之前 fail-closed 拒收。
-	if _, armErr := normalizeEvalArm(firstNonEmptyStr(req.ArmMode, req.PulseMode)); armErr != nil {
+	if _, armErr := normalizeEvalArm(req.ArmMode); armErr != nil {
 		httpx.Fail(c, httpx.WithCode(http.StatusBadRequest), httpx.WithMessage(armErr.Error()))
 		return
 	}
@@ -3409,8 +3401,6 @@ func buildReproCLICommand(tier, armMode, storePath string, rawLimit int, useAgen
 	args := []string{"rmem", "eval", "--eval-store", portableCLIStorePath(storePath), "--tier", normalizeTier(tier)}
 	if strings.EqualFold(strings.TrimSpace(armMode), EvalArmOracle) {
 		args = append(args, "--oracle")
-	} else {
-		args = append(args, "--pulse-mode", EvalPulseModeLocalPlain)
 	}
 	if useAgents {
 		args = append(args, "--answerer", "llm", "--judge", "llm")
@@ -5561,8 +5551,6 @@ func buildATMReproCLICommand(tier, armMode, storePath string, rawLimit int, useA
 	args := []string{"rmem", "eval", "--eval-store", portableCLIStorePath(storePath), "--suite", "atm", "--tier", normalizeATMTier(tier)}
 	if strings.EqualFold(strings.TrimSpace(armMode), EvalArmOracle) {
 		args = append(args, "--oracle")
-	} else {
-		args = append(args, "--pulse-mode", EvalPulseModeLocalPlain)
 	}
 	if useAgents {
 		args = append(args, "--answerer", "llm", "--judge", "llm")

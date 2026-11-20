@@ -64,44 +64,6 @@ func InverseSplit(slots []TermSample) []TermSample {
 	return terms
 }
 
-// FoldSamples folds samples of the same keyed identity to their minimum width and count.
-func FoldSamples(samples []TermSample) []FoldedTerm {
-	folded := make(map[uint64]FoldedTerm, len(samples))
-	for _, sample := range samples {
-		prev, seen := folded[sample.H]
-		if !seen {
-			folded[sample.H] = FoldedTerm{
-				Key:     sample.H,
-				Bits:    sample.W,
-				Samples: 1,
-			}
-			continue
-		}
-		prev.Samples++
-		if sample.W < prev.Bits {
-			prev.Bits = sample.W
-		}
-		folded[sample.H] = prev
-	}
-	terms := make([]FoldedTerm, 0, len(folded))
-	for _, foldedTerm := range folded {
-		terms = append(terms, foldedTerm)
-	}
-	sort.Slice(terms, func(a, b int) bool {
-		left, right := terms[a], terms[b]
-		if left.Bits != right.Bits {
-			return left.Bits > right.Bits
-		}
-		return left.Key < right.Key
-	})
-	return terms
-}
-
-// ExtractTerms filters invalid samples and folds valid samples by key.
-func ExtractTerms(slots []TermSample) []FoldedTerm {
-	return FoldSamples(InverseSplit(slots))
-}
-
 // HashPhraseDyad computes the deterministic 64-bit FNV-1a fingerprint of (left, right).
 func HashPhraseDyad(left, right uint64) uint64 {
 	hash := fnv.New64a()
@@ -279,47 +241,6 @@ func firstDecorationClosedSetTag(low string) string {
 		}
 	}
 	return ""
-}
-
-// ExtractDecorationClosedSet 执行第 2 层「装饰闭集 / 分类闭集（DecorationClosedSet / CategoryClosedSet）」对齐：
-// 覆盖 100% 确定性有限世界知识映射（ISO-3166 地名 @geo:cc:*、度量衡与货币单位 @unit:*、
-// 亲属/角色 @kin:*/@role:*、场所 @venue:*、类别 @obj:* 及纯形式结构化日期校准饰标 cal:YYYY-MM-DD）。
-//
-// 排除 @dim:* 与 @geo:cont:* 宽泛二阶大类轴；100% 零香农先验、零 BPE 先验判官调用。
-func ExtractDecorationClosedSet(low string) []string {
-	if low == "" {
-		return nil
-	}
-	isSingleASCIILetter := len(low) == 1 && low[0] >= 'a' && low[0] <= 'z'
-	var out []string
-	for _, tag := range LookupClosedSetHarmonics(low) {
-		if strings.HasPrefix(tag, "@dim:") || strings.HasPrefix(tag, "@geo:cont:") {
-			continue
-		}
-		if isSingleASCIILetter && strings.HasPrefix(tag, "@unit:") {
-			continue
-		}
-		out = append(out, tag)
-	}
-	if len(out) == 0 {
-		if idx := strings.IndexByte(low, '\''); idx > 0 {
-			for _, tag := range LookupClosedSetHarmonics(low[:idx]) {
-				if strings.HasPrefix(tag, "@dim:") || strings.HasPrefix(tag, "@geo:cont:") || strings.HasPrefix(tag, "@unit:") || strings.HasPrefix(tag, "@cal:") {
-					continue
-				}
-				out = append(out, tag)
-			}
-		}
-	}
-	if len(low) >= 8 && strings.IndexFunc(low, unicode.IsNumber) >= 0 {
-		for _, iso := range ExtractStructuredDateHarmonics(low) {
-			out = append(out, "cal:"+iso)
-			if len(iso) == 10 && iso[4] == '-' && iso[7] == '-' {
-				out = append(out, "@cal:month:"+iso[5:7])
-			}
-		}
-	}
-	return out
 }
 
 // ExtractMorphShaping 执行纯确定性字符几何规整与 BPE 纯字典切分（零 BPE 先验与零香农先验）：
@@ -587,5 +508,3 @@ func (a *TermExtractor) ExtractFeatures(text string) DocumentFeatures {
 		SpaceFusion:  a.ExtractSpaceFaultFusion(canonical),
 	}
 }
-
-func SentenceEnergySegments(sent string) []string { return sentenceEnergySegments(sent) }

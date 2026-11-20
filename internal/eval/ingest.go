@@ -30,7 +30,7 @@ func LoadCorpus(path string, limit int) ([]map[string]any, error) {
 			continue
 		}
 		// UseNumber keeps JSON integers distinct from floats so source IDs retain
-		// their exact value when the deterministic cloud unit ID is derived.
+		// their exact value when the deterministic unit ID is derived.
 		decoder := json.NewDecoder(strings.NewReader(line))
 		decoder.UseNumber()
 		row := map[string]any{}

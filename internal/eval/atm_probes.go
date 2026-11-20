@@ -355,9 +355,6 @@ func RunATMProbes(cfg *config.Config, opts Options) (map[string]any, error) {
 		logf = func(string, ...any) {}
 	}
 	started := time.Now()
-	if !IsValidPulseMode(opts.PulseMode) {
-		return nil, fmt.Errorf("invalid pulse_mode %q (only %q is supported)", opts.PulseMode, PulseModeLocalPlain)
-	}
 	tier := NormalizeProbeTier(opts.Tier)
 	if tier == "" {
 		return nil, fmt.Errorf("未知探针档 %q（可用：%s）", opts.Tier, strings.Join(ProbeTierNames, " / "))
@@ -386,10 +383,9 @@ func RunATMProbes(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 
 	opts.Suite = SuiteATMProbes
-	opts.PulseMode = NormalizePulseMode(opts.PulseMode)
 	// 探针与 ATM 主档共用冻结语料与同一世代 scope：索引一次建成、零重复灌库。
-	scope := ScopeForSuiteAndMode(SuiteATM, evalUserID(), opts.PulseMode)
-	engine, err := NewLocalEngine(cfg, SuiteATM, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
+	scope := ScopeForSuite(SuiteATM, evalUserID())
+	engine, err := NewLocalEngine(cfg, SuiteATM, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer))
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +413,7 @@ func RunATMProbes(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 
 	logf("[atm-probes] suite=%s tier=%s pulse_mode=%s probes=%d raw_limit=%d scope=%s",
-		SuiteATMProbes, tier, opts.PulseMode, len(probes), rawLimit, scope)
+		SuiteATMProbes, tier, PulseModeLocalPlain, len(probes), rawLimit, scope)
 
 	rows := make([]map[string]any, len(probes))
 	errs := make([]error, len(probes))
@@ -534,9 +530,9 @@ func RunATMProbes(cfg *config.Config, opts Options) (map[string]any, error) {
 	summary := atmProbeSummary{
 		Suite:                      SuiteATMProbes,
 		Tier:                       tier,
-		Arm:                        "atm-probes-" + tier + "-" + ArmModeForPulseMode(opts.PulseMode),
-		PulseMode:                  opts.PulseMode,
-		Transport:                  TransportForPulseMode(opts.PulseMode),
+		Arm:                        "atm-probes-" + tier + "-" + EvalArmSDKLocalPlain,
+		PulseMode:                  PulseModeLocalPlain,
+		Transport:                  LocalPlainTransport,
 		Scope:                      scope,
 		LocalFallback:              false,
 		RawLimit:                   rawLimit,

@@ -225,6 +225,17 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 	}
 
 	report.Mode = "apply"
+	purgeEpochBumped := false
+	bumpPurgeEpoch := func() error {
+		if purgeEpochBumped {
+			return nil
+		}
+		if err := tc.Vault.BumpPurgeEpoch(ctx); err != nil {
+			return fmt.Errorf("episodic prune purge epoch: %w", err)
+		}
+		purgeEpochBumped = true
+		return nil
+	}
 	if len(absent) > 0 {
 		receiptDir := config.DefaultStateDir()
 		if err := os.MkdirAll(receiptDir, 0o700); err != nil {
@@ -250,6 +261,11 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 				_ = receipt.Close()
 				return report, fmt.Errorf("episodic prune receipt: %w", err)
 			}
+			if err := bumpPurgeEpoch(); err != nil {
+				_ = receipt.Close()
+				_ = os.Remove(receiptPath)
+				return report, err
+			}
 			removed, delErr := tc.Vault.DeleteLocalEpisodicUnit(item.docID, item.refPointer)
 			if delErr != nil {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("episodic prune %s: %v", item.docID, delErr))
@@ -267,11 +283,10 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 		}
 		report.Receipt = receiptPath
 	}
-	report.NoeticRemoved, report.LocusHealed = pruneOrphanNoeticAndHealLoci(ctx, db)
-	if report.Removed > 0 || report.NoeticRemoved > 0 {
-		if bumpErr := tc.Vault.BumpPurgeEpoch(ctx); bumpErr != nil {
-			report.Warnings = append(report.Warnings, fmt.Sprintf("purge epoch: %v", bumpErr))
-		}
+	var cleanupErr error
+	report.NoeticRemoved, report.LocusHealed, cleanupErr = pruneOrphanNoeticAndHealLoci(ctx, db, bumpPurgeEpoch)
+	if cleanupErr != nil {
+		return report, cleanupErr
 	}
 	if memory.Config != nil && mcp.ShouldUseUnixDaemon(memory.Config.DB) {
 		mcp.InvalidateUnixDaemonCaches("")
@@ -290,9 +305,9 @@ func pruneEpisodicUnitsWithOptions(ctx context.Context, memory *facade.Memory, o
 // rows (whose cited L1/L2 units no longer exist in the vault), and repairs episodic
 // rows whose locus was stamped as "admin" or empty by looking up the session's Git
 // workspace root in the ZCode database.
-func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemoved int, locusHealed int) {
+func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB, beforeDelete func() error) (noeticRemoved int, locusHealed int, err error) {
 	if db == nil {
-		return 0, 0
+		return 0, 0, nil
 	}
 	type noeticRow struct {
 		id        string
@@ -351,6 +366,11 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 			dropIDs = append(dropIDs, r.id)
 		} else if anyMissing && strings.EqualFold(strings.TrimSpace(r.status), "active") {
 			staleIDs = append(staleIDs, r.id)
+		}
+	}
+	if len(dropIDs) > 0 && beforeDelete != nil {
+		if err := beforeDelete(); err != nil {
+			return 0, 0, err
 		}
 	}
 	if len(dropIDs) > 0 || len(staleIDs) > 0 {
@@ -471,7 +491,7 @@ func pruneOrphanNoeticAndHealLoci(ctx context.Context, db *sql.DB) (noeticRemove
 	if noeticRemoved > 0 || locusHealed > 0 {
 		_, _ = db.ExecContext(ctx, `UPDATE rm_revision SET episodic_rev = episodic_rev + 1 WHERE id = 1`)
 	}
-	return noeticRemoved, locusHealed
+	return noeticRemoved, locusHealed, nil
 }
 
 // episodicPruneText renders one prune pass for humans.

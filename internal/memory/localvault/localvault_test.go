@@ -105,8 +105,10 @@ func TestRecallNoeticVerificationGainAndDAGClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecallNoetic: %v", err)
 	}
-	if len(hits) < 2 || hits[0].NoeticID != "NT-VERIFIED" {
-		t.Fatalf("expected verified L3 handle to rank first, got %+v", hits)
+	// NT-FRESH and NT-VERIFIED answer the same cue with different evidence, so
+	// the newer trace supersedes the older one; only one handle can win a cue.
+	if len(hits) != 1 || hits[0].NoeticID != "NT-VERIFIED" {
+		t.Fatalf("expected the newest trace for this cue, got %+v", hits)
 	}
 	if hits[0].ReuseCount < 2 || hits[0].VerificationGain() <= 1.0 {
 		t.Fatalf("expected NT-VERIFIED ReuseCount>=2 and VerificationGain>1, got reuse=%d gain=%f", hits[0].ReuseCount, hits[0].VerificationGain())

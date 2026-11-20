@@ -1683,11 +1683,3 @@ func (e *Engine) Spread(seeds []int32, seedEnergy map[int32]float64, qTerms map[
 func (e *Engine) IsPrimaryWord(h uint64) bool {
 	return e.ensureClusterState().isPrimaryOf(h)
 }
-
-func SortByEnergy(units []int32, energy map[int32]float64, idx *Index) {
-	sortByEnergy(units, energy, idx)
-}
-
-func PackTermPosition(sent, slot int) uint32 {
-	return packTermPosition(sent, slot)
-}

@@ -11,7 +11,6 @@ package ids
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net"
@@ -30,36 +29,6 @@ import (
 	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
 )
-
-var Audiences = []string{"private", "group", "shared", "public"}
-
-var AudienceRank = map[string]int{
-	"private": 0,
-	"group":   1,
-	"shared":  2,
-	"public":  3,
-}
-
-var Warrants = []string{"referential", "performative", "procedural", "experiential"}
-
-var TemporalClasses = []string{"past", "present", "future", "unknown"}
-
-var NodeKinds = []string{
-	"referent",
-	"relation_type",
-	"assertion",
-	"role",
-	"expression",
-	"incarnation",
-}
-
-var AssertionStatuses = []string{
-	"active",
-	"superseded",
-	"expired",
-	"disputed",
-	"retracted",
-}
 
 var cjkRanges = [][2]rune{
 	{0x3400, 0x4DBF},
@@ -113,22 +82,6 @@ var (
 
 	monthDayRE = regexp.MustCompile(`^([0-9]{1,2})月([0-9]{1,2})日?$`)
 
-	monthNames = map[string]int{
-		"january": 1, "february": 2, "march": 3, "april": 4,
-		"may": 5, "june": 6, "july": 7, "august": 8,
-		"september": 9, "october": 10, "november": 11, "december": 12,
-	}
-
-	monthPattern = `(?i:january|february|march|april|may|june|july|august|september|october|november|december)`
-
-	queryDayISORe      = regexp.MustCompile(`((?:19|20)[0-9]{2})[-/]([0-9]{1,2})[-/]([0-9]{1,2})`)
-	queryDayRangeMDYRe = regexp.MustCompile(`(?i:between|from)` + pySpaceClass + `+(` + monthPattern + `)` + pySpaceClass + `+([0-9]{1,2})(?:st|nd|rd|th)?` + pySpaceClass + `+(?i:and|to)` + pySpaceClass + `+(?:(` + monthPattern + `)` + pySpaceClass + `+)?([0-9]{1,2})(?:st|nd|rd|th)?,?` + pySpaceClass + `+((?:19|20)[0-9]{2})`)
-	queryDayMDYRe      = regexp.MustCompile(`(` + monthPattern + `)` + pySpaceClass + `+([0-9]{1,2})(?:st|nd|rd|th)?,?` + pySpaceClass + `+((?:19|20)[0-9]{2})`)
-	queryDayDMYRe      = regexp.MustCompile(`([0-9]{1,2})(?:st|nd|rd|th)?` + pySpaceClass + `+(` + monthPattern + `),?` + pySpaceClass + `+((?:19|20)[0-9]{2})`)
-	queryMonthRe       = regexp.MustCompile(`(` + monthPattern + `)` + pySpaceClass + `+((?:19|20)[0-9]{2})`)
-	queryYearRe        = regexp.MustCompile(`((?:19|20)[0-9]{2})`)
-	queryMonthRe2      = regexp.MustCompile(`(` + monthPattern + `)`)
-
 	relDaysBeforeRe     = regexp.MustCompile(`^([0-9]+)` + pySpaceClass + `*天前$`)
 	relDaysAfterRe      = regexp.MustCompile(`^([0-9]+)` + pySpaceClass + `*天后$`)
 	relWeeksBefore      = regexp.MustCompile(`^([0-9]+)` + pySpaceClass + `*(?:周|个星期)前$`)
@@ -158,18 +111,6 @@ func StableJSON(value any) string {
 		return ""
 	}
 	return encoded
-}
-
-// Clamp bounds value to [low, high] with standard max/min semantics.
-func Clamp(value, low, high float64) float64 {
-	result := high
-	if value < high {
-		result = value
-	}
-	if result > low {
-		return result
-	}
-	return low
 }
 
 // IsCJKChar reports whether char falls in the tokenizer CJK ranges.
@@ -230,17 +171,6 @@ func NormalizeWithMap(text string) (string, []int) {
 func NormalizeText(text string) string {
 	normalized, _ := NormalizeWithMap(text)
 	return pyTrimSpace(normalized)
-}
-
-const labelTrim = " \t\r\n。！？!?;；,，、:：.。\"'“”‘’（）()[]【】<>《》"
-
-// NormalizeLabel normalizes text and trims label punctuation.
-func NormalizeLabel(text string) string {
-	value := strings.Trim(NormalizeText(text), labelTrim)
-	if value != "" {
-		return value
-	}
-	return NormalizeText(text)
 }
 
 // Tokenize implements the deterministic query tokenizer for CJK + Latin text
@@ -335,13 +265,6 @@ func TokenizeAll(text string) []string {
 		}
 	}
 	return unique
-}
-
-// EscapeLike escapes SQL LIKE wildcards with a backslash.
-func EscapeLike(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, "%", `\%`)
-	return strings.ReplaceAll(value, "_", `\_`)
 }
 
 // SQLiteFileURI returns path in the `file:`-prefixed URI form SQLite DSNs use,
@@ -583,132 +506,6 @@ func ParseTime(value any, opts ParseTimeOptions) int64 {
 	return opts.Default
 }
 
-// ParseQueryWindow extracts a half-open date window from a query. It returns
-// (0, 0, "") when no absolute expression is present.
-func ParseQueryWindow(text string) (start, end int64, label string) {
-	if text == "" {
-		return 0, 0, ""
-	}
-	dayWindow := func(year, month, day int) (int64, int64, string, bool) {
-		value, ok := dateFromYMD(year, month, day)
-		if !ok {
-			return 0, 0, "", false
-		}
-		next := value.AddDate(0, 0, 1)
-		return localMidnight(value), localMidnight(next), value.Format("2006-01-02"), true
-	}
-	monthWindow := func(year, month int) (int64, int64, string, bool) {
-		if month < 1 || month > 12 {
-			return 0, 0, "", false
-		}
-		if year < 1 || year > 9999 {
-			return 0, 0, "", false
-		}
-		startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
-		endDate := startDate.AddDate(0, 1, 0)
-		return localMidnight(startDate), localMidnight(endDate), fmt.Sprintf("%04d-%02d", year, month), true
-	}
-
-	if match := findBoundaryMatch(queryDayISORe, text); match != nil {
-		year, _ := strconv.Atoi(text[match[2]:match[3]])
-		month, _ := strconv.Atoi(text[match[4]:match[5]])
-		day, _ := strconv.Atoi(text[match[6]:match[7]])
-		if start, end, label, ok := dayWindow(year, month, day); ok {
-			return start, end, label
-		}
-	}
-	if match := findBoundaryMatch(queryDayRangeMDYRe, text); match != nil {
-		m1 := monthNames[strings.ToLower(text[match[2]:match[3]])]
-		d1, _ := strconv.Atoi(text[match[4]:match[5]])
-		m2 := m1
-		if match[6] >= 0 && match[7] > match[6] {
-			m2 = monthNames[strings.ToLower(text[match[6]:match[7]])]
-		}
-		d2, _ := strconv.Atoi(text[match[8]:match[9]])
-		year, _ := strconv.Atoi(text[match[10]:match[11]])
-		v1, ok1 := dateFromYMD(year, m1, d1)
-		v2, ok2 := dateFromYMD(year, m2, d2)
-		if ok1 && ok2 && !v2.Before(v1) {
-			next := v2.AddDate(0, 0, 1)
-			return localMidnight(v1), localMidnight(next), v1.Format("2006-01-02") + ".." + v2.Format("2006-01-02")
-		}
-	}
-	if match := findBoundaryMatch(queryDayMDYRe, text); match != nil {
-		year, _ := strconv.Atoi(text[match[6]:match[7]])
-		month := monthNames[strings.ToLower(text[match[2]:match[3]])]
-		day, _ := strconv.Atoi(text[match[4]:match[5]])
-		if start, end, label, ok := dayWindow(year, month, day); ok {
-			return start, end, label
-		}
-	}
-	if match := findBoundaryMatch(queryDayDMYRe, text); match != nil {
-		year, _ := strconv.Atoi(text[match[6]:match[7]])
-		month := monthNames[strings.ToLower(text[match[4]:match[5]])]
-		day, _ := strconv.Atoi(text[match[2]:match[3]])
-		if start, end, label, ok := dayWindow(year, month, day); ok {
-			return start, end, label
-		}
-	}
-	if match := findBoundaryMatch(queryMonthRe, text); match != nil {
-		year, _ := strconv.Atoi(text[match[4]:match[5]])
-		month := monthNames[strings.ToLower(text[match[2]:match[3]])]
-		if start, end, label, ok := monthWindow(year, month); ok {
-			return start, end, label
-		}
-	}
-	if match := findBoundaryMatch(queryYearRe, text); match != nil {
-		year, _ := strconv.Atoi(text[match[2]:match[3]])
-		if year < 1 || year > 9998 {
-			return 0, 0, ""
-		}
-		start = localMidnight(time.Date(year, time.January, 1, 0, 0, 0, 0, time.Local))
-		end = localMidnight(time.Date(year+1, time.January, 1, 0, 0, 0, 0, time.Local))
-		return start, end, strconv.Itoa(year)
-	}
-	return 0, 0, ""
-}
-
-// ParseQueryMonth returns a month number when the query names a month without
-// requiring a year.
-func ParseQueryMonth(text string) int {
-	if text == "" {
-		return 0
-	}
-	match := findBoundaryMatch(queryMonthRe2, text)
-	if match == nil {
-		return 0
-	}
-	return monthNames[strings.ToLower(text[match[2]:match[3]])]
-}
-
-// TemporalClass classifies an epoch relative to timeRef by local date.
-func TemporalClass(epoch int64, timeRef *int64) string {
-	if epoch == 0 {
-		return "unknown"
-	}
-	reference := clock.Unix()
-	if timeRef != nil {
-		reference = *timeRef
-	}
-	referenceDT := time.Unix(reference, 0).In(time.Local)
-	target := time.Unix(epoch, 0).In(time.Local)
-	if sameDate(target, referenceDT) {
-		return "present"
-	}
-	if target.Before(referenceDT) {
-		return "past"
-	}
-	return "future"
-}
-
-// FormatTime formats epoch as a local YYYY-MM-DD date.
-func FormatTime(epoch int64, empty string) string {
-	if epoch == 0 {
-		return empty
-	}
-	return time.Unix(epoch, 0).In(time.Local).Format("2006-01-02")
-}
-
 // FormatTimeSeconds formats epoch as a local YYYY-MM-DD HH:MM:SS timestamp with
 // its numeric UTC offset. Recall delivery labels use this shape so a reader
 // never has to guess the zone behind a clock reading, and same-day moments stay
@@ -720,160 +517,9 @@ func FormatTimeSeconds(epoch int64, empty string) string {
 	return time.Unix(epoch, 0).In(time.Local).Format("2006-01-02 15:04:05 -07:00")
 }
 
-// AudienceNarrower returns the narrower (lower-ranked) audience.
-func AudienceNarrower(left, right string) string {
-	if AudienceRank[left] <= AudienceRank[right] {
-		return left
-	}
-	return right
-}
-
-// AudienceVisible reports whether reader may see all audiences. owner sees
-// everything; deliverable never sees private rows.
-func AudienceVisible(reader string, audiences ...string) bool {
-	if reader == "owner" {
-		return true
-	}
-	for _, value := range audiences {
-		if value == "private" {
-			return false
-		}
-	}
-	return true
-}
-
-// NodeID returns "n_" plus the first 16 hex characters of the node identity.
-func NodeID(scope, kind, normLabel, qualifier string) string {
-	digest := SHA256Hex(strings.Join([]string{scope, kind, normLabel, qualifier}, "\x1f"))[:16]
-	return "n_" + digest
-}
-
-// AssertionNodeID returns "a_" plus the first 20 characters of identityHash.
-func AssertionNodeID(identityHash string) string {
-	if len(identityHash) > 20 {
-		identityHash = identityHash[:20]
-	}
-	return "a_" + identityHash
-}
-
 // TraceHash returns the first 32 hex characters of the trace identity.
 func TraceHash(scope, session string, turn int64, text string) string {
 	return SHA256Hex(strings.Join([]string{scope, session, strconv.FormatInt(turn, 10), text}, "\x1f"))[:32]
-}
-
-// NormalizeTurn mirrors int(turn) if str(turn).lstrip("-").isdigit() else 0.
-func NormalizeTurn(value any) int64 {
-	text := ""
-	switch typed := value.(type) {
-	case string:
-		text = typed
-	case nil:
-		text = "None"
-	case bool:
-		if typed {
-			text = "True"
-		} else {
-			text = "False"
-		}
-	case json.Number:
-		text = typed.String()
-	case int:
-		text = strconv.Itoa(typed)
-	case int8:
-		text = strconv.FormatInt(int64(typed), 10)
-	case int16:
-		text = strconv.FormatInt(int64(typed), 10)
-	case int32:
-		text = strconv.FormatInt(int64(typed), 10)
-	case int64:
-		text = strconv.FormatInt(typed, 10)
-	case uint:
-		text = strconv.FormatUint(uint64(typed), 10)
-	case uint8:
-		text = strconv.FormatUint(uint64(typed), 10)
-	case uint16:
-		text = strconv.FormatUint(uint64(typed), 10)
-	case uint32:
-		text = strconv.FormatUint(uint64(typed), 10)
-	case uint64:
-		text = strconv.FormatUint(typed, 10)
-	case float32:
-		text = pyFloatRepr(float64(typed))
-	case float64:
-		text = pyFloatRepr(typed)
-	default:
-		text = fmt.Sprint(value)
-	}
-	digits := strings.TrimLeft(text, "-")
-	if digits == "" || !isASCIIDigits(digits) {
-		return 0
-	}
-	number, err := strconv.ParseInt(text, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return number
-}
-
-// AssertionHashParts fields are in formula order.
-type AssertionHashParts struct {
-	Scope           string
-	SubjectKey      string
-	RelID           string
-	ObjectKey       string
-	Bare            bool
-	HolderID        string
-	Warrant         string
-	AnchorTraceHash string
-	Audience        string
-	World           string
-	Carrier         string
-	Locus           string
-}
-
-// AssertionHash returns the first 32 hex characters of the assertion identity.
-func AssertionHash(parts AssertionHashParts) string {
-	bare := "0"
-	if parts.Bare {
-		bare = "1"
-	}
-	joined := strings.Join([]string{
-		parts.Scope,
-		parts.SubjectKey,
-		parts.RelID,
-		parts.ObjectKey,
-		bare,
-		parts.HolderID,
-		parts.Warrant,
-		parts.AnchorTraceHash,
-		parts.Audience,
-		parts.World,
-		parts.Carrier,
-		parts.Locus,
-	}, "\x1f")
-	return SHA256Hex(joined)[:32]
-}
-
-// KeyForNodeOrLiteral prefers an explicit node id, else a normalized literal.
-func KeyForNodeOrLiteral(nodeID, literal string) string {
-	if nodeID != "" {
-		return "id:" + nodeID
-	}
-	return "lit:" + NormalizeLabel(literal)
-}
-
-// RenderAssertion renders the canonical assertion text. Dyadic forms omit empty slots:
-// dyadic-SX (no object) renders "S X" · dyadic-XO (no subject) renders "X O" · bare renders relation only.
-func RenderAssertion(subject, relation, object string) string {
-	switch {
-	case subject == "" && object == "":
-		return relation
-	case subject == "":
-		return relation + " " + object
-	case object == "":
-		return subject + " " + relation
-	}
-	return subject + " —" + relation + "→ " + object
 }
 
 // StripInjected removes harness-injected context blocks and non-speech protocol
@@ -882,40 +528,6 @@ func RenderAssertion(subject, relation, object string) string {
 // conversation turns identically.
 func StripInjected(text string) string {
 	return speech.StripConversationNoise(text)
-}
-
-// SentenceSplit splits cleaned transcript text into bounded sentence parts.
-func SentenceSplit(text string, maxParts, maxLen int) []string {
-	cleaned := StripInjected(text)
-	if cleaned == "" {
-		return nil
-	}
-	parts := splitSentenceParts(cleaned)
-	sentences := make([]string, 0, len(parts))
-	for _, part := range parts {
-		candidate := pyTrimSpace(part)
-		if candidate == "" {
-			continue
-		}
-		if utf8.RuneCountInString(candidate) > maxLen {
-			for _, sub := range splitASCIISentences(candidate) {
-				sub = pyTrimSpace(sub)
-				if sub == "" {
-					continue
-				}
-				sentences = append(sentences, runeSlice(sub, 0, maxLen))
-				if len(sentences) >= maxParts {
-					return sentences
-				}
-			}
-			continue
-		}
-		sentences = append(sentences, candidate)
-		if len(sentences) >= maxParts {
-			break
-		}
-	}
-	return sentences
 }
 
 // Truncate shortens stripped text to limit characters, appending suffix.
@@ -975,46 +587,6 @@ func URLHost(raw string) (string, bool) {
 	return strings.ToLower(host), true
 }
 
-// UniqueOrdered preserves the first occurrence order of values.
-func UniqueOrdered(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
-}
-
-// FilterQueryTerms removes grammatical glue tokens via the delivery BPE-Shannon
-// mathematical discriminator while keeping a fallback to the original list if all
-// tokens would be removed. Tokens are dropped only inside the joint low-information
-// band (see isTokenFilteredByDelivery), so no static stopword table is involved.
-func FilterQueryTerms(tokens []string) []string {
-	if len(tokens) == 0 {
-		return tokens
-	}
-	filtered := make([]string, 0, len(tokens))
-	for _, tok := range tokens {
-		if !isTokenFilteredByDelivery(tok) {
-			filtered = append(filtered, tok)
-		}
-	}
-	if len(filtered) == 0 {
-		return tokens
-	}
-	return filtered
-}
-
-// StemToken computes the language-agnostic Shannon-bit proportional prefix stem
-// (1:1 delegated to text.StemToken; zero hardcoded suffix lists or character-count thresholds).
-func StemToken(tok string) string {
-	return text.StemToken(tok)
-}
-
 func parseSmallCount(s string) int {
 	if n, err := strconv.Atoi(s); err == nil && n > 0 {
 		return n
@@ -1046,89 +618,6 @@ func parseSmallCount(s string) int {
 		return 12
 	}
 	return 0
-}
-
-var (
-	firstPersonMyRe        = regexp.MustCompile(`(?i)^my\s+`)
-	firstPersonWordMyRe    = regexp.MustCompile(`(?i)\bmy\s+`)
-	firstPersonLeadingMeRe = regexp.MustCompile(`(?i)^me\s+`)
-)
-
-// NormalizeFirstPersonObject resolves a leading "my " in a value literal to
-// the possessor's possessive form; in-sentence first-person forms stay
-// verbatim (protects literals like "reminds me of my home").
-func NormalizeFirstPersonObject(literal, holder, subject string) string {
-	if literal == "" {
-		return literal
-	}
-	if strings.ContainsAny(literal, "\"“”") {
-		return literal
-	}
-	possessor := firstPersonPossessor(holder, subject)
-	if possessor == "" {
-		return literal
-	}
-	m := firstPersonMyRe.FindStringIndex(literal)
-	if m == nil {
-		return literal
-	}
-	return literal[:m[0]] + possessiveOf(possessor) + " " + literal[m[1]:]
-}
-
-// NormalizeFirstPersonEntity resolves first-person references in entity names
-// (subject / object): word-boundary "my " to the possessor's possessive form,
-// and leading "me " to the possessor's name.
-func NormalizeFirstPersonEntity(entity, holder, subject string) string {
-	if entity == "" {
-		return entity
-	}
-	if strings.ContainsAny(entity, "\"“”") {
-		return entity
-	}
-	possessor := firstPersonPossessor(holder, subject)
-	if possessor == "" {
-		return entity
-	}
-	if m := firstPersonWordMyRe.FindStringIndex(entity); m != nil {
-		entity = entity[:m[0]] + possessiveOf(possessor) + " " + entity[m[1]:]
-	}
-	if m := firstPersonLeadingMeRe.FindStringIndex(entity); m != nil {
-		entity = possessor + " " + entity[m[1]:]
-	}
-	return entity
-}
-
-func firstPersonPossessor(holder, subject string) string {
-	possessor := strings.TrimSpace(holder)
-	if isGenericRoleIdentity(possessor) {
-		possessor = strings.TrimSpace(subject)
-	}
-	if isGenericRoleIdentity(possessor) {
-		return ""
-	}
-	return possessor
-}
-
-func isGenericRoleIdentity(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "我", "user", "human", "assistant", "ai", "bot", "system", "unknown":
-		return true
-	}
-	return false
-}
-
-func possessiveOf(name string) string {
-	if HasCJK(name) {
-		return name + "的"
-	}
-	low := strings.ToLower(name)
-	if len(low) > 0 {
-		last := low[len(low)-1]
-		if last == 's' || last == 'x' || last == 'z' {
-			return name + "'"
-		}
-	}
-	return name + "'s"
 }
 
 // Mean returns the arithmetic mean, or 0 for an empty slice. Summation uses
@@ -1242,12 +731,6 @@ func isLeapYear(year int) bool {
 
 func pythonWeekday(value time.Time) int {
 	return (int(value.Weekday()) + 6) % 7
-}
-
-func sameDate(left, right time.Time) bool {
-	leftYear, leftMonth, leftDay := left.Date()
-	rightYear, rightMonth, rightDay := right.Date()
-	return leftYear == rightYear && leftMonth == rightMonth && leftDay == rightDay
 }
 
 // unixSeconds mirrors standard int(datetime.timestamp()): truncation toward zero
@@ -1442,116 +925,6 @@ func splitDigits(text string, widths []int, separators []byte) (int, int, int, b
 
 func isPyWord(char rune) bool {
 	return speech.IsPyWord(char)
-}
-
-func findBoundaryMatch(pattern *regexp.Regexp, text string) []int {
-	offset := 0
-	for offset <= len(text) {
-		location := pattern.FindStringSubmatchIndex(text[offset:])
-		if location == nil {
-			return nil
-		}
-		for index, value := range location {
-			if value >= 0 {
-				location[index] = value + offset
-			}
-		}
-		start, end := location[0], location[1]
-		if boundaryOK(text, start, end) {
-			return location
-		}
-		_, size := utf8.DecodeRuneInString(text[start:])
-		if size <= 0 {
-			size = 1
-		}
-		offset = start + size
-	}
-	return nil
-}
-
-func boundaryOK(text string, start, end int) bool {
-	if start > 0 {
-		previous, _ := utf8.DecodeLastRuneInString(text[:start])
-		if isPyWord(previous) {
-			return false
-		}
-	}
-	if end < len(text) {
-		next, _ := utf8.DecodeRuneInString(text[end:])
-		if isPyWord(next) {
-			return false
-		}
-	}
-	return true
-}
-
-func splitSentenceParts(text string) []string {
-	runes := []rune(text)
-	parts := make([]string, 0, 8)
-	start := 0
-	for index := 0; index < len(runes); index++ {
-		char := runes[index]
-		if strings.ContainsRune("。！？!?；;", char) {
-			index++
-			for index < len(runes) && isPySpace(runes[index]) {
-				index++
-			}
-			parts = append(parts, string(runes[start:index]))
-			start = index
-			index--
-			continue
-		}
-		if char == '\n' {
-			for index < len(runes) && runes[index] == '\n' {
-				index++
-			}
-			parts = append(parts, string(runes[start:index]))
-			start = index
-			index--
-			continue
-		}
-		if char == '.' || char == '!' || char == '?' {
-			next := index + 1
-			whitespace := next
-			for whitespace < len(runes) && isPySpace(runes[whitespace]) {
-				whitespace++
-			}
-			if whitespace > next && whitespace < len(runes) &&
-				runes[whitespace] >= 'A' && runes[whitespace] <= 'Z' {
-				parts = append(parts, string(runes[start:whitespace]))
-				start = whitespace
-				index = whitespace - 1
-			}
-		}
-	}
-	if start < len(runes) {
-		parts = append(parts, string(runes[start:]))
-	}
-	return parts
-}
-
-func splitASCIISentences(text string) []string {
-	runes := []rune(text)
-	parts := make([]string, 0, 4)
-	start := 0
-	for index := 0; index < len(runes); index++ {
-		if runes[index] != '.' && runes[index] != '!' && runes[index] != '?' {
-			continue
-		}
-		next := index + 1
-		for next < len(runes) && isPySpace(runes[next]) {
-			next++
-		}
-		if next > index+1 {
-			parts = append(parts, string(runes[start:next]))
-			start = next
-			index = next - 1
-		}
-	}
-	if start < len(runes) {
-		parts = append(parts, string(runes[start:]))
-	}
-	return parts
 }
 
 func runeSlice(value string, start, end int) string {

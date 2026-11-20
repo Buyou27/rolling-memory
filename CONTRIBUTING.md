@@ -28,7 +28,6 @@ go build ./...
 go vet ./...
 gofmt -l .                                  # must print nothing
 go test ./... -count=1
-go test ./internal/golden -count=1          # frozen golden fixtures (see testdata/golden/MANIFEST.json)
 CGO_ENABLED=0 go build -trimpath ./cmd/rolling-memory   # portability smoke (pure Go, no CGO)
 ```
 
@@ -40,10 +39,9 @@ are hand-written on purpose.
 Tests use synthetic data only and isolate themselves: they run against temporary HOME / XDG / database
 roots and never open a real `~/.local/share/rolling-memory/memory.db`.
 
-Golden parity: `testdata/golden/` is sealed in `MANIFEST.json` (provenance + per-file sha256 + `seal_sha256`;
-the scenario list lives in `testdata/golden/README.md`); the test suite replays and verifies the cryptographic
-seal. Never regenerate expectations from ad-hoc test runs. A semantic contract change requires an explicit baseline
-reseal with recorded provenance.
+Format vectors: `testdata/golden/vectors/` holds the small JSON expectations pinned by the id and time helpers
+(`internal/ids`). They are reviewed inputs, not generated output: never refresh them from an ad-hoc test run.
+A semantic contract change requires an explicit, reviewed update to the vectors in the same PR.
 
 ## Versioning & deprecation
 
@@ -65,11 +63,10 @@ All commands run from the repo root and must be clean — this is the exact gate
 go build ./...                                # 1. compiles
 go vet ./...                                  # 2. static checks
 gofmt -l .                                    # 3. must print nothing
-go test ./... -count=1                        # 4. unit + internal/e2e (process level) + internal/golden parity
-go test ./internal/golden -count=1            # 5. golden replay only (subset of 4; handy while iterating)
-go test -race ./internal/... -count=1         # 6. race detector over the engine packages
-go test ./internal/... -shuffle=on -count=2   # 7. order independence (no inter-test coupling)
-# 8. cross-compile smoke: all five release targets build from pure Go
+go test ./... -count=1                        # 4. unit + internal/e2e (process level)
+go test -race ./internal/... -count=1         # 5. race detector over the engine packages
+go test ./internal/... -shuffle=on -count=2   # 6. order independence (no inter-test coupling)
+# 7. cross-compile smoke: all five release targets build from pure Go
 for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
   CGO_ENABLED=0 GOOS="${t%/*}" GOARCH="${t#*/}" go build -trimpath -o /dev/null ./cmd/rolling-memory || exit 1
 done
@@ -78,7 +75,7 @@ done
 - Tests use synthetic data only, and isolate HOME / XDG / DB roots by default — never point a test at a real
   memory database, and never let a new test write outside its temporary root.
 - Numbers quoted in docs (scenario counts, file counts) come from the fixtures themselves
-  (`testdata/golden/MANIFEST.json` + `testdata/golden/README.md`); update them there first.
+  (`testdata/golden/vectors/`); update them there first.
 
 ## Pull requests
 

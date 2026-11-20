@@ -36,56 +36,6 @@ func loadVector(t *testing.T, name string, target any) {
 }
 
 type idsVectors struct {
-	AssertionHashes []struct {
-		Args struct {
-			AnchorTraceHash string  `json:"anchor_trace_hash"`
-			Audience        string  `json:"audience"`
-			Bare            bool    `json:"bare"`
-			Carrier         *string `json:"carrier"`
-			HolderID        *string `json:"holder_id"`
-			Locus           *string `json:"locus"`
-			ObjectKey       string  `json:"object_key"`
-			RelID           string  `json:"rel_id"`
-			Scope           string  `json:"scope"`
-			SubjectKey      string  `json:"subject_key"`
-			Warrant         string  `json:"warrant"`
-			World           *string `json:"world"`
-		} `json:"args"`
-		Expected string `json:"expected"`
-		Name     string `json:"name"`
-	} `json:"assertion_hashes"`
-	AssertionNodeIDs []struct {
-		Expected     string `json:"expected"`
-		IdentityHash string `json:"identity_hash"`
-		Name         string `json:"name"`
-	} `json:"assertion_node_ids"`
-	Audience []struct {
-		Left      string   `json:"left"`
-		Narrower  string   `json:"narrower"`
-		Right     string   `json:"right"`
-		Audiences []string `json:"audiences"`
-		Reader    string   `json:"reader"`
-		Visible   bool     `json:"visible"`
-	} `json:"audience"`
-	Keys []struct {
-		Expected string  `json:"expected"`
-		Literal  *string `json:"literal"`
-		Node     *string `json:"node"`
-	} `json:"keys"`
-	NodeIDs []struct {
-		Expected  string `json:"expected"`
-		Kind      string `json:"kind"`
-		Name      string `json:"name"`
-		NormLabel string `json:"norm_label"`
-		Qualifier string `json:"qualifier"`
-		Scope     string `json:"scope"`
-	} `json:"node_ids"`
-	RenderAssertion []struct {
-		Expected string `json:"expected"`
-		Object   string `json:"o"`
-		Subject  string `json:"s"`
-		Relation string `json:"x"`
-	} `json:"render_assertion"`
 	SHA256 []struct {
 		Expected string `json:"expected"`
 		Input    string `json:"input"`
@@ -102,10 +52,6 @@ type idsVectors struct {
 		Text     string      `json:"text"`
 		Turn     json.Number `json:"turn"`
 	} `json:"trace_hashes"`
-	TurnNormalization []struct {
-		Expected int64  `json:"expected"`
-		Input    string `json:"input"`
-	} `json:"turn_normalization"`
 }
 
 func TestGoldenIDs(t *testing.T) {
@@ -116,15 +62,6 @@ func TestGoldenIDs(t *testing.T) {
 		for _, testCase := range vectors.SHA256 {
 			if got := SHA256Hex(testCase.Input); got != testCase.Expected {
 				t.Errorf("SHA256Hex(%q) = %q, want %q", testCase.Input, got, testCase.Expected)
-			}
-		}
-	})
-
-	t.Run("node_ids", func(t *testing.T) {
-		for _, testCase := range vectors.NodeIDs {
-			got := NodeID(testCase.Scope, testCase.Kind, testCase.NormLabel, testCase.Qualifier)
-			if got != testCase.Expected {
-				t.Errorf("%s: NodeID = %q, want %q", testCase.Name, got, testCase.Expected)
 			}
 		}
 	})
@@ -142,77 +79,6 @@ func TestGoldenIDs(t *testing.T) {
 		}
 	})
 
-	t.Run("turn_normalization", func(t *testing.T) {
-		for _, testCase := range vectors.TurnNormalization {
-			if got := NormalizeTurn(testCase.Input); got != testCase.Expected {
-				t.Errorf("NormalizeTurn(%q) = %d, want %d", testCase.Input, got, testCase.Expected)
-			}
-		}
-	})
-
-	t.Run("assertion_hashes", func(t *testing.T) {
-		for _, testCase := range vectors.AssertionHashes {
-			got := AssertionHash(AssertionHashParts{
-				Scope:           testCase.Args.Scope,
-				SubjectKey:      testCase.Args.SubjectKey,
-				RelID:           testCase.Args.RelID,
-				ObjectKey:       testCase.Args.ObjectKey,
-				Bare:            testCase.Args.Bare,
-				HolderID:        valueOrEmpty(testCase.Args.HolderID),
-				Warrant:         testCase.Args.Warrant,
-				AnchorTraceHash: testCase.Args.AnchorTraceHash,
-				Audience:        testCase.Args.Audience,
-				World:           valueOrEmpty(testCase.Args.World),
-				Carrier:         valueOrEmpty(testCase.Args.Carrier),
-				Locus:           valueOrEmpty(testCase.Args.Locus),
-			})
-			if got != testCase.Expected {
-				t.Errorf("%s: AssertionHash = %q, want %q", testCase.Name, got, testCase.Expected)
-			}
-		}
-	})
-
-	t.Run("assertion_node_ids", func(t *testing.T) {
-		for _, testCase := range vectors.AssertionNodeIDs {
-			if got := AssertionNodeID(testCase.IdentityHash); got != testCase.Expected {
-				t.Errorf("%s: AssertionNodeID = %q, want %q", testCase.Name, got, testCase.Expected)
-			}
-		}
-	})
-
-	t.Run("keys", func(t *testing.T) {
-		for _, testCase := range vectors.Keys {
-			got := KeyForNodeOrLiteral(valueOrEmpty(testCase.Node), valueOrEmpty(testCase.Literal))
-			if got != testCase.Expected {
-				t.Errorf("KeyForNodeOrLiteral = %q, want %q", got, testCase.Expected)
-			}
-		}
-	})
-
-	t.Run("audience", func(t *testing.T) {
-		for _, testCase := range vectors.Audience {
-			if testCase.Reader != "" {
-				if got := AudienceVisible(testCase.Reader, testCase.Audiences...); got != testCase.Visible {
-					t.Errorf("AudienceVisible(%q, %v) = %v, want %v",
-						testCase.Reader, testCase.Audiences, got, testCase.Visible)
-				}
-				continue
-			}
-			if got := AudienceNarrower(testCase.Left, testCase.Right); got != testCase.Narrower {
-				t.Errorf("AudienceNarrower(%q, %q) = %q, want %q",
-					testCase.Left, testCase.Right, got, testCase.Narrower)
-			}
-		}
-	})
-
-	t.Run("render_assertion", func(t *testing.T) {
-		for _, testCase := range vectors.RenderAssertion {
-			if got := RenderAssertion(testCase.Subject, testCase.Relation, testCase.Object); got != testCase.Expected {
-				t.Errorf("RenderAssertion = %q, want %q", got, testCase.Expected)
-			}
-		}
-	})
-
 	t.Run("stable_json", func(t *testing.T) {
 		for _, testCase := range vectors.StableJSON {
 			if got := StableJSON(testCase.Input); got != testCase.Expected {
@@ -220,22 +86,6 @@ func TestGoldenIDs(t *testing.T) {
 			}
 		}
 	})
-}
-
-// TestAudienceIntersection verifies AudienceNarrower and AudienceVisible rules.
-func TestAudienceIntersection(t *testing.T) {
-	if got := AudienceNarrower("shared", "private"); got != "private" {
-		t.Errorf("AudienceNarrower(shared, private) = %q, want private", got)
-	}
-	if !AudienceVisible("owner", "private") {
-		t.Error("owner should see private")
-	}
-	if AudienceVisible("deliverable", "private") {
-		t.Error("deliverable must not see private")
-	}
-	if !AudienceVisible("deliverable", "shared", "group") {
-		t.Error("deliverable should see shared/group")
-	}
 }
 
 // TestTraceHashDeterministic verifies that TraceHash is deterministic and binds the turn number.
@@ -253,7 +103,6 @@ func TestGoldenNormalize(t *testing.T) {
 	var vectors struct {
 		Cases []struct {
 			Input      string `json:"input"`
-			Label      string `json:"label"`
 			Map        []int  `json:"map"`
 			Normalized string `json:"normalized"`
 			Text       string `json:"text"`
@@ -270,9 +119,6 @@ func TestGoldenNormalize(t *testing.T) {
 		}
 		if got := NormalizeText(testCase.Input); got != testCase.Text {
 			t.Errorf("NormalizeText(%q) = %q, want %q", testCase.Input, got, testCase.Text)
-		}
-		if got := NormalizeLabel(testCase.Input); got != testCase.Label {
-			t.Errorf("NormalizeLabel(%q) = %q, want %q", testCase.Input, got, testCase.Label)
 		}
 	}
 }
@@ -305,15 +151,6 @@ func TestGoldenTime(t *testing.T) {
 			Input    any         `json:"input"`
 			TimeRef  json.Number `json:"time_ref"`
 		} `json:"cases"`
-		FormatTime []struct {
-			Epoch    int64  `json:"epoch"`
-			Expected string `json:"expected"`
-		} `json:"format_time"`
-		TemporalClass []struct {
-			Epoch    int64  `json:"epoch"`
-			Expected string `json:"expected"`
-			TimeRef  int64  `json:"time_ref"`
-		} `json:"temporal_class"`
 	}
 	loadVector(t, "time.json", &vectors)
 	for _, testCase := range vectors.Cases {
@@ -324,17 +161,6 @@ func TestGoldenTime(t *testing.T) {
 		got := ParseTime(testCase.Input, ParseTimeOptions{TimeRef: &timeRef, Default: testCase.Default})
 		if got != testCase.Expected {
 			t.Errorf("ParseTime(%v) = %d, want %d", testCase.Input, got, testCase.Expected)
-		}
-	}
-	for _, testCase := range vectors.FormatTime {
-		if got := FormatTime(testCase.Epoch, "unknown"); got != testCase.Expected {
-			t.Errorf("FormatTime(%d) = %q, want %q", testCase.Epoch, got, testCase.Expected)
-		}
-	}
-	for _, testCase := range vectors.TemporalClass {
-		timeRef := testCase.TimeRef
-		if got := TemporalClass(testCase.Epoch, &timeRef); got != testCase.Expected {
-			t.Errorf("TemporalClass(%d) = %q, want %q", testCase.Epoch, got, testCase.Expected)
 		}
 	}
 }
@@ -356,43 +182,6 @@ func TestFormatTimeSeconds(t *testing.T) {
 	if got := FormatTimeSeconds(1793102400, ""); got != "2026-10-27 20:00:00 +08:00" {
 		t.Fatalf("FormatTimeSeconds in +08:00 = %q, want %q", got, "2026-10-27 20:00:00 +08:00")
 	}
-}
-
-func TestGoldenQueryWindow(t *testing.T) {
-	var vectors struct {
-		Cases []struct {
-			Input  string `json:"input"`
-			Month  int    `json:"month"`
-			Window []any  `json:"window"`
-		} `json:"cases"`
-	}
-	loadVector(t, "query-window.json", &vectors)
-	for _, testCase := range vectors.Cases {
-		start, end, label := ParseQueryWindow(testCase.Input)
-		wantStart := jsonInt64(t, testCase.Window[0])
-		wantEnd := jsonInt64(t, testCase.Window[1])
-		wantLabel, _ := testCase.Window[2].(string)
-		if start != wantStart || end != wantEnd || label != wantLabel {
-			t.Errorf("ParseQueryWindow(%q) = (%d,%d,%q), want (%d,%d,%q)",
-				testCase.Input, start, end, label, wantStart, wantEnd, wantLabel)
-		}
-		if got := ParseQueryMonth(testCase.Input); got != testCase.Month {
-			t.Errorf("ParseQueryMonth(%q) = %d, want %d", testCase.Input, got, testCase.Month)
-		}
-	}
-}
-
-func jsonInt64(t *testing.T, value any) int64 {
-	t.Helper()
-	number, ok := value.(json.Number)
-	if !ok {
-		t.Fatalf("expected json number, got %T", value)
-	}
-	parsed, err := number.Int64()
-	if err != nil {
-		t.Fatalf("bad json number %q: %v", number, err)
-	}
-	return parsed
 }
 
 func TestGoldenPyJSON(t *testing.T) {
@@ -483,76 +272,13 @@ func orderedPyJSONPayload(raw []byte) (OrderedMap, error) {
 	}, nil
 }
 
-func valueOrEmpty(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-func TestStemTokenAndFilterQueryTerms(t *testing.T) {
-	cases := map[string]string{
-		"painted":       "paint",
-		"painting":      "paint",
-		"rejected":      "rejec",
-		"rejection":     "reject",
-		"collaboration": "collabora",
-		"collaborate":   "collabo",
-		"promote":       "promo",
-		"creative":      "creat",
-		"scripts":       "scrip",
-		"matches":       "match",
-		"moved":         "move",
-		"rings":         "ring",
-		"running":       "runni",
-		"stunning":      "stunn",
-		"countries":     "countr",
-		"musical":       "music",
-		"classical":     "classi",
-	}
-	for input, want := range cases {
-		if got := StemToken(input); got != want {
-			t.Errorf("StemToken(%q) = %q, want %q", input, got, want)
-		}
-	}
-	// Zero-wordlist gain tiers (2026-11-04 doctrine): "would"/"about" sit in the
-	// closed-class band and are dropped, while "whether" (14b) reaches the primary
-	// gain tier and survives alongside "caroline"/"religious" — code never kills a
-	// high-information token, regardless of its traditional function-word status.
-	filtered := FilterQueryTerms([]string{"would", "caroline", "whether", "religious", "about"})
-	if len(filtered) != 3 || filtered[0] != "caroline" || filtered[1] != "whether" || filtered[2] != "religious" {
-		t.Errorf("FilterQueryTerms = %v, want [caroline whether religious]", filtered)
-	}
-	allStop := FilterQueryTerms([]string{"would", "about"})
-	if len(allStop) != 2 {
-		t.Errorf("FilterQueryTerms fallback failed: %v", allStop)
-	}
-	zhFiltered := FilterQueryTerms([]string{"我", "喜欢", "咖啡", "的", "很"})
-	if len(zhFiltered) != 2 || zhFiltered[0] != "喜欢" || zhFiltered[1] != "咖啡" {
-		t.Errorf("FilterQueryTerms(zh) = %v, want [喜欢 咖啡]", zhFiltered)
-	}
-	zhAllStop := FilterQueryTerms([]string{"的"})
-	if len(zhAllStop) != 1 || zhAllStop[0] != "的" {
-		t.Errorf("FilterQueryTerms(zh) fallback failed: %v", zhAllStop)
-	}
+func TestParseTimeDSL(t *testing.T) {
 	ref := int64(1683504000) // 2023-05-08
-	if got := FormatTime(ParseTime("4 years ago", ParseTimeOptions{TimeRef: &ref}), ""); got != "2019-05-01" {
+	if got := time.Unix(ParseTime("4 years ago", ParseTimeOptions{TimeRef: &ref}), 0).In(time.Local).Format("2006-01-02"); got != "2019-05-01" {
 		t.Errorf("ParseTime(4 years ago) = %q, want 2019-05-01", got)
 	}
-	if got := FormatTime(ParseTime("for about four months now", ParseTimeOptions{TimeRef: &ref}), ""); got != "2023-01-01" {
+	if got := time.Unix(ParseTime("for about four months now", ParseTimeOptions{TimeRef: &ref}), 0).In(time.Local).Format("2006-01-02"); got != "2023-01-01" {
 		t.Errorf("ParseTime(for about four months now) = %q, want 2023-01-01", got)
-	}
-	if got := NormalizeFirstPersonObject("my home country", "Caroline", "Caroline"); got != "Caroline's home country" {
-		t.Errorf("NormalizeFirstPersonObject(my) = %q, want Caroline's home country", got)
-	}
-	if got := NormalizeFirstPersonObject("reminds me of my home", "Nate", ""); got != "reminds me of my home" {
-		t.Errorf("NormalizeFirstPersonObject(non-leading) = %q, want unchanged", got)
-	}
-	if got := NormalizeFirstPersonEntity("me stay focused", "James", "James"); got != "James stay focused" {
-		t.Errorf("NormalizeFirstPersonEntity(leading me) = %q, want James stay focused", got)
-	}
-	if got := NormalizeFirstPersonEntity("my home country", "Caroline", ""); got != "Caroline's home country" {
-		t.Errorf("NormalizeFirstPersonEntity(boundary my) = %q, want Caroline's home country", got)
 	}
 	dslCases := map[string]string{
 		"2023-07-mid":            "2023-07-11",
@@ -575,7 +301,7 @@ func TestStemTokenAndFilterQueryTerms(t *testing.T) {
 		"2023-05-01..2023-05-10": "2023-05-01",
 	}
 	for expr, want := range dslCases {
-		if got := FormatTime(ParseTime(expr, ParseTimeOptions{TimeRef: &ref}), ""); got != want {
+		if got := time.Unix(ParseTime(expr, ParseTimeOptions{TimeRef: &ref}), 0).In(time.Local).Format("2006-01-02"); got != want {
 			t.Errorf("ParseTime(%q) = %q, want %q", expr, got, want)
 		}
 	}

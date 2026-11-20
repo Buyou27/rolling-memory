@@ -1062,8 +1062,8 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 	phraseWitness := sc.phraseWitness[:idx.N]
 	for _, pair := range rmQueryDyadsWithPositionsInto(sc, qTerms, qPositions) {
-		posts := st.phrasePostings(pair)
-		if len(posts) == 0 {
+		dfPhrase := st.phrasePostingCount(pair)
+		if dfPhrase == 0 {
 			continue
 		}
 		wa, okA := effWForQueryTerm(pair.a)
@@ -1071,7 +1071,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 		if !okA || !okB {
 			continue
 		}
-		joint := math.Log1p((float64(idx.N) - float64(len(posts)) + 0.5) / (float64(len(posts)) + 0.5))
+		joint := math.Log1p((float64(idx.N) - float64(dfPhrase) + 0.5) / (float64(dfPhrase) + 0.5))
 		mass := math.Min(wa, wb) * joint / (1.0 + joint)
 		qaA, qaB := qTerms[pair.a], qTerms[pair.b]
 		if qaA.Flags&rmFlagCompanion != 0 && qaB.Flags&rmFlagCompanion != 0 {
@@ -1082,18 +1082,20 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			}
 		}
 		var sum float64
-		for _, u := range posts {
+		st.visitPhrasePostings(pair, func(u int32) bool {
 			activateUnit(u)
 			candidates[u].phrase += mass * unitStructGate[u]
 			sum += candidates[u].lex / total
-		}
-		denom := 1.0 + float64(len(posts))
-		for _, u := range posts {
+			return true
+		})
+		denom := 1.0 + float64(dfPhrase)
+		st.visitPhrasePostings(pair, func(u int32) bool {
 			c := &candidates[u]
 			if witness := sum - c.lex/total; witness > 0 {
 				phraseWitness[u] += mass * unitStructGate[u] * math.Log1p(witness) / denom
 			}
-		}
+			return true
+		})
 	}
 
 	// 2. EntityCluster witness (1st-order term witness) & SpacetimeCluster neighbor spread.
@@ -1134,9 +1136,9 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 	for _, seed := range sc.coreUnits {
 		seedE := coreLex[seed]
-		for _, neighbor := range st.neighborsOf(seed) {
+		st.visitNeighbors(seed, func(neighbor int32) bool {
 			if neighbor == seed {
-				continue
+				return true
 			}
 			aff := st.temporalAffinity(idx, seed, neighbor)
 			gain := seedE * aff * residual
@@ -1156,7 +1158,8 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 				activateUnit(neighbor)
 				candidates[neighbor].stSpread = gain
 			}
-		}
+			return true
+		})
 	}
 	// Unified 2x2 EntityCluster x SpacetimeCluster subsumption-lattice conduction:
 	// Even when residual -> 0 (the seed itself matches ~100% of query groups),
@@ -1444,9 +1447,10 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 					missingBest = upsertStructGroupMax(missingBest, om.group, val)
 				}
 			}
-			for _, n := range st.neighborsOf(u) {
+			st.visitNeighbors(u, func(n int32) bool {
 				evalPeerCorrob(n, 0)
-			}
+				return true
+			})
 			if len(st.citePeers) > 0 {
 				for _, n := range st.citationPeersOf(u) {
 					evalPeerCorrob(n, transmissionPerHop)

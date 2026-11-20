@@ -75,7 +75,7 @@ The console is **not a bespoke admin framework written from scratch**. Its prove
 Alongside the **Live Console**, **ROI Monitor**, and **Memory Graph**, the dashboard provides a dedicated **`Dashboard -> Memory Console`** (`/#/admin/dashboard/artifacts`) for unified monitoring and control of the **Rolling Autonoetic Memory Engine** (100% Vector-Free · 100% LLM-Free):
 
 - **Vector-Free & LLM-Free Architecture Panel**: Requires zero embedding model or cross-encoder reranking configuration — directly monitors local memory engine status, recall throughput, and local plaintext vault statistics.
-- **Live Runtime Switches**: Toggle recall ledger recording (`ledger`), sparse raw fallback (`raw_when_sparse`), and the floating status widget (`widget_enabled`) in real time.
+- **Live Runtime Switches**: Toggle recall ledger recording (`ledger`) and the floating status widget (`widget_enabled`) in real time.
 
 ### 2.2 Zero-Poll Real-Time WebSocket Streams
 

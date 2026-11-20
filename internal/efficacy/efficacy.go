@@ -187,141 +187,72 @@ type HourlySavingBucket struct {
 	NetTokenROI          float64 `json:"net_token_roi"`
 }
 
-// HookPhysicalTelemetry captures 100% factual, zero-counterfactual physical hook metrics
-// directly from rolling-memory.log so engineers can inspect real latency and token overhead.
-type HookPhysicalTelemetry struct {
-	TotalRecallHooks      int     `json:"total_recall_hooks"`
-	RealInjectedHooks     int     `json:"real_injected_hooks"`
-	RealAbsentHooks       int     `json:"real_absent_hooks"`
-	RealDedupHooks        int     `json:"real_dedup_hooks"`
-	RealSilentHooks       int     `json:"real_silent_hooks"`
-	RealInjectRatePct     float64 `json:"real_inject_rate_pct"`
-	RealInjectedChars     int     `json:"real_injected_chars"`
-	RealInjectedTokensEst int     `json:"real_injected_tokens_est"`
-	AvgInjectedTokens     int     `json:"avg_injected_tokens"`
-	MaxInjectedTokens     int     `json:"max_injected_tokens"`
-	P50MS                 int     `json:"p50_ms"`
-	P95MS                 int     `json:"p95_ms"`
-	P99MS                 int     `json:"p99_ms"`
-	SlowOver500MS         int     `json:"slow_over_500ms"`
-	TotalStartHooks       int     `json:"total_start_hooks"`
-	TotalCloseHooks       int     `json:"total_close_hooks"`
-	TotalWrittenInLog     int     `json:"total_written_in_log"`
-	L1DirectInjectedTurns int     `json:"l1_direct_injected_turns"`
-	L1DirectAdoptedTurns  int     `json:"l1_direct_adopted_turns"`
-	L1DirectAdoptRatePct  float64 `json:"l1_direct_adopt_rate_pct"`
-	L0CarryoverTurns      int     `json:"l0_carryover_turns"`
-}
-
-// BandDiagnosticItem ranks a recalled subject band by its empirical utility (Adopted vs. Noisy Waste).
-type BandDiagnosticItem struct {
-	BandTitle      string   `json:"band_title"`
-	Subject        string   `json:"subject"`
-	InjectedTurns  int      `json:"injected_turns"`
-	AdoptedTurns   int      `json:"adopted_turns"`
-	NoiseTurns     int      `json:"noise_turns"`
-	AdoptRate      float64  `json:"adopt_rate"`
-	InjectedTokens int      `json:"injected_tokens"`
-	WastedTokens   int      `json:"wasted_tokens"`
-	SampleAnchors  []string `json:"sample_anchors"`
-	LastSeen       string   `json:"last_seen"`
-}
-
-// BlindSearchGapItem highlights a high-exploration turn where memory stayed silent or missed,
-// forcing the coding agent to run multiple blind search steps before locating files.
-type BlindSearchGapItem struct {
-	SessionID     string   `json:"session_id"`
-	TimeText      string   `json:"time_text"`
-	RecordedAt    int64    `json:"recorded_at"`
-	Harness       string   `json:"harness"`
-	Workspace     string   `json:"workspace"`
-	Prompt        string   `json:"prompt"`
-	Outcome       string   `json:"outcome"`
-	ExploreSteps  int      `json:"explore_steps"`
-	ToolCalls     int      `json:"tool_calls"`
-	ModelRequests int      `json:"model_requests"`
-	TargetFiles   []string `json:"target_files"`
-	ToolTimeline  []string `json:"tool_timeline,omitempty"`
-}
-
 // Report is the top-level cross-harness recall efficacy evaluation output.
 type Report struct {
-	Scope                      string                `json:"scope"`
-	EvaluatedAt                string                `json:"evaluated_at"`
-	TotalHookRuns              int                   `json:"total_hook_runs"`
-	TotalSessions              int                   `json:"total_sessions"`
-	EvaluatedTurns             int                   `json:"evaluated_turns"`
-	InjectedCount              int                   `json:"injected_count"`
-	SilencedCount              int                   `json:"silenced_count"`
-	AdoptedCount               int                   `json:"adopted_count"`
-	CodeCoordHits              int                   `json:"code_coord_hits"`
-	NovelCoordHits             int                   `json:"novel_coord_hits"`              // code coordinates supplied purely by memory (excluding prompt echo & prior turns)
-	CausalDirectHits           int                   `json:"causal_direct_hits"`            // turns where target file Read/Edit occurred with < baseline blind search
-	NavigationDirectHits       int                   `json:"navigation_direct_hits"`        // Pillar 1: zero-blind-search direct file tool navigation hits
-	GuardrailHits              int                   `json:"guardrail_hits"`                // Pillar 2: epistemic guardrail / ruling / gotcha / recipe hits avoiding rework
-	ContinuityHits             int                   `json:"continuity_hits"`               // Pillar 3: short-prompt / cross-turn / boot-landmark continuity hits
-	BootAndCarryoverHits       int                   `json:"boot_and_carryover_hits"`       // 0-marginal-cost turns where SessionStart boot landmarks or session carry-over directly guided file tools
-	OverallBilledReductionPct  float64               `json:"overall_billed_reduction_pct"`  // Empirical per-turn billed token reduction % vs unassisted heavy-exploration coding baseline
-	OverallRawReductionPct     float64               `json:"overall_raw_reduction_pct"`     // Empirical per-turn raw context token reduction % vs unassisted heavy-exploration coding baseline
-	OverallRequestReductionPct float64               `json:"overall_request_reduction_pct"` // Empirical per-turn model request reduction % vs unassisted heavy-exploration coding baseline
-	OverallTimeReductionPct    float64               `json:"overall_time_reduction_pct"`    // Empirical per-turn wall-clock duration reduction % vs unassisted heavy-exploration coding baseline
-	EchoExcludedCount          int                   `json:"echo_excluded_count"`           // anchors stripped because they already appeared in the user's prompt or prior turns
-	SelfHealedCount            int                   `json:"self_healed_count"`             // Pillar 4: stale assertions superseded/retracted via L2 piggybacked agent writebacks
-	WritebackCount             int                   `json:"writeback_count"`               // durable assertions written back via remember across audited sessions
-	AdoptRate                  float64               `json:"adopt_rate"`                    // % of evaluated injections that genuinely saved steps or supplied adopted facts
-	SilenceRate                float64               `json:"silence_rate"`                  // % of hook triggers that stayed silent (dedup + absent + guard)
-	BaselineExploreSteps       float64               `json:"baseline_explore_steps"`        // empirical avg blind-search steps on unassisted coding turns
-	AvgRoundCostTokens         int                   `json:"avg_round_cost_tokens"`         // marginal context tokens per exploration round-trip (fresh + cached)
-	AvgRoundFreshTokens        int                   `json:"avg_round_fresh_tokens"`
-	AvgRoundCachedTokens       int                   `json:"avg_round_cached_tokens"`
-	AvgSavedRounds             float64               `json:"avg_saved_rounds"`        // avg exploration round-trips saved on adopted turns
-	TotalSavedRounds           int                   `json:"total_saved_rounds"`      // all-time cumulative round-trips saved across sessions
-	TotalSavedSeconds          int                   `json:"total_saved_seconds"`     // all-time cumulative wall-clock exploration wait seconds saved
-	LegacyCarriedTurns         int                   `json:"legacy_carried_turns"`    // out-of-window immutable-cache turns folded into all-time cumulative savings
-	InjectedTokens             int                   `json:"injected_tokens"`         // all-time total tokens spent on recall injections
-	SavedFreshTokens           int                   `json:"saved_fresh_tokens"`      // all-time saved uncached input + output tokens
-	SavedCachedTokens          int                   `json:"saved_cached_tokens"`     // all-time saved cached historical context tokens
-	GrossSavedTokens           int                   `json:"gross_saved_tokens"`      // all-time total saved raw context tokens (SavedFreshTokens + SavedCachedTokens)
-	NetSavedTokens             int                   `json:"net_saved_tokens"`        // all-time raw context net saved (gross_saved_tokens - injected_tokens)
-	NetTokenROI                float64               `json:"net_token_roi"`           // all-time raw context ROI %
-	BilledNetSavedTokens       int                   `json:"billed_net_saved_tokens"` // all-time API-billed equivalent net saved (Fresh + 0.10*Cached - Injected)
-	BilledTokenROI             float64               `json:"billed_token_roi"`        // all-time API-billed equivalent ROI %
-	LogDedupTotal              int                   `json:"log_dedup_total"`         // all-time hook ledger dedup count from rolling-memory.log
-	LogAbsentTotal             int                   `json:"log_absent_total"`        // all-time hook absent count from rolling-memory.log
-	TodayTurns                 int                   `json:"today_turns"`             // turns evaluated in the active today window
-	TodayInjectedCount         int                   `json:"today_injected_count"`
-	TodayAdoptedCount          int                   `json:"today_adopted_count"`
-	TodaySavedRounds           int                   `json:"today_saved_rounds"`
-	TodaySavedSeconds          int                   `json:"today_saved_seconds"`
-	TodayInjectedTokens        int                   `json:"today_injected_tokens"`
-	TodaySavedFreshTokens      int                   `json:"today_saved_fresh_tokens"`
-	TodaySavedCachedTokens     int                   `json:"today_saved_cached_tokens"`
-	TodayGrossSavedTokens      int                   `json:"today_gross_saved_tokens"`
-	TodayBilledNetSavedTokens  int                   `json:"today_billed_net_saved_tokens"`
-	TodayBilledTokenROI        float64               `json:"today_billed_token_roi"`
-	TodayNetSavedTokens        int                   `json:"today_net_saved_tokens"`
-	TodayNetTokenROI           float64               `json:"today_net_token_roi"`
-	WeekSavedRounds            int                   `json:"week_saved_rounds"`
-	WeekNetSavedTokens         int                   `json:"week_net_saved_tokens"`
-	Windows                    []WindowSavingBucket  `json:"windows"`        // rolling 1h / 24h / 7d / 30d monitor windows (时 / 日 / 周 / 月)
-	HourlySavings              []HourlySavingBucket  `json:"hourly_savings"` // last 48 clock-hour buckets for the 时 window series
-	DailySavings               []DailySavingBucket   `json:"daily_savings"`
-	Partial                    bool                  `json:"partial"`        // true when this snapshot was finalized before every in-window turn was settled
-	DeferredTurns              int                   `json:"deferred_turns"` // turns left for the next incremental run (settled from the persistent ledger then)
-	BudgetSeconds              int                   `json:"budget_seconds"` // per-run evaluation budget that produced this snapshot (0 = unbounded)
-	AvgLatencyMS               int                   `json:"avg_latency_ms"`
-	P50LatencyMS               int                   `json:"p50_latency_ms"`
-	P95LatencyMS               int                   `json:"p95_latency_ms"`
-	EfficacyScore              float64               `json:"efficacy_score"` // strict composite 0..100 score
-	Grade                      string                `json:"grade"`          // S | A | B | C | D
-	Continuity                 SessionContinuity     `json:"continuity"`
-	Funnel                     FunnelBreakdown       `json:"funnel"`
-	HookTelemetry              HookPhysicalTelemetry `json:"hook_telemetry"`
-	TopUsefulBands             []BandDiagnosticItem  `json:"top_useful_bands"`
-	TopNoisyBands              []BandDiagnosticItem  `json:"top_noisy_bands"`
-	BlindSearchGaps            []BlindSearchGapItem  `json:"blind_search_gaps"`
-	Harnesses                  []HarnessEfficacy     `json:"harnesses"`
-	Sessions                   []SessionEvaluation   `json:"sessions"`
+	Scope                     string               `json:"scope"`
+	EvaluatedAt               string               `json:"evaluated_at"`
+	TotalHookRuns             int                  `json:"total_hook_runs"`
+	TotalSessions             int                  `json:"total_sessions"`
+	EvaluatedTurns            int                  `json:"evaluated_turns"`
+	InjectedCount             int                  `json:"injected_count"`
+	SilencedCount             int                  `json:"silenced_count"`
+	AdoptedCount              int                  `json:"adopted_count"`
+	CodeCoordHits             int                  `json:"code_coord_hits"`
+	CausalDirectHits          int                  `json:"causal_direct_hits"`     // turns where target file Read/Edit occurred with < baseline blind search
+	NavigationDirectHits      int                  `json:"navigation_direct_hits"` // Pillar 1: zero-blind-search direct file tool navigation hits
+	GuardrailHits             int                  `json:"guardrail_hits"`         // Pillar 2: epistemic guardrail / ruling / gotcha / recipe hits avoiding rework
+	ContinuityHits            int                  `json:"continuity_hits"`        // Pillar 3: short-prompt / cross-turn / boot-landmark continuity hits
+	EchoExcludedCount         int                  `json:"echo_excluded_count"`    // anchors stripped because they already appeared in the user's prompt or prior turns
+	SelfHealedCount           int                  `json:"self_healed_count"`      // Pillar 4: stale assertions superseded/retracted via L2 piggybacked agent writebacks
+	WritebackCount            int                  `json:"writeback_count"`        // durable assertions written back via remember across audited sessions
+	AdoptRate                 float64              `json:"adopt_rate"`             // % of evaluated injections that genuinely saved steps or supplied adopted facts
+	SilenceRate               float64              `json:"silence_rate"`           // % of hook triggers that stayed silent (dedup + absent + guard)
+	AvgRoundCostTokens        int                  `json:"avg_round_cost_tokens"`  // marginal context tokens per exploration round-trip (fresh + cached)
+	AvgRoundFreshTokens       int                  `json:"avg_round_fresh_tokens"`
+	AvgRoundCachedTokens      int                  `json:"avg_round_cached_tokens"`
+	AvgSavedRounds            float64              `json:"avg_saved_rounds"`        // avg exploration round-trips saved on adopted turns
+	TotalSavedRounds          int                  `json:"total_saved_rounds"`      // all-time cumulative round-trips saved across sessions
+	TotalSavedSeconds         int                  `json:"total_saved_seconds"`     // all-time cumulative wall-clock exploration wait seconds saved
+	InjectedTokens            int                  `json:"injected_tokens"`         // all-time total tokens spent on recall injections
+	SavedFreshTokens          int                  `json:"saved_fresh_tokens"`      // all-time saved uncached input + output tokens
+	SavedCachedTokens         int                  `json:"saved_cached_tokens"`     // all-time saved cached historical context tokens
+	GrossSavedTokens          int                  `json:"gross_saved_tokens"`      // all-time total saved raw context tokens (SavedFreshTokens + SavedCachedTokens)
+	NetSavedTokens            int                  `json:"net_saved_tokens"`        // all-time raw context net saved (gross_saved_tokens - injected_tokens)
+	NetTokenROI               float64              `json:"net_token_roi"`           // all-time raw context ROI %
+	BilledNetSavedTokens      int                  `json:"billed_net_saved_tokens"` // all-time API-billed equivalent net saved (Fresh + 0.10*Cached - Injected)
+	BilledTokenROI            float64              `json:"billed_token_roi"`        // all-time API-billed equivalent ROI %
+	LogDedupTotal             int                  `json:"log_dedup_total"`         // all-time hook ledger dedup count from rolling-memory.log
+	LogAbsentTotal            int                  `json:"log_absent_total"`        // all-time hook absent count from rolling-memory.log
+	TodayTurns                int                  `json:"today_turns"`             // turns evaluated in the active today window
+	TodayInjectedCount        int                  `json:"today_injected_count"`
+	TodayAdoptedCount         int                  `json:"today_adopted_count"`
+	TodaySavedRounds          int                  `json:"today_saved_rounds"`
+	TodaySavedSeconds         int                  `json:"today_saved_seconds"`
+	TodayInjectedTokens       int                  `json:"today_injected_tokens"`
+	TodaySavedFreshTokens     int                  `json:"today_saved_fresh_tokens"`
+	TodaySavedCachedTokens    int                  `json:"today_saved_cached_tokens"`
+	TodayGrossSavedTokens     int                  `json:"today_gross_saved_tokens"`
+	TodayBilledNetSavedTokens int                  `json:"today_billed_net_saved_tokens"`
+	TodayBilledTokenROI       float64              `json:"today_billed_token_roi"`
+	TodayNetSavedTokens       int                  `json:"today_net_saved_tokens"`
+	TodayNetTokenROI          float64              `json:"today_net_token_roi"`
+	WeekSavedRounds           int                  `json:"week_saved_rounds"`
+	WeekNetSavedTokens        int                  `json:"week_net_saved_tokens"`
+	Windows                   []WindowSavingBucket `json:"windows"`        // rolling 1h / 24h / 7d / 30d monitor windows (时 / 日 / 周 / 月)
+	HourlySavings             []HourlySavingBucket `json:"hourly_savings"` // last 48 clock-hour buckets for the 时 window series
+	DailySavings              []DailySavingBucket  `json:"daily_savings"`
+	Partial                   bool                 `json:"partial"`        // true when this snapshot was finalized before every in-window turn was settled
+	DeferredTurns             int                  `json:"deferred_turns"` // turns left for the next incremental run (settled from the persistent ledger then)
+	BudgetSeconds             int                  `json:"budget_seconds"` // per-run evaluation budget that produced this snapshot (0 = unbounded)
+	AvgLatencyMS              int                  `json:"avg_latency_ms"`
+	P50LatencyMS              int                  `json:"p50_latency_ms"`
+	P95LatencyMS              int                  `json:"p95_latency_ms"`
+	EfficacyScore             float64              `json:"efficacy_score"` // strict composite 0..100 score
+	Grade                     string               `json:"grade"`          // S | A | B | C | D
+	Continuity                SessionContinuity    `json:"continuity"`
+	Funnel                    FunnelBreakdown      `json:"funnel"`
+	Harnesses                 []HarnessEfficacy    `json:"harnesses"`
+	Sessions                  []SessionEvaluation  `json:"sessions"`
 }
 
 // ToMap converts Report to a generic map for JSON/API emission, preserving integer types via json.Number.

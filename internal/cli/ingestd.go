@@ -38,6 +38,12 @@ const (
 	ingestWorkerHeartbeat = 5 * time.Second
 	// ingestWorkerRetry is how long an extra worker waits for the holder to stop.
 	ingestWorkerRetry = 5 * time.Second
+	// ingestQueueDrainLimit bounds how many queued remembers one scan tick
+	// applies, keeping a tick's apply time small relative to its cadence.
+	ingestQueueDrainLimit = 32
+	// ingestQueueRetryBackoff spaces retries of one failing queued remember so it
+	// cannot block newer items in the same drain slice.
+	ingestQueueRetryBackoff = 10 * time.Second
 )
 
 // ingestWorkerLease is the single-instance guard held by `rmem ingestd`.
@@ -115,6 +121,16 @@ func (a *application) runIngestd() int {
 
 	runPass := func() {
 		writeIngestWorkerStatus(memory.Store.DB(), "scanning")
+		if applied, queueErr := memory.ProcessRememberQueue(ctx, facade.IngestQueueProcessOptions{
+			Limit:             ingestQueueDrainLimit,
+			LeaseDuration:     ingestWorkerLeaseTTL,
+			HeartbeatInterval: ingestWorkerHeartbeat,
+			RetryBackoff:      ingestQueueRetryBackoff,
+		}); queueErr != nil {
+			log.Printf("ingestd: remember queue: %v", queueErr)
+		} else if applied > 0 {
+			log.Printf("ingestd: applied %d queued remember(s)", applied)
+		}
 		RunAutoWatchWorkerTick(ctx, memory, bgSettleWindow, episodicQuiescenceWindow)
 		if IsEpisodicSyncPaused(memory.Store.DB(), memory.Config.Path) {
 			writeIngestWorkerStatus(memory.Store.DB(), "paused")
@@ -122,6 +138,11 @@ func (a *application) runIngestd() int {
 		}
 		writeIngestWorkerStatus(memory.Store.DB(), "idle")
 		a.ensureSnapshotBuilder(ctx, memory)
+		if pruned, pruneErr := memory.PruneIngestQueueApplied(ctx); pruneErr != nil {
+			log.Printf("ingestd: prune remember queue: %v", pruneErr)
+		} else if pruned > 0 {
+			log.Printf("ingestd: pruned %d applied remember queue row(s)", pruned)
+		}
 		if processed, queueErr := memory.ProcessCrystallizationQueue(ctx, 1); queueErr != nil {
 			log.Printf("ingestd: crystallization queue: %v", queueErr)
 		} else if processed > 0 {

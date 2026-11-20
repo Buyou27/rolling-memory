@@ -109,7 +109,7 @@ func evalGenerationPath(suite, scope string) string {
 
 // NewEvalGenerationID 生成世代号：UTC 紧凑时间戳 + 4 位随机十六进制（可读、可排序）。后缀只有
 // 16 bit，同一秒并发下存在生日界内的撞名概率；「绝不撞名」由分配器的已存在即重试守卫兜底，
-// 见 AllocateEvalGenerationForMode。
+// 见 AllocateEvalGeneration。
 func NewEvalGenerationID(now time.Time) (string, error) {
 	suffix := make([]byte, 2)
 	if _, err := rand.Read(suffix); err != nil {
@@ -225,9 +225,8 @@ func (g EvalGeneration) live(now time.Time) bool {
 	return now.Sub(beat) < evalGenerationLiveTTL
 }
 
-func newEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePath string, now time.Time) (EvalGeneration, error) {
+func newEvalGeneration(cfg *config.Config, suite, storePath string, now time.Time) (EvalGeneration, error) {
 	suite = strings.ToLower(strings.TrimSpace(suite))
-	pulseMode = NormalizePulseMode(pulseMode)
 	userID := evalUserID()
 	generationID, err := NewEvalGenerationID(now)
 	if err != nil {
@@ -239,7 +238,7 @@ func newEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePath st
 	endpoint := "local://vault"
 	ownerTok, _ := NewEvalGenerationID(now)
 	return EvalGeneration{
-		Scope:       ScopeForModeGeneration(suite, userID, pulseMode, generationID),
+		Scope:       ScopeForGeneration(suite, userID, generationID),
 		Generation:  generationID,
 		Suite:       suite,
 		UserID:      userID,
@@ -374,13 +373,7 @@ func liveWriterOnStore(storePath, endpoint, userID string, now time.Time) (EvalG
 //
 // 新世代的本地 scope 构造上为空，随后 Ingest(rebuild=true) 会复核并给出清库回执。
 func AllocateEvalGeneration(cfg *config.Config, suite, storePath string) (EvalGeneration, error) {
-	return AllocateEvalGenerationForMode(cfg, suite, PulseModeLocalPlain, storePath)
-}
-
-// AllocateEvalGenerationForMode 为指定脉冲模式（现役唯一值 local_plain）分配独立世代 scope。
-func AllocateEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePath string) (EvalGeneration, error) {
 	now := time.Now()
-	pulseMode = NormalizePulseMode(pulseMode)
 	// 本地评测世代恒用本地金库身份（零云端端点解析）。
 	endpoint := "local://vault"
 	userID := evalUserID()
@@ -391,7 +384,7 @@ func AllocateEvalGenerationForMode(cfg *config.Config, suite, pulseMode, storePa
 	}
 	var lastErr error
 	for attempt := 0; attempt < evalGenerationAcquireAttempts; attempt++ {
-		gen, err := newEvalGenerationForMode(cfg, suite, pulseMode, storePath, time.Now())
+		gen, err := newEvalGeneration(cfg, suite, storePath, time.Now())
 		if err != nil {
 			return EvalGeneration{}, err
 		}
@@ -418,7 +411,7 @@ func (e *LocalEngine) startNewGeneration(ctx context.Context, logf func(string, 
 	if e.cfg == nil {
 		return errors.New("evaluation engine is not initialized with a config")
 	}
-	gen, err := AllocateEvalGenerationForMode(e.cfg, e.Suite, e.PulseMode, e.StorePath)
+	gen, err := AllocateEvalGeneration(e.cfg, e.Suite, e.StorePath)
 	if err != nil {
 		return err
 	}
@@ -427,7 +420,7 @@ func (e *LocalEngine) startNewGeneration(ctx context.Context, logf func(string, 
 	}
 	e.ownsGeneration = true
 	e.ownerToken = gen.OwnerToken
-	logf("[eval] 新评测世代 scope=%s mode=%s（本地评测独立 scope，互不清库、互不干扰）", gen.Scope, NormalizePulseMode(e.PulseMode))
+	logf("[eval] 新评测世代 scope=%s mode=%s（本地评测独立 scope，互不清库、互不干扰）", gen.Scope, e.PulseMode)
 	e.retired = e.ReconcileRetiredGenerations(ctx, logf)
 	return nil
 }
@@ -469,7 +462,7 @@ func (e *LocalEngine) adoptStoredGeneration() (EvalGeneration, bool) {
 	if !ok || suite != e.Suite {
 		return EvalGeneration{}, false
 	}
-	if NormalizePulseMode(scopeMode) != NormalizePulseMode(e.PulseMode) {
+	if scopeMode != "" && scopeMode != e.PulseMode {
 		return EvalGeneration{}, false
 	}
 	gen, _ := LoadEvalGeneration(manifest.Scope)
@@ -523,7 +516,7 @@ func (e *LocalEngine) ReconcileRetiredGenerations(ctx context.Context, logf func
 	}
 	var receipts []EvalGenerationPurge
 	now := time.Now()
-	activeMode := NormalizePulseMode(e.PulseMode)
+	activeMode := e.PulseMode
 	for _, gen := range listEvalGenerations() {
 		if gen.Scope == e.Scope {
 			continue

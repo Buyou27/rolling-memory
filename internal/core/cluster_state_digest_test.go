@@ -53,12 +53,6 @@ func (d *digestWriter) u32s(s []uint32) {
 		d.u32(v)
 	}
 }
-func (d *digestWriter) u16s(s []uint16) {
-	d.u64(uint64(len(s)))
-	for _, v := range s {
-		d.u16(v)
-	}
-}
 func (d *digestWriter) u8s(s []uint8) {
 	d.u64(uint64(len(s)))
 	for _, v := range s {
@@ -145,6 +139,52 @@ func (d *digestWriter) positionsMap(m map[uint32]TermPosition) {
 // fields (builtIndex/builtIndexGen) are excluded: two engines built by
 // different paths must agree on state content even when their generation
 // counters differ.
+// logicalPhraseView returns the phrase CSR a full rebuild would produce: the immutable
+// base merged with the append delta. The digest hashes this logical view, so an
+// incremental base+delta state and a full rebuild stay comparable.
+func logicalPhraseView(st *rmClusterState) ([]rmDyad, []uint32, []int32) {
+	if len(st.phraseDelta) == 0 {
+		return st.phraseKeys, st.phraseRowPtr, st.phraseUnits
+	}
+	postings := make([]dyadPosting, 0, len(st.phraseUnits)+len(st.phraseDelta))
+	for i, k := range st.phraseKeys {
+		for _, u := range st.phraseUnits[st.phraseRowPtr[i]:st.phraseRowPtr[i+1]] {
+			postings = append(postings, dyadPosting{pair: k, unit: u})
+		}
+	}
+	postings = append(postings, st.phraseDelta...)
+	sort.Sort(dyadPostingSort(postings))
+	keys := make([]rmDyad, 0, len(st.phraseKeys)+len(st.phraseDelta))
+	rowPtr := make([]uint32, 0, len(st.phraseKeys)+len(st.phraseDelta)+1)
+	units := make([]int32, 0, len(postings))
+	for i, p := range postings {
+		if i > 0 && p == postings[i-1] {
+			continue
+		}
+		if len(keys) == 0 || keys[len(keys)-1] != p.pair {
+			keys = append(keys, p.pair)
+			rowPtr = append(rowPtr, uint32(len(units)))
+		}
+		units = append(units, p.unit)
+	}
+	rowPtr = append(rowPtr, uint32(len(units)))
+	return keys, rowPtr, units
+}
+
+// phrasePrefixOf derives the 4,096-bucket prefix table from a phrase key sequence.
+func phrasePrefixOf(keys []rmDyad) [4097]uint32 {
+	var prefix [4097]uint32
+	cur := uint32(0)
+	for b := 0; b < 4096; b++ {
+		prefix[b] = cur
+		for cur < uint32(len(keys)) && int(keys[cur].a>>52) == b {
+			cur++
+		}
+	}
+	prefix[4096] = cur
+	return prefix
+}
+
 func clusterStateCanonicalDigest(st *rmClusterState) string {
 	if st == nil {
 		return "nil"
@@ -186,18 +226,16 @@ func clusterStateCanonicalDigest(st *rmClusterState) string {
 	d.u64s(st.termParentGroup)
 	d.tag("termIsPrimary")
 	d.u8s(st.termIsPrimary)
+	phraseKeys, phraseRowPtr, phraseUnits := logicalPhraseView(st)
+	phrasePrefix := phrasePrefixOf(phraseKeys)
 	d.tag("phraseKeys")
-	d.dyads(st.phraseKeys)
+	d.dyads(phraseKeys)
 	d.tag("phrasePrefixPtr")
-	d.u32s(st.phrasePrefixPtr[:])
+	d.u32s(phrasePrefix[:])
 	d.tag("phraseRowPtr")
-	d.u32s(st.phraseRowPtr)
+	d.u32s(phraseRowPtr)
 	d.tag("phraseUnits")
-	d.i32s(st.phraseUnits)
-	d.tag("partnerIdx")
-	d.i32s(st.partnerIdx)
-	d.tag("partnerPrefixPtr")
-	d.u32s(st.partnerPrefixPtr[:])
+	d.i32s(phraseUnits)
 
 	d.tag("effWeight")
 	keys = keys[:0]
@@ -251,9 +289,24 @@ func clusterStateCanonicalDigest(st *rmClusterState) string {
 	d.tag("bucketTimes")
 	d.i64s(st.bucketTimes)
 	d.tag("neighborRowPtr")
-	d.u32s(st.neighborRowPtr)
+	d.u64(uint64(len(st.clusters) + 1))
+	var neighborCount uint32
+	d.u32(0)
+	for u := range st.clusters {
+		st.visitNeighbors(int32(u), func(neighbor int32) bool {
+			neighborCount++
+			return true
+		})
+		d.u32(neighborCount)
+	}
 	d.tag("neighborPool")
-	d.i32s(st.neighborPool)
+	d.u64(uint64(neighborCount))
+	for u := range st.clusters {
+		st.visitNeighbors(int32(u), func(neighbor int32) bool {
+			d.i32(neighbor)
+			return true
+		})
+	}
 	d.tag("refTimes")
 	d.i64s(st.refTimes)
 	d.tag("gaps")
@@ -360,6 +413,82 @@ func digestProbeQuery(docs []Doc) map[uint64]Term {
 		}
 	}
 	return q
+}
+
+func queryHitsCanonicalDigest(hits []Hit) string {
+	var d digestWriter
+	d.tag("query-hits-v1")
+	d.u64(uint64(len(hits)))
+	for _, hit := range hits {
+		d.tag(hit.UnitID)
+		d.f64(hit.Energy)
+		d.f64(hit.Direct)
+		d.f64(hit.Hop1)
+		d.f64(hit.Hop2)
+	}
+	return hex.EncodeToString(d.h[:])
+}
+
+func TestVisitNeighborsPreservesOrderAndShortCircuits(t *testing.T) {
+	st := &rmClusterState{
+		bucketTimes:          []int64{10, 20, 30, 40},
+		bucketRowPtr:         []uint32{0, 2, 3, 4, 6},
+		bucketUnits:          []int32{9, 3, 8, 2, 7, 6},
+		extraNeighborRowPtr:  []uint32{0, 1},
+		extraNeighborBuckets: []int32{3},
+		ordPos:               []int32{0},
+	}
+
+	var got []int32
+	st.visitNeighbors(0, func(neighbor int32) bool {
+		got = append(got, neighbor)
+		return true
+	})
+	want := []int32{9, 3, 8, 2, 7, 6}
+	if len(got) != len(want) {
+		t.Fatalf("visited %d neighbors, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("neighbor %d = %d, want %d; order=%v", i, got[i], want[i], got)
+		}
+	}
+
+	got = got[:0]
+	st.visitNeighbors(0, func(neighbor int32) bool {
+		got = append(got, neighbor)
+		return neighbor != 3
+	})
+	want = []int32{9, 3}
+	if len(got) != len(want) {
+		t.Fatalf("short-circuit visited %d neighbors, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("short-circuit neighbor %d = %d, want %d; order=%v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestNeighborVisitorSeamGoldenParity(t *testing.T) {
+	docs := appendProbeDocs(64)
+	eng := NewEngine(BuildIndex(docs))
+	// The dual-order partner index was removed from the state and from this digest's
+	// composition (it is a derived permutation of phraseKeys and served only the
+	// diagnostic TermEnergyVector profile); phraseKeys/Units still cover the logical state.
+	const wantClusterState = "8c71826e767fac7392e89db361601db94e209713ef1800c1d3c11a3aa83a36ee"
+	if got := clusterStateCanonicalDigest(eng.ensureClusterState()); got != wantClusterState {
+		t.Fatalf("cluster state digest = %s, want %s", got, wantClusterState)
+	}
+
+	q := make(map[uint64]Term, 3)
+	for _, h := range []uint64{1000, 1013, 1026} {
+		q[h] = docs[0].Terms[h]
+	}
+	const wantQueryHits = "f5f3b497577e357a5bcf4877802f31e70d5b4d9e0795626aa66fb60f41d530b1"
+	if got := queryHitsCanonicalDigest(eng.Search(q, 50)); got != wantQueryHits {
+		t.Fatalf("query hit digest = %s, want %s", got, wantQueryHits)
+	}
 }
 
 func TestClusterStateDigestAppendEqualsFullRebuild(t *testing.T) {

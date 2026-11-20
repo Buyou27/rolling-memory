@@ -4,6 +4,7 @@
 package facade_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -524,7 +525,7 @@ func TestRecentVaultItemsKeepsSourceVisibleInDerivedWindow(t *testing.T) {
 			OccurredAt:   testNow + int64(10*(i+1)),
 			QueryText:    "q:" + id,
 			AnswerText:   "a:" + id,
-			CitedUnitIDs: []string{"ep_recent_source"},
+			CitedUnitIDs: []string{"ep_recent_source", fmt.Sprintf("ep_recent_extra_%d", i)},
 		}); err != nil {
 			t.Fatalf("seed noetic %s: %v", id, err)
 		}

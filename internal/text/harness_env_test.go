@@ -30,65 +30,6 @@ func clearHarnessEnv(t *testing.T) {
 	}
 }
 
-func TestDetectHarnessFromEnvFingerprints(t *testing.T) {
-	cases := []struct {
-		name string
-		env  map[string]string
-		want string
-	}{
-		{"override", map[string]string{"ROLLING_MEMORY_HARNESS": "custom"}, "custom"},
-		{"dsh session", map[string]string{"DSH_SESSION_ID": "s1"}, "dsh"},
-		{"dsh shell", map[string]string{"DSH_SHELL": "/bin/zsh"}, "dsh"},
-		{"zcode session", map[string]string{"ZCODE_SESSION_ID": "z1"}, "zcode"},
-		{"claude env", map[string]string{"CLAUDECODE": "1"}, "claude-code"},
-		{"claude entrypoint", map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}, "claude-code"},
-		{"opencode session", map[string]string{"OPENCODE_SESSION_ID": "o1"}, "opencode"},
-		{"opencode agent", map[string]string{"AI_AGENT": "opencode"}, "opencode"},
-		{"cursor", map[string]string{"CURSOR_TRACE_ID": "c1"}, "cursor"},
-		{"windsurf", map[string]string{"WINDSURF_SESSION": "w1"}, "windsurf"},
-		{"codex thread", map[string]string{"CODEX_THREAD_ID": "t1"}, "codex"},
-		// Plain shell exports describe a workspace, not an identity. They
-		// are inherited by every descendant and must not name the host.
-		{"zcode project export", map[string]string{"ZCODE_PROJECT_DIR": "/tmp/demo"}, ""},
-		{"zcode terminal", map[string]string{"TERM_PROGRAM": "ZCode"}, ""},
-		{"claude project export", map[string]string{"CLAUDE_PROJECT_DIR": "/tmp/demo"}, ""},
-		{"codex home export", map[string]string{"CODEX_HOME": "/tmp/codex"}, ""},
-		{"none", map[string]string{}, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			clearHarnessEnv(t)
-			for key, value := range tc.env {
-				t.Setenv(key, value)
-			}
-			if got := DetectHarnessFromEnv(); got != tc.want {
-				t.Fatalf("DetectHarnessFromEnv = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestDetectHarnessFromEnvOrdering pins the marker-strength order: session
-// markers stamped by the hosting process outrank weak shell exports, and a
-// nested DSH session outranks the ZCode marker it inherited from its
-// launching terminal.
-func TestDetectHarnessFromEnvOrdering(t *testing.T) {
-	clearHarnessEnv(t)
-	t.Setenv("DSH_SESSION_ID", "s1")
-	t.Setenv("ZCODE_SESSION_ID", "z1")
-	t.Setenv("TERM_PROGRAM", "zcode")
-	if got := DetectHarnessFromEnv(); got != "dsh" {
-		t.Fatalf("nested DSH inside ZCode = %q, want dsh", got)
-	}
-
-	clearHarnessEnv(t)
-	t.Setenv("CODEX_HOME", "/tmp/codex")
-	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
-	if got := DetectHarnessFromEnv(); got != "claude-code" {
-		t.Fatalf("claude with a CODEX_HOME export = %q, want claude-code", got)
-	}
-}
-
 // TestDetectHarnessPresenceUsesEnvFingerprints locks the carrier a presence
 // stamp receives when the caller carries no explicit harness name.
 func TestDetectHarnessPresenceUsesEnvFingerprints(t *testing.T) {

@@ -644,49 +644,62 @@ type rmClusterState struct {
 	phrasePrefixPtr [4097]uint32
 	phraseRowPtr    []uint32
 	phraseUnits     []int32
-	// partnerIdx 是 phraseKeys 的对偶线性扩张（dual linear extension）：按 (b, a)
-	// 排序的键序在主键序中的下标序列。主序 (a, b) 只索引 a 侧搭档；b 侧搭档
-	// 借 partnerIdx + partnerPrefixPtr 二分定位，postings 仍共享 phraseUnits，
-	// 零第二副本。生命周期与 rmClusterState 一致，零落盘（支持层⊥权重层）。
-	partnerIdx         []int32
-	partnerPrefixPtr   [4097]uint32
-	effWeight          map[uint64]float64
-	properRatio        map[uint64]float64
-	parentGroup        map[uint64]uint64
-	isPrimaryWord      map[uint64]bool
-	clusters           []int32
-	clusterN           int
-	bucketTimes        []int64
-	neighborRowPtr     []uint32
-	neighborPool       []int32
-	refTimes           []int64
-	meanGap            float64
-	muLogGap           float64
-	sigLogGap          float64
-	ordPos             []int32
-	episodeOf          []int32
-	episodeCount       int
-	entryMeanBits      float64
-	sentenceEnergyMean float64
-	totalDaysM         float64
-	fastDocs           []rmFastDocStruct
-	subjRowPtr         []uint32
-	subjIDsPool        []uint64
-	subjWeightsPool    []float64
-	dayCos             map[uint64]float64
-	dayCosRowPtr       []uint32
-	dayCosKeys         []uint64
-	dayCosVals         []float64
-	provKeys           []uint64
-	provRowPtr         []uint32
-	provUnits          []int32
-	citeRowPtr         []uint32
-	citePeers          []int32
-	cociteRowPtr       []uint32
-	cocitePeers        []int32
-	authorDF           map[uint64]int32
-	meanLineSpan       float64
-	widePos            map[uint32]TermPosition
+	// phraseDelta is the append-only delta over the immutable base phrase CSR:
+	// sorted (pair, unit) postings for units appended since the last compaction.
+	// Empty means the base alone is authoritative.
+	phraseDelta   []dyadPosting
+	effWeight     map[uint64]float64
+	properRatio   map[uint64]float64
+	parentGroup   map[uint64]uint64
+	isPrimaryWord map[uint64]bool
+	clusters      []int32
+	clusterN      int
+	bucketTimes   []int64
+
+	// Exact ordered timestamp-bucket membership is the sole neighborhood backing
+	// in memory and in .zcsr. Each timed unit appears once in bucketUnits.
+	bucketRowPtr []uint32
+	bucketUnits  []int32
+
+	// extraNeighborRowPtr/extraNeighborBuckets contain only references to the
+	// orthogonal-transparent buckets beyond the base ±2-bucket band. They are
+	// appended after the base bucket sequence, preserving the logical visitor order
+	// without duplicating shared bucket members per unit.
+	extraNeighborRowPtr  []uint32
+	extraNeighborBuckets []int32
+	refTimes             []int64
+	meanGap              float64
+	muLogGap             float64
+	sigLogGap            float64
+	ordPos               []int32
+	episodeOf            []int32
+	episodeCount         int
+	entryMeanBits        float64
+	sentenceEnergyMean   float64
+	totalDaysM           float64
+	fastDocs             []rmFastDocStruct
+	subjRowPtr           []uint32
+	subjIDsPool          []uint64
+	subjWeightsPool      []float64
+	dayCos               map[uint64]float64
+	dayCosRowPtr         []uint32
+	dayCosKeys           []uint64
+	dayCosVals           []float64
+	provKeys             []uint64
+	provRowPtr           []uint32
+	provUnits            []int32
+	citeRowPtr           []uint32
+	citePeers            []int32
+	cociteRowPtr         []uint32
+	cocitePeers          []int32
+	// externalCitationSets carries caller-declared co-citation records whose
+	// citing unit is not an index node (a client-side recollection trace that
+	// cites evidence already in the corpus). The kernel materializes only the
+	// pairwise co-citation it asserts, judging no semantics.
+	externalCitationSets [][]string
+	authorDF             map[uint64]int32
+	meanLineSpan         float64
+	widePos              map[uint32]TermPosition
 
 	// 新鲜度指纹：索引对象身份（重建会换指针）+ 世代号（原位变更会自增）。
 	// 二者组合精确判定缓存是否仍对应当前索引，无需对全量倒排重算内容哈希。
@@ -827,6 +840,10 @@ func (st *rmClusterState) buildCitationCSR(idx *Index) {
 		}
 	}
 	if len(edges) == 0 {
+		// External co-citation records do not need a citing node in the index,
+		// so the second-order CSR must still be built when there are no
+		// first-order meta edges.
+		st.buildCoCitationCSR(idx)
 		return
 	}
 	sort.Slice(edges, func(i, j int) bool {
@@ -862,7 +879,10 @@ func (st *rmClusterState) buildCitationCSR(idx *Index) {
 func (st *rmClusterState) buildCoCitationCSR(idx *Index) {
 	st.cociteRowPtr = nil
 	st.cocitePeers = nil
-	if idx == nil || idx.N == 0 || len(st.citeRowPtr) == 0 {
+	if idx == nil || idx.N == 0 {
+		return
+	}
+	if len(st.citeRowPtr) == 0 && len(st.externalCitationSets) == 0 {
 		return
 	}
 	type edge struct{ from, to int32 }
@@ -883,6 +903,32 @@ func (st *rmClusterState) buildCoCitationCSR(idx *Index) {
 				if members[i] == members[j] {
 					continue
 				}
+				edges = append(edges, edge{from: members[i], to: members[j]}, edge{from: members[j], to: members[i]})
+			}
+		}
+	}
+	// Caller-declared co-citation records whose citing unit is not an index
+	// node (client-side recollection traces). Deduplicate members so a repeated
+	// id in the same record cannot manufacture a self-pair.
+	for _, cited := range st.externalCitationSets {
+		if len(cited) < 2 {
+			continue
+		}
+		members := make([]int32, 0, len(cited))
+		seen := make(map[int32]struct{}, len(cited))
+		for _, id := range cited {
+			v, ok := idx.LookupUnit(id)
+			if !ok {
+				continue
+			}
+			if _, dup := seen[v]; dup {
+				continue
+			}
+			seen[v] = struct{}{}
+			members = append(members, v)
+		}
+		for i := 0; i < len(members); i++ {
+			for j := i + 1; j < len(members); j++ {
 				edges = append(edges, edge{from: members[i], to: members[j]}, edge{from: members[j], to: members[i]})
 			}
 		}
@@ -982,31 +1028,8 @@ func (st *rmClusterState) buildPrefixTables(n int) {
 	}
 	st.phrasePrefixPtr[4096] = pn
 
-	// 对偶序 (b, a) 前缀表：与主序共用同一键集，仅在 partnerIdx 上重排。
-	// 构建 O(P log P)（P = |phraseKeys|），单次成本，之后 b 侧搭档定位为
-	// 前缀桶 + 桶内二分，O(log) per lookup。
-	if pn > 0 {
-		order := make([]int32, pn)
-		for i := range order {
-			order[i] = int32(i)
-		}
-		sort.Slice(order, func(i, j int) bool {
-			kx, ky := pKeys[order[i]], pKeys[order[j]]
-			if kx.b != ky.b {
-				return kx.b < ky.b
-			}
-			return kx.a < ky.a
-		})
-		st.partnerIdx = order
-		var qCur uint32
-		for b := 0; b < 4096; b++ {
-			st.partnerPrefixPtr[b] = qCur
-			for qCur < pn && int(pKeys[order[qCur]].b>>52) == b {
-				qCur++
-			}
-		}
-		st.partnerPrefixPtr[4096] = pn
-	}
+	// 对偶序 (b, a) 索引已删除：它只服务诊断用的 TermEnergyVector 画像，却让每次
+	// 摄取与冷启动支付 O(P log P) 重排；b 侧搭档改为按需 O(P) 扫描主序键集。
 
 	dKeys := st.dayCosKeys
 	dn := uint32(len(dKeys))
@@ -1081,11 +1104,67 @@ func (st *rmClusterState) entryPositionsOf(e rmDocEntry) []uint32 {
 	return st.posPool[e.posOff : e.posOff+e.posLen]
 }
 
-func (st *rmClusterState) neighborsOf(u int32) []int32 {
-	if int(u)+1 >= len(st.neighborRowPtr) {
-		return nil
+func (st *rmClusterState) visitNeighbors(u int32, visit func(int32) bool) {
+	if st == nil || visit == nil || u < 0 {
+		return
 	}
-	return st.neighborPool[st.neighborRowPtr[u]:st.neighborRowPtr[u+1]]
+	if int(u) >= len(st.ordPos) || len(st.bucketRowPtr) != len(st.bucketTimes)+1 {
+		return
+	}
+	bIdx := int(st.ordPos[u])
+	if bIdx < 0 || bIdx >= len(st.bucketTimes) {
+		return
+	}
+	const neighborSpan = 2
+	if !st.visitBucketMembers(int32(bIdx), visit) {
+		return
+	}
+	for span := 1; span <= neighborSpan; span++ {
+		for _, adj := range [2]int{bIdx - span, bIdx + span} {
+			if adj >= 0 && adj < len(st.bucketTimes) && !st.visitBucketMembers(int32(adj), visit) {
+				return
+			}
+		}
+	}
+	if int(u)+1 < len(st.extraNeighborRowPtr) {
+		for i, end := st.extraNeighborRowPtr[u], st.extraNeighborRowPtr[u+1]; i < end; i++ {
+			if !st.visitBucketMembers(st.extraNeighborBuckets[i], visit) {
+				return
+			}
+		}
+	}
+}
+
+func (st *rmClusterState) visitBucketMembers(bucket int32, visit func(int32) bool) bool {
+	if bucket < 0 || int(bucket)+1 >= len(st.bucketRowPtr) {
+		return true
+	}
+	for i, end := st.bucketRowPtr[bucket], st.bucketRowPtr[bucket+1]; i < end; i++ {
+		if !visit(st.bucketUnits[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (st *rmClusterState) buildBucketMembership(n int) {
+	st.bucketRowPtr = make([]uint32, len(st.bucketTimes)+1)
+	for u := 0; u < n && u < len(st.ordPos); u++ {
+		if bucket := st.ordPos[u]; bucket >= 0 && int(bucket) < len(st.bucketTimes) {
+			st.bucketRowPtr[bucket+1]++
+		}
+	}
+	for bucket := 0; bucket < len(st.bucketTimes); bucket++ {
+		st.bucketRowPtr[bucket+1] += st.bucketRowPtr[bucket]
+	}
+	st.bucketUnits = make([]int32, st.bucketRowPtr[len(st.bucketTimes)])
+	writeAt := append([]uint32(nil), st.bucketRowPtr[:len(st.bucketTimes)]...)
+	for u := 0; u < n && u < len(st.ordPos); u++ {
+		if bucket := st.ordPos[u]; bucket >= 0 && int(bucket) < len(st.bucketTimes) {
+			st.bucketUnits[writeAt[bucket]] = int32(u)
+			writeAt[bucket]++
+		}
+	}
 }
 
 func (st *rmClusterState) isDirectTimeNeighbor(a, b int32) bool {
@@ -1103,7 +1182,7 @@ func (st *rmClusterState) isDirectTimeNeighbor(a, b int32) bool {
 	return dk <= 2
 }
 
-func (st *rmClusterState) phrasePostings(pair rmDyad) []int32 {
+func (st *rmClusterState) phraseBasePostings(pair rmDyad) []int32 {
 	keys := st.phraseKeys
 	if len(keys) == 0 {
 		return nil
@@ -1126,6 +1205,89 @@ func (st *rmClusterState) phrasePostings(pair rmDyad) []int32 {
 		return st.phraseUnits[st.phraseRowPtr[lo]:st.phraseRowPtr[lo+1]]
 	}
 	return nil
+}
+
+// phraseDeltaRange returns the half-open range of delta postings for pair. The delta is
+// sorted by (pair, unit) and holds only units appended since the last compaction.
+func (st *rmClusterState) phraseDeltaRange(pair rmDyad) (int, int) {
+	d := st.phraseDelta
+	if len(d) == 0 {
+		return 0, 0
+	}
+	lo, hi := 0, len(d)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if dyadLess(d[mid].pair, pair) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	start := lo
+	hi = len(d)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if dyadLess(pair, d[mid].pair) {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return start, lo
+}
+
+// phrasePostingCount returns the global posting count of pair (base + delta) without
+// materializing the merged view.
+func (st *rmClusterState) phrasePostingCount(pair rmDyad) int {
+	lo, hi := st.phraseDeltaRange(pair)
+	return len(st.phraseBasePostings(pair)) + hi - lo
+}
+
+// visitPhrasePostings walks the global postings of pair in ascending unit order without
+// materializing a merged slice. fn returns false to stop; the return value is the number
+// of visited postings.
+func (st *rmClusterState) visitPhrasePostings(pair rmDyad, fn func(unit int32) bool) int {
+	base := st.phraseBasePostings(pair)
+	lo, hi := st.phraseDeltaRange(pair)
+	visited := 0
+	i := 0
+	for i < len(base) && lo < hi {
+		bu, du := base[i], st.phraseDelta[lo].unit
+		switch {
+		case bu < du:
+			visited++
+			if !fn(bu) {
+				return visited
+			}
+			i++
+		case du < bu:
+			visited++
+			if !fn(du) {
+				return visited
+			}
+			lo++
+		default:
+			visited++
+			if !fn(bu) {
+				return visited
+			}
+			i++
+			lo++
+		}
+	}
+	for ; i < len(base); i++ {
+		visited++
+		if !fn(base[i]) {
+			return visited
+		}
+	}
+	for ; lo < hi; lo++ {
+		visited++
+		if !fn(st.phraseDelta[lo].unit) {
+			return visited
+		}
+	}
+	return visited
 }
 
 func diskPostingUnitIterator(st *rmClusterState) func(hash uint64, fn func(unit int32)) {
@@ -1199,7 +1361,6 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 		parentGroup:    make(map[uint64]uint64, len(idx.DF)),
 		isPrimaryWord:  make(map[uint64]bool, len(idx.DF)),
 		clusters:       make([]int32, idx.N),
-		neighborRowPtr: make([]uint32, idx.N+1),
 		refTimes:       make([]int64, idx.N),
 	}
 	for h := range idx.DF {
@@ -1411,7 +1572,17 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	// exist here and the old CSR is reused through a two-way merge.
 	if inc != nil {
 		sort.Sort(dyadPostingSort(allDyadPostings))
-		st.phraseKeys, st.phraseRowPtr, st.phraseUnits = mergePhraseCSR(inc.prev, inc.remap, allDyadPostings)
+		if appendOnlyIncremental(inc) {
+			delta := mergeDyadPostings(inc.prev.phraseDelta, allDyadPostings)
+			if phraseDeltaOverBudget(len(delta), inc.prev) {
+				st.phraseKeys, st.phraseRowPtr, st.phraseUnits = mergePhraseCSRWithDelta(inc.prev, inc.remap, allDyadPostings)
+			} else {
+				st.phraseKeys, st.phraseRowPtr, st.phraseUnits = inc.prev.phraseKeys, inc.prev.phraseRowPtr, inc.prev.phraseUnits
+				st.phraseDelta = delta
+			}
+		} else {
+			st.phraseKeys, st.phraseRowPtr, st.phraseUnits = mergePhraseCSRWithDelta(inc.prev, inc.remap, allDyadPostings)
+		}
 	} else if len(allDyadPostings) > 0 {
 		radixSortDyadPostings(allDyadPostings)
 		uniqueKeys := 1
@@ -1495,33 +1666,11 @@ func (e *Engine) ensureClusterState() *rmClusterState {
 	// Shared derivation with the disk-hydration path (csr_disk.go) so both
 	// state builders agree bit-exactly without serializing a derived column.
 	st.episodeOf, st.episodeCount = buildEpisodeComponents(st.bucketTimes, st.ordPos, idx.N, st.meanGap, st.muLogGap, st.sigLogGap)
-	// neighborSpan 是桶时间线上的局部近邻窗口（±2 桶）：工程局部性边界（相邻桶的
-	// 同情节证据），无分布假设推导；机制由全池配对回归保持（见 docs/CHANGELOG.md）。
-	// [calibrated] neighborSpan — local neighbourhood half-width in bucket steps
-	// (buckets). Engineering locality bound for adjacent-bucket evidence.
-	const neighborSpan = 2
-	bucketNeighbors := make([][]int32, len(buckets))
-	var totalNeighborLinks int
-	for i, b := range buckets {
-		neighbors := append([]int32(nil), b.units...)
-		for span := 1; span <= neighborSpan; span++ {
-			for _, adj := range [2]int{i - span, i + span} {
-				if adj >= 0 && adj < len(buckets) {
-					neighbors = append(neighbors, buckets[adj].units...)
-				}
-			}
-		}
-		bucketNeighbors[i] = neighbors
-		totalNeighborLinks += len(b.units) * len(neighbors)
-	}
-	st.neighborPool = make([]int32, 0, totalNeighborLinks)
-	for u := 0; u < idx.N; u++ {
-		st.neighborRowPtr[u] = uint32(len(st.neighborPool))
-		if bIdx := st.ordPos[u]; bIdx >= 0 && int(bIdx) < len(bucketNeighbors) {
-			st.neighborPool = append(st.neighborPool, bucketNeighbors[bIdx]...)
-		}
-	}
-	st.neighborRowPtr[idx.N] = uint32(len(st.neighborPool))
+	// Base spacetime neighbors are an exact projection of ordered timestamp
+	// bucket membership. Store each unit once and derive the legacy ±2-bucket
+	// sequence in visitNeighbors instead of copying the same bucket rows into
+	// every member unit.
+	st.buildBucketMembership(idx.N)
 
 	// Build effective family weights: the append-only fast path extends the
 	// previous compressed statistics with delta contributions, the full path
@@ -1681,9 +1830,9 @@ func (st *rmClusterState) buildFastDocs(idx *Index) {
 	st.dayCos = make(map[uint64]float64)
 	for u := 0; u < idx.N; u++ {
 		a := int32(u)
-		for _, b := range st.neighborsOf(a) {
+		st.visitNeighbors(a, func(b int32) bool {
 			if b <= a {
-				continue
+				return true
 			}
 			if c := st.computeDocSubjectCos(idx, a, b); c > 0 {
 				x, y := uint32(a), uint32(b)
@@ -1692,17 +1841,19 @@ func (st *rmClusterState) buildFastDocs(idx *Index) {
 				}
 				st.dayCos[(uint64(x)<<32)|uint64(y)] = c
 			}
-		}
+			return true
+		})
 	}
-	// Rebuild neighborPool with orthogonal-interleaver transparency within each
-	// episodic component: when an asynchronous orthogonal arrival (cos < 1/e^2,
-	// e.g. a background inbox notification) falls between co-episode buckets, it
-	// does not consume the neighborSpan=2 quota of non-orthogonal co-episode peers.
-	st.rebuildOrthogonalTransparentNeighbors(idx)
+	// Preserve orthogonal-interleaver transparency as sparse extra bucket edges:
+	// the base bucket sequence stays shared, while only coherent buckets beyond
+	// the legacy ±2 band are recorded per unit.
+	st.buildOrthogonalTransparentExtras(idx)
 }
 
-func (st *rmClusterState) rebuildOrthogonalTransparentNeighbors(idx *Index) {
+func (st *rmClusterState) buildOrthogonalTransparentExtras(idx *Index) {
 	n := idx.N
+	st.extraNeighborRowPtr = make([]uint32, n+1)
+	st.extraNeighborBuckets = nil
 	if st.clusterN <= 0 || len(st.bucketTimes) == 0 {
 		return
 	}
@@ -1710,83 +1861,57 @@ func (st *rmClusterState) rebuildOrthogonalTransparentNeighbors(idx *Index) {
 	const neighborSpan = 2
 	const orthoFloor = transmissionPerHop * transmissionPerHop
 	subFloor := 1.0 - transmissionPerHop
-	bUnits := make([][]int32, len(st.bucketTimes))
-	for u := 0; u < n; u++ {
-		if b := st.ordPos[u]; b >= 0 && int(b) < len(bUnits) {
-			bUnits[b] = append(bUnits[b], int32(u))
-		}
-	}
 	lookupCos := func(a, b int32) float64 {
 		if a == b {
 			return 1.0
 		}
 		return st.docSubjectCos(idx, nil, a, b)
 	}
-	newPool := make([]int32, 0, len(st.neighborPool)*2)
-	seen := make(map[int32]bool, 16)
 	for u := 0; u < n; u++ {
-		st.neighborRowPtr[u] = uint32(len(newPool))
+		st.extraNeighborRowPtr[u] = uint32(len(st.extraNeighborBuckets))
 		bIdx := int(st.ordPos[u])
-		if bIdx < 0 || bIdx >= len(bUnits) {
+		if bIdx < 0 || bIdx >= len(st.bucketTimes) {
 			continue
 		}
-		clear(seen)
-		addUnit := func(v int32) {
-			if !seen[v] {
-				seen[v] = true
-				newPool = append(newPool, v)
-			}
-		}
-		for _, v := range bUnits[bIdx] {
-			addUnit(v)
-		}
-		for span := 1; span <= neighborSpan; span++ {
-			for _, adj := range [2]int{bIdx - span, bIdx + span} {
-				if adj >= 0 && adj < len(bUnits) {
-					for _, v := range bUnits[adj] {
-						addUnit(v)
-					}
-				}
-			}
-		}
 		epU := st.episodeOf[u]
-		if epU >= 0 {
-			for _, dir := range [2]int{-1, 1} {
-				coherentCnt := 0
-				orthoSkipped := 0
-				for step := 1; step <= 2*neighborSpan && coherentCnt < neighborSpan; step++ {
-					adj := bIdx + dir*step
-					if adj < 0 || adj >= len(bUnits) || len(bUnits[adj]) == 0 {
+		if epU < 0 {
+			continue
+		}
+		for _, dir := range [2]int{-1, 1} {
+			coherentCnt := 0
+			orthoSkipped := 0
+			for step := 1; step <= 2*neighborSpan && coherentCnt < neighborSpan; step++ {
+				adj := bIdx + dir*step
+				if adj < 0 || adj >= len(st.bucketTimes) || st.bucketRowPtr[adj] == st.bucketRowPtr[adj+1] {
+					break
+				}
+				v0 := st.bucketUnits[st.bucketRowPtr[adj]]
+				if st.episodeOf[v0] != epU || st.temporalAffinity(idx, int32(u), v0) < subFloor {
+					break
+				}
+				hasCoherent := false
+				st.visitBucketMembers(int32(adj), func(v int32) bool {
+					if lookupCos(int32(u), v) >= orthoFloor {
+						hasCoherent = true
+						return false
+					}
+					return true
+				})
+				if hasCoherent {
+					coherentCnt++
+					if step > neighborSpan {
+						st.extraNeighborBuckets = append(st.extraNeighborBuckets, int32(adj))
+					}
+				} else {
+					orthoSkipped++
+					if orthoSkipped > neighborSpan {
 						break
-					}
-					v0 := bUnits[adj][0]
-					if st.episodeOf[v0] != epU || st.temporalAffinity(idx, int32(u), v0) < subFloor {
-						break
-					}
-					hasCoherent := false
-					for _, v := range bUnits[adj] {
-						if lookupCos(int32(u), v) >= orthoFloor {
-							hasCoherent = true
-							break
-						}
-					}
-					if hasCoherent {
-						coherentCnt++
-						for _, v := range bUnits[adj] {
-							addUnit(v)
-						}
-					} else {
-						orthoSkipped++
-						if orthoSkipped > neighborSpan {
-							break
-						}
 					}
 				}
 			}
 		}
 	}
-	st.neighborRowPtr[n] = uint32(len(newPool))
-	st.neighborPool = newPool
+	st.extraNeighborRowPtr[n] = uint32(len(st.extraNeighborBuckets))
 }
 
 func (st *rmClusterState) docSubjectCos(idx *Index, sc *rmQueryScratch, a, b int32) float64 {

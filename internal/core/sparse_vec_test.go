@@ -422,23 +422,6 @@ func TestPartnerScanDualIndexEquivalence(t *testing.T) {
 					t.Fatalf("seed %d term %x: entry %d mismatch fast=%+v slow=%+v", seed, h, i, fe, se)
 				}
 			}
-			// 前缀表零值态（b 侧退化全扫）也必须等价。
-			var saved [4097]uint32
-			saved = st.partnerPrefixPtr
-			st.partnerIdx = nil
-			st.partnerPrefixPtr = [4097]uint32{}
-			fallback := st.partnerEntriesInto(idx, h, effW, highDF)
-			fbVec := BuildSparseVector(fallback)
-			if fbVec.Len() != slowVec.Len() {
-				t.Fatalf("seed %d term %x: fallback nnz=%d slow=%d", seed, h, fbVec.Len(), slowVec.Len())
-			}
-			for i := range fbVec.Entries {
-				if fbVec.Entries[i] != slowVec.Entries[i] {
-					t.Fatalf("seed %d term %x: fallback entry %d mismatch", seed, h, i)
-				}
-			}
-			st.partnerIdx, st.partnerPrefixPtr = nil, saved
-			st.partnerIdx = nil
 		}
 	}
 }

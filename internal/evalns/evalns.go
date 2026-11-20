@@ -8,7 +8,7 @@
 //   - `internal/eval`（评测流水线）用它解析 scope 轴；
 //   - `internal/memory/facade`（产品生命周期）用它把自动 L3 Noetic 结晶挡在评测空间之外。
 //
-// 命名空间闭集（正本 internal/eval/local_engine.go 的 ScopeForSuiteAndMode）：
+// 命名空间闭集（正本 internal/eval/local_engine.go 的 ScopeForSuite）：
 //   - <user>-mem-eval-<locomo|atmbench>-local-plain[-<世代号>]
 //
 // 其它形态一律 fail-closed：本项目只有本地明文一种模式。

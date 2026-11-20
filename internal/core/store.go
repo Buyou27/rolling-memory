@@ -344,7 +344,31 @@ func (s *Store) Ingest(docs []Doc) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := s.ingestTx(tx, docs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+// IngestTx writes the same batch through a caller-owned transaction, so the
+// ingest and any accompanying bookkeeping succeed or roll back as one durable
+// unit. It is SQLite-only: a wrapped backend owns its own transaction and has
+// none to join.
+func (s *Store) IngestTx(tx *sql.Tx, docs []Doc) error {
+	if s == nil || s.backend != nil {
+		return errors.New("rm/store: caller-owned ingest requires a local SQLite store")
+	}
+	if tx == nil {
+		return errors.New("rm/store: nil ingest transaction")
+	}
+	if len(docs) == 0 {
+		return nil
+	}
+	return s.ingestTx(tx, docs)
+}
+
+// ingestTx applies the batch on an open transaction without committing it.
+func (s *Store) ingestTx(tx *sql.Tx, docs []Doc) error {
 	docStmt, err := tx.Prepare(`INSERT OR REPLACE INTO rm_docs(
         unit_id, occurred_at, narrated_at, ingested_at, author_hash, doc_hash, block_hash, line_start, line_end, layer, term_count, raw_text
     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -412,7 +436,7 @@ func (s *Store) Ingest(docs []Doc) error {
 			}
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // DocCount 返回当前存储内的文档数。

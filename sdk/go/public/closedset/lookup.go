@@ -16,8 +16,6 @@ import (
 var (
 	mapOnce sync.Once
 	tagMap  map[string][][2]string
-	stdOnce sync.Once
-	stdMap  map[string][][2]string
 )
 
 func buildEntriesMap(entries []string, capHint int) map[string][][2]string {
@@ -59,47 +57,10 @@ func ensureMap() {
 	})
 }
 
-func ensureStdMap() {
-	stdOnce.Do(func() {
-		stdMap = buildEntriesMap(StandardClosedSetTable, 4000)
-	})
-}
-
-// LookupFirstStandardTag resolves the first 1st-order international standard closed-set tag (Part I only).
-func LookupFirstStandardTag(low string) string {
-	if low == "" {
-		return ""
-	}
-	isSingleASCIILetter := len(low) == 1 && low[0] >= 'a' && low[0] <= 'z'
-	ensureStdMap()
-	axes := stdMap[low]
-	if len(axes) == 0 && strings.HasSuffix(low, ".") {
-		axes = stdMap[strings.TrimSuffix(low, ".")]
-	}
-	for _, pair := range axes {
-		for _, tag := range pair {
-			if tag == "" || tag == low || strings.HasPrefix(tag, "@dim:") || strings.HasPrefix(tag, "@geo:cont:") {
-				continue
-			}
-			if isSingleASCIILetter && strings.HasPrefix(tag, "@unit:") {
-				continue
-			}
-			return tag
-		}
-	}
-	return ""
-}
-
 // HasToken reports whether low is registered in the closed-set dictionary.
 func HasToken(low string) bool {
 	ensureMap()
 	return len(tagMap[low]) > 0
-}
-
-// TagMap returns the initialized closed-set token-to-axes lookup map.
-func TagMap() map[string][][2]string {
-	ensureMap()
-	return tagMap
 }
 
 // LookupGeoPair resolves a token into its 1st-order (@geo:cc:<iso2> or @geo:cont:<cont>)
@@ -174,31 +135,6 @@ func LookupFirstTag(low string) string {
 		}
 	}
 	return ""
-}
-
-// LookupHarmonics returns all deduplicated closed-set tags for token.
-func LookupHarmonics(token string) []string {
-	ensureMap()
-	l := strings.ToLower(strings.TrimSpace(token))
-	axes := tagMap[l]
-	if len(axes) == 0 && strings.HasSuffix(l, ".") {
-		axes = tagMap[strings.TrimSuffix(l, ".")]
-	}
-	if len(axes) == 0 {
-		return nil
-	}
-	out := make([]string, 0, 2*len(axes))
-	seen := make(map[string]bool, 2*len(axes))
-	for _, pair := range axes {
-		for _, tag := range pair {
-			if tag == "" || seen[tag] {
-				continue
-			}
-			seen[tag] = true
-			out = append(out, tag)
-		}
-	}
-	return out
 }
 
 var (

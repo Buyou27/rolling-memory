@@ -8,10 +8,6 @@
 // re-exports its surface so existing callers keep compiling unchanged.
 package local
 
-import (
-	"strings"
-)
-
 const (
 	FlagHasUpper    uint8 = 1 << 0
 	FlagHasCamel    uint8 = 1 << 1
@@ -31,15 +27,9 @@ const (
 	CanaryAtomsB64  = "Uk1CUAEAPA0AFAAAABUAAhQhUFBjZHiLAYwBtAHIAYQCtQJAEATBATAPB0jHISlR96QHZAI40Tt3T0fPAxxcTN+orGsN87QYgKG+M3wAaBUxyxkJx8f8zRbMt024NoH4VZEtimANzWUASZ6GWiX3Z7rb64Eq7inVwwMYS98I2I7VbHWwUFW4WszbtBQnTCgoPkEZy9pjGebXDmmqB9vwbo0DeZvaEa9TH6Ti6fHUlg3MbBKkCYTXBbqHJcBSS+ORCU+K9G0qrLWQNLboQC4oYxzk6gIUARCElBIB"
 )
 
-// RAME Client Operating Modes (100% Symmetric [local | pulse] × [plain | cipher]):
-//   - ModeLocalPlain  ("local_plain"):  100% local offline plaintext vault, zero cloud traffic;
-//   - ModePulsePlain  ("pulse_plain"):  cloud pulse + plaintext mode (RB directly receives/returns plaintext);
-//   - ModePulseCipher ("pulse_cipher"): cloud irreversible cipher pulse mode (0 plaintext leaves client).
-const (
-	ModeLocalPlain  = "local_plain"
-	ModePulsePlain  = "pulse_plain"
-	ModePulseCipher = "pulse_cipher"
-)
+// ModeLocalPlain identifies the local offline plaintext vault (zero cloud traffic).
+// Cloud pulse modes live in the cloud client package, not in this local subset.
+const ModeLocalPlain = "local_plain"
 
 // UnitMeta carries optional speaker, tri-temporal metadata (narrated_at, occurred_at, ingested_at),
 // and 4D spatial coordinates (file_url/doc_h, block_id/block_h, line_start, line_end, file_parse).
@@ -153,41 +143,6 @@ type LocalNoeticRecord struct {
 	// lifetime instance, so parallel incarnations never overwrite each other's answer.
 	AssistantID   string `json:"assistant_id,omitempty"`
 	IncarnationID string `json:"incarnation_id,omitempty"`
-}
-
-// FTS5BM25TermMinCarrierX10 是本地 SQLite FTS5/BM25 词项纳入查询的最小机械载体宽度
-// （×10）：60 ≈ 3 个拉丁字母 / 2 个汉字，低于它的词项被本地 FTS/BM25 视为噪声丢弃。
-const FTS5BM25TermMinCarrierX10 = 60
-
-// FTS5BM25Segmenter 复现本地 SQLite FTS5/BM25 索引的词项流：对一句话取
-// SplitWords（表面词 + 复合子词，与 QueryFTS5BM25 完全同源），只保留机械载体宽度
-// ≥ FTS5BM25TermMinCarrierX10 的词项，按首次出现顺序返回且**保留重复**
-// （重复进入盲态波形的 tf 统计，与 FTS 倒排的词频同口径）。
-//
-// 用途：把它挂到 `BlindEncoder.SetSegmenterOptions` 后打包的盲态脉冲，其词项集合与
-// 本地 FTS5/BM25 检索词表逐项对齐——端侧只负责切词与盲化，排序仍 100% 由云端
-// `the memory engine` 完成，绝不与本地 FTS 检索结果做并集或融合。
-func FTS5BM25Segmenter(sentence string) []string {
-	words := SplitWords(sentence)
-	if len(words) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(words))
-	for _, w := range words {
-		low := strings.ToLower(strings.TrimSpace(w))
-		if low == "" {
-			continue
-		}
-		var carrier uint32
-		for _, r := range low {
-			carrier += uint32(CarrierUnits(r))
-		}
-		if carrier < FTS5BM25TermMinCarrierX10 {
-			continue
-		}
-		out = append(out, low)
-	}
-	return out
 }
 
 type ResolvedHit struct {

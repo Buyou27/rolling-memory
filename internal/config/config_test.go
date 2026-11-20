@@ -243,7 +243,7 @@ func TestValidation(t *testing.T) {
 		substr  string
 	}{
 		{"budget", "[recall]\nbudget_ms = 0\n", "recall.budget_ms must be positive"},
-		{"caps", "[hooks]\nmax_traces = 0\n", "caps and batch sizes must be positive"},
+		{"caps", "[recall]\nchars = 0\n", "caps and batch sizes must be positive"},
 	}
 	for _, testCase := range invalidConfigs {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -383,7 +383,7 @@ func TestSecretStatusAndPublicDict(t *testing.T) {
 		t.Fatalf("unexpected public dict: %+v", public)
 	}
 	recall, ok := public["recall"].(map[string]any)
-	if !ok || len(recall) != 4 {
+	if !ok || len(recall) != 2 {
 		t.Fatalf("recall public shape = %#v", public["recall"])
 	}
 	if _, ok := public["llm"]; ok {
@@ -589,7 +589,7 @@ profile = "usb"
 	if cfg.AllowLoopbackLLM {
 		t.Fatalf("unexpected allow_loopback_llm: %+v", cfg)
 	}
-	if cfg.Recall.Bands != 8 || cfg.Recall.Nodes != 50 || cfg.Recall.Chars != 16000 || cfg.Recall.RawLimit != 5 {
+	if cfg.Recall.Chars != 16000 {
 		t.Fatalf("recall caps = %+v", cfg.Recall)
 	}
 	if cfg.Hooks.Ledger {

@@ -91,24 +91,11 @@ source = "github"
 memory_limit = "auto"
 
 [recall]
-bands = 8
-nodes = 50
 chars = 16000
 budget_ms = 500
-# raw_limit = 原文腿交付条数上限（判分面的主要旋钮：在字符预算内多给原文；5 = 旧行为）。
-# Tier-100 实测（冻结答题/判官）：5 → 判对 0.45 · 20 → 0.60 · 30 → 0.62。
-raw_limit = 5
 
 [hooks]
-max_traces = 60
 ledger = true
-
-[identity]
-# Transcript role -> canonical speaker name (resolved at write-side ingestion).
-# Empty by default (holder defaults to "我" and the extractor receives raw role labels).
-# Example: owner = "我" (or local username) · assistant = "assistant"
-owner = ""
-assistant = ""
 
 [eval]
 # Bundled self-evaluation (rmem eval): tiers 100 / 200 / 1540 ship under evaldata/.
@@ -189,11 +176,8 @@ type EvalConfig struct {
 // RecallConfig holds read-chain caps and leg toggles.
 type RecallConfig struct {
 	DeliveryWindow string
-	Bands          int
-	Nodes          int
 	Chars          int
 	BudgetMS       int
-	RawLimit       int
 }
 
 // NormalizeDeliveryWindow normalizes an adaptive delivery window preset ("auto", "0-16",
@@ -221,18 +205,7 @@ func NormalizeDeliveryWindow(raw, fallback string) (string, int, bool) {
 
 // HooksConfig holds hook budgets.
 type HooksConfig struct {
-	MaxTraces int
-	Ledger    bool
-}
-
-// IdentityConfig holds the Assistant-centric identity mapping ([identity] section):
-//   - AssistantID: the Assistant's first-class identity ID (maps to scope "assistant:<assistant_id>" co-read with "default").
-//   - Assistant:   the Assistant's self-referent label I_self (origin="self").
-//   - Owner:       the bound host user label I_peer (origin="roster", equal in node status to other roster persons).
-type IdentityConfig struct {
-	AssistantID string
-	Owner       string
-	Assistant   string
+	Ledger bool
 }
 
 // StorageConfig is reserved for the USB design; the default is local.
@@ -266,7 +239,6 @@ type Config struct {
 	Hooks            HooksConfig
 	Storage          StorageConfig
 	Daemon           DaemonConfig
-	Identity         IdentityConfig
 	Eval             EvalConfig
 	Update           UpdateConfig
 }
@@ -315,7 +287,6 @@ func Load(opts LoadOptions) (*Config, error) {
 	recallTable := table(data, "recall")
 	hooksTable := table(data, "hooks")
 	daemonTable := table(data, "daemon")
-	identityTable := table(data, "identity")
 	evalTable := table(data, "eval")
 	updateTable := table(data, "update")
 	storageTable := table(data, "storage")
@@ -333,20 +304,11 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 	recallConfig := RecallConfig{
 		DeliveryWindow: recallWindowNorm,
-		Bands:          asInt(recallTable["bands"], 8),
-		Nodes:          asInt(recallTable["nodes"], 50),
 		Chars:          asInt(recallTable["chars"], 16000),
 		BudgetMS:       asInt(recallTable["budget_ms"], 500),
-		RawLimit:       asInt(recallTable["raw_limit"], 5),
 	}
 	hooksConfig := HooksConfig{
-		MaxTraces: asInt(hooksTable["max_traces"], 60),
-		Ledger:    asBool(hooksTable["ledger"], true),
-	}
-	identityConfig := IdentityConfig{
-		AssistantID: pyString(envOr(env, "ROLLING_MEMORY_ASSISTANT_ID", firstTruthy(identityTable["assistant_id"], core["assistant_id"], ""))),
-		Owner:       pyString(envOr(env, "ROLLING_MEMORY_IDENTITY_OWNER", getDefault(identityTable, "owner", ""))),
-		Assistant:   pyString(envOr(env, "ROLLING_MEMORY_IDENTITY_ASSISTANT", getDefault(identityTable, "assistant", ""))),
+		Ledger: asBool(hooksTable["ledger"], true),
 	}
 	updateChannel, updateChannelErr := updatechannel.Normalize(pyString(firstTruthy(
 		envValue(env, "ROLLING_MEMORY_UPDATE_CHANNEL"), updateTable["channel"], updatechannel.Default)))
@@ -413,7 +375,6 @@ func Load(opts LoadOptions) (*Config, error) {
 		Hooks:            hooksConfig,
 		Storage:          StorageConfig{Profile: storageProfile},
 		Daemon:           DaemonConfig{MemoryLimit: daemonMemoryLimit},
-		Identity:         identityConfig,
 		Eval:             evalConfig,
 		Update:           UpdateConfig{Channel: updateChannel, Source: updateSource},
 	}
@@ -448,10 +409,7 @@ func (c *Config) Validate() error {
 			formatMemorySize(ExplicitMemoryLimitFloor), formatMemorySize(ExplicitMemoryLimitCeiling), pyRepr(c.Daemon.MemoryLimit))
 	}
 	for _, value := range []int{
-		c.Recall.Bands,
-		c.Recall.Nodes,
 		c.Recall.Chars,
-		c.Hooks.MaxTraces,
 		c.Eval.Workers,
 	} {
 		if value <= 0 {
@@ -610,8 +568,6 @@ func (c *Config) PublicDict() map[string]any {
 		"egress": "loopback-only",
 		"log":    c.Log,
 		"recall": map[string]any{
-			"bands":     c.Recall.Bands,
-			"nodes":     c.Recall.Nodes,
 			"chars":     c.Recall.Chars,
 			"budget_ms": c.Recall.BudgetMS,
 		},

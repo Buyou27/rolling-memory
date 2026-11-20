@@ -1000,6 +1000,13 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 
 	// 1. Reconcile L2 Episodic (Harness history into local vault)
 	if layer == "all" || layer == "episodic" {
+		// This importer is the second path into the vault; the same sync.since
+		// bound must hold here, otherwise a fresh vault backfills the oldest
+		// harness turns before the scanner ever sees them.
+		since, sinceErr := EpisodicScanSince(memory.Config.Path)
+		if sinceErr != nil {
+			return rep, sinceErr
+		}
 		localEpi := map[string]bool{}
 		deletedEpi := tc.Vault.DeletedUnitSet("episodic")
 		storedRaw := map[string]string{}
@@ -1146,6 +1153,9 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 						continue
 					}
 					if strings.TrimSpace(turn.Text) == "" || turn.RefPointer == "" {
+						continue
+					}
+					if episodicOccurredBefore(turn.OccurredAt, since) {
 						continue
 					}
 					if err := vault.SaveLocalEpisodicPointerIndexedVerified(scope, snapshot, turn.DocID, turn.OccurredAt, turn.RefPointer, turn.TurnRef, turn.Text, localvault.IngestResponse{}); err != nil {

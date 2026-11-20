@@ -4,8 +4,6 @@
 package ids
 
 import (
-	"math"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -84,30 +82,6 @@ func TestStripInjected(t *testing.T) {
 	}
 }
 
-func TestSentenceSplit(t *testing.T) {
-	got := SentenceSplit("老张养了一只猫。Alice likes SQLite. Next one", 40, 240)
-	want := []string{"老张养了一只猫。", "Alice likes SQLite.", "Next one"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("SentenceSplit = %#v, want %#v", got, want)
-	}
-	got = SentenceSplit("e.g. this stays together", 40, 240)
-	if !reflect.DeepEqual(got, []string{"e.g. this stays together"}) {
-		t.Fatalf("SentenceSplit lowercase continuation = %#v", got)
-	}
-	got = SentenceSplit("One. Two. Three. Four.", 2, 240)
-	if len(got) != 2 {
-		t.Fatalf("SentenceSplit maxParts = %#v", got)
-	}
-	got = SentenceSplit("abcdefghij。", 40, 5)
-	if len(got) != 1 || got[0] != "abcde" {
-		t.Fatalf("SentenceSplit maxLen = %#v", got)
-	}
-	got = SentenceSplit("<other-recall>x</other-recall> kept", 40, 240)
-	if !reflect.DeepEqual(got, []string{"kept"}) {
-		t.Fatalf("SentenceSplit injection = %#v", got)
-	}
-}
-
 func TestTruncateAndCollections(t *testing.T) {
 	if got := Truncate("  hello world  ", 8, "…"); got != "hello w…" {
 		t.Errorf("Truncate = %q", got)
@@ -118,17 +92,11 @@ func TestTruncateAndCollections(t *testing.T) {
 	if got := Truncate("hello", 1, "…"); got != "h" {
 		t.Errorf("Truncate suffix limit = %q", got)
 	}
-	if got := UniqueOrdered([]string{"a", "b", "a", "c", "b"}); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
-		t.Errorf("UniqueOrdered = %v", got)
-	}
 	if got := Mean(nil); got != 0 {
 		t.Errorf("Mean(nil) = %v", got)
 	}
 	if got := Mean([]float64{1, 2, 3}); got != 2 {
 		t.Errorf("Mean = %v", got)
-	}
-	if got := EscapeLike(`a\b%c_d`); got != `a\\b\%c\_d` {
-		t.Errorf("EscapeLike = %q", got)
 	}
 }
 
@@ -159,26 +127,5 @@ func TestTurnAndClampEdgeCases(t *testing.T) {
 	}
 	if got := ParseTime("1970-01-01T00:00:00.5Z", ParseTimeOptions{TimeRef: &reference}); got != 0 {
 		t.Errorf("epoch fractional ParseTime = %d, want 0", got)
-	}
-	if got := AssertionNodeID("abc"); got != "a_abc" {
-		t.Errorf("AssertionNodeID short = %q, want a_abc", got)
-	}
-	if got := NormalizeTurn(7.0); got != 0 {
-		t.Errorf("NormalizeTurn(7.0) = %d, want 0", got)
-	}
-	if got := NormalizeTurn(7); got != 7 {
-		t.Errorf("NormalizeTurn(7) = %d, want 7", got)
-	}
-	if got := NormalizeTurn(nil); got != 0 {
-		t.Errorf("NormalizeTurn(nil) = %d, want 0", got)
-	}
-	if got := Clamp(math.NaN(), 0, 1); got != 1 {
-		t.Errorf("Clamp(NaN) = %v, want 1", got)
-	}
-	if got := Clamp(-2, 0, 1); got != 0 {
-		t.Errorf("Clamp(-2) = %v", got)
-	}
-	if got := Clamp(2, 0, 1); got != 1 {
-		t.Errorf("Clamp(2) = %v", got)
 	}
 }

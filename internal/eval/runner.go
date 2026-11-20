@@ -18,6 +18,9 @@ import (
 	local "github.com/rocareer/rolling-memory/sdk/go/local"
 )
 
+// EvalArmSDKLocalPlain is the sole evaluation retrieval arm label.
+const EvalArmSDKLocalPlain = "sdk-local-plain"
+
 // Options 是一次评测运行的完整参数（命令行 flag 覆盖 [eval] 段）。
 type Options struct {
 	Suite   string // locomo | atm | atm-probes
@@ -57,11 +60,7 @@ type Options struct {
 	// PulseTokenizer 选择盲态脉冲切词臂：product（产品同配，默认）、standard 或 trigram（对照臂）。
 	// 各臂都只消费本臂结果，不融合其它检索。
 	PulseTokenizer string
-	// PulseMode 选择评测脉冲运行模式。现役唯一合法值 = "local_plain"（本地明文离线检索，
-	// 独立 scope *-mem-eval-<suite>-local-plain[-<世代>]，零云端请求）。
-	// 空值默认 local_plain；任何非本地模式一律 fail-closed 拒绝。
-	PulseMode string
-	Log       func(format string, args ...any)
+	Log            func(format string, args ...any)
 }
 
 // Run 跑一次评测并返回汇总报告（同时把 results/summary 落盘）。
@@ -117,8 +116,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 		return nil, err
 	}
 	opts.Suite = SuiteLoCoMo
-	opts.PulseMode = NormalizePulseMode(opts.PulseMode)
-	opts.Scope = ScopeForSuiteAndMode(SuiteLoCoMo, evalUserID(), opts.PulseMode)
+	opts.Scope = ScopeForSuite(SuiteLoCoMo, evalUserID())
 	if opts.RawLimit <= 0 {
 		opts.RawLimit = 96
 	}
@@ -127,7 +125,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 	}
 	arm := BuildArm(opts)
 	logf("[eval] arm=%s pulse_mode=%s tier=%s questions=%d transport=%s oracle=%v answerer=%s judge=%s scope=%s",
-		arm, opts.PulseMode, opts.Tier, len(questions), TransportForPulseMode(opts.PulseMode), opts.Oracle, answererName(opts), judgeName(opts), opts.Scope)
+		arm, PulseModeLocalPlain, opts.Tier, len(questions), LocalPlainTransport, opts.Oracle, answererName(opts), judgeName(opts), opts.Scope)
 
 	answerer, judge, err := buildProtocols(cfg, opts)
 	if err != nil {
@@ -137,7 +135,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 	ingestMeta := map[string]any{"corpus_rows": 0, "inserted": 0}
 	var engine *LocalEngine
 	if !opts.Oracle {
-		engine, err = NewLocalEngine(cfg, SuiteLoCoMo, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer), WithPulseMode(opts.PulseMode))
+		engine, err = NewLocalEngine(cfg, SuiteLoCoMo, expandUser(opts.StorePath), WithPulseTokenizer(opts.PulseTokenizer))
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +198,7 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 			}
 			opts.Scope = engine.Scope
 			verification := map[string]any{
-				"verified": true, "transport": TransportForPulseMode(opts.PulseMode), "scope": engine.Scope,
+				"verified": true, "transport": LocalPlainTransport, "scope": engine.Scope,
 				"local_fallback": false, "engine": engine.Metadata(),
 				"ingest": map[string]any{"manifest": verified, "reused": true, "inserted": 0},
 			}
@@ -254,8 +252,8 @@ func Run(cfg *config.Config, opts Options) (map[string]any, error) {
 		summary["pulse_mode"] = "oracle"
 		summary["engine"] = map[string]any{"transport": "oracle-gold", "scope": opts.Scope, "local_fallback": false}
 	} else {
-		summary["mode"] = ArmModeForPulseMode(opts.PulseMode)
-		summary["pulse_mode"] = NormalizePulseMode(opts.PulseMode)
+		summary["mode"] = EvalArmSDKLocalPlain
+		summary["pulse_mode"] = PulseModeLocalPlain
 		summary["engine"] = engine.Metadata()
 	}
 	summary["transport"] = summary["engine"].(map[string]any)["transport"]
@@ -450,7 +448,7 @@ func runQuestions(engine *LocalEngine, opts Options,
 			failureBucket := ClassifyFailureBucket(
 				fullEvidenceHit, answerInContext || fullGoldRecall >= 0.8, fullEvidenceRecall, f1, fullGoldRecall, pyStr(verdicts[index]),
 			)
-			transport := TransportForPulseMode(opts.PulseMode)
+			transport := LocalPlainTransport
 			if opts.Oracle {
 				transport = "oracle-gold"
 			}
@@ -628,16 +626,9 @@ func progressLine(done, total int, results []map[string]any) string {
 	return line
 }
 
-// ArmModeForPulseMode 将脉冲模式映射为唯一合法检索臂标签。现役唯一臂 = 本地明文
-// （sdk-local-plain），对任何输入都返回它（脉冲云端臂已随「评测层去云端」移除）。
-func ArmModeForPulseMode(pulseMode string) string {
-	_ = pulseMode
-	return "sdk-local-plain"
-}
-
 // BuildArm 给一次运行起个可读的臂名（写盘文件名与报告用）。
 func BuildArm(opts Options) string {
-	arm := ArmModeForPulseMode(opts.PulseMode)
+	arm := EvalArmSDKLocalPlain
 	if opts.Oracle {
 		arm = "oracle"
 	}

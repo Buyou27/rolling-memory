@@ -83,6 +83,68 @@ func IsAutoSyncEnabled(cfgPath string) bool {
 
 const episodicSyncPausedMetaKey = "episodic_sync_paused"
 
+// EpisodicScanSince returns the lower bound (unix seconds) for episodic ingest,
+// or 0 when every turn is eligible. Turns older than the bound are skipped
+// without being stored, which lets a machine with a large harness history start
+// collecting from now on without rewriting the transcript store. An
+// unparseable value is an error: silently ignoring it would backfill exactly the
+// history the bound exists to skip.
+func EpisodicScanSince(cfgPath string) (int64, error) {
+	if raw := strings.TrimSpace(os.Getenv("ROLLING_MEMORY_SYNC_SINCE")); raw != "" {
+		return parseEpisodicScanSince(raw)
+	}
+	// No configuration path means no bound. Falling back to the user's default
+	// config would let a test or an embedded caller inherit a real machine's
+	// bound and silently drop its own fixtures.
+	if strings.TrimSpace(cfgPath) == "" {
+		return 0, nil
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return 0, nil
+	}
+	section := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+			continue
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if section+"."+strings.TrimSpace(parts[0]) != "sync.since" {
+			continue
+		}
+		return parseEpisodicScanSince(strings.Trim(strings.TrimSpace(parts[1]), `"'`))
+	}
+	return 0, nil
+}
+
+// parseEpisodicScanSince accepts RFC3339 or a bare date (00:00 UTC).
+func parseEpisodicScanSince(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	if ts, err := time.Parse(time.RFC3339, value); err == nil {
+		return ts.Unix(), nil
+	}
+	// A bare date means 00:00 UTC on purpose: the same config must resolve to the
+	// same instant in every process. time.Local falls back to UTC when a sandbox
+	// hides /etc/localtime, which once moved the bound by the zone offset between
+	// the worker and the console. Callers that mean a local midnight write the
+	// offset explicitly (2026-11-20T00:00:00+08:00).
+	if ts, err := time.Parse("2006-01-02", value); err == nil {
+		return ts.Unix(), nil
+	}
+	return 0, fmt.Errorf("sync.since %q: want RFC3339 (2026-11-20T17:00:00+08:00) or YYYY-MM-DD (00:00 UTC)", value)
+}
+
 var autoWatchProcessGate = make(chan struct{}, 1)
 
 func tryAcquireAutoWatchProcessGate() bool {

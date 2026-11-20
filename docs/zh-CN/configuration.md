@@ -45,7 +45,6 @@ rmem config set <section.key> <value>
 | 键 | 默认 | 含义 |
 |---|---|---|
 | `recall.delivery_window` | `auto`（解析为 `0-16`） | 智能交付窗口：`auto`、`0-16`、`0-32`、`0-64`；窗口越大，单次召回给出的证据越多 |
-| `recall.raw_limit` | `5` | 字符预算内原文腿的交付条数上限 |
 | `recall.chars` | `16000` | 单次召回的字符预算 |
 | `recall.budget_ms` | `500` | 延迟预算参考值 |
 

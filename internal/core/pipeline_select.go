@@ -638,17 +638,17 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 		}
 		var profBest unitGroupProfile
 		var profBestSet bool
-		for _, nb := range st.neighborsOf(best.unit) {
+		st.visitNeighbors(best.unit, func(nb int32) bool {
 			if nb == best.unit {
-				continue
+				return true
 			}
 			nbC := &candidates[nb]
 			if nbC.lex+nbC.stSpread+nbC.stCorrob <= 0 {
-				continue
+				return true
 			}
 			aff := st.temporalAffinity(idx, best.unit, nb)
 			if aff < subFloor {
-				continue
+				return true
 			}
 			// Falsification Guard P6 (Query Match Subsumption Conservation):
 			// Candidate nb can only be a redundant echo clone of best.unit if
@@ -699,7 +699,8 @@ func (st *rmClusterState) selectClusterHits(idx *Index, sc *rmQueryScratch, cand
 					}
 				}
 			}
-		}
+			return true
+		})
 	}
 	sc.heapQueue = queue[:0]
 	return out

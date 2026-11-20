@@ -104,61 +104,6 @@ func powQuarter(exp int) float64 {
 	}
 }
 
-// SliceShannonBits computes the total prior Shannon self-information (in bits) of a rune slice,
-// enforcing non-carrier zeroing (0.0 bits when no letter/digit is present), 1st-order Markov repetition
-// damping (0.25^(k-2) for identical rune runs of length k >= 3), sliding-window period-p (p in 1..4)
-// tandem-repeat collapse on compact single-token strings, and cross-space periodic flood collapse on
-// long space-delimited repetition floods (e.g. "a a a ...", "ab ab ab ...").
-func SliceShannonBits(rs []rune) float64 {
-	var bits float64
-	hasAlnum := false
-	hasSpace := false
-	var prevRune rune
-	runLen := 0
-	var buf [64]rune
-	var ring [4]rune
-	var pMatch [5]int
-	tandemTotal := 0
-	inTandemCur := false
-	n := 0
-	for _, r := range rs {
-		skipCf, isSp, isAlnum, lowR, rb := classifyRuneShannonFast(r)
-		if skipCf {
-			continue
-		}
-		if isSp {
-			hasSpace = true
-		}
-		if isAlnum {
-			hasAlnum = true
-			if n < 64 {
-				buf[n] = lowR
-			}
-			tandemTotal, inTandemCur = stepStreamingTandem(lowR, n, &ring, &pMatch, tandemTotal, inTandemCur)
-			n++
-		}
-		if lowR == prevRune {
-			runLen++
-		} else {
-			prevRune = lowR
-			runLen = 1
-		}
-		if runLen >= 3 && rb > 0 {
-			rb *= powQuarter(runLen - 2)
-		}
-		bits += rb
-	}
-	if !hasAlnum {
-		return 0
-	}
-	if !hasSpace && n >= 4 {
-		bits *= fullStringTandemDamping(&buf, n, tandemTotal)
-	} else if hasSpace && n >= 16 && tandemTotal*4 >= n*3 {
-		bits *= spacedPeriodicFloodDamping(n, tandemTotal)
-	}
-	return bits
-}
-
 // StringShannonBits computes the total prior Shannon self-information (in bits) of a string,
 // enforcing non-carrier zeroing (0.0 bits when no letter/digit is present), 1st-order Markov repetition
 // damping (0.25^(k-2) for identical rune runs of length k >= 3), sliding-window period-p (p in 1..4)
@@ -331,17 +276,4 @@ func periodicTandemDamping64(buf *[64]rune, n int) float64 {
 		return d * d * 0.25
 	}
 	return 1.0
-}
-
-// IsPureHan reports whether s consists solely of Han ideographs (without Hiragana/Katakana inflection endings).
-func IsPureHan(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if !unicode.Is(unicode.Han, r) {
-			return false
-		}
-	}
-	return true
 }

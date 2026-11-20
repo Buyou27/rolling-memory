@@ -26,7 +26,6 @@ name = "cloud"
 
 [recall]
 vector = false
-raw_when_sparse = true
 
 [hooks]
 ledger = false
@@ -39,7 +38,7 @@ auto_watch = false
 	}
 	sw := parseConfigSwitches(cfgPath, true)
 	// 控制台恒本地：配置里残留的 [mode] name = "cloud" 不得改变控制台的运行模式读数。
-	if sw.Ledger || !sw.RawWhenSparse || sw.Mode != modeLocal || !sw.WidgetEnabled {
+	if sw.Ledger || sw.Mode != modeLocal || !sw.WidgetEnabled {
 		t.Fatalf("unexpected switches: %#v", sw)
 	}
 	if sw.SyncAutoWatch {
@@ -104,7 +103,7 @@ func TestParseConfigSwitchesModeStaysLocal(t *testing.T) {
 		{"local_explicit", "[mode]\nname = \"local\"\n"},
 		{"cloud_explicit", "[mode]\nname = \"cloud\"\n"},
 		{"local_uppercase", "[mode]\nname = \"Local\"\n"},
-		{"missing_section_defaults_local", "[recall]\nraw_when_sparse = true\n"},
+		{"missing_section_defaults_local", "[hooks]\nledger = true\n"},
 		{"invalid_value_keeps_default", "[mode]\nname = \"weird\"\n"},
 	}
 	for _, tc := range cases {
@@ -347,16 +346,13 @@ func TestUnifiedWaveCellSwitches(t *testing.T) {
 
 	tomlText := `[hooks]
 ledger = true
-
-[recall]
-raw_when_sparse = false
 `
 	if err := os.WriteFile(cfgPath, []byte(tomlText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sw := parseConfigSwitches(cfgPath, true)
 	// 无 [mode] 段时按引擎缺省（local），不得再用硬编码 cloud 兜底。
-	if sw.Mode != "local" || sw.RawWhenSparse || !sw.Ledger {
+	if sw.Mode != "local" || !sw.Ledger {
 		t.Fatalf("unexpected unified the memory engine switches: %+v", sw)
 	}
 

@@ -253,74 +253,33 @@ func (m *Memory) LocalVault() (*localvault.Client, error) {
 
 func (m *Memory) localVaultRemember(req RememberRequest) (map[string]any, error) {
 	started := clock.MonotonicMS()
-	scope := m.Config.Scope
-	if req.Scope != nil && strings.TrimSpace(*req.Scope) != "" {
-		scope = strings.TrimSpace(*req.Scope)
-	}
-	if err := m.checkLocalVaultScope(scope); err != nil {
+	plan, err := m.prepareRemember(req)
+	if err != nil {
 		return nil, err
 	}
-	session := strings.TrimSpace(req.Session)
-	if session == "" {
-		session = "default"
-	}
-	var textParts []string
-	if req.Content != nil && strings.TrimSpace(*req.Content) != "" {
-		textParts = append(textParts, ids.StripInjected(strings.TrimSpace(*req.Content)))
-	} else if req.SourceText != nil && strings.TrimSpace(*req.SourceText) != "" {
-		textParts = append(textParts, ids.StripInjected(strings.TrimSpace(*req.SourceText)))
-	}
-	if len(textParts) == 0 && req.Assertion != nil {
-		textParts = append(textParts, ids.StableJSON(req.Assertion))
-	}
-	if len(textParts) == 0 && len(req.Assertions) > 0 {
-		textParts = append(textParts, ids.StableJSON(req.Assertions))
-	}
-	text := strings.Join(textParts, "\n")
-	if strings.TrimSpace(text) == "" {
-		return nil, fmt.Errorf("localvault remember requires non-empty content")
-	}
-	// One unit is bounded by the shared tokenz-r chunk rung: a long paste is
-	// ingested as several content-addressed units (identical chunks collapse),
-	// while a text that fits the rung keeps its historical single-unit id.
-	chunks := tokenzr.ChunkBySentences(text, tokenzr.DefaultChunkTokens)
 	if req.Dry {
-		return map[string]any{
-			"ok":        true,
-			"dry":       true,
-			"scope":     scope,
-			"extractor": localvault.EngineName,
-			"chunks":    len(chunks),
-		}, nil
+		return plan.dryReceipt(), nil
 	}
 	tc, err := m.LocalVault()
 	if err != nil {
 		return nil, err
 	}
-	now := clock.Unix()
-	occ := ids.ParseTime(req.OccurredAt, ids.ParseTimeOptions{TimeRef: &now, Default: now})
-	written := make([]any, 0, len(chunks))
-	seen := make(map[string]struct{}, len(chunks))
+	written := make([]any, 0, len(plan.Units))
 	var first localvault.IngestResponse
-	for index, chunk := range chunks {
-		docID := "rm_" + ids.SHA256Hex(scope + "\x00" + session + "\x00" + chunk)[:24]
-		if _, duplicate := seen[docID]; duplicate {
-			continue
-		}
-		seen[docID] = struct{}{}
-		resp, err := tc.Remember(context.Background(), docID, chunk, occ)
+	for _, unit := range plan.Units {
+		resp, err := tc.Remember(context.Background(), unit.DocID, unit.Plaintext, plan.OccurredAt)
 		if err != nil {
-			return nil, fmt.Errorf("localvault remember chunk %d/%d: %w", index+1, len(chunks), err)
+			return nil, fmt.Errorf("localvault remember chunk %d/%d: %w", unit.ChunkIndex+1, plan.ChunkCount, err)
 		}
 		if len(written) == 0 {
 			first = resp
 		}
 		written = append(written, map[string]any{
-			"id":          docID,
+			"id":          unit.DocID,
 			"address_uri": resp.AddressURI,
 			"waveform":    resp.WaveformBar,
 			"reason":      "vault_ingested",
-			"chunk_index": index,
+			"chunk_index": unit.ChunkIndex,
 		})
 	}
 	if len(written) == 0 {
@@ -330,7 +289,7 @@ func (m *Memory) localVaultRemember(req RememberRequest) (map[string]any, error)
 	return map[string]any{
 		"ok":            true,
 		"dry":           false,
-		"scope":         scope,
+		"scope":         plan.Scope,
 		"extractor":     localvault.EngineName,
 		"written":       written,
 		"skipped":       []any{},
@@ -340,7 +299,7 @@ func (m *Memory) localVaultRemember(req RememberRequest) (map[string]any, error)
 		"anchor_failed": 0,
 		"trace": map[string]any{
 			"hash":     firstID,
-			"session":  session,
+			"session":  plan.Session,
 			"inserted": true,
 			"chunks":   len(written),
 		},
@@ -550,6 +509,53 @@ func allNoetic(entries []localvault.RecentDoc) bool {
 	return len(entries) > 0
 }
 
+// deliveredNoeticActivations returns the Noetic handles that actually took part
+// in one delivery: the handle's own band survived the caps, or at least one of
+// its cited units did. Matching alone does not count, so repeatedly asking an
+// unhelpful question cannot ratchet a recollection forever.
+func deliveredNoeticActivations(records []localvault.LocalNoeticRecord, bands []map[string]any, excludeTraceKey string) []string {
+	evidence := make(map[string]bool, 64)
+	handles := make(map[string]bool, 8)
+	for _, band := range bands {
+		kind, _ := band["kind"].(string)
+		nodes, _ := band["nodes"].([]map[string]any)
+		for _, node := range nodes {
+			id, _ := node["id"].(string)
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if kind == "noetic_band" {
+				handles[id] = true
+			} else {
+				evidence[id] = true
+			}
+		}
+	}
+	out := make([]string, 0, 4)
+	for _, rec := range records {
+		if excludeTraceKey != "" && rec.TraceKey == excludeTraceKey {
+			continue
+		}
+		used := handles[rec.NoeticID]
+		if !used {
+			for _, cid := range rec.CitedUnitIDs {
+				if evidence[strings.TrimSpace(cid)] {
+					used = true
+					break
+				}
+			}
+		}
+		if used {
+			out = append(out, rec.NoeticID)
+		}
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out
+}
+
 // parseRecentNoeticText extracts the cue line and cited unit IDs from a rendered
 // RecentDoc noetic text ("Cue: ...\nCited units: u1, u2").
 func parseRecentNoeticText(text string) (cueLine string, citedIDs []string) {
@@ -736,7 +742,6 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	if strings.TrimSpace(req.IncarnationID) != "" {
 		tc.SetIdentity(tc.AssistantID, strings.TrimSpace(req.IncarnationID), tc.Locus)
 	}
-	noeticHits, _ := tc.RecallNoetic(query, topK)
 	queryCtx := context.Background()
 	budgetMS := 10000
 	if req.BudgetMS != nil {
@@ -767,6 +772,9 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	}
 	now := clock.Unix()
 	timeRef := ids.ParseTime(req.TimeRef, ids.ParseTimeOptions{TimeRef: &now, Default: now})
+	// Noetic handles are matched by every cue variant of a trace; activation
+	// counts real use, so no clock enters this decision.
+	noeticHits, _ := tc.RecallNoetic(query, topK)
 	hits, err := tc.RecallWithOptions(queryCtx, query, localvault.BlindQueryOptions{
 		TopK:    recallFetchK,
 		AsOf:    0,
@@ -787,9 +795,10 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	hits = evidenceHits
 
 	// L3 -> L1/L2 Citation Resonance Hydrate: SearchClientSDKDefault has already
-	// boosted any matched cited units inside the initial candidate pool; here we
-	// only hydrate cited units that were outside the initial topK so proven
-	// evidence from past sessions is never dropped.
+	// applied the cited-set coverage floor inside the candidate pool; here we
+	// only hydrate cited units that were outside the initial topK at the same
+	// coverage-derived weight so proven evidence from past sessions is never
+	// dropped.
 	if len(noeticHits) > 0 && tc.Vault != nil {
 		hitIdxByID := make(map[string]int, len(hits))
 		maxW := 1.0
@@ -803,7 +812,11 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 			if nRank >= 3 || nh.MatchScore <= 0 {
 				break
 			}
-			vGain := nh.VerificationGain()
+			coverage := tc.Vault.NoeticEvidenceCoverage(nh.CitedUnitIDs, query)
+			target := maxW * nh.MatchScore * coverage
+			if target <= 0 {
+				continue
+			}
 			for _, cid := range nh.CitedUnitIDs {
 				cid = strings.TrimSpace(cid)
 				if cid == "" || strings.HasPrefix(cid, "nt_") || strings.HasPrefix(cid, "noetic_") {
@@ -825,7 +838,7 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 								UnitID:      cid,
 								Layer:       layer,
 								AddressURI:  nh.AddressURI,
-								FinalWeight: maxW * (0.72 * nh.MatchScore * vGain),
+								FinalWeight: target,
 							},
 							RawPlaintext:       rawTxt,
 							DistilledPlaintext: distTxt,
@@ -1247,6 +1260,9 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 		if len(bands) >= topK {
 			break
 		}
+		// L3 is the agent's own recollection, and the matched cue is its recall
+		// handle. The handle names the phrasing that actually fired; it is not a
+		// claim about the conversation, which is L2.
 		if len(nh.CitedUnitIDs) > 0 {
 			allInvalid := true
 			for _, uid := range nh.CitedUnitIDs {
@@ -1259,7 +1275,11 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 				continue
 			}
 		}
-		rendered := "Cue: " + nh.QueryText
+		matchedCue := strings.TrimSpace(nh.MatchedCue)
+		if matchedCue == "" {
+			matchedCue = strings.TrimSpace(nh.QueryText)
+		}
+		rendered := "Cue: " + matchedCue
 		if len(nh.CitedUnitIDs) > 0 {
 			rendered += "\nCited units: " + strings.Join(nh.CitedUnitIDs, ", ")
 		}
@@ -1270,7 +1290,7 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 		nodeMap := map[string]any{
 			"id":                nh.NoeticID,
 			"kind":              "noetic_qa",
-			"label":             nh.QueryText,
+			"label":             matchedCue,
 			"content":           rendered,
 			"anchor":            nh.NoeticID,
 			"time":              noeticTimeLabel,
@@ -1283,8 +1303,8 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 		bands = append(bands, map[string]any{
 			"id":         nh.NoeticID,
 			"kind":       "noetic_band",
-			"title":      "带·" + strings.TrimSpace(nh.QueryText),
-			"subject":    nh.QueryText,
+			"title":      matchedCue,
+			"subject":    matchedCue,
 			"time_label": noeticTimeLabel,
 			"score":      nh.MatchScore,
 			"nodes":      []map[string]any{nodeMap},
@@ -1294,6 +1314,7 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	if m.Config != nil && evalns.IsBenchmarkScope(m.Config.Scope) {
 		benchmarkScope = true
 	}
+	crystallizedTraceKey := ""
 	if query != "" && !isInternalWarmupProbeCue(query) && len(hits) > 0 && req.Mode != "probe" && !req.NoCrystallize && !benchmarkScope {
 		var citedIDs []string
 		var citedSents []string
@@ -1336,10 +1357,15 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 		}
 		if len(citedIDs) > 0 {
 			ansSummary := strings.Join(citedSents, " | ")
-			noeticID := "nt_" + ids.SHA256Hex(scope + "\x00" + query + "\x00" + strings.Join(citedIDs, ","))[:16]
+			// The trace is the evidence set, not the phrasing: re-asking the same
+			// question in different words resolves to the same recollection, while
+			// a changed evidence set is a new trace that supersedes the old one.
+			traceKey := localvault.NoeticTraceKey(citedIDs)
+			noeticID := localvault.NoeticTraceID(traceKey)
+			crystallizedTraceKey = traceKey
 			for _, nh := range noeticHits {
 				nhID := strings.TrimSpace(nh.NoeticID)
-				if nhID == "" || nhID == noeticID || seenCite[nhID] || nh.MatchScore < 1.0/math.E {
+				if nhID == "" || nhID == noeticID || nh.TraceKey == traceKey || seenCite[nhID] || nh.MatchScore < 1.0/math.E {
 					continue
 				}
 				seenCite[nhID] = true
@@ -1348,7 +1374,7 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 					break
 				}
 			}
-			now := clock.Unix()
+			now := timeRef
 			if !m.snapshotOnly.Load() {
 				if tc.Vault != nil && tc.Vault.CorpusSize() >= 2048 {
 					citedIDsCopy := append([]string(nil), citedIDs...)
@@ -1457,6 +1483,16 @@ func (m *Memory) localVaultRecall(req RecallRequest) (*recall.Result, error) {
 	// 交付面再次保证「带锚者排最前」（同图存管线口径，fail-open）。
 	recall.PromoteBandsByLocusAnchor(result, rawCue)
 	applyThinDeliveryCaps(result, req)
+	// Recall is not a pure read: a recollection that actually took part in this
+	// delivery is reinforced, while a matched but unused one is not. The write
+	// happens after the caps so only delivered handles count, and it is skipped
+	// on read-only surfaces (no-crystallize / snapshot-only) and in benchmark
+	// scope, where the vault must stay frozen.
+	if !req.NoCrystallize && !benchmarkScope && !m.snapshotOnly.Load() && tc.Vault != nil && len(noeticHits) > 0 {
+		if activated := deliveredNoeticActivations(noeticHits, result.Bands, crystallizedTraceKey); len(activated) > 0 {
+			_, _ = tc.Vault.ActivateNoetics(activated, timeRef)
+		}
+	}
 	if contentTruncated {
 		truncated, _ := result.Meta["truncated"].(map[string]any)
 		if truncated == nil {
@@ -1771,11 +1807,12 @@ func (m *Memory) RememberNoetic(scope, session, queryText string, citedUnitIDs, 
 	if err != nil {
 		return "", err
 	}
-	if err := tc.RememberNoetic(noeticID, queryText, citedUnitIDs, citedSentences, answerText, now); err != nil {
+	actualID, err := tc.RememberNoeticTrace(noeticID, queryText, citedUnitIDs, citedSentences, answerText, now)
+	if err != nil {
 		return "", err
 	}
-	pushNoeticPulse(tc, noeticID, queryText, answerText, citedUnitIDs, now)
-	return noeticID, nil
+	pushNoeticPulse(tc, actualID, queryText, answerText, citedUnitIDs, now)
+	return actualID, nil
 }
 
 // NoeticPulseBudget bounds one L3 crystallization pulse. It is exported because a

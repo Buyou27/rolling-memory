@@ -546,20 +546,6 @@ func IsBPEProperNounPrior(word string) bool {
 	return ctr.codec.bpePieceBits(true, titleStr) < ctr.codec.bpePieceBits(true, lowStr)
 }
 
-// IsBPESingleToken reports in O(1) zero-allocation time whether piece exists as a single
-// vocabulary token in the embedded 128k BPE merge tree (either bare or pre-spaced).
-func IsBPESingleToken(piece string) bool {
-	s := strings.TrimSpace(piece)
-	if s == "" {
-		return false
-	}
-	ctr, err := Default()
-	if err != nil || ctr == nil || ctr.codec == nil {
-		return false
-	}
-	return ctr.codec.bareTokenID[s] > 0 || ctr.codec.spacedTokenID[s] > 0
-}
-
 // HasCompetingBPESubroot reports whether the longer word in a diverging pair (qRunes, wRunes)
 // forms an independent open-class BPE root at the bit span of the shorter word or via an elided
 // syllabic nucleus in the 128k BPE merge tree (zero hardcoded suffix strings or character counts).
@@ -719,62 +705,6 @@ func IsTerminalInflectedExtension(qRunes, wRunes []rune) bool {
 		return BPEInflectionValence(sh) >= 1
 	}
 	return BPEInflectionValence(sh) >= 2
-}
-
-// BPEPrefixStats returns (spacedID, minChildID, childCnt4k) for " " + word.
-func BPEPrefixStats(word string) (uint32, uint32, uint16) {
-	ctr, err := Default()
-	if err != nil || ctr == nil || ctr.codec == nil {
-		return 0, 0, 0
-	}
-	id := ctr.codec.spacedTokenID[strings.ToLower(strings.TrimSpace(word))]
-	if id == 0 || int(id) >= len(ctr.codec.minChildID) {
-		return 0, 0, 0
-	}
-	return id, ctr.codec.minChildID[id], ctr.codec.childCnt4k[id]
-}
-
-// IsBPEStandaloneGluePrior reports whether a non-CJK word exhibits the mathematical BPE signature
-// of a high-frequency standalone closed-class function word across languages without per-language wordlists.
-func IsBPEStandaloneGluePrior(word string) bool {
-	w := toLowerTrimmedFast(word)
-	wBits := bpeLexicalCarryBits(w)
-	if wBits < 4.0 || wBits > 6.0 {
-		return false
-	}
-	ctr, err := Default()
-	if err != nil || ctr == nil || ctr.codec == nil {
-		return false
-	}
-	hasNucleus := false
-	for _, r := range w {
-		if !unicode.IsLetter(r) || isUnspacedScriptRune(r) || unicode.Is(unicode.Hangul, r) {
-			return false
-		}
-		if ctr.codec.nucleusRunes[r] || r > 127 {
-			hasNucleus = true
-		}
-	}
-	if !hasNucleus || IsBPEProperNounPrior(w) {
-		return false
-	}
-	spBits := ctr.codec.bpePieceBits(true, w)
-	if spBits <= 0 || spBits >= 9.90 {
-		return false
-	}
-	rawBits := ctr.codec.bpePieceBits(false, w)
-	spID, minChild, cnt4k := BPEPrefixStats(w)
-	if spID == 0 {
-		return false
-	}
-	val := BPEInflectionValence(w)
-	if spID < 512 && spBits < rawBits && val <= 1 {
-		return true
-	}
-	if wBits <= 4.0 {
-		return val == 0 && (spID < 400 || (minChild >= 2000 && (spBits < rawBits || spBits < 9.30)))
-	}
-	return val == 0 && cnt4k <= 1 && spBits < rawBits
 }
 
 // IsAlreadyInflectedVerbToken reports whether word is a finite inflected verb form

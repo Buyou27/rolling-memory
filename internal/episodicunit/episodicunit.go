@@ -11,7 +11,7 @@
 // boundaries (never mid-sentence, never truncated).
 //
 // The package owns the deterministic docID derivation so every ingest path
-// (Stop hook, reconcile sweep, rebuild) addresses the same speech to the same unit.
+// (background sync, reconcile sweep, rebuild) addresses the same speech to the same unit.
 package episodicunit
 
 import (

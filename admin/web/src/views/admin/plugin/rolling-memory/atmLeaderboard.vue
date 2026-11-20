@@ -1034,8 +1034,8 @@ const scorerGateBadgeText = computed(() => `${isEn.value ? 'Official scorer pari
 
 const activeReproCli = computed(() =>
     boardTab.value === 'hard'
-        ? 'rmem eval --suite atm --tier hard --pulse-mode local_plain --top-k 50 --answerer none --judge off'
-        : 'rmem eval --suite atm --tier 1013 --pulse-mode local_plain --top-k 50 --answerer none --judge off'
+        ? 'rmem eval --suite atm --tier hard --top-k 50 --answerer none --judge off'
+        : 'rmem eval --suite atm --tier 1013 --top-k 50 --answerer none --judge off'
 )
 
 const tierLadder = computed(() => atmBaselines.value.filter((row) => !!row.profile_tier))

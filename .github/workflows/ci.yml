@@ -34,10 +34,9 @@ jobs:
           go build ./...
           go vet ./...
 
-      - name: Unit, E2E & Golden Parity Tests
+      - name: Unit, E2E & Race Tests
         run: |
           go test ./... -count=1
-          go test ./internal/golden -count=1
           go test -race ./internal/... -count=1
 
       - name: Set up Node

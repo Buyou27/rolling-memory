@@ -146,7 +146,7 @@ func localEvalRecallPayload(engine *eval.LocalEngine, cue string, topK int) (map
 	}
 	meta := engine.Metadata()
 	// local_hits is the local retrieval hit count; engine_transport names the local channel.
-	meta["engine_transport"] = eval.TransportForPulseMode(engine.PulseMode)
+	meta["engine_transport"] = eval.LocalPlainTransport
 	meta["engine_scope"] = engine.Scope
 	meta["engine_upstream"] = engine.Endpoint
 	meta["local_fallback"] = false

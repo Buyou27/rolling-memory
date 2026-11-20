@@ -813,6 +813,99 @@ func loadNoeticStatus(t *testing.T, db *sql.DB, noeticID string) string {
 	return status
 }
 
+func TestBackgroundSyncDeletedFileFencesQueuedIngestBeforePurge(t *testing.T) {
+	root := newBackgroundTestDir(t)
+	path := filepath.Join(root, "fenced.md")
+	if err := os.WriteFile(path, []byte("fence queued ingest before deleting this background unit"), 0o600); err != nil {
+		t.Fatalf("write background document: %v", err)
+	}
+
+	transport := &backgroundTransportStub{}
+	client, db := newBackgroundTestClient(t, transport)
+	ctx := context.Background()
+	if _, err := client.AddBackgroundDir(root); err != nil {
+		t.Fatalf("AddBackgroundDir: %v", err)
+	}
+	if _, err := client.SyncBackgroundDirs(ctx); err != nil {
+		t.Fatalf("initial SyncBackgroundDirs: %v", err)
+	}
+	items, err := client.Vault.EnqueueIngestQueue(ctx, []localvault.IngestQueueRequest{{RequestKey: "background-purge-fence", RawPayload: []byte("queued-before-purge")}})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("enqueue: items=%+v err=%v", items, err)
+	}
+	claim, ok, err := client.Vault.ClaimIngestQueue(ctx, time.Unix(1700000000, 0), time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	before, err := client.Vault.CurrentPurgeEpoch(ctx)
+	if err != nil || claim.PurgeEpoch != before {
+		t.Fatalf("claim epoch=%d live=%d err=%v", claim.PurgeEpoch, before, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove source document: %v", err)
+	}
+	transport.deleteUnits = func(ctx context.Context, unitIDs []string) error {
+		if len(unitIDs) != 1 {
+			t.Fatalf("expected one deleted unit, got %v", unitIDs)
+		}
+		if _, err := client.Vault.FinishIngestQueueApplied(ctx, claim.QueueID, claim.Attempt, claim.LeaseToken); !errors.Is(err, localvault.ErrIngestQueuePurgeEpochChanged) {
+			t.Fatalf("queued ingest was not fenced before delete: %v", err)
+		}
+		return errors.New("transport purge failed")
+	}
+	if _, err := client.SyncBackgroundDirs(ctx); err == nil || !strings.Contains(err.Error(), "transport purge failed") {
+		t.Fatalf("expected transport purge failure, got %v", err)
+	}
+	after, err := client.Vault.CurrentPurgeEpoch(ctx)
+	if err != nil || after != before+1 {
+		t.Fatalf("failed purge epoch: before=%d after=%d err=%v", before, after, err)
+	}
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 1 {
+		t.Fatalf("failed transport purge removed local metadata: %d", got)
+	}
+}
+
+func TestBackgroundSyncDeletedFilePurgeEpochFailureBlocksDelete(t *testing.T) {
+	root := newBackgroundTestDir(t)
+	path := filepath.Join(root, "blocked.md")
+	if err := os.WriteFile(path, []byte("epoch failure must block every destructive delete"), 0o600); err != nil {
+		t.Fatalf("write background document: %v", err)
+	}
+	purgeCalls := 0
+	transport := &backgroundTransportStub{deleteUnits: func(_ context.Context, _ []string) error {
+		purgeCalls++
+		return nil
+	}}
+	client, db := newBackgroundTestClient(t, transport)
+	if _, err := client.AddBackgroundDir(root); err != nil {
+		t.Fatalf("AddBackgroundDir: %v", err)
+	}
+	if _, err := client.SyncBackgroundDirs(context.Background()); err != nil {
+		t.Fatalf("initial SyncBackgroundDirs: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove source document: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_background_purge_epoch
+		BEFORE UPDATE OF purge_epoch ON rm_revision
+		WHEN NEW.purge_epoch > OLD.purge_epoch
+		BEGIN
+			SELECT RAISE(ABORT, 'epoch bump failed');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SyncBackgroundDirs(context.Background()); err == nil || !strings.Contains(err.Error(), "epoch bump failed") {
+		t.Fatalf("expected purge epoch error, got %v", err)
+	}
+	if purgeCalls != 0 {
+		t.Fatalf("transport delete ran after epoch failure: calls=%d", purgeCalls)
+	}
+	if got := countBackgroundRows(t, db, `SELECT COUNT(*) FROM rm_bg_files WHERE abs_path = ?`, path); got != 1 {
+		t.Fatalf("epoch failure removed local metadata: %d", got)
+	}
+}
+
 func TestBackgroundSyncDeletedFilePurgesBeforeLocalDeleteAndRetries(t *testing.T) {
 	root := newBackgroundTestDir(t)
 	path := filepath.Join(root, "deleted.md")

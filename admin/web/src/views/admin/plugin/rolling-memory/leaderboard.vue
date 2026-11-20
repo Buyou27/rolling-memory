@@ -275,7 +275,7 @@
             <div class="rm-repro-command-strip">
                 <div class="rm-rcs-main">
                     <span class="rm-rcs-tag">LOCOMO-1540 REPRO</span>
-                    <code class="rm-rcs-code">rmem eval --suite locomo --tier 1540 --pulse-mode local_plain --top-k 96 --answerer llm --judge llm</code>
+                    <code class="rm-rcs-code">rmem eval --suite locomo --tier 1540 --top-k 96 --answerer llm --judge llm</code>
                 </div>
                 <div class="rm-rcs-btns">
                     <el-button
@@ -285,7 +285,7 @@
                         plain
                         @click="
                             copyText(
-                                'rmem eval --suite locomo --tier 1540 --pulse-mode local_plain --top-k 96 --answerer llm --judge llm',
+                                'rmem eval --suite locomo --tier 1540 --top-k 96 --answerer llm --judge llm',
                                 'Copied LoCoMo repro CLI',
                                 '已复制 LoCoMo 1,540 复现命令'
                             )

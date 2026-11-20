@@ -777,11 +777,12 @@ func (e *Engine) InspectUnitRelations(unitID string, topK int) (UnitRelationProf
 			}
 		}
 	}
-	for _, nb := range st.neighborsOf(u) {
+	st.visitNeighbors(u, func(nb int32) bool {
 		if nb != u {
 			candSet[nb] = struct{}{}
 		}
-	}
+		return true
+	})
 	st.forEachProvenancePeer(idx, u, func(nb int32) {
 		candSet[nb] = struct{}{}
 	})
@@ -988,11 +989,12 @@ func (e *Engine) TraceExplanationChainWithQuery(unitID string, upward bool, maxH
 				}
 			}
 		}
-		for _, nb := range st.neighborsOf(curU) {
+		st.visitNeighbors(curU, func(nb int32) bool {
 			if !visited[nb] {
 				candSet[nb] = struct{}{}
 			}
-		}
+			return true
+		})
 		st.forEachProvenancePeer(idx, curU, func(nb int32) {
 			if !visited[nb] {
 				candSet[nb] = struct{}{}

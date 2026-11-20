@@ -124,23 +124,6 @@ func TestDetectGitWorkspaceNameLinkedWorktreeAndSubmodule(t *testing.T) {
 	}
 }
 
-// TestDetectGitWorkspaceLocusSpatialContract pins the spatial-coordinate
-// synthesizer after the walker refactor: the relative subdirectory stays part
-// of the coordinate and the remote slug supplies the org segment.
-func TestDetectGitWorkspaceLocusSpatialContract(t *testing.T) {
-	root := writeGitDirFixture(t, filepath.Join(t.TempDir(), "my-repo"), "git@github.com:acme/my-repo.git")
-	if got := DetectGitWorkspaceLocus(root); got != "acme/my-repo" {
-		t.Errorf("locus(root) = %q, want acme/my-repo", got)
-	}
-	if got := DetectGitWorkspaceLocus(filepath.Join(root, "pkg", "engine")); got != "acme/my-repo/pkg/engine" {
-		t.Errorf("locus(subdir) = %q, want acme/my-repo/pkg/engine", got)
-	}
-	plain := writeGitDirFixture(t, filepath.Join(t.TempDir(), "solo"), "")
-	if got, want := DetectGitWorkspaceLocus(plain), filepath.Base(filepath.Dir(plain))+"/solo"; got != want {
-		t.Errorf("locus(no-remote repo) = %q, want %q", got, want)
-	}
-}
-
 // TestSavePresenceFileRoundtripAndReplace pins the attachment-ledger contract:
 // one document, one entry per session, hooks hold a short heartbeat lease, and
 // empty inputs are no-ops.

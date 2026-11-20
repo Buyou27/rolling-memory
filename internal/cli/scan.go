@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"strconv"
@@ -49,14 +50,39 @@ func (a *application) runScan() int {
 		if status, statusErr := memory.Status(memory.Config.Scope); statusErr == nil {
 			result["snapshot"] = status["snapshot"]
 		}
+		if stats, statsErr := memory.IngestQueueStats(context.Background()); statsErr == nil {
+			result["ingest_queue"] = map[string]any{
+				"pending":             stats.Pending,
+				"running":             stats.Running,
+				"applied":             stats.Applied,
+				"failed":              stats.Failed,
+				"canceled":            stats.Canceled,
+				"pending_bytes":       stats.PendingBytes,
+				"visible_applied":     stats.VisibleApplied,
+				"visible_through_seq": stats.VisibleThroughSeq,
+				"oldest_pending_id":   stats.OldestPendingID,
+				"accepted_id":         stats.AcceptedID,
+				"applied_id":          stats.AppliedID,
+			}
+		}
 		result["worker"] = readScanWorkerLease(db)
 		result["builder"] = readSnapshotBuildStatus(db)
+		if since, sinceErr := EpisodicScanSince(memory.Config.Path); sinceErr == nil {
+			result["sync_since"] = since
+		} else {
+			result["sync_since_error"] = sinceErr.Error()
+		}
+		result["skipped_before_since"] = readEpisodicScanSkipped(db, memory.Config.Scope)
 	}
 	if err := a.emit(result, func() {
 		a.printf("scan: %s (auto_sync=%v paused=%v)\n", action, result["auto_sync"], result["paused"])
 		if snapshot, ok := result["snapshot"].(map[string]any); ok {
 			a.printf("snapshot: ready=%v change_seq=%v built=%v gap=%v\n",
 				snapshot["ready"], snapshot["change_seq"], snapshot["built_change_seq"], snapshot["change_gap"])
+		}
+		if stats, ok := result["ingest_queue"].(map[string]any); ok {
+			a.printf("ingest queue: pending=%v running=%v applied=%v visible=%v failed=%v canceled=%v bytes=%v\n",
+				stats["pending"], stats["running"], stats["applied"], stats["visible_applied"], stats["failed"], stats["canceled"], stats["pending_bytes"])
 		}
 	}); err != nil {
 		return a.fail(err)

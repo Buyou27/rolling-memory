@@ -27,7 +27,6 @@ go build ./...
 go vet ./...
 gofmt -l .                                  # 必须无输出
 go test ./... -count=1
-go test ./internal/golden -count=1          # 冻结黄金夹具（见 testdata/golden/MANIFEST.json）
 CGO_ENABLED=0 go build -trimpath ./cmd/rolling-memory   # 可移植性冒烟（纯 Go，无 CGO）
 ```
 
@@ -38,9 +37,8 @@ CGO_ENABLED=0 go build -trimpath ./cmd/rolling-memory   # 可移植性冒烟（�
 测试只使用合成数据并自我隔离：运行于临时 HOME / XDG / 数据库根，绝不打开真实的
 `~/.local/share/rolling-memory/memory.db`。
 
-黄金对拍：`testdata/golden/` 由 `MANIFEST.json` 封存（来源信息 + 逐文件 sha256 + `seal_sha256`；
-场景清单见 `testdata/golden/README.md`），测试套件会回放并校验密码学封条。绝不从临时测试运行
-重新生成期望值。语义契约变更必须显式重封基线并记录来源信息。
+格式向量：`testdata/golden/vectors/` 保存 id / 时间辅助函数（`internal/ids`）钉住的 JSON 期望值。
+它们是经评审的输入而非生成产物：绝不从临时测试运行刷新；语义契约变更须在同一 PR 中显式评审并更新向量。
 
 ## 版本与弃用
 
@@ -60,19 +58,17 @@ CGO_ENABLED=0 go build -trimpath ./cmd/rolling-memory   # 可移植性冒烟（�
 go build ./...                                # 1. 可编译
 go vet ./...                                  # 2. 静态检查
 gofmt -l .                                    # 3. 必须无输出
-go test ./... -count=1                        # 4. 单元 + 进程级 e2e + 黄金对拍
-go test ./internal/golden -count=1            # 5. 仅黄金回放（4 的子集，迭代时常用）
-go test -race ./internal/... -count=1          # 6. 引擎包的竞态检测
-go test ./internal/... -shuffle=on -count=2    # 7. 顺序无关（无测试间耦合）
-# 8. 五目标交叉编译冒烟：全部发布目标均为纯 Go 构建
+go test ./... -count=1                        # 4. 单元 + 进程级 e2e
+go test -race ./internal/... -count=1          # 5. 引擎包的竞态检测
+go test ./internal/... -shuffle=on -count=2    # 6. 顺序无关（无测试间耦合）
+# 7. 五目标交叉编译冒烟：全部发布目标均为纯 Go 构建
 for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
   CGO_ENABLED=0 GOOS="${t%/*}" GOARCH="${t#*/}" go build -trimpath -o /dev/null ./cmd/rolling-memory || exit 1
 done
 ```
 
 - 测试只使用合成数据，默认隔离 HOME / XDG / DB 根——绝不指向真实记忆库，也绝不让新测试写出临时根之外。
-- 文档中引用的数字（场景数、文件数）来自夹具本身（`testdata/golden/MANIFEST.json` 与
-  `testdata/golden/README.md`）；请先在那里更新。
+- 文档中引用的数字（场景数、文件数）来自夹具本身（`testdata/golden/vectors/`）；请先在那里更新。
 
 ## Pull Request
 

@@ -251,18 +251,6 @@ func SupremumJoin(a, b SparseVector) SparseVector {
 	return finalizePreSortedSparseVector(out)
 }
 
-// SupremumJoinMany 计算多个稀疏向量的幂等上确界包络 ∨_k v_k（用于构造簇级动态能量向量）。
-func SupremumJoinMany(vecs ...SparseVector) SparseVector {
-	var acc SparseVector
-	for _, v := range vecs {
-		if len(v.Entries) == 0 {
-			continue
-		}
-		acc = SupremumJoin(acc, v)
-	}
-	return acc
-}
-
 // IntersectionMeet 计算两稀疏向量的交集下确界包络 a ∧ b（仅保留共享支撑 supp(a) ∩ supp(b)，
 // 坐标能量取木桶下确界 min(w_a, w_b)）。双指针线性时间 O(nnz(a)+nnz(b))。
 func IntersectionMeet(a, b SparseVector) SparseVector {
@@ -744,28 +732,11 @@ func (st *rmClusterState) partnerEntriesInto(idx *Index, termID uint64, effW flo
 		return nil
 	}
 	entries := make([]SparseEntry, 0, 16)
-	emit := func(partner uint64, postings []int32) {
-		if len(postings) == 0 {
-			return
+	counts := make(map[uint64]int, 16)
+	add := func(partner uint64, n int) {
+		if n > 0 {
+			counts[partner] += n
 		}
-		wb, okB := st.effWeightOf(partner)
-		if !okB || wb <= 0 {
-			wb, _ = idx.TermMass(partner)
-		}
-		if wb <= 0 {
-			return
-		}
-		joint := math.Log1p((float64(idx.N) - float64(len(postings)) + 0.5) / (float64(len(postings)) + 0.5))
-		bindMass := math.Min(effW, wb) * joint / (1.0 + joint)
-		pDF := idx.TermDF(partner)
-		entries = append(entries, SparseEntry{
-			ID:           partner,
-			WeightNats:   bindMass,
-			SelfInfoNats: joint,
-			TF:           int32(len(postings)),
-			DF:           pDF,
-			IsCore:       pDF <= highDFThresh,
-		})
 	}
 	bIdx := int(termID >> 52)
 	// a 侧臂：桶内键按 (a, b) 升序，二分下界后顺序消费 a==termID 连缀段。
@@ -783,33 +754,44 @@ func (st *rmClusterState) partnerEntriesInto(idx *Index, termID uint64, effW flo
 		}
 	}
 	for lo < armHi && keys[lo].a == termID {
-		k := keys[lo]
-		emit(k.b, st.phraseUnits[st.phraseRowPtr[lo]:st.phraseRowPtr[lo+1]])
+		add(keys[lo].b, int(st.phraseRowPtr[lo+1]-st.phraseRowPtr[lo]))
 		lo++
 	}
-	// b 侧臂：对偶序桶内键按 (b, a) 升序，同式二分下界后顺序消费 b==termID 连缀段。
-	if len(st.partnerIdx) == 0 {
-		for i, pk := range keys {
-			if pk.b == termID {
-				emit(pk.a, st.phraseUnits[st.phraseRowPtr[i]:st.phraseRowPtr[i+1]])
-			}
-		}
-		return entries
-	}
-	lo, hi = int(st.partnerPrefixPtr[bIdx]), int(st.partnerPrefixPtr[bIdx+1])
-	armHi = hi
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if keys[st.partnerIdx[mid]].b < termID {
-			lo = mid + 1
-		} else {
-			hi = mid
+	// b 侧臂：主序扫描全部 b==termID 的键。对偶序索引只服务本诊断画像，已在
+	// 2b 预注册中删除：每次摄取重建 O(P log P) 的对偶序不划算，改为按需 O(P) 扫描。
+	for i, pk := range keys {
+		if pk.b == termID {
+			add(pk.a, int(st.phraseRowPtr[i+1]-st.phraseRowPtr[i]))
 		}
 	}
-	for lo < armHi && keys[st.partnerIdx[lo]].b == termID {
-		k := keys[st.partnerIdx[lo]]
-		emit(k.a, st.phraseUnits[st.phraseRowPtr[st.partnerIdx[lo]]:st.phraseRowPtr[st.partnerIdx[lo]+1]])
-		lo++
+	// 追加 delta：同键计数与 base 合并，保证 df_phrase 用全局口径而非块内计数。
+	for i := range st.phraseDelta {
+		dp := st.phraseDelta[i]
+		if dp.pair.a == termID {
+			add(dp.pair.b, 1)
+		} else if dp.pair.b == termID {
+			add(dp.pair.a, 1)
+		}
+	}
+	for partner, n := range counts {
+		wb, okB := st.effWeightOf(partner)
+		if !okB || wb <= 0 {
+			wb, _ = idx.TermMass(partner)
+		}
+		if wb <= 0 {
+			continue
+		}
+		joint := math.Log1p((float64(idx.N) - float64(n) + 0.5) / (float64(n) + 0.5))
+		bindMass := math.Min(effW, wb) * joint / (1.0 + joint)
+		pDF := idx.TermDF(partner)
+		entries = append(entries, SparseEntry{
+			ID:           partner,
+			WeightNats:   bindMass,
+			SelfInfoNats: joint,
+			TF:           int32(n),
+			DF:           pDF,
+			IsCore:       pDF <= highDFThresh,
+		})
 	}
 	return entries
 }
@@ -838,8 +820,8 @@ func (e *Engine) PhraseEnergyVector(termA, termB uint64) (PhraseEnergyProfile, b
 	idx := e.Index
 	st := e.ensureClusterState()
 	pair := rmDyad{a: termA, b: termB}
-	posts := st.phrasePostings(pair)
-	if len(posts) == 0 {
+	dfPhrase := st.phrasePostingCount(pair)
+	if dfPhrase == 0 {
 		return PhraseEnergyProfile{}, false
 	}
 	wa, okA := st.effWeightOf(termA)
@@ -853,7 +835,6 @@ func (e *Engine) PhraseEnergyVector(termA, termB uint64) (PhraseEnergyProfile, b
 	if wa <= 0 || wb <= 0 {
 		return PhraseEnergyProfile{}, false
 	}
-	dfPhrase := len(posts)
 	joint := math.Log1p((float64(idx.N) - float64(dfPhrase) + 0.5) / (float64(dfPhrase) + 0.5))
 	ratio := joint / (1.0 + joint)
 	bindMass := math.Min(wa, wb) * ratio
@@ -889,10 +870,10 @@ func (e *Engine) PhraseEnergyVector(termA, termB uint64) (PhraseEnergyProfile, b
 	}
 
 	wide := st.hasWidePos()
-	unitEntries := make([]SparseEntry, 0, len(posts))
-	for _, u := range posts {
+	unitEntries := make([]SparseEntry, 0, dfPhrase)
+	st.visitPhrasePostings(pair, func(u int32) bool {
 		if int(u) < 0 || int(u) >= idx.N {
-			continue
+			return true
 		}
 		entries := st.docEntriesOf(u)
 		idxA, idxB := int32(-1), int32(-1)
@@ -923,7 +904,8 @@ func (e *Engine) PhraseEnergyVector(termA, termB uint64) (PhraseEnergyProfile, b
 			DF:           dfPhrase,
 			IsCore:       dfPhrase <= highDFThresh,
 		})
-	}
+		return true
+	})
 
 	return PhraseEnergyProfile{
 		TermA:              termA,
@@ -1002,8 +984,8 @@ func (e *Engine) unitEnergyVectorByIndex(u int32) UnitEnergyProfile {
 	highDFThresh := idx.HighDFThreshold()
 	var phraseEntries []SparseEntry
 	for _, pair := range dyads {
-		posts := st.phrasePostings(pair)
-		if len(posts) == 0 {
+		dfPhrase := st.phrasePostingCount(pair)
+		if dfPhrase == 0 {
 			continue
 		}
 		wa, okA := st.effWeightOf(pair.a)
@@ -1017,15 +999,15 @@ func (e *Engine) unitEnergyVectorByIndex(u int32) UnitEnergyProfile {
 		if wa <= 0 || wb <= 0 {
 			continue
 		}
-		joint := math.Log1p((float64(idx.N) - float64(len(posts)) + 0.5) / (float64(len(posts)) + 0.5))
+		joint := math.Log1p((float64(idx.N) - float64(dfPhrase) + 0.5) / (float64(dfPhrase) + 0.5))
 		bindMass := math.Min(wa, wb) * joint / (1.0 + joint)
 		phraseEntries = append(phraseEntries, SparseEntry{
 			ID:           foldDyadKey64(pair.a, pair.b),
 			WeightNats:   bindMass,
 			SelfInfoNats: joint,
 			TF:           1,
-			DF:           len(posts),
-			IsCore:       len(posts) <= highDFThresh,
+			DF:           dfPhrase,
+			IsCore:       dfPhrase <= highDFThresh,
 		})
 	}
 

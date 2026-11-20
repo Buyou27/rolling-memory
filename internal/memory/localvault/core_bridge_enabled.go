@@ -153,8 +153,7 @@ func (s *vaultCorpusSnapshot) ensureSnapshotCoreEngine(v *Vault) *core.Engine {
 	// The disk cluster is the only read-path source. Reopening it is a cheap
 	// mmap and never advances to the full build below.
 	if eng, ok := openSnapshotCoreEngineFromCSR(dbPath, signature); ok {
-		s.coreEngine = eng
-		return eng
+		return s.setBaseCoreEngine(eng)
 	}
 	// Recall surfaces run with builds disabled: a missing or stale cluster
 	// degrades to a warming snapshot and the background builder republishes.
@@ -162,9 +161,66 @@ func (s *vaultCorpusSnapshot) ensureSnapshotCoreEngine(v *Vault) *core.Engine {
 		return nil
 	}
 	s.coreOnce.Do(func() {
-		s.coreEngine = v.buildAndPersistCorpusEngine(context.Background(), signature, []byte(s.episodicCodecKey))
+		s.setBaseCoreEngine(v.buildAndPersistCorpusEngine(context.Background(), signature, []byte(s.episodicCodecKey)))
 	})
 	return s.coreEngine
+}
+
+// setBaseCoreEngine installs a freshly loaded base engine and invalidates any
+// derived view built from the previous one. Callers hold coreLoadMu.
+func (s *vaultCorpusSnapshot) setBaseCoreEngine(eng *core.Engine) *core.Engine {
+	s.coreEngine = eng
+	s.noeticEngine = nil
+	s.noeticEdgesKey = ""
+	return eng
+}
+
+// coreEngineWithNoeticCitations folds the active recollections' declared
+// citation records into a derived engine's co-citation CSR. The base engine
+// stays immutable and shared; the derived view is cached by the noetic
+// fingerprint, so a recall pays the CSR rebuild only when the trace set
+// actually changes. Engines carrying a delta overlay are used unchanged.
+func (s *vaultCorpusSnapshot) coreEngineWithNoeticCitations(v *Vault, eng *core.Engine) *core.Engine {
+	if s == nil || v == nil || eng == nil {
+		return eng
+	}
+	records, _, ok := v.noeticCacheSnapshot()
+	if !ok {
+		// A recall must see the trace written by the previous call; load once.
+		if _, err := v.loadActiveNoeticRecords(); err != nil {
+			return eng
+		}
+		records, _, ok = v.noeticCacheSnapshot()
+	}
+	if !ok || len(records) == 0 {
+		return eng
+	}
+	key := noeticCitationSetsKey(records)
+	if key == "" {
+		return eng
+	}
+	s.coreLoadMu.Lock()
+	defer s.coreLoadMu.Unlock()
+	base := s.coreEngine
+	if base == nil {
+		base = eng
+	}
+	if s.noeticEngine != nil && s.noeticEdgesKey == key {
+		return s.noeticEngine
+	}
+	sets := make([][]string, 0, len(records))
+	for _, rec := range records {
+		if len(rec.CitedUnitIDs) > 0 {
+			sets = append(sets, rec.CitedUnitIDs)
+		}
+	}
+	if len(sets) == 0 {
+		return eng
+	}
+	derived := base.WithExternalCoCitations(sets)
+	s.noeticEngine = derived
+	s.noeticEdgesKey = key
+	return derived
 }
 
 // buildAndPersistCorpusEngine materialises the full corpus engine and writes the

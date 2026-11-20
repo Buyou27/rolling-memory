@@ -218,9 +218,8 @@ func triggerConsoleStartupPrewarm() {
 
 // Switches 开发调试监控开关集合（提供给用户在面板中实时开闭，100% 向量无关 · LLM 无关）。
 type Switches struct {
-	Ledger        bool   `json:"ledger"`
-	RawWhenSparse bool   `json:"raw_when_sparse"`
-	Mode          string `json:"mode"`
+	Ledger bool   `json:"ledger"`
+	Mode   string `json:"mode"`
 	// SyncAutoWatch 自动监控同步开关（控制台只写本地配置键 `sync.auto_watch`，不涉及任何云端同步）。
 	SyncAutoWatch  bool   `json:"sync_auto_watch"`
 	WidgetEnabled  bool   `json:"widget_enabled"`
@@ -564,7 +563,6 @@ func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 		Ledger: true,
 		// 控制台只读写本地明文金库（local_plain）：运行模式读数恒为 local，
 		// 引擎配置里的 `[mode] name` 不再参与控制台路径判定。
-		RawWhenSparse:  true,
 		Mode:           modeLocal,
 		SyncAutoWatch:  true,
 		WidgetEnabled:  wEnabled,
@@ -576,9 +574,6 @@ func parseConfigSwitches(configPath string, wEnabled bool) Switches {
 	}
 	if val, ok := cfg["hooks.ledger"]; ok {
 		sw.Ledger = strings.TrimSpace(val) == "true"
-	}
-	if val, ok := cfg["recall.raw_when_sparse"]; ok {
-		sw.RawWhenSparse = strings.TrimSpace(val) == "true"
 	}
 	if val, ok := cfg["recall.delivery_window"]; ok {
 		switch strings.ToLower(strings.TrimSpace(val)) {
@@ -682,11 +677,6 @@ func applySwitchToggle(home, key, value string) error {
 			return errors.New("ledger 仅支持 true 或 false")
 		}
 		configKey = "hooks.ledger"
-	case "raw_when_sparse":
-		if value != "true" && value != "false" {
-			return errors.New("raw_when_sparse 仅支持 true 或 false")
-		}
-		configKey = "recall.raw_when_sparse"
 	case "delivery_window":
 		switch strings.ToLower(value) {
 		case "auto", "0-16", "16":

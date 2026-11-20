@@ -90,6 +90,55 @@ func (a *application) printStatus(result map[string]any) {
 		a.printf("update:   %s -> %s available (run `rolling-memory update --check`)\n",
 			pyStr(update["current_version"]), pyStr(update["latest_display"]))
 	}
+	if background := childMap(result, "background"); len(background) > 0 {
+		a.printf("background: %s\n", backgroundFreshnessLine(background))
+	}
+}
+
+// backgroundFreshnessLine renders the mount receipts in one line. Counts and ages only: a
+// stale mount is reported here, never turned into a verdict.
+func backgroundFreshnessLine(background map[string]any) string {
+	mounts := anyList(background["mounts"])
+	parts := []string{fmt.Sprintf("%d mounted", len(mounts))}
+	if age := freshnessInt(background["age_seconds"]); age > 0 {
+		parts = append(parts, "last sync "+formatFreshnessAge(age))
+	} else if _, synced := background["last_success_at"]; !synced {
+		parts = append(parts, "never synced")
+	}
+	if failing := freshnessInt(background["error_mounts"]); failing > 0 {
+		parts = append(parts, fmt.Sprintf("%d failing", failing))
+	}
+	if pending := freshnessInt(background["never_synced_mounts"]); pending > 0 {
+		parts = append(parts, fmt.Sprintf("%d never synced", pending))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func freshnessInt(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+// formatFreshnessAge picks a display unit for a whole-second age; it decides nothing else.
+func formatFreshnessAge(seconds int64) string {
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%ds ago", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("%dm ago", seconds/60)
+	case seconds < 86400:
+		return fmt.Sprintf("%dh ago", seconds/3600)
+	default:
+		return fmt.Sprintf("%dd ago", seconds/86400)
+	}
 }
 
 func (a *application) printDoctor(result map[string]any) {
