@@ -193,50 +193,6 @@ func CanonicalSchemaCarrier(raw string) string {
 	}
 }
 
-// DualTrackLocusPrefixes returns up to 4 hierarchical node prefixes (root, level-2, level-3, and full leaf)
-// plus an optional short leaf alias for Dual-Track Spatial Encoding (Track 2 graph place-node materialization).
-func DualTrackLocusPrefixes(rawLocus string) (prefixes []string, leafShortAlias string) {
-	norm := NormalizeHierarchicalPath(rawLocus)
-	if norm == "" {
-		return nil, ""
-	}
-	segs := SplitHierarchicalSegments(norm)
-	if len(segs) == 0 {
-		return nil, ""
-	}
-	for i := 1; i <= len(segs); i++ {
-		if i <= 3 || i == len(segs) {
-			prefixes = append(prefixes, strings.Join(segs[:i], "/"))
-		}
-	}
-	leafShort := segs[len(segs)-1]
-	if len(segs) >= 2 && StringShannonBits(leafShort) >= 4.0 && leafShort != norm {
-		leafShortAlias = leafShort
-	}
-	return prefixes, leafShortAlias
-}
-
-// IncarnationHierarchyPrefixes returns the ordered root-to-leaf prefixes for a hierarchical incarnation URI
-// (for example, "coding/zcode/main" -> ["coding", "coding/zcode", "coding/zcode/main"]).
-func IncarnationHierarchyPrefixes(rawIncarnation string) []string {
-	norm := NormalizeHierarchicalPath(rawIncarnation)
-	if norm == "" {
-		norm = strings.TrimSpace(rawIncarnation)
-	}
-	if norm == "" {
-		return nil
-	}
-	segs := SplitHierarchicalSegments(norm)
-	if len(segs) <= 1 {
-		return []string{norm}
-	}
-	out := make([]string, 0, len(segs))
-	for i := 1; i <= len(segs); i++ {
-		out = append(out, strings.Join(segs[:i], "/"))
-	}
-	return out
-}
-
 // ParseGitRemoteSlug extracts "<org>/<repo>" from standard SSH or HTTPS git remote URLs.
 func ParseGitRemoteSlug(remoteURL string) string {
 	u := strings.TrimSpace(remoteURL)
@@ -548,67 +504,6 @@ func parseUserNameFromGitConfig(content string) string {
 		}
 	}
 	return ""
-}
-
-// CanonicalAssistantScopeVariants returns the ordered list of equivalent scopes for an assistant's
-// first-class autonoetic memory domain, enabling zero-migration co-reading across
-// "default", legacy "mem:self", "assistant:<assistant_id>", and legacy "person:front-<id>" scopes.
-func CanonicalAssistantScopeVariants(scope, assistantID string) []string {
-	s := strings.TrimSpace(scope)
-	aid := strings.TrimSpace(assistantID)
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 5)
-	add := func(v string) {
-		v = strings.TrimSpace(v)
-		if v == "" {
-			return
-		}
-		if _, ok := seen[v]; !ok {
-			seen[v] = struct{}{}
-			out = append(out, v)
-		}
-	}
-	add(s)
-	if strings.HasPrefix(s, "assistant:") {
-		suffix := strings.TrimSpace(strings.TrimPrefix(s, "assistant:"))
-		if aid == "" {
-			aid = suffix
-		}
-		add("default")
-		add("mem:self")
-		if suffix != "" {
-			add("person:" + suffix)
-			if !strings.HasPrefix(suffix, "front-") {
-				add("person:front-" + suffix)
-			}
-		}
-	} else if s == "default" || s == "mem:self" {
-		if s == "default" {
-			add("mem:self")
-		} else {
-			add("default")
-		}
-		if aid != "" {
-			if strings.HasPrefix(aid, "assistant:") {
-				add(aid)
-			} else {
-				add("assistant:" + aid)
-			}
-		}
-	} else if strings.HasPrefix(s, "person:") {
-		suffix := strings.TrimSpace(strings.TrimPrefix(s, "person:"))
-		if suffix != "" {
-			add("assistant:" + suffix)
-		}
-		if aid != "" {
-			if strings.HasPrefix(aid, "assistant:") {
-				add(aid)
-			} else {
-				add("assistant:" + aid)
-			}
-		}
-	}
-	return out
 }
 
 // DetectHarnessFromEnv returns the harness fingerprint carried by the process

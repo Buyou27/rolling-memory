@@ -532,22 +532,6 @@ func pyPathSuffix(name string) string {
 	return name[index:]
 }
 
-func asIntDefault(value any, fallback int) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	case json.Number:
-		if parsed, err := typed.Int64(); err == nil {
-			return int(parsed)
-		}
-	}
-	return fallback
-}
-
 func workspaceProject(payload map[string]any) string {
 	raw := firstTruthy(payload["cwd"], payload["workspace"], os.Getenv("ROLLING_MEMORY_WORKSPACE"))
 	if raw == nil {

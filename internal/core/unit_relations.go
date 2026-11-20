@@ -684,8 +684,26 @@ func (e *Engine) evalPairFromProfilesQ(st *rmClusterState, u int32, profU unitGr
 func (e *Engine) evalPairFromProfilesQLocal(st *rmClusterState, u int32, profU unitGroupProfile, v int32, profV unitGroupProfile, qSet map[uint64]struct{}, sc *rmQueryScratch) UnitRelationPeer {
 	idx := e.Index
 	ix := intersectGroupProfiles(profU, profV, true)
+	// Exact precondition of intraEventEndorseGain's unconditional gates: a pair
+	// that already fails the coverage gates contributes 0 regardless of the
+	// directed explanation work, so return before the O(positions) kernels.
+	harmCov := harmonicCoverage(ix.SelfCoverage, ix.PeerCoverage)
+	if harmCov < transmissionPerHop || harmCov >= identityFloor ||
+		ix.SelfCoverage < transmissionPerHop || ix.PeerCoverage < transmissionPerHop {
+		return UnitRelationPeer{
+			UnitID: idx.UnitIDs[v], Unit: v,
+			SelfCoverage: ix.SelfCoverage, PeerCoverage: ix.PeerCoverage,
+		}
+	}
 
 	subjCos := st.docSubjectCosLocal(idx, sc, u, v)
+	if subjCos < transmissionTwoHop {
+		return UnitRelationPeer{
+			UnitID: idx.UnitIDs[v], Unit: v,
+			SelfCoverage: ix.SelfCoverage, PeerCoverage: ix.PeerCoverage,
+			SubjectCosine: subjCos,
+		}
+	}
 	tempAff := st.temporalAffinity(idx, u, v)
 	if st.hasCitationEdge(u, v) || st.hasCoCitationEdge(u, v) {
 		tempAff = math.Max(tempAff, transmissionPerHop)

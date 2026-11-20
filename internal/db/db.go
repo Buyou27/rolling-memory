@@ -17,7 +17,7 @@ import (
 
 	"github.com/rocareer/rolling-memory/internal/ids"
 	"github.com/rocareer/rolling-memory/internal/version"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 //go:embed schema_vault.sql
@@ -96,6 +96,22 @@ func (p StorageProfile) normalized() StorageProfile {
 // the pool ever creates keeps it, not just the first one. A failed WAL switch
 // degrades to the rollback journal.
 func Connect(path string, profile StorageProfile) (*sql.DB, error) {
+	return openSQLite(path, profile, nil)
+}
+
+// OpenCounting opens the same vault pool as Connect with a driver wrapper that counts the
+// statements sent to SQLite. Measurement paths use it; the product opens through Connect so
+// the counting wrapper never rides a user session.
+func OpenCounting(path string, profile StorageProfile) (*sql.DB, *SQLStats, error) {
+	stats := &SQLStats{}
+	connection, err := openSQLite(path, profile, stats)
+	if err != nil {
+		return nil, nil, err
+	}
+	return connection, stats, nil
+}
+
+func openSQLite(path string, profile StorageProfile, stats *SQLStats) (*sql.DB, error) {
 	profile = profile.normalized()
 	dbPath := expandHome(path)
 	memory := dbPath == ":memory:"
@@ -141,9 +157,19 @@ func Connect(path string, profile StorageProfile) (*sql.DB, error) {
 	if profile.CacheSize != 0 {
 		dsn += "&_pragma=cache_size(" + strconv.Itoa(profile.CacheSize) + ")"
 	}
-	connection, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
+	var connection *sql.DB
+	if stats != nil {
+		connector, connectorErr := sqlite.NewConnector(dsn)
+		if connectorErr != nil {
+			return nil, connectorErr
+		}
+		connection = sql.OpenDB(&countingConnector{inner: connector, stats: stats})
+	} else {
+		var err error
+		connection, err = sql.Open("sqlite", dsn)
+		if err != nil {
+			return nil, err
+		}
 	}
 	connection.SetMaxOpenConns(1)
 	connection.SetMaxIdleConns(1)

@@ -165,6 +165,14 @@ func (a *application) dispatch() int {
 		return a.runIngestd()
 	case "scan":
 		return a.runScan()
+	case "perf":
+		// Measurement runs on its own throwaway vaults, so it must not require (or open)
+		// a configured vault first.
+		code, err := a.runPerfCommand()
+		if err != nil {
+			return a.fail(err)
+		}
+		return code
 	case "hook":
 		return a.runHook()
 	case "init":

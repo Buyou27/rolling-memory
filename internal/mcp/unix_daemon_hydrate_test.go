@@ -167,7 +167,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 		t.Fatalf("explicit alternate source returned content: %d %+v", status, out)
 	}
 	sourcePath := filepath.Join(home, ".zcode", "cli", "db", "db.sqlite")
-	sourceDB, err := sql.Open("sqlite", sourcePath)
+	sourceDB, err := sql.Open("sqlite", sourcePath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestUnixDaemonHydrateCanonicalSegments(t *testing.T) {
 	}
 
 	// A resegmented source returns the digest-matching text and its actual position.
-	sourceDB, err = sql.Open("sqlite", sourcePath)
+	sourceDB, err = sql.Open("sqlite", sourcePath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

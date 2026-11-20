@@ -66,18 +66,6 @@ func fact(s, x string, o any) map[string]any {
 	}
 }
 
-func rememberOne(t *testing.T, memory *facade.Memory, content, s, x string, o any) map[string]any {
-	t.Helper()
-	receipt, err := memory.Remember(facade.RememberRequest{
-		Content: strPtr(content), AnchorText: strPtr(content), Assertion: fact(s, x, o),
-		Author: "user", AutoSync: boolPtr(false),
-	})
-	if err != nil {
-		t.Fatalf("remember: %v", err)
-	}
-	return receipt
-}
-
 func TestStatusAndDoctor(t *testing.T) {
 	memory := newMemory(t)
 	status, err := memory.Status("mem:test")

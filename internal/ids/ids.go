@@ -709,14 +709,6 @@ func FormatTime(epoch int64, empty string) string {
 	return time.Unix(epoch, 0).In(time.Local).Format("2006-01-02")
 }
 
-// FormatTimeUTC formats epoch as a UTC YYYY-MM-DD date.
-func FormatTimeUTC(epoch int64, empty string) string {
-	if epoch == 0 {
-		return empty
-	}
-	return time.Unix(epoch, 0).UTC().Format("2006-01-02")
-}
-
 // FormatTimeSeconds formats epoch as a local YYYY-MM-DD HH:MM:SS timestamp with
 // its numeric UTC offset. Recall delivery labels use this shape so a reader
 // never has to guess the zone behind a clock reading, and same-day moments stay
@@ -1195,30 +1187,11 @@ func QuotePyString(value string) string {
 	return "'" + escaped + "'"
 }
 
-// ShortHash keeps the leading eight bytes of a digest string for anchors and
-// diagnostics; shorter values pass through unchanged. Digests are ASCII hex, so
-// the byte cut is also a character cut.
-func ShortHash(value string) string {
-	if len(value) <= 8 {
-		return value
-	}
-	return value[:8]
-}
-
 // DerefString dereferences an optional string for value rendering: nil becomes
 // the empty string.
 func DerefString(value *string) string {
 	if value == nil {
 		return ""
-	}
-	return *value
-}
-
-// OptionalString maps an optional string onto Python's None convention for
-// payload fields: nil becomes nil, present values pass through.
-func OptionalString(value *string) any {
-	if value == nil {
-		return nil
 	}
 	return *value
 }

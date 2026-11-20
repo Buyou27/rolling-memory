@@ -582,13 +582,6 @@ func plainLine(value any) string {
 
 // ------------------------------------------------------------------ helpers
 
-func pickCap(value *int, fallback int) int {
-	if value == nil || *value == 0 {
-		return fallback
-	}
-	return *value
-}
-
 func asString(value any) string {
 	switch typed := value.(type) {
 	case nil:

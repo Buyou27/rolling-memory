@@ -40,13 +40,6 @@ const (
 	LegacyDefaultScope = "mem:self"
 )
 
-// IsDefaultScope reports whether scope refers to the default personal memory
-// namespace ("default", empty, or legacy "mem:self").
-func IsDefaultScope(scope string) bool {
-	clean := strings.TrimSpace(scope)
-	return clean == "" || clean == DefaultScope || clean == LegacyDefaultScope
-}
-
 // WorkspaceScopeName derives a per-workspace scope name: the
 // ROLLING_MEMORY_LOCUS override wins, otherwise the working directory basename
 // (the same rule the persona locus uses, so scope and locus never disagree).

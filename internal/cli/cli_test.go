@@ -578,11 +578,6 @@ func readFile(t *testing.T, path string) string {
 	return string(raw)
 }
 
-func asInt64(value any) int64 {
-	number, _ := value.(float64)
-	return int64(number)
-}
-
 func TestCheckExitsOneOnError(t *testing.T) {
 	env := newEnv(t)
 	db, err := sql.Open("sqlite", filepath.Join(env.base, "memory.db")+"?_pragma=busy_timeout(5000)")

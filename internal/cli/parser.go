@@ -963,6 +963,19 @@ func BuildParser() *Parser {
 		},
 	}
 
+	perfCmd := &command{
+		Name: "perf", Path: []string{"perf"},
+		Help:    "measurement harness: per-unit storage cost at several corpus sizes",
+		Options: commonOptions(), SubDest: "perf_command", DefaultSub: "slope",
+	}
+	perfCmd.Subcommands = []*command{
+		{
+			Name: "slope", Path: []string{"perf", "slope"}, Options: append(commonOptions(),
+				stringOption([]string{"--files"}, "files", "100,300,600", "comma-separated corpus sizes measured on throwaway vaults"),
+				stringOption([]string{"--dir"}, "dir", nil, "keep measurement artifacts in this directory")),
+		},
+	}
+
 	daemonCmd := &command{
 		Name: "daemon", Path: []string{"daemon"},
 		Help:    "control the shared local engine daemon (status, start, stop, restart)",
@@ -1118,7 +1131,7 @@ func BuildParser() *Parser {
 		importCmd, syncCmd, backgroundCmd, mcpCmd, buildCmd, ingestdCmd, scanCmd, hookCmd,
 		statusCmd, doctorCmd, checkCmd, installCmd, evalCmd,
 		ejectCmd, efficacyCmd, panelCmd, updateCmd,
-		maintainCmd, daemonCmd, engineCmd,
+		maintainCmd, perfCmd, daemonCmd, engineCmd,
 	}
 	for _, sub := range root.Subcommands {
 		sub.Path = []string{sub.Name}

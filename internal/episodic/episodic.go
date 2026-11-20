@@ -572,14 +572,6 @@ func JSONLTurnSegments(path string, turnIndex int) ([]Segment, error) {
 // parseJSONLLine extracts one speaker row of a harness transcript. It accepts the
 // shapes the supported harnesses write (`message`/`payload` envelopes with string
 // or block-list content) and returns one text per content block: a segment is a
-// part, never a merged message.
-// ParseJSONLSpeech parses one JSONL speech row using the same rules as turn scans.
-func ParseJSONLSpeech(line string) (role string, texts []string, occurredAt int64) {
-	if isJSONLToolCallLine(line) {
-		return "", nil, 0
-	}
-	return parseJSONLLine(line)
-}
 
 func parseJSONLLine(line string) (role string, texts []string, occurredAt int64) {
 	trimmed := strings.TrimSpace(line)

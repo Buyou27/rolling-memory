@@ -503,32 +503,6 @@ func stringList(t *testing.T, value any) []string {
 	return result
 }
 
-func firstNodeConfidence(t *testing.T, result map[string]any) float64 {
-	t.Helper()
-	bands, ok := result["bands"].([]any)
-	if !ok {
-		t.Fatalf("bands: %#v", result["bands"])
-	}
-	for _, band := range bands {
-		nodes, ok := asMap(t, band)["nodes"].([]any)
-		if !ok {
-			continue
-		}
-		for _, node := range nodes {
-			values := asMap(t, node)
-			if raw, present := values["confidence"]; present {
-				number, err := raw.(json.Number).Float64()
-				if err != nil {
-					t.Fatalf("confidence: %#v", raw)
-				}
-				return number
-			}
-		}
-	}
-	t.Fatal("no band node carries a confidence")
-	return 0
-}
-
 func TestUnknownToolAndParamErrors(t *testing.T) {
 	memory := newMemory(t)
 	responses := runSession(t, memory,
