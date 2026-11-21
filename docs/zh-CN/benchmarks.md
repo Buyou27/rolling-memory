@@ -16,7 +16,7 @@ Rolling Memory 提供一条命令、协议冻结的评测运行器（`rmem eval`
 
 **数据许可**：两套语料均由上游作者以 **CC BY-NC 4.0**（非商业）发布 —— ATM-Bench 数据集卡片原文为 “This dataset is released under CC BY-NC 4.0. The accompanying code is released under the MIT License.”（数据：<https://huggingface.co/datasets/Jingbiao/ATM-Bench>）；LoCoMo 仓库自带 CC BY-NC 4.0 的 `LICENSE.txt`（<https://github.com/snap-research/locomo>）。基于上述非商业条款，两套语料及派生的题集文件均**不随本仓库或其发布资产分发**；请按上游条款从上游项目获取，并以 §1.2 的摘要钉住。
 
-**一条命令取数**：`rmem eval --fetch atm --accept-upstream-license` 会从钉住的 Hugging Face revision 下载必要 ATM-Bench 文件（约 35 MB：邮件、图像/视频预处理字幕与两套题集），在本机重建 pinned 语料与题集，对照下方 `SHA-256` 摘要校验后直接开始评测。`rmem eval --fetch locomo --accept-upstream-license` 对 LoCoMo 同样一步到位：下载上游 `locomo10.json`（约 2.8 MB，钉住 revision），在本机确定性重建上游官方 cat1-4 题集（1,540 题，随附官方证据）与 5,882 轮语料，并在 `UPSTREAM-PROVENANCE.json` 记录上游 revision 与重建摘要。下载行为遵循上游数据许可（CC BY-NC 4.0），需由该旗标显式接受；`--fetch-only` 只取数不评测，重复运行会跳过摘要已一致的文件。数据落在你的本地数据目录（用 `--eval-data <dir>` 时 ATM 为 `<dir>/atmbench`，LoCoMo 用数据目录根）。
+**一条命令取数**：`rmem eval --fetch-only --fetch atm --accept-upstream-license` 会从钉住的 Hugging Face revision 下载必要 ATM-Bench 文件（约 35 MB：邮件、图像/视频预处理字幕与两套题集），在本机重建 pinned 语料与题集，对照下方 `SHA-256` 摘要校验后即完成取数，不进入评测。评测另跑 `rmem eval --suite atm --tier 1013 --answerer none --judge off --top-k 50`（Hard-31 用 `--tier hard`）。`rmem eval --fetch-only --fetch locomo --accept-upstream-license` 对 LoCoMo 同样一步到位：下载上游 `locomo10.json`（约 2.8 MB，钉住 revision），在本机确定性重建上游官方 cat1-4 题集（1,540 题，随附官方证据）与 5,882 轮语料，并在 `UPSTREAM-PROVENANCE.json` 记录上游 revision 与重建摘要。下载行为遵循上游数据许可（CC BY-NC 4.0），需由该旗标显式接受；只给 `--fetch <target>` 时会在取数后停在取数阶段；显式加上 `--suite` 才会在同一条命令里继续进入评测，并按你配置的答题/判官通道执行；重复运行会跳过摘要已一致的文件。数据落在你的本地数据目录（用 `--eval-data <dir>` 时 ATM 为 `<dir>/atmbench`，LoCoMo 用数据目录根）。
 
 | 基准 | 上游来源 | 语料 |
 |---|---|---|
@@ -59,7 +59,7 @@ ATM-Bench atmbench/corpus.jsonl.gz      c9c4cc55dd3be147638121765b5dc7b8321a5e29
 ATM-Bench atmbench/tiers/questions-1013.json  3c4cbf84deeb158c78d515626a540908878d304ce0cda5c8e2ae7e52c6b878a2
 ATM-Bench atmbench/tiers/questions-hard.json  f6f63ff196a9f1de5715e35b328d4e80ca80311f2e2eae8028e7cb60e87ad37e
 
-# 上游文件 pin（由 `rmem eval --fetch locomo` 校验）：
+# 上游文件 pin（由 `rmem eval --fetch-only --fetch locomo` 校验）：
 #   data/locomo10.json  79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4（revision 3eb6f2c5）
 
 # 归档 LoCoMo 包（仅存档历史读数溯源用；不再分发，亦不可逐位复刻——旧文件内嵌构建时间戳）：
@@ -71,7 +71,7 @@ ATM-Bench atmbench/tiers/questions-hard.json  f6f63ff196a9f1de5715e35b328d4e80ca
 
 ATM-Bench 语料摘要另以强制 pin 形式编入运行器：重打包后与之不符的语料会在任何题目被打分之前就被拒绝。
 
-**诚实说明（派生件）**：ATM-Bench 题集为项目派生且可确定性重建：`rmem eval --fetch atm` 在你的机器上从钉住的上游 revision 重建语料与两档题集，并对照上表 `SHA-256` 摘要校验——校验通过即与公布读数使用同一评测输入。两档题集逐字节一致；语料按「容器字节 / 解压流 / 逐条内容摘要」三者之一校验，因为语料完全相同的时候，gzip 容器本身仍可能随 Go 工具链不同。LoCoMo 题集以上游官方为准：`rmem eval --fetch locomo` 从钉住的上游 revision 确定性重建官方 cat1-4 全集（1,540），并在 `UPSTREAM-PROVENANCE.json` 记录上游 revision 与重建摘要；它与归档历史包**不是逐位一致**（旧文件内嵌构建时间戳与未公开的中间池），历史包不再分发。便捷档 100/200 任何形态均不再提供。
+**诚实说明（派生件）**：ATM-Bench 题集为项目派生且可确定性重建：`rmem eval --fetch-only --fetch atm` 在你的机器上从钉住的上游 revision 重建语料与两档题集，并对照上表 `SHA-256` 摘要校验——校验通过即与公布读数使用同一评测输入。两档题集逐字节一致；语料按「容器字节 / 解压流 / 逐条内容摘要」三者之一校验，因为语料完全相同的时候，gzip 容器本身仍可能随 Go 工具链不同。LoCoMo 题集以上游官方为准：`rmem eval --fetch-only --fetch locomo` 从钉住的上游 revision 确定性重建官方 cat1-4 全集（1,540），并在 `UPSTREAM-PROVENANCE.json` 记录上游 revision 与重建摘要；它与归档历史包**不是逐位一致**（旧文件内嵌构建时间戳与未公开的中间池），历史包不再分发。便捷档 100/200 任何形态均不再提供。
 
 ### 1.3 执行面
 

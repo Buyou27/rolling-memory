@@ -755,7 +755,7 @@ func BuildParser() *Parser {
 		stringOption([]string{"--probes"}, "probes", nil,
 			"adversarial probe directory (MANIFEST.json + absence/conflict JSONL; used with --suite atm-probes)"),
 		stringOption([]string{"--fetch"}, "fetch", nil,
-			"download upstream benchmark data before running (atm = ATM-Bench from Hugging Face, ~35 MB, rebuilt locally into the pinned form; locomo = LoCoMo10 annotations from the upstream repository, ~2.8 MB, rebuilt into the official cat1-4 question set)"),
+			"download upstream benchmark data, rebuild and verify it, then stop (add --suite to run the evaluation in the same invocation; atm = ATM-Bench from Hugging Face, ~35 MB, rebuilt locally into the pinned form; locomo = LoCoMo10 annotations from the upstream repository, ~2.8 MB, rebuilt into the official cat1-4 question set)"),
 		flagOption([]string{"--fetch-only"}, "fetch_only", false,
 			"only download + rebuild + verify the upstream data, then exit"),
 		stringOption([]string{"--fetch-revision"}, "fetch_revision", nil,

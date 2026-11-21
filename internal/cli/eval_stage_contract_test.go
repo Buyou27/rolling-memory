@@ -38,3 +38,27 @@ func TestEvalStandaloneStagesFailClosed(t *testing.T) {
 		t.Fatalf("eval jobs exited %d:\n%s\n%s", code, stdout.String(), stderr.String())
 	}
 }
+
+// TestFetchRunsEvaluationRequiresExplicitSuite locks the fetch safety contract:
+// a bare --fetch stages data and stops; only an explicit --suite continues into
+// the evaluation, and --fetch-only always wins.
+func TestFetchRunsEvaluationRequiresExplicitSuite(t *testing.T) {
+	cases := []struct {
+		name          string
+		explicitSuite bool
+		fetchOnly     bool
+		want          bool
+	}{
+		{"bare fetch stops", false, false, false},
+		{"bare fetch with fetch-only stops", false, true, false},
+		{"explicit suite runs", true, false, true},
+		{"fetch-only wins over explicit suite", true, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fetchRunsEvaluation(tc.explicitSuite, tc.fetchOnly); got != tc.want {
+				t.Fatalf("fetchRunsEvaluation(%v, %v) = %v, want %v", tc.explicitSuite, tc.fetchOnly, got, tc.want)
+			}
+		})
+	}
+}

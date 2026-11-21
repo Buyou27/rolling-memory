@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-11-21
+
+### Changed
+
+- `rmem eval --fetch <target>` now stops after staging and verifying the upstream data; the evaluation continues in the same invocation only when an explicit `--suite` is given, and `--fetch-only` keeps forcing the staging stop. This removes the previous surprise where a plain fetch command ran a full (possibly paid) evaluation.
+- ATM-Bench retrieval reports record the build toolchain (`go_version`, `go_os`, `go_arch`), and the official runner prints them beside the metrics, so a cross-machine reading can be attributed before it is compared with the published numbers.
+- Query planning now avoids repeated group lookups, folds sentence groups with a counting scatter, keeps small endorsement batches serial, specializes single-position slot scans, and tabulates term-repeat gain. Kernel differential tests pin the folded sequence and the slot scan. ATM-Bench remains Main-1013 R@10 82.77%, Hard-31 R@10 52.43%, composite 73.67 (7366.8 bps), and the per-question ranking sets are identical.
+
+### Fixed
+
+- The df=0 inferred ordinal-day dispatch now uses the same exact `κ_occ` estimator (`calendarConcentration(1, dfDay, M)`) as the term path instead of the retired `(n−1)/(n+2)` shrink. The change is score-neutral: ATM-Bench remains Main-1013 R@10 82.77%, Hard-31 R@10 52.43%, composite 73.67 (7366.8 bps), and the per-question ranking sets are unchanged.
+
 ## [0.0.9] - 2026-11-21
 
 ### Added
@@ -191,7 +203,8 @@ Initial public release.
 - **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
 - **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
 
-[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/rocareer/rolling-memory/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/rocareer/rolling-memory/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/rocareer/rolling-memory/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/rocareer/rolling-memory/compare/v0.0.6...v0.0.7

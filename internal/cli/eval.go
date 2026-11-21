@@ -78,23 +78,30 @@ func (a *application) runEval() int {
 		return a.fail(fmt.Errorf("`eval %s` is not a standalone stage yet; run `rolling-memory eval` for the full pipeline (import → ingest → run → grade), or `eval jobs` / `eval status` for the out-dir ledger", sub))
 	}
 	suite := firstNonEmptyString(a.args.String("suite"), eval.SuiteLoCoMo)
-	// `--fetch atm` 取数并本地重建后继续本次评测；`--fetch-only` 只取数不跑评测。
+	// `--fetch <target>` 取数并本地重建后停在取数阶段；只有显式给出 `--suite`
+	// 才在同一条命令里继续评测。`--fetch-only` 强制停在该阶段。
 	if fetchTarget := strings.TrimSpace(a.args.String("fetch")); fetchTarget != "" {
-		if strings.EqualFold(fetchTarget, "atm") && !a.args.provided["suite"] {
+		explicitSuite := a.args.provided["suite"]
+		if strings.EqualFold(fetchTarget, "atm") && !explicitSuite {
 			suite = eval.SuiteATM
 		}
 		report, view, err := a.doEvalFetch()
 		if err != nil {
 			return a.fail(err)
 		}
-		if a.args.Flag("fetch_only") {
+		if !fetchRunsEvaluation(explicitSuite, a.args.Flag("fetch_only")) {
 			if err := a.emit(report, func() { a.printFetchSummary(view) }); err != nil {
 				return a.fail(err)
+			}
+			if !a.args.Flag("fetch_only") {
+				evalLogWriter(a.args.Flag("json"), a.printf, func(format string, args ...any) {
+					fmt.Fprintf(os.Stderr, format+"\n", args...)
+				})("未指定 --suite，已停在取数阶段；要在同一条命令里继续评测，请显式加 --suite %s。", suite)
 			}
 			return 0
 		}
 	} else if a.args.Flag("fetch_only") {
-		return a.fail(errors.New("--fetch-only 需要同时指定 --fetch atm"))
+		return a.fail(errors.New("--fetch-only 需要同时指定 --fetch atm|locomo"))
 	}
 	storePath := a.args.String("eval_store")
 	if storePath == "" {
@@ -218,6 +225,12 @@ func evalLogWriter(jsonMode bool, stdout, stderr func(string, ...any)) func(stri
 		return func(format string, args ...any) { stdout(format+"\n", args...) }
 	}
 	return func(format string, args ...any) { stderr(format+"\n", args...) }
+}
+
+// fetchRunsEvaluation 报告一次 --fetch 调用是否继续进入评测：裸取数只就位数，
+// 调用方必须显式给出 --suite。--fetch-only 恒停在取数阶段。
+func fetchRunsEvaluation(explicitSuite, fetchOnly bool) bool {
+	return explicitSuite && !fetchOnly
 }
 
 func intOr(value, fallback int) int {

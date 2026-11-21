@@ -26,7 +26,16 @@ func init() {
 	endorsePairDispatch = dispatchEndorsePairs
 }
 
+// endorseDispatchProbe is installed only by measurement tests; nil in production.
+var endorseDispatchProbe func(n int)
+
+// SetEndorseDispatchProbe installs the dispatch-size hook; nil removes it.
+func SetEndorseDispatchProbe(fn func(n int)) { endorseDispatchProbe = fn }
+
 func dispatchEndorsePairs(n int, eval endorsePairEval) []float64 {
+	if endorseDispatchProbe != nil {
+		endorseDispatchProbe(n)
+	}
 	out := make([]float64, n)
 	if n <= 1 {
 		return out
@@ -40,6 +49,18 @@ func dispatchEndorsePairs(n int, eval endorsePairEval) []float64 {
 	}
 	if workers < 1 {
 		workers = 1
+	}
+	// Below four evaluations per worker the fixed goroutine spawn and wakeup
+	// cost dominates the parallel gain; keep identical coverage in one loop.
+	if n <= 4*workers {
+		local := &rmQueryScratch{}
+		for i := 1; i < n; i++ {
+			out[i] = eval(i, local)
+			if endorseWorkersOverride > 0 {
+				endorseUnitEvaluations.Add(1)
+			}
+		}
+		return out
 	}
 	var next atomic.Int64
 	var wg sync.WaitGroup

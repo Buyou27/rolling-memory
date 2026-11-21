@@ -18,6 +18,28 @@ func gateAt(unitStructGate []float64, u int32) float64 {
 	return 1.0
 }
 
+// docRepeatTable holds log(max(1, tf)) clamped to one for the common term
+// frequencies; only tf==2 survives the clamp unchanged.
+var docRepeatTable = func() [256]float64 {
+	var t [256]float64
+	t[2] = math.Log(2)
+	for i := 3; i < len(t); i++ {
+		t[i] = 1
+	}
+	return t
+}()
+
+// docRepeats converts a term frequency to log(max(1, tf)) clamped to one.
+func docRepeats(tf int32) float64 {
+	if tf >= 0 && tf < int32(len(docRepeatTable)) {
+		return docRepeatTable[tf]
+	}
+	if tf < 0 {
+		return 0
+	}
+	return 1
+}
+
 func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions map[uint64][]TermPosition, topK int) []Hit {
 	idx := e.Index
 	st := e.ensureClusterState()
@@ -706,7 +728,11 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			dfDay := float64(len(dayUnits))
 			baseline = math.Log1p((float64(idx.N) - dfDay + 0.5) / (dfDay + 0.5))
 			if len(dayUnits) > 1 && totalDaysM > 0 {
-				kOcc := (dfDay - 1.0) / (dfDay + 2.0)
+				// The dispatch term is the day itself: every observed unit falls on
+				// that single calendar day, so dObs = 1. Reuse the same exact
+				// null-occupancy estimator as the term path; a private (n-1)/(n+2)
+				// shrink here would be a second implementation of κ_occ.
+				kOcc := calendarConcentration(1, dfDay, totalDaysM)
 				baseline *= 1.0 + kOcc*transmissionPerHop
 			}
 			weight := baseline
@@ -878,10 +904,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			c := &candidates[p.unit]
 			unitEntries := st.docEntriesOf(p.unit)
 			docEntry := unitEntries[p.entry]
-			repeats := math.Log(math.Max(1, float64(docEntry.tf)))
-			if repeats > 1.0 {
-				repeats = 1.0
-			}
+			repeats := docRepeats(docEntry.tf)
 			if detachedFrag[group] {
 				repeats *= transmissionPerHop
 			}
@@ -1014,10 +1037,7 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 			var repeats float64
 			if c.matches[0].entry >= 0 {
 				unitEntries := st.docEntriesOf(u)
-				repeats = math.Log(math.Max(1, float64(unitEntries[c.matches[0].entry].tf)))
-				if repeats > 1.0 {
-					repeats = 1.0
-				}
+				repeats = docRepeats(unitEntries[c.matches[0].entry].tf)
 			}
 			if detachedFrag[c.matches[0].group] {
 				repeats *= transmissionPerHop

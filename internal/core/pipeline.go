@@ -1532,6 +1532,52 @@ func closestPackedSlot(left, right []uint32) int {
 	if nL == 0 || nR == 0 {
 		return -1
 	}
+	// Single-position entries are the common case for terms that occur once;
+	// compare directly instead of running the two-pointer bookkeeping.
+	if nL == 1 {
+		sent := left[0] >> 16
+		lSlot := int(left[0] & 0xFFFF)
+		y := 0
+		for y < nR && right[y]>>16 < sent {
+			y++
+		}
+		best := -1
+		for ; y < nR && right[y]>>16 == sent; y++ {
+			diff := lSlot - int(right[y]&0xFFFF)
+			if diff < 0 {
+				diff = -diff
+			}
+			if best < 0 || diff < best {
+				best = diff
+				if best == 0 {
+					return 0
+				}
+			}
+		}
+		return best
+	}
+	if nR == 1 {
+		sent := right[0] >> 16
+		rSlot := int(right[0] & 0xFFFF)
+		x := 0
+		for x < nL && left[x]>>16 < sent {
+			x++
+		}
+		best := -1
+		for ; x < nL && left[x]>>16 == sent; x++ {
+			diff := rSlot - int(left[x]&0xFFFF)
+			if diff < 0 {
+				diff = -diff
+			}
+			if best < 0 || diff < best {
+				best = diff
+				if best == 0 {
+					return 0
+				}
+			}
+		}
+		return best
+	}
 	if (left[nL-1]>>16) < (right[0]>>16) || (right[nR-1]>>16) < (left[0]>>16) {
 		return -1
 	}

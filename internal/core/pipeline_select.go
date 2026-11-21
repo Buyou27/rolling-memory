@@ -83,15 +83,50 @@ func (st *rmClusterState) closestFamilySlotExact(entries []rmDocEntry, a, b rmFe
 	return best
 }
 
+// proxPairProbe and structureCallProbe are installed only by measurement
+// tests; the nil checks keep production cost at one branch per call.
+var (
+	proxPairProbe      func(pairs int)
+	structureCallProbe func(entries int)
+)
+
+// SetProxPairProbe installs the pair-count hook; nil removes it.
+func SetProxPairProbe(fn func(pairs int)) { proxPairProbe = fn }
+
+// SetStructureCallProbe installs the structure-call hook; nil removes it.
+func SetStructureCallProbe(fn func(entries int)) { structureCallProbe = fn }
+
 func (st *rmClusterState) rmProximityAndSynergy(c *rmCandidate, groups map[uint64]float64, total float64) (float64, float64) {
 	if total <= 0 || len(c.matches) < 2 {
 		return 0, 0
 	}
+	if proxPairProbe != nil {
+		proxPairProbe(len(c.matches) * (len(c.matches) - 1) / 2)
+	}
 	entries := st.docEntriesOf(c.unit)
+	n := len(c.matches)
+	var gwBuf [32]float64
+	var gws []float64
+	if n <= len(gwBuf) {
+		gws = gwBuf[:n]
+	} else {
+		gws = make([]float64, n)
+	}
+	for i := range c.matches {
+		gws[i] = groups[c.matches[i].group]
+	}
 	var prox, syn float64
-	for i, a := range c.matches {
-		ma := groups[a.group]
-		for _, b := range c.matches[i+1:] {
+	for i := range c.matches {
+		a := c.matches[i]
+		ma := gws[i]
+		for j := i + 1; j < n; j++ {
+			b := c.matches[j]
+			mb := gws[j]
+			// Both pair channels are exactly zero when neither the group
+			// weights nor the two masses can contribute; skip the distance scan.
+			if ma+mb <= 0 && (a.mass <= 0 || b.mass <= 0) {
+				continue
+			}
 			closest := st.closestFamilySlot(entries, a, b)
 			if closest < 0 {
 				continue
@@ -100,9 +135,13 @@ func (st *rmClusterState) rmProximityAndSynergy(c *rmCandidate, groups map[uint6
 			if d < 1 {
 				d = 1
 			}
-			mb := groups[b.group]
 			if ma+mb > 0 {
-				prox += 2 * ma * mb / (ma + mb) * math.Exp(-(d-1)*transmissionPerHop)
+				if d == 1 {
+					// exp(-(d-1)*c) = exp(-0) = 1 exactly.
+					prox += 2 * ma * mb / (ma + mb)
+				} else {
+					prox += 2 * ma * mb / (ma + mb) * math.Exp(-(d-1)*transmissionPerHop)
+				}
 			}
 			syn += a.mass * (b.mass / total) * math.Exp(-d*transmissionTwoHop)
 		}
@@ -119,8 +158,22 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 		return 0
 	}
 	entries := st.docEntriesOf(c.unit)
+	if structureCallProbe != nil {
+		structureCallProbe(len(entries))
+	}
 	highDFThresh := idx.HighDFThreshold()
 	wide := st.hasWidePos()
+
+	effG := sc.docEntryEffGroup
+	if cap(effG) < len(entries) {
+		effG = make([]uint64, len(entries))
+	} else {
+		effG = effG[:len(entries)]
+	}
+	sc.docEntryEffGroup = effG
+	for ei := range entries {
+		effG[ei] = effectiveEntryGroup(entries[ei], idx, highDFThresh)
+	}
 
 	matchedDG := sc.matchedDG[:0]
 	maxActiveSent := -1
@@ -139,7 +192,7 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 				maxActiveSent = s
 			}
 		}
-		dg := effectiveEntryGroup(entry, idx, highDFThresh)
+		dg := effG[eIdx]
 		for _, prev := range matchedDG {
 			if prev == dg {
 				return
@@ -170,8 +223,9 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 	// background sentences are never collected or sorted.
 	docGW := sc.docGroupW[:0]
 	activeSentList := sc.anchorPacked[:0]
-	for _, entry := range entries {
-		g := effectiveEntryGroup(entry, idx, highDFThresh)
+	for ei := range entries {
+		entry := entries[ei]
+		g := effG[ei]
 		if !isMatchedDG(g) {
 			continue
 		}
@@ -213,7 +267,8 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 			activeSent[s] = sGen
 		}
 		sentGW := sc.sentGroupW[:0]
-		for _, entry := range entries {
+		for ei := range entries {
+			entry := entries[ei]
 			posList := st.entryPositionsOf(entry)
 			if len(posList) == 0 {
 				continue
@@ -236,7 +291,7 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 			if !ok || math.IsNaN(w) || math.IsInf(w, 0) || w <= 0 {
 				continue
 			}
-			g := effectiveEntryGroup(entry, idx, highDFThresh)
+			g := effG[ei]
 			for pi := range posList {
 				s := int(posList[pi] >> 16)
 				if wide {
@@ -258,7 +313,7 @@ func (st *rmClusterState) computeStructuredIncrement(idx *Index, sc *rmQueryScra
 			clear(sentTotals)
 			clear(sentOverlaps)
 
-			for _, item := range sortAndFoldSentGroups(sentGW) {
+			for _, item := range sc.foldSentGroups(sentGW) {
 				sentTotals[item.sent] += item.weight
 				if isMatchedDG(item.group) {
 					sentOverlaps[item.sent] += item.weight

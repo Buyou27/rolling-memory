@@ -206,6 +206,85 @@ func sortAndFoldSentGroups(sentGW []rmStructSentGroupW) []rmStructSentGroupW {
 	return sentGW[:w]
 }
 
+// foldSentGroups folds (sentence, group, weight) occurrences to one maximum
+// weight per (sentence, group), ordered by ascending sentence then ascending
+// group. When the sentence span is proportional to the input size it buckets by
+// sentence with a counting scatter, avoiding a global comparison sort; the
+// folded sequence is identical either way.
+func (sc *rmQueryScratch) foldSentGroups(src []rmStructSentGroupW) []rmStructSentGroupW {
+	if len(src) <= 1 {
+		return src
+	}
+	minSent, maxSent := src[0].sent, src[0].sent
+	for _, item := range src[1:] {
+		if item.sent < minSent {
+			minSent = item.sent
+		}
+		if item.sent > maxSent {
+			maxSent = item.sent
+		}
+	}
+	span := maxSent - minSent + 1
+	// A counting scatter costs O(span + n); a comparison sort costs O(n log n).
+	if span <= 0 || span > 4*len(src) {
+		return sortAndFoldSentGroups(src)
+	}
+	counts := sc.sentSortCounts
+	if cap(counts) < span+1 {
+		counts = make([]int32, span+1)
+	} else {
+		counts = counts[:span+1]
+		clear(counts)
+	}
+	for _, item := range src {
+		counts[item.sent-minSent+1]++
+	}
+	for i := 1; i < len(counts); i++ {
+		counts[i] += counts[i-1]
+	}
+	cursor := sc.sentSortCursor
+	if cap(cursor) < span {
+		cursor = make([]int32, span)
+	} else {
+		cursor = cursor[:span]
+	}
+	copy(cursor, counts[:span])
+	dst := sc.sentSorted
+	if cap(dst) < len(src) {
+		dst = make([]rmStructSentGroupW, len(src))
+	} else {
+		dst = dst[:len(src)]
+	}
+	for _, item := range src {
+		bucket := item.sent - minSent
+		dst[cursor[bucket]] = item
+		cursor[bucket]++
+	}
+	w := 0
+	for bucket := 0; bucket < span; bucket++ {
+		part := dst[counts[bucket]:cursor[bucket]]
+		if len(part) > 1 {
+			sortSentGroupW(part)
+		}
+		for i := 0; i < len(part); {
+			cur := part[i]
+			i++
+			for i < len(part) && part[i].group == cur.group {
+				if part[i].weight > cur.weight {
+					cur.weight = part[i].weight
+				}
+				i++
+			}
+			dst[w] = cur
+			w++
+		}
+	}
+	sc.sentSortCounts = counts
+	sc.sentSortCursor = cursor
+	sc.sentSorted = dst
+	return dst[:w]
+}
+
 // lessSentGroupW orders by ascending sent, then ascending group, then
 // descending weight, matching the previous comparator exactly.
 func lessSentGroupW(a, b rmStructSentGroupW) bool {
@@ -474,7 +553,11 @@ type rmQueryScratch struct {
 	heapQueue        []rmScoredCandidate
 	matchedDG        []uint64
 	docGroupW        []rmStructGroupW
+	docEntryEffGroup []uint64
 	sentGroupW       []rmStructSentGroupW
+	sentSortCounts   []int32
+	sentSortCursor   []int32
+	sentSorted       []rmStructSentGroupW
 	sentTotals       []float64
 	sentOverlaps     []float64
 	activeSentGen    []uint32
@@ -2612,11 +2695,30 @@ func (st *rmClusterState) calcMeanSentenceEnergy(idx *Index) float64 {
 	return mean
 }
 
+// temporalAffinityProbe is installed only by measurement tests; the nil check
+// keeps production cost at one branch per call.
+var temporalAffinityProbe func(a, b int32, ta, tb int64, oa, ob int32)
+
+// SetTemporalAffinityProbe installs the measurement hook; nil removes it.
+func SetTemporalAffinityProbe(fn func(a, b int32, ta, tb int64, oa, ob int32)) {
+	temporalAffinityProbe = fn
+}
+
 func (st *rmClusterState) temporalAffinity(idx *Index, a, b int32) float64 {
 	if int(a) >= len(st.refTimes) || int(b) >= len(st.refTimes) {
 		return 0
 	}
 	ta, tb := st.refTimes[a], st.refTimes[b]
+	if temporalAffinityProbe != nil {
+		var oa, ob int32 = -1, -1
+		if int(a) < len(st.ordPos) {
+			oa = st.ordPos[a]
+		}
+		if int(b) < len(st.ordPos) {
+			ob = st.ordPos[b]
+		}
+		temporalAffinityProbe(a, b, ta, tb, oa, ob)
+	}
 	if ta <= 0 || tb <= 0 {
 		return 0
 	}
