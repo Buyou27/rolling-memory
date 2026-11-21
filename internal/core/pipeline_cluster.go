@@ -1585,6 +1585,9 @@ func (e *Engine) searchClustersWithPositions(qTerms map[uint64]Term, qPositions 
 	}
 
 	// 4. Prior-smoothed bidirectional structured coverage & set-conditioned selection.
+	if queryDistinctProbe != nil {
+		queryDistinctProbe(len(sc.coreUnits))
+	}
 	return st.selectClusterHits(idx, sc, candidates, unitStructGate, detachedFrag, qTerms, groups, total, muQ, topK)
 }
 

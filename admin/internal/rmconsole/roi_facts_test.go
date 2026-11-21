@@ -791,3 +791,61 @@ func TestROIFactsTopCitedUnitsIncludesReusedNoeticL3(t *testing.T) {
 		t.Fatalf("unexpected nt_gold_1 full_text: %q", ntUnit.FullText)
 	}
 }
+
+// TestROIFactsVaultAcceptsRmUnitsView 覆盖 canonical 金库把 rm_units 暴露为视图
+// （rm_docs × rm_unit_meta）的形态：视图与历史表形态必须都能被 ROI 读取。
+func TestROIFactsVaultAcceptsRmUnitsView(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	memDB, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowUnix := time.Now().Unix()
+	if _, err := memDB.Exec(`
+		CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT);
+		CREATE TABLE rm_docs (
+			unit_id TEXT PRIMARY KEY, layer TEXT NOT NULL DEFAULT 'episodic',
+			occurred_at INTEGER NOT NULL, ingested_at INTEGER NOT NULL DEFAULT 0,
+			raw_text TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE rm_unit_meta (
+			unit_id TEXT PRIMARY KEY, inserted_at INTEGER NOT NULL DEFAULT 0,
+			ref_pointer TEXT NOT NULL DEFAULT '', sentences_json TEXT NOT NULL DEFAULT '[]',
+			address_uri TEXT NOT NULL DEFAULT '', coord64 INTEGER NOT NULL DEFAULT 0,
+			waveform_bar TEXT NOT NULL DEFAULT '', doc_macro_wave TEXT NOT NULL DEFAULT '',
+			kept_indices_json TEXT NOT NULL DEFAULT '[]', assistant_id TEXT NOT NULL DEFAULT '',
+			incarnation_id TEXT NOT NULL DEFAULT '', locus TEXT NOT NULL DEFAULT ''
+		);
+		CREATE VIEW rm_units AS
+			SELECT d.unit_id AS doc_id,
+			       d.layer AS layer,
+			       d.occurred_at AS occurred_at,
+			       COALESCE(NULLIF(m.inserted_at, 0), d.ingested_at, d.occurred_at) AS inserted_at,
+			       COALESCE(NULLIF(m.ref_pointer, ''), d.raw_text) AS raw_text,
+			       COALESCE(m.sentences_json, '[]') AS sentences_json,
+			       COALESCE(m.address_uri, '') AS address_uri,
+			       COALESCE(m.coord64, 0) AS coord64,
+			       COALESCE(m.waveform_bar, '') AS waveform_bar,
+			       COALESCE(m.doc_macro_wave, '') AS doc_macro_wave,
+			       COALESCE(m.kept_indices_json, '[]') AS kept_indices_json,
+			       COALESCE(m.assistant_id, '') AS assistant_id,
+			       COALESCE(m.incarnation_id, '') AS incarnation_id,
+			       COALESCE(m.locus, '') AS locus
+			  FROM rm_docs d
+			  LEFT JOIN rm_unit_meta m ON m.unit_id = d.unit_id;
+		INSERT INTO db_meta VALUES ('created_at', '1793350000'), ('engine', 'rolling-memory');
+		INSERT INTO rm_docs (unit_id, layer, occurred_at, ingested_at, raw_text)
+			VALUES ('doc_view_1', 'episodic', ?, ?, 'view backed body');
+	`, nowUnix-120, nowUnix-120); err != nil {
+		t.Fatal(err)
+	}
+	_ = memDB.Close()
+
+	bundle, _ := computeROIFactsVaultBundle(path)
+	if bundle.vault == nil {
+		t.Fatal("rm_units view must be accepted as a live vault")
+	}
+	if bundle.vault.EpisodicDocs != 1 || bundle.vault.TotalUnits != 1 {
+		t.Fatalf("unexpected vault counts: %+v", bundle.vault)
+	}
+}

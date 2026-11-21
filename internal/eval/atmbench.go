@@ -271,47 +271,7 @@ func LoadATMSGMItems(dataDir, scope string, corpusLimit int) ([]*ATMSGMItem, map
 	}
 	gzPath := filepath.Join(dataDir, "corpus.jsonl.gz")
 	if info, err := os.Stat(gzPath); err == nil && !info.IsDir() {
-		f, err := os.Open(gzPath)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		defer f.Close()
-		gz, err := gzip.NewReader(f)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		defer gz.Close()
-		items := make([]*ATMSGMItem, 0, 11034)
-		byID := make(map[string]*ATMSGMItem, 11034)
-		byHash := make(map[string]*ATMSGMItem, 11034)
-		scanner := bufio.NewScanner(gz)
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
-			}
-			var it ATMSGMItem
-			if err := json.Unmarshal([]byte(line), &it); err != nil {
-				return nil, nil, nil, err
-			}
-			if it.ItemID == "" {
-				continue
-			}
-			HydrateATMSGMItem(scope, &it)
-			it.CorpusIdx = len(items)
-			ptr := &it
-			items = append(items, ptr)
-			byID[ptr.ItemID] = ptr
-			byHash[ptr.TraceHash] = ptr
-			if corpusLimit > 0 && len(items) >= corpusLimit {
-				break
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return nil, nil, nil, err
-		}
-		return items, byID, byHash, nil
+		return loadATMSGMItemsFromGz(gzPath, scope, corpusLimit)
 	}
 
 	// 回退：从原始 ATM-Bench 3 个 JSON 文件加载
@@ -365,6 +325,7 @@ func LoadATMSGMItems(dataDir, scope string, corpusLimit int) ([]*ATMSGMItem, map
 			Detail:    asStr(e["detail"]),
 		}
 		HydrateATMSGMItem(scope, it)
+		it.CorpusIdx = len(items)
 		items = append(items, it)
 		byID[id] = it
 		byHash[it.TraceHash] = it
@@ -407,6 +368,7 @@ func LoadATMSGMItems(dataDir, scope string, corpusLimit int) ([]*ATMSGMItem, map
 				Tags:      tags,
 			}
 			HydrateATMSGMItem(scope, it)
+			it.CorpusIdx = len(items)
 			items = append(items, it)
 			byID[id] = it
 			byHash[it.TraceHash] = it
@@ -416,6 +378,86 @@ func LoadATMSGMItems(dataDir, scope string, corpusLimit int) ([]*ATMSGMItem, map
 	parseMedia(videos, "video_path", "video")
 
 	return items, byID, byHash, nil
+}
+
+// loadATMSGMItemsFromGz 读取并解析随包 corpus.jsonl.gz，按行序为 CorpusIdx 赋值。
+func loadATMSGMItemsFromGz(gzPath, scope string, corpusLimit int) ([]*ATMSGMItem, map[string]*ATMSGMItem, map[string]*ATMSGMItem, error) {
+	if scope == "" {
+		scope = ATMScope
+	}
+	f, err := os.Open(gzPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer gz.Close()
+	items := make([]*ATMSGMItem, 0, 11034)
+	byID := make(map[string]*ATMSGMItem, 11034)
+	byHash := make(map[string]*ATMSGMItem, 11034)
+	scanner := bufio.NewScanner(gz)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var it ATMSGMItem
+		if err := json.Unmarshal([]byte(line), &it); err != nil {
+			return nil, nil, nil, err
+		}
+		if it.ItemID == "" {
+			continue
+		}
+		HydrateATMSGMItem(scope, &it)
+		it.CorpusIdx = len(items)
+		ptr := &it
+		items = append(items, ptr)
+		byID[ptr.ItemID] = ptr
+		byHash[ptr.TraceHash] = ptr
+		if corpusLimit > 0 && len(items) >= corpusLimit {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	return items, byID, byHash, nil
+}
+
+// ATMCorpusSemanticDigest 计算语料的内容摘要：按语料顺序逐条写入
+// 「ItemID + 0x00 + 规范化正文（FullText）+ 0x0A」，再做 SHA-256。
+//
+// 该摘要与 gzip 容器字节、JSON 序列化细节都无关：同一批条目、同一顺序、同一正文
+// 在任意 Go 工具链下得到同一读数，因此可以用它判定「评测输入是否同一语料」，
+// 而不把压缩器实现版本绑进语料 pin。
+func ATMCorpusSemanticDigest(items []*ATMSGMItem) string {
+	h := sha256.New()
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		_, _ = h.Write([]byte(it.ItemID))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(it.FullText))
+		_, _ = h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ATMCorpusSemanticDigestFromGz 从 corpus.jsonl.gz 直接计算内容摘要（不读原始目录回退）。
+func ATMCorpusSemanticDigestFromGz(gzPath string) (string, error) {
+	items, _, _, err := loadATMSGMItemsFromGz(gzPath, ATMScope, 0)
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
+		return "", errors.New("ATM-Bench 语料为空")
+	}
+	return ATMCorpusSemanticDigest(items), nil
 }
 
 // ErrATMTierRetired 表示请求了已废止的自造 100 题前缀档。

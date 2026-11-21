@@ -40,6 +40,23 @@ type termBlocks struct {
 	gen    uint64
 }
 
+// withUnitIDs 给从块存储读回的 posting 快照绑定同一索引的名次→UnitID 映射。
+// UnitID 不属于 term block 载荷，调用方必须提供长度一致、严格升序的索引快照；
+// 否则拒绝增量复用，让 refresh 回退全量构建而不是猜测旧名次。
+func (tb *termBlocks) withUnitIDs(unitIDs []string) *termBlocks {
+	if tb == nil || len(unitIDs) != tb.n {
+		return nil
+	}
+	for i := 1; i < len(unitIDs); i++ {
+		if unitIDs[i] <= unitIDs[i-1] {
+			return nil
+		}
+	}
+	next := *tb
+	next.unitIDs = append([]string(nil), unitIDs...)
+	return &next
+}
+
 // termBlock 是单块的不可变 term CSR：升序键列、指向 posting 行列的 rowPtr、
 // 4,096 桶前缀表，以及与键列对齐的整数半群列。
 type termBlock struct {
@@ -412,6 +429,9 @@ func (tb *termBlocks) termProperRatio(hash uint64) float64 {
 // idx.N == tb.n 且 added 为空时返回 (tb, true)（无新 unit，无事可做）。
 func (tb *termBlocks) appendTail(idx *Index, maxUnits int, added []Doc, replacedOld bool) (*termBlocks, bool) {
 	if tb == nil || idx == nil || maxUnits < 1 || idx.N < tb.n || replacedOld {
+		return nil, false
+	}
+	if len(tb.unitIDs) != tb.n {
 		return nil, false
 	}
 	if len(added) != idx.N-tb.n {

@@ -108,11 +108,11 @@
                             </template>
                             <div class="rm-help-body">
                                 <p v-if="isEn">
-                                    Official 1,013-question full set on standard 2B SGM inputs: Official Recall@10 = 82.85% (gold-set-mean), R@50 =
-                                    90.11%, Hybrid QS = 70.13% (vs top external MemPalace R@10 76.40% / QS 56.80%).
+                                    Official 1,013-question full set on standard 2B SGM inputs: Official Recall@10 = 82.77% (gold-set-mean), R@50 =
+                                    90.16%, Hybrid QS = 70.13% (vs top external MemPalace R@10 76.40% / QS 56.80%).
                                 </p>
                                 <p v-else>
-                                    官方 1,013 题全量（标准 2B SGM 输入）：官方 Recall@10 = 82.85%（金标交均）、R@50 = 90.11%、混合 QS = 70.13%（对比外部最高 MemPalace R@10 76.40% / QS 56.80%）。
+                                    官方 1,013 题全量（标准 2B SGM 输入）：官方 Recall@10 = 82.77%（金标交均）、R@50 = 90.16%、混合 QS = 70.13%（对比外部最高 MemPalace R@10 76.40% / QS 56.80%）。
                                 </p>
                             </div>
                         </el-popover>
@@ -636,13 +636,11 @@
                                     </strong>
                                 </template>
                             </el-table-column>
-                            <el-table-column :label="isEn ? 'Elapsed / Ingest' : '耗时 / 导入'" width="115" align="right">
-                                <template #default="{ row }">
-                                    <span class="rm-num-cell">{{ formatElapsed(row.elapsed_seconds) }}</span>
-                                    <div v-if="(row.ingest_ms || 0) > 0" class="rm-sub-text">
-                                        {{ isEn ? 'ingest' : '导入' }} {{ (row.ingest_ms / 1000).toFixed(2) }}s
-                                    </div>
-                                </template>
+                            <el-table-column :label="isEn ? 'Load' : '载入'" width="88" align="right">
+                                <template #default="{ row }">{{ loadSeconds(row) }}</template>
+                            </el-table-column>
+                            <el-table-column :label="isEn ? 'End-to-end' : '端到端'" width="102" align="right">
+                                <template #default="{ row }">{{ e2eSeconds(row) }}</template>
                             </el-table-column>
                             <el-table-column :label="isEn ? 'Failure Buckets' : '五桶归因'" min-width="190">
                                 <template #default="{ row }">
@@ -720,14 +718,14 @@
                                     <span v-else class="rm-muted">—</span>
                                 </template>
                             </el-table-column>
-                            <el-table-column :label="isEn ? 'Recall / Ingest' : '检索 / 导入耗时'" width="130" align="right">
+                            <el-table-column :label="isEn ? 'Recall' : '检索'" width="100" align="right">
                                 <template #default="{ row }">
                                     <span v-if="(row.avg_recall_ms || 0) > 0" class="rm-num-cell">{{ row.avg_recall_ms?.toFixed(1) }}ms</span>
                                     <span v-else class="rm-num-cell">{{ formatElapsed(row.elapsed_seconds) }}</span>
-                                    <div v-if="(row.ingest_ms || 0) > 0" class="rm-sub-text">
-                                        {{ isEn ? 'Ingest' : '导入' }} {{ (row.ingest_ms / 1000).toFixed(2) }}s
-                                    </div>
                                 </template>
+                            </el-table-column>
+                            <el-table-column :label="isEn ? 'Load' : '载入'" width="88" align="right">
+                                <template #default="{ row }">{{ loadSeconds(row) }}</template>
                             </el-table-column>
                             <el-table-column :label="isEn ? 'Hybrid QS ⬆' : '混合 QS ⬆'" width="110" align="right">
                                 <template #default="{ row }">
@@ -1150,6 +1148,15 @@ const tierLabel = (tier: string) => {
 const formatElapsed = (seconds: number) => {
     const value = Number(seconds) || 0
     return value >= 60 ? `${(value / 60).toFixed(1)} min` : `${value.toFixed(1)} s`
+}
+// 载入与端到端分开：新记录用 load_ms / eval_seconds，旧记录回退 ingest_ms / elapsed_seconds。
+const loadSeconds = (row: any) => {
+    const ms = Number(row?.load_ms || row?.ingest_ms || 0)
+    return ms > 0 ? `${(ms / 1000).toFixed(2)}s` : '—'
+}
+const e2eSeconds = (row: any) => {
+    const seconds = Number(row?.eval_seconds || row?.elapsed_seconds || 0)
+    return seconds > 0 ? formatElapsed(seconds) : '—'
 }
 
 const displayRankOf = (idx: number) => {

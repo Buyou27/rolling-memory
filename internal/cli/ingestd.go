@@ -38,9 +38,17 @@ const (
 	ingestWorkerHeartbeat = 5 * time.Second
 	// ingestWorkerRetry is how long an extra worker waits for the holder to stop.
 	ingestWorkerRetry = 5 * time.Second
-	// ingestQueueDrainLimit bounds how many queued remembers one scan tick
-	// applies, keeping a tick's apply time small relative to its cadence.
-	ingestQueueDrainLimit = 32
+	// ingestQueueDrainBatch is the claim slice one ProcessRememberQueue call
+	// handles before the pass re-checks its remaining budget.
+	ingestQueueDrainBatch = 256
+	// ingestQueueDrainBudget bounds one scan pass's queue drain so the source
+	// scan and the snapshot builder still run inside the 10s tick. At the
+	// measured ~1.1ms per applied remember this drains roughly 3.5k items per
+	// pass instead of the 32 the old fixed limit allowed.
+	ingestQueueDrainBudget = 4 * time.Second
+	// ingestQueueDrainLimit is the per-pass cap: a very large backlog cannot
+	// monopolise the pass even when items apply faster than the budget.
+	ingestQueueDrainLimit = 4096
 	// ingestQueueRetryBackoff spaces retries of one failing queued remember so it
 	// cannot block newer items in the same drain slice.
 	ingestQueueRetryBackoff = 10 * time.Second
@@ -121,12 +129,7 @@ func (a *application) runIngestd() int {
 
 	runPass := func() {
 		writeIngestWorkerStatus(memory.Store.DB(), "scanning")
-		if applied, queueErr := memory.ProcessRememberQueue(ctx, facade.IngestQueueProcessOptions{
-			Limit:             ingestQueueDrainLimit,
-			LeaseDuration:     ingestWorkerLeaseTTL,
-			HeartbeatInterval: ingestWorkerHeartbeat,
-			RetryBackoff:      ingestQueueRetryBackoff,
-		}); queueErr != nil {
+		if applied, queueErr := drainRememberQueue(ctx, memory, ingestQueueDrainBudget); queueErr != nil {
 			log.Printf("ingestd: remember queue: %v", queueErr)
 		} else if applied > 0 {
 			log.Printf("ingestd: applied %d queued remember(s)", applied)
@@ -170,6 +173,51 @@ func (a *application) runIngestd() int {
 			runPass()
 		}
 	}
+}
+
+// rememberQueueDrainer is the slice of the memory facade the drain loop needs.
+type rememberQueueDrainer interface {
+	ProcessRememberQueue(context.Context, facade.IngestQueueProcessOptions) (int, error)
+}
+
+// drainRememberQueue applies queued remembers in bounded batches until the pass
+// budget, the per-pass cap, or an empty queue. Deferred items carry their own
+// retry backoff, so one failing item cannot block the rest of the batch.
+func drainRememberQueue(ctx context.Context, drainer rememberQueueDrainer, budget time.Duration) (int, error) {
+	if drainer == nil {
+		return 0, nil
+	}
+	if budget <= 0 {
+		budget = ingestQueueDrainBudget
+	}
+	deadline := time.Now().Add(budget)
+	applied := 0
+	var firstErr error
+	for applied < ingestQueueDrainLimit {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return applied, err
+			}
+		}
+		batch := ingestQueueDrainBatch
+		if remaining := ingestQueueDrainLimit - applied; remaining < batch {
+			batch = remaining
+		}
+		progress, err := drainer.ProcessRememberQueue(ctx, facade.IngestQueueProcessOptions{
+			Limit:             batch,
+			LeaseDuration:     ingestWorkerLeaseTTL,
+			HeartbeatInterval: ingestWorkerHeartbeat,
+			RetryBackoff:      ingestQueueRetryBackoff,
+		})
+		applied += progress
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if progress == 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	return applied, firstErr
 }
 
 // superviseIngestWorker keeps one `ingestd` child alive for the daemon. The

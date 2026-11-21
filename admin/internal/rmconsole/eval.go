@@ -167,6 +167,11 @@ type EvalRunRecord struct {
 	JudgeCorrect    int     `json:"judge_correct"`
 	JudgeScored     int     `json:"judge_scored"`
 	ElapsedSeconds  float64 `json:"elapsed_seconds"`
+	// 分相耗时（只增键）：LoadMS 是本次运行开始时的语料就绪/载入阶段（prepare 探针；
+	// 复用已备语料时通常 <1s，首次构建时含全量导入）；EvalSeconds 是其后逐题评测的
+	// 端到端墙钟。ElapsedSeconds 保持总耗时 = 载入 + 评测。旧记录缺省 0 时前端回退。
+	LoadMS      int64   `json:"load_ms,omitempty"`
+	EvalSeconds float64 `json:"eval_seconds,omitempty"`
 	// 端到端检索耗时与交付量（tokenz-r 口径）运行级聚合：
 	//   - AvgRecallMS / P95RecallMS：单题端到端云端检索耗时（毫秒）均值与 P95；
 	//   - AvgDeliveredTokens / TotalDeliveredTokens：单题实际送入答题载荷的 tokenz-r Token 均值与总计；
@@ -3950,6 +3955,13 @@ func beginEvalQuestion(ctx context.Context, jobID string, q EvalQuestionItem, to
 	return true
 }
 
+// evalRunPhases 是一次评测任务的墙钟分相：语料就绪/载入阶段与随后的逐题评测。
+// ElapsedSeconds 仍是两者之和；分相只增字段、不改旧字段语义。
+type evalRunPhases struct {
+	LoadSeconds float64
+	EvalSeconds float64
+}
+
 func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, jobID string, req evalRunRequest, aiCfg AIModelConfig, questions []EvalQuestionItem) {
 	started := time.Now()
 	workerError := ""
@@ -3977,11 +3989,12 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 		atmUnits, err = loadATMEvalUnits(home, dataDir)
 		if err != nil {
 			if claimEvalFailure(ctx, jobID) {
-				finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, nil, time.Since(started).Seconds(), evalTaskStatusFailed, "加载 ATM UnitID 映射失败: "+err.Error())
+				finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, nil, time.Since(started).Seconds(), evalRunPhases{}, evalTaskStatusFailed, "加载 ATM UnitID 映射失败: "+err.Error())
 			}
 			return
 		}
 	}
+	phases := evalRunPhases{}
 	if armMode != EvalArmOracle {
 		evalJobMu.Lock()
 		if evalJobState.JobID != jobID || evalJobState.Status != "running" || evalJobState.Phase == "finalizing" || ctx.Err() != nil {
@@ -4000,13 +4013,16 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 		}
 		// 优先复用已校验通过的隔离评测语料（耗时 <1s），仅在未准备或校验未过时自动构建，
 		// 避免每次点运行都强制全量重灌 11,034 / 5,882 条文档导致长时间卡在 0%。
+		loadStart := time.Now()
 		readiness, err := prepareLocalEvalStore(ctx, bin, home, suite, req.Tier, storePath, dataDir, probeQuery, atmUnits, false)
 		if err != nil {
+			phases.LoadSeconds = time.Since(loadStart).Seconds()
 			if ctx.Err() == nil && claimEvalFailure(ctx, jobID) {
-				finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, nil, time.Since(started).Seconds(), evalTaskStatusFailed, err.Error())
+				finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, nil, time.Since(started).Seconds(), phases, evalTaskStatusFailed, err.Error())
 			}
 			return
 		}
+		phases.LoadSeconds = time.Since(loadStart).Seconds()
 		evalJobMu.Lock()
 		if evalJobState.JobID == jobID && evalJobState.Status == "running" {
 			appendJobLog(fmt.Sprintf("隔离评测语料已就绪：scope=%s · 回收旧单元=%d 条 · documents=%d · probe_hits=%d",
@@ -4014,6 +4030,7 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 		}
 		evalJobMu.Unlock()
 	}
+	evalStart := time.Now()
 
 	type indexedTask struct {
 		idx int
@@ -4173,7 +4190,8 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 		errMsg := workerError
 		evalJobMu.RUnlock()
 		if errMsg != "" {
-			finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, completedItems, time.Since(started).Seconds(), evalTaskStatusFailed, errMsg)
+			phases.EvalSeconds = time.Since(evalStart).Seconds()
+			finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, completedItems, time.Since(started).Seconds(), phases, evalTaskStatusFailed, errMsg)
 		}
 		return
 	}
@@ -4185,7 +4203,8 @@ func runStreamingEvalWorker(ctx context.Context, home, bin, storePath, dataDir, 
 	evalJobState.Phase = "finalizing"
 	evalJobState.UpdatedAtUnixMS = time.Now().UnixMilli()
 	evalJobMu.Unlock()
-	finalizeEvalRunRecord(home, jobID, req, aiCfg, completedItems, time.Since(started).Seconds(), false)
+	phases.EvalSeconds = time.Since(evalStart).Seconds()
+	finalizeEvalRunRecord(home, jobID, req, aiCfg, completedItems, time.Since(started).Seconds(), phases, false)
 }
 
 func evalTaskProvenanceFromItems(items []EvalQuestionResultItem) evalTaskProvenance {
@@ -4196,15 +4215,15 @@ func evalTaskProvenanceFromItems(items []EvalQuestionResultItem) evalTaskProvena
 	return evalTaskProvenance{Scope: item.EngineScope, Endpoint: item.EngineUpstream, CorpusSHA256: item.CorpusSHA256}
 }
 
-func finalizeEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelConfig, items []EvalQuestionResultItem, elapsedSec float64, isPartial bool) (EvalRunRecord, error) {
+func finalizeEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelConfig, items []EvalQuestionResultItem, elapsedSec float64, phases evalRunPhases, isPartial bool) (EvalRunRecord, error) {
 	status := evalTaskStatusCompleted
 	if isPartial {
 		status = evalTaskStatusCancelled
 	}
-	return finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, items, elapsedSec, status, "")
+	return finalizeEvalRunRecordWithStatus(home, jobID, req, aiCfg, items, elapsedSec, phases, status, "")
 }
 
-func buildEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelConfig, items []EvalQuestionResultItem, elapsedSec float64, status, errMsg string) EvalRunRecord {
+func buildEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelConfig, items []EvalQuestionResultItem, elapsedSec float64, phases evalRunPhases, status, errMsg string) EvalRunRecord {
 	isPartial := status != evalTaskStatusCompleted
 	suite := normalizeSuite(req.Suite)
 	tier := normalizeTier(req.Tier)
@@ -4285,6 +4304,8 @@ func buildEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelCon
 		EvidenceHit: evRate, AnswerInContext: aicRate,
 		JudgeRate: jdgRate, JudgeCorrect: jdgCor, JudgeScored: jdgSco,
 		ElapsedSeconds:       roundFloat(elapsedSec, 1),
+		LoadMS:               int64(roundFloat(phases.LoadSeconds*1000, 0)),
+		EvalSeconds:          roundFloat(phases.EvalSeconds, 1),
 		AvgRecallMS:          avgRecallMS,
 		P95RecallMS:          p95RecallMS,
 		AvgDeliveredTokens:   avgDelivTokens,
@@ -4310,8 +4331,8 @@ func buildEvalRunRecord(home, jobID string, req evalRunRequest, aiCfg AIModelCon
 	return rec
 }
 
-func finalizeEvalRunRecordWithStatus(home, jobID string, req evalRunRequest, aiCfg AIModelConfig, items []EvalQuestionResultItem, elapsedSec float64, status, errMsg string) (EvalRunRecord, error) {
-	rec := buildEvalRunRecord(home, jobID, req, aiCfg, items, elapsedSec, status, errMsg)
+func finalizeEvalRunRecordWithStatus(home, jobID string, req evalRunRequest, aiCfg AIModelConfig, items []EvalQuestionResultItem, elapsedSec float64, phases evalRunPhases, status, errMsg string) (EvalRunRecord, error) {
+	rec := buildEvalRunRecord(home, jobID, req, aiCfg, items, elapsedSec, phases, status, errMsg)
 	isPartial := status != evalTaskStatusCompleted
 	prov := evalTaskProvenanceFromItems(items)
 	ledgerErr := saveEvalTaskResult(rec, prov, status, errMsg, items)
@@ -4514,7 +4535,7 @@ func evalRunHandler(c *gin.Context) {
 
 		var savedRec *EvalRunRecord
 		if wasRunning {
-			rec, err := finalizeEvalRunRecord(home, jobID, activeReq, activeAIConfig, itemsCopy, elapsed, true)
+			rec, err := finalizeEvalRunRecord(home, jobID, activeReq, activeAIConfig, itemsCopy, elapsed, evalRunPhases{}, true)
 			if err != nil {
 				httpx.Fail(c, httpx.WithMessage(err.Error()))
 				return

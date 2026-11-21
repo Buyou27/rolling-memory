@@ -173,6 +173,8 @@ func (a *application) dispatch() int {
 			return a.fail(err)
 		}
 		return code
+	case "recover":
+		return a.runRecover()
 	case "hook":
 		return a.runHook()
 	case "init":

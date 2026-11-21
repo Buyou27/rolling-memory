@@ -12,9 +12,11 @@ package eval
 // Fixture data is not part of the runtime. Scorer tests use synthetic inputs.
 
 import (
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,6 +47,14 @@ const (
 	PinATMCorpusSHA256 = "c9c4cc55dd3be147638121765b5dc7b8321a5e292b90909b68ae7fe8a57ee3a7"
 	PinATM1013SHA256   = "3c4cbf84deeb158c78d515626a540908878d304ce0cda5c8e2ae7e52c6b878a2"
 	PinATMHardSHA256   = "f6f63ff196a9f1de5715e35b328d4e80ca80311f2e2eae8028e7cb60e87ad37e"
+
+	// PinATMCorpusStreamSHA256 是 corpus.jsonl.gz 解压后的 JSONL 字节流摘要。
+	// 它与 gzip 压缩器实现无关：同一内容在不同 Go 工具链下重压出的容器字节可能不同，
+	// 解压流必须一致。
+	PinATMCorpusStreamSHA256 = "5841ef086954ac9fb75b45f0a45e54e81b1b5c6c04c958a1ab88678c3b266f4d"
+	// PinATMCorpusSemanticSHA256 是按语料顺序逐条对「ItemID + 0x00 + FullText + 0x0A」
+	// 求得的摘要，与容器字节和 JSON 序列化细节都无关，用于判定评测输入是否为同一语料。
+	PinATMCorpusSemanticSHA256 = "79bad7ee4002cbc35106df18c071e20b52b780d1145ee229a3234c29a942cd5e"
 )
 
 // ATMOfficialScoringFixture returns nil because the historical fixture is not distributed.
@@ -85,22 +95,70 @@ func ATMOfficialCorpusSHA256s() map[string]string {
 // VerifyATMCorpusPins checks the on-disk corpus and question tiers against the
 // official pins. It resolves the ATM data directory the same way the evaluator
 // does; a missing directory is an error (fail-closed), not a silent pass.
+//
+// The corpus accepts three equivalent proofs, in decreasing strength: the exact
+// gzip container bytes, the decompressed JSONL stream, or the per-item semantic
+// digest. The container depends on the Go toolchain's flate implementation, so
+// a rebuild on a newer toolchain can differ in bytes while carrying the same
+// 11,034 items in the same order. Question tiers stay strictly byte-pinned.
 func VerifyATMCorpusPins(dataDir string) error {
+	return verifyATMCorpusPinsWith(dataDir, ATMOfficialCorpusSHA256s(), PinATMCorpusStreamSHA256, PinATMCorpusSemanticSHA256)
+}
+
+func verifyATMCorpusPinsWith(dataDir string, pins map[string]string, streamPin, semanticPin string) error {
 	dir, err := ResolveATMDataDir(dataDir)
 	if err != nil {
 		return err
 	}
-	for rel, want := range ATMOfficialCorpusSHA256s() {
+	for rel, want := range pins {
 		path := filepath.Join(dir, filepath.FromSlash(rel))
 		got, err := sha256File(path)
 		if err != nil {
 			return fmt.Errorf("ATM-Bench 官方语料 pin 读取失败 (%s): %w", rel, err)
 		}
-		if got != want {
-			return fmt.Errorf("ATM-Bench 官方语料 pin 不符 (%s)：期望 %s，实际 %s", rel, want, got)
+		if got == want {
+			continue
 		}
+		if rel == "corpus.jsonl.gz" && atmCorpusContentMatches(path, streamPin, semanticPin) {
+			continue
+		}
+		return fmt.Errorf("ATM-Bench 官方语料 pin 不符 (%s)：期望 %s，实际 %s", rel, want, got)
 	}
 	return nil
+}
+
+// atmCorpusContentMatches 报告在容器字节不同时，解压流或条目内容是否仍与官方 pin 一致。
+func atmCorpusContentMatches(gzPath, streamPin, semanticPin string) bool {
+	if streamPin != "" {
+		if got, err := sha256GzStream(gzPath); err == nil && got == streamPin {
+			return true
+		}
+	}
+	if semanticPin != "" {
+		if got, err := ATMCorpusSemanticDigestFromGz(gzPath); err == nil && got == semanticPin {
+			return true
+		}
+	}
+	return false
+}
+
+// sha256GzStream 计算 gzip 解压后的字节流摘要（容器无关）。
+func sha256GzStream(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, gz); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func sha256File(path string) (string, error) {

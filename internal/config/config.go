@@ -6,9 +6,12 @@
 //
 // The policy is deliberately small and enforced at every network call:
 //
-//   - local  -- only loopback (localhost / 127.0.0.1 / ::1) is reachable; the
-//     single explicitly configured non-loopback exception is the evaluation
-//     model endpoint (see CheckEgress).
+//   - local  -- product runtime reaches only loopback (localhost / 127.0.0.1 /
+//     ::1) through CheckEgress.
+//   - local  -- evaluation LLM calls (`rm eval` answerer/judge) use the
+//     user-configured OpenAI-compatible endpoint, which is an explicit
+//     per-run choice (config file or --eval-base-url), so it may leave the
+//     machine to any http(s) host (see CheckEvalEgress).
 //
 // No telemetry, no background uploads.
 package config
@@ -477,6 +480,27 @@ func (c *Config) CheckEgress(rawURL string) error {
 		"local mode blocks non-loopback egress to %s; only the configured evaluation model endpoint may leave the machine",
 		display,
 	)
+}
+
+// CheckEvalEgress enforces the evaluation-model boundary. `rm eval` runs with a
+// user-configured OpenAI-compatible endpoint (config `[eval] base_url` or the
+// per-run `--eval-base-url` override); that endpoint is an explicit user choice
+// for the benchmark answerer/judge leg, so it may leave the machine to any
+// http(s) host. Only the URL shape is validated here — the local-mode loopback
+// rule of CheckEgress does not apply to explicit evaluation LLM calls.
+func (c *Config) CheckEvalEgress(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return newEgressError("unsupported scheme for %s", pyRepr(rawURL))
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return newEgressError("unsupported scheme for %s", pyRepr(rawURL))
+	}
+	host, ok := ids.URLHost(rawURL)
+	if !ok || strings.TrimSpace(host) == "" {
+		return newEgressError("missing host in %s", pyRepr(rawURL))
+	}
+	return nil
 }
 
 // tomlDecodeMessage maps the TOML parser's wording onto TOML parser's for the

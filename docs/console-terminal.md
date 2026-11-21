@@ -34,6 +34,7 @@ The terminal is a floating window; its expanded state survives page switches, an
 | `rmem sync prune --json` | **Retire & self-heal preview** (read-only): verified / re-anchorable / provably-stale / unreadable-source counts | Terminal (dropdown) |
 | `rmem recall --cue "keyword" --json` | Run one manual recall to debug "why didn't it hit" | System terminal |
 | `rmem sync watch --pause / --resume / --step` | Background scanning and historical pointer index backfill controls | Buttons on the L2 dialogue page |
+| `rmem recover --passes 10 --budget-sec 60` | Rebuild a vault from the local transcript window: additive scan passes with no retire, heal or prune (`--limit` bounds turns per pass) | System terminal |
 | `rmem sync prune --apply --yes` | **Apply maintenance**: retire provably-stale units, re-anchor drifted pointers, write an auditable receipt | Overview → "Retire & Self-heal" entry |
 | `rmem eval --suite atm …` | Frozen benchmark evaluation | Evaluation lab |
 

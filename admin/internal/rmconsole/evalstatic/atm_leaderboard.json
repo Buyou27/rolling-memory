@@ -41,7 +41,7 @@
       "architecture_en": "4-Step Dual-Cluster Kernel (EntityCluster × SpacetimeCluster · .zcsr zero-copy mmap · 0-Vector/0-LLM)",
       "is_ours": true,
       "recall_at_10": 52.43,
-      "recall_at_25": 60.14,
+      "recall_at_25": 59.91,
       "recall_at_50": 70.62,
       "qs_score": 25.06,
       "list_recall": 39.73,
@@ -50,8 +50,8 @@
       "index_time_hr": "4.65s (0.0013 hr · 检索 107.9ms/题)",
       "highlight_tag": "0-Vector/0-LLM · R@10 52.43% · R@50 70.62% · 建库 4.65s · QS 25.06%",
       "highlight_tag_en": "0-Vector/0-LLM · R@10 52.43% · R@50 70.62% · Ingest 4.65s · QS 25.06%",
-      "note": "本地明文臂（local_plain · 四步双簇内核）在 11,034 条 SGM 多模态记忆上实测：全量建库导入 4.65s，单题检索 107.9ms；Hard-31 官方 Recall@10=52.43%（逐题金标交均）、R@25=60.14%、R@50=70.62%、Any-Hit@10=80.65% (25/31)、All-Hit@10=29.03% (9/31)、官方混合 QS=25.06%（答器 deepseek-v4.1-flash · 判官 gpt-5-mini minimal）。",
-      "note_en": "Local Plain arm (local_plain · 4-step dual-cluster kernel) over 11,034 SGM multimodal items: full corpus ingest 4.65s, retrieval 107.9ms/query; Hard-31 official Recall@10=52.43% (gold-set-mean), R@25=60.14%, R@50=70.62%, Any-Hit@10=80.65% (25/31), All-Hit@10=29.03% (9/31), hybrid QS=25.06% (answerer deepseek-v4.1-flash, judge gpt-5-mini minimal)."
+      "note": "本地明文臂（local_plain · 四步双簇内核）在 11,034 条 SGM 多模态记忆上实测：全量建库导入 4.65s，单题检索 107.9ms；Hard-31 官方 Recall@10=52.43%（逐题金标交均）、R@25=59.91%、R@50=70.62%、Any-Hit@10=80.65% (25/31)、All-Hit@10=29.03% (9/31)、官方混合 QS=25.06%（答器 deepseek-v4.1-flash · 判官 gpt-5-mini minimal）。",
+      "note_en": "Local Plain arm (local_plain · 4-step dual-cluster kernel) over 11,034 SGM multimodal items: full corpus ingest 4.65s, retrieval 107.9ms/query; Hard-31 official Recall@10=52.43% (gold-set-mean), R@25=59.91%, R@50=70.62%, Any-Hit@10=80.65% (25/31), All-Hit@10=29.03% (9/31), hybrid QS=25.06% (answerer deepseek-v4.1-flash, judge gpt-5-mini minimal)."
     },
     {
       "rank": 3,
@@ -258,18 +258,18 @@
       "architecture": "四步双簇内核 (EntityCluster × SpacetimeCluster · .zcsr 零拷贝 mmap · 1,013 题全量实测)",
       "architecture_en": "4-Step Dual-Cluster Kernel (EntityCluster × SpacetimeCluster · .zcsr zero-copy mmap · full 1,013-Q run)",
       "is_ours": true,
-      "recall_at_10": 82.85,
-      "recall_at_25": 86.41,
-      "recall_at_50": 90.11,
+      "recall_at_10": 82.77,
+      "recall_at_25": 86.44,
+      "recall_at_50": 90.16,
       "qs_score": 70.13,
       "list_recall": 55.71,
       "number_em": 74.44,
       "open_end": 71.01,
       "index_time_hr": "4.65s (0.0013 hr · 检索 68.6ms/题)",
-      "highlight_tag": "0-Vector/0-LLM · R@10 82.85% · R@50 90.11% · 建库 4.65s · QS 70.13%",
-      "highlight_tag_en": "0-Vector/0-LLM · R@10 82.85% · R@50 90.11% · Ingest 4.65s · QS 70.13%",
-      "note": "本地明文臂（local_plain · 四步双簇内核 73.72 代）在 11,034 条记忆上执行 1,013 题全量实测：建库导入 4.65s，单题检索 68.6ms；官方 Recall@10=82.85%（金标交均）、R@25=86.41%、R@50=90.11%，Any-Hit@10=85.39% [865/1013]，All-Hit@10=80.16% [812/1013]，综合分 composite_score=73.72，官方混合 QS=70.13%（答器 deepseek-v4.1-flash · 判官 gpt-5-mini minimal）。",
-      "note_en": "Local Plain arm (local_plain · 4-step dual-cluster kernel, 73.72 generation) over 11,034 items on full 1,013-Q set: corpus ingest 4.65s, retrieval 68.6ms/query; official Recall@10=82.85% (gold-set-mean), R@25=86.41%, R@50=90.11%, Any-Hit@10=85.39% [865/1013], All-Hit@10=80.16% [812/1013], composite_score=73.72, hybrid QS=70.13% (answerer deepseek-v4.1-flash, judge gpt-5-mini minimal)."
+      "highlight_tag": "0-Vector/0-LLM · R@10 82.77% · R@50 90.16% · 建库 4.65s · QS 70.13%",
+      "highlight_tag_en": "0-Vector/0-LLM · R@10 82.77% · R@50 90.16% · Ingest 4.65s · QS 70.13%",
+      "note": "本地明文臂（local_plain · 四步双簇内核 73.67 代）在 11,034 条记忆上执行 1,013 题全量：检索读数 2026-11-20 复核——官方 Recall@10=82.77%（金标交均）、R@25=86.44%、R@50=90.16%，Any-Hit@10=85.29% [864/1013]，All-Hit@10=80.06% [811/1013]，综合分 composite_score=73.67；建库导入 4.65s、单题检索 68.6ms 与官方混合 QS=70.13%（答器 deepseek-v4.1-flash · 判官 gpt-5-mini minimal）为 2026-11-18 端到端记录。",
+      "note_en": "Local Plain arm (local_plain · 4-step dual-cluster kernel, 73.67 generation) over 11,034 items on the full 1,013-Q set: retrieval re-verified 2026-11-20 — official Recall@10=82.77% (gold-set-mean), R@25=86.44%, R@50=90.16%, Any-Hit@10=85.29% [864/1013], All-Hit@10=80.06% [811/1013], composite_score=73.67; corpus ingest 4.65s, retrieval 68.6ms/query and hybrid QS=70.13% (answerer deepseek-v4.1-flash, judge gpt-5-mini minimal) are the 2026-11-18 end-to-end record."
     },
     {
       "rank": 2,

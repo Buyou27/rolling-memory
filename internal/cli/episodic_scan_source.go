@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rocareer/rolling-memory/internal/config"
 	"github.com/rocareer/rolling-memory/internal/episodic"
@@ -523,6 +524,16 @@ func zcodeTurnCompleted(ctx context.Context, db episodic.ZCodeQueryer, sessionID
 // reconcile window. A completed cycle starts over so changes and streaming tails
 // are revisited, while each checkpoint contains only successfully saved work.
 func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home string) error {
+	return runEpisodicSourceScanTickWithLimit(ctx, memory, home, reconcileDefaultLimit)
+}
+
+// runEpisodicSourceScanTickWithLimit scans up to limit turns from the discovered
+// sources. The recovery command uses a larger page and a longer budget; the
+// autowatch path keeps the bounded default.
+func runEpisodicSourceScanTickWithLimit(ctx context.Context, memory *facade.Memory, home string, limit int) error {
+	if limit <= 0 {
+		limit = reconcileDefaultLimit
+	}
 	if memory == nil || memory.Store == nil || memory.Store.DB() == nil {
 		return errors.New("episodic source scan requires an open local store")
 	}
@@ -555,7 +566,9 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 	var sources []episodicScanSource
 	var discoveryErr error
 	for _, definition := range harnessEnvDefinitions(home, "") {
-		found, err := discoverEpisodicScanSources(ctx, home, definition.ID)
+		discoverCtx, cancelDiscover := context.WithTimeout(ctx, 5*time.Second)
+		found, err := discoverEpisodicScanSources(discoverCtx, home, definition.ID)
+		cancelDiscover()
 		if err != nil {
 			discoveryErr = errors.Join(discoveryErr, fmt.Errorf("%s: %w", definition.ID, err))
 		}
@@ -575,7 +588,7 @@ func runEpisodicSourceScanTick(ctx context.Context, memory *facade.Memory, home 
 	// the bound first; the turn filter then trims the boundary session, whose
 	// activity is current but whose older turns must stay out.
 	sources = filterEpisodicScanSourcesSince(sources, since)
-	next, more, scanErr := visitEpisodicSourcesVerified(ctx, sources, scope, cursor, reconcileDefaultLimit, since, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
+	next, more, scanErr := visitEpisodicSourcesVerified(ctx, sources, scope, cursor, limit, since, func(snapshot *episodic.SourceSnapshot, turn candidateEpisodicTurn) error {
 		// Second line: the walker already drops out-of-bound turns, but the write
 		// itself must never persist one if a future caller reaches this point.
 		if episodicOccurredBefore(turn.OccurredAt, since) {

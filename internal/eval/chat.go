@@ -33,7 +33,7 @@ var errChatEmptyContent = errors.New("模型回执正文为空")
 // ChatOptions 是答题器 / 判官的模型面配置（[eval] 段或命令行覆盖）。
 //
 // 任何 OpenAI 兼容 /chat/completions 端点都可用：base_url 允许已经带路径
-// （如网关形态 `https://host/v1/<key>/<chan>`），也允许直接给到 `/chat/completions`。
+// （如官网 `https://api.deepseek.com`），也允许直接给到 `/chat/completions`。
 type ChatOptions struct {
 	BaseURL         string
 	Model           string
@@ -75,7 +75,7 @@ func NewChatClient(cfg *config.Config, o ChatOptions) (*ChatClient, error) {
 	if timeout <= 0 {
 		timeout = 60
 	}
-	if err := cfg.CheckEgress(url); err != nil {
+	if err := cfg.CheckEvalEgress(url); err != nil {
 		return nil, err
 	}
 	return &ChatClient{
@@ -98,9 +98,9 @@ func (c *ChatClient) Model() string { return c.model }
 
 // Complete 发一轮对话并取回文本（system + user 两条消息）。
 //
-// 请求体：
-//   - 思考开关按 DeepSeek 官方写法 `thinking.type = enabled|disabled`；
-//   - `reasoning_effort` 显式透传（缺省 low）；
+// 请求体（对齐 DeepSeek 官网 Chat Completions 契约）：
+//   - 思考开关用 `thinking.type = enabled|disabled`（显式开关优先于 reasoning_effort）；
+//   - 思考开启时 `reasoning_effort` 透传 low/high/max（缺省 high）；关闭时不带该字段；
 //   - `max_tokens` 仅在 >0 时下发（0 = 不设帽，让推理模型先思考再作答）；
 //   - 不注入 response_format，JSON 由提示词约束。
 func (c *ChatClient) Complete(system, user string) (string, error) {
@@ -116,13 +116,12 @@ func (c *ChatClient) Complete(system, user string) (string, error) {
 	if c.maxTokens > 0 {
 		payload["max_tokens"] = c.maxTokens
 	}
-	// 思考开关必须同时按两家上游的契约下发（各自取自己认的那个）：
-	//   - DeepSeek 官方：`thinking.type = enabled|disabled`；
-	//   - 网宿 AI 网关（`deepseek-v4.1-flash` 所在渠道）：**不识别** `thinking.type`，
-	//     静默忽略后思考默认开启；它只认 `reasoning_effort = none|low|medium|high`，
-	//     **不带该字段 = 缺省开**，隐藏推理不受 max_tokens 约束，会把正文吃空
-	//     （上游实证：该渠道只认 reasoning_effort，静默忽略 thinking.type）。
-	// 注意 `thinking: null` 与"不带字段"等价（不表态 ⇒ 开），**不能**用作关闭开关。
+	// 思考开关按 DeepSeek 官网契约下发：
+	//   - `thinking.type = enabled|disabled` 是显式开关，优先级高于 reasoning_effort；
+	//   - 思考开启时 `reasoning_effort` 取 low/high/max，未配置则用官网缺省 high；
+	//   - 思考关闭时只发 thinking.type=disabled，不再附带 reasoning_effort。
+	// 注意：省略 thinking 与传 null 等价（官网按 reasoning_effort 或默认开启思考），
+	// 不能靠“不表态”来关闭思考。
 	if c.thinking {
 		payload["thinking"] = map[string]any{"type": "enabled"}
 		effort := strings.TrimSpace(c.effort)
@@ -132,7 +131,6 @@ func (c *ChatClient) Complete(system, user string) (string, error) {
 		payload["reasoning_effort"] = effort
 	} else {
 		payload["thinking"] = map[string]any{"type": "disabled"}
-		payload["reasoning_effort"] = "none"
 	}
 	response, err := httpclient.PostJSON(c.url, payload, httpclient.Bearer(c.key), c.timeout, 2)
 	if err != nil {

@@ -20,6 +20,20 @@ const eulerNumber = math.E
 // calibrated threshold; every other file refers to it by name.
 const transmissionPerHop = 1.0 / math.E
 
+// queryDistinctProbe is an optional diagnostic sink for the number of distinct
+// units that receive direct query mass in one query. It stays nil in production
+// (one nil check per query); a measurement harness installs it with
+// SetQueryDistinctProbe before issuing queries and is responsible for its own
+// synchronization when queries run concurrently.
+var queryDistinctProbe func(int)
+
+// SetQueryDistinctProbe installs a diagnostic sink for the direct candidate-pool
+// size of each query. Pass nil to disable. Diagnostic surface only: sizing for
+// the stage 2d query-time DocMass decision (pre-registered §7-4).
+func SetQueryDistinctProbe(fn func(int)) {
+	queryDistinctProbe = fn
+}
+
 // [calibrated] anchorConcentrationFloor — calendar-concentration floor at which a
 // word family counts as a temporally localized event anchor. Fitted on the reference
 // corpus; the value coincides with e^-1 but is an empirical operating point, not a
@@ -906,6 +920,9 @@ func (e *Engine) searchBaseWithPositions(qTerms map[uint64]Term, qPositions map[
 			direct[unit] = info
 		}
 		directUnits = append(directUnits, unit)
+	}
+	if queryDistinctProbe != nil {
+		queryDistinctProbe(len(direct))
 	}
 	// Residual proximity: while no candidate fully covers the query mass, each
 	// candidate's matched pairs add the harmonic pair mass 2*ma*mb/(ma+mb)

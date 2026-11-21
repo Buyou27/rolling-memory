@@ -1118,7 +1118,7 @@ func vaultDroppedLegacyAnalytics(memoryPath string) bool {
 	}
 	defer release()
 	var vaultTables int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_units'`).Scan(&vaultTables); err != nil || vaultTables == 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'rm_units' AND type IN ('table', 'view')`).Scan(&vaultTables); err != nil || vaultTables == 0 {
 		return false
 	}
 	var legacyTables int
@@ -1319,13 +1319,13 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 		return out, sig
 	}
 	defer release()
-	// The efficacy ledger scan inside the bundle measures ~3.5s on a 10k-event
-	// ledger (per-row correlated dedupe); 10s lets the whole bundle finish
-	// before the deadline instead of dropping its tail silently.
+	// The ledger scan is a plain base-table pass unless the ledger actually
+	// carries revisions or non-tool MCP sibling rows; 10s lets the whole bundle
+	// finish before the deadline instead of dropping its tail silently.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var hasVault int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rm_units'`).Scan(&hasVault); err != nil || hasVault == 0 {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name = 'rm_units' AND type IN ('table', 'view')`).Scan(&hasVault); err != nil || hasVault == 0 {
 		return out, sig
 	}
 
@@ -1477,19 +1477,23 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	if ldb := openVaultReadOnly(memoryPath + ".efficacy.sqlite"); ldb != nil {
 		var lVer int
 		if ldb.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&lVer) == nil && lVer == 1 {
-			lRows, lErr := ldb.QueryContext(ctx, `
+			scanSQL := `
 					SELECT e.action, e.output_outcome, coalesce(e.text_bytes, 0), e.observed_at
 					FROM efficacy_event e
-					WHERE e.action IN ('recall', 'output_attempt') AND e.observation = 'observed' AND e.text_bytes > 0
+					WHERE e.action IN ('recall', 'output_attempt') AND e.observation = 'observed' AND e.text_bytes > 0`
+			// 仅当账本确有直写孪生行时才需要反连接；否则整段相关子查询可证明为空操作。
+			if _, siblings, shapeOK := roiLedgerShape(ctx, ldb); !shapeOK || siblings {
+				scanSQL += `
 					  AND (e.hook != 'mcp_recall:tool' OR NOT EXISTS (
 						SELECT 1 FROM efficacy_event d
 						WHERE d.scope = e.scope
 						  AND d.action = 'recall'
 						  AND d.hook LIKE 'mcp_recall:%'
 						  AND d.hook != 'mcp_recall:tool'
-						  AND ABS(d.observed_at - e.observed_at) <= 2000000000
-					  ))
-				`)
+						  AND d.observed_at BETWEEN e.observed_at - 2000000000 AND e.observed_at + 2000000000
+					  ))`
+			}
+			lRows, lErr := ldb.QueryContext(ctx, scanSQL)
 			if lErr == nil {
 				for lRows.Next() {
 					var act, outc string
@@ -2319,6 +2323,27 @@ func computeROIFactsVaultBundle(memoryPath string) (vaultAnalyticsBundle, string
 	return out, sig
 }
 
+// roiLedgerRowQuery 是账本形状探测所需的最小查询面（*sql.DB 与 *sql.Tx 均满足）。
+type roiLedgerRowQuery interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// roiLedgerShape 判定账本是否含修订行（correction/retraction）与 MCP 直写孪生行
+// （hook 为非 tool 的 mcp_recall:*）。两者皆无时，有效集 LEFT JOIN 与反连接均可
+// 证明为空操作，直接扫描基表与完整 CTE 等价；查询失败返回 ok=false，调用方走完整路径。
+func roiLedgerShape(ctx context.Context, q roiLedgerRowQuery) (revisions bool, siblings bool, ok bool) {
+	var found int
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM efficacy_event WHERE action IN ('correction', 'retraction'))`).Scan(&found); err != nil {
+		return true, true, false
+	}
+	revisions = found != 0
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM efficacy_event WHERE action = 'recall' AND hook LIKE 'mcp_recall:%' AND hook <> 'mcp_recall:tool')`).Scan(&found); err != nil {
+		return true, true, false
+	}
+	siblings = found != 0
+	return revisions, siblings, true
+}
+
 // queryROIFacts reads a single SQLite snapshot. Only explicitly selected scopes
 // are included; unassigned scopes and harnesses never enter a selected bucket.
 func queryROIFacts(ctx context.Context, memoryPath string, req roiFactsRequest) roiFactsResponse {
@@ -2366,9 +2391,9 @@ func queryROIFacts(ctx context.Context, memoryPath string, req roiFactsRequest) 
 		return unknown("database_unavailable")
 	}
 	defer release()
-	// The effective-set scan measures ~1.3s on a 10k-event ledger and grows
-	// with the correlated subqueries; 10s tolerates multi-fold growth before
-	// the snapshot fails closed.
+	// The effective-set walk degrades to a base-table scan when the ledger has
+	// no revisions or non-tool MCP sibling rows; 10s tolerates multi-fold growth
+	// on the correlated path before the snapshot fails closed.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -2417,12 +2442,24 @@ func queryROIFacts(ctx context.Context, memoryPath string, req roiFactsRequest) 
 							  AND d.action = 'recall'
 							  AND d.hook LIKE 'mcp_recall:%'
 							  AND d.hook != 'mcp_recall:tool'
-							  AND ABS(d.observed_at - e.observed_at) <= 2000000000
+							  AND d.observed_at BETWEEN e.observed_at - 2000000000 AND e.observed_at + 2000000000
 						))
 				)
 				GROUP BY event_id
 				)`
-	rows, err := tx.QueryContext(ctx, effective+` SELECT action, outcome, observation, harness, hook, text_bytes, observed_at, effective_seq FROM effective`, scope, altScope, harness, harness)
+	revisions, siblings, shapeOK := roiLedgerShape(ctx, tx)
+	var rows *sql.Rows
+	if shapeOK && !revisions && !siblings {
+		// 无修订、无直写孪生行：基表即有效集，省去两次全表相关的派生/反连接。
+		rows, err = tx.QueryContext(ctx, `
+				SELECT e.action, e.output_outcome, e.observation, e.harness, e.hook, e.text_bytes, e.observed_at, e.seq
+				FROM efficacy_event e
+				WHERE e.scope IN (?, ?) AND e.scope != '' AND (? = '' OR e.harness = ?)
+					AND e.action IN ('decision', 'prepared', 'output_attempt', 'recall')`,
+			scope, altScope, harness, harness)
+	} else {
+		rows, err = tx.QueryContext(ctx, effective+` SELECT action, outcome, observation, harness, hook, text_bytes, observed_at, effective_seq FROM effective`, scope, altScope, harness, harness)
+	}
 	if err != nil {
 		return unknown("schema_or_query_error")
 	}

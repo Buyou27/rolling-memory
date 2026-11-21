@@ -233,7 +233,14 @@ func (a *application) runSyncCommand(memory *facade.Memory) (int, error) {
 		if limit <= 0 {
 			limit = reconcileDefaultLimit
 		}
-		rep, err := executeReconcileSync(context.Background(), memory, layer, harnessFilter, limit)
+		scanLimit := a.args.Int("scan_limit")
+		if scanLimit <= 0 {
+			scanLimit = 2000
+		}
+		if scanLimit > 50000 {
+			scanLimit = 50000
+		}
+		rep, err := executeReconcileSyncWithScanLimit(context.Background(), memory, layer, harnessFilter, limit, scanLimit)
 		if err != nil {
 			return 1, err
 		}
@@ -960,6 +967,15 @@ func episodicTurnSourcePath(refPointer string) string {
 }
 
 func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, harnessFilter string, limit int) (ReconcileReport, error) {
+	return executeReconcileSyncWithScanLimit(ctx, memory, layer, harnessFilter, limit, 2000)
+}
+
+// executeReconcileSyncWithScanLimit drains up to scanLimit harness turns per
+// harness in a foreground pass. The historical 2000-turn window is enough for
+// incremental auto-watch, but a manual recovery after a vault reset must be
+// able to walk the full local transcript window without changing the import
+// semantics (the reconcile path only adds or heals units; it never deletes).
+func executeReconcileSyncWithScanLimit(ctx context.Context, memory *facade.Memory, layer, harnessFilter string, limit, scanLimit int) (ReconcileReport, error) {
 	t0 := time.Now()
 	if limit <= 0 {
 		limit = reconcileDefaultLimit
@@ -1048,8 +1064,15 @@ func executeReconcileSync(ctx context.Context, memory *facade.Memory, layer, har
 
 		// Scan breadth: a background pass (caller set a deadline) only needs the newest
 		// window because local import converges over successive ticks; a foreground run
-		// keeps the full window so one command can drain a backlog. Both walk newest-first.
-		scanCap := 2000
+		// keeps the requested window (default 2000, up to 50000) so one command can
+		// drain a full backlog. Both walk newest-first.
+		scanCap := scanLimit
+		if scanCap <= 0 {
+			scanCap = 2000
+		}
+		if scanCap > 50000 {
+			scanCap = 50000
+		}
 		if backgroundPass {
 			scanCap = max(limit*4, limit)
 		}

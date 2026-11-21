@@ -22,6 +22,8 @@ type fetchSummaryView struct {
 	License        string
 	Files          []eval.FetchATMFileReport
 	CorpusSHA256   string
+	ContainerSame  bool
+	CorpusSemantic string
 	TierSHA256     map[string]string
 	ProvenancePath string
 }
@@ -64,6 +66,8 @@ func (a *application) doEvalFetch() (any, *fetchSummaryView, error) {
 			License:        report.License,
 			Files:          report.Files,
 			CorpusSHA256:   report.CorpusSHA256,
+			ContainerSame:  report.CorpusContainerByteIdentical,
+			CorpusSemantic: report.CorpusSemanticSHA256,
 			TierSHA256:     report.TierSHA256,
 			ProvenancePath: report.ProvenancePath,
 		}, nil
@@ -112,6 +116,9 @@ func (a *application) printFetchSummary(view *fetchSummaryView) {
 	}
 	a.printf("  文件：%d 个（本次下载 %d 个，其余为本地已有且哈希一致）\n", len(view.Files), downloaded)
 	a.printf("  重建语料 corpus=%s\n", shortDigest(view.CorpusSHA256))
+	if !view.ContainerSame && view.CorpusSemantic != "" {
+		a.printf("  说明：gzip 容器字节与官方构建产物不同（压缩实现随 Go 工具链变化），条目内容摘要一致（%s）\n", shortDigest(view.CorpusSemantic))
+	}
 	keys := make([]string, 0, len(view.TierSHA256))
 	for rel := range view.TierSHA256 {
 		keys = append(keys, rel)

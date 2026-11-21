@@ -93,18 +93,22 @@ type FetchATMFileReport struct {
 
 // FetchATMReport 一次 ATM-Bench 上游取数的完整回执。
 type FetchATMReport struct {
-	DatasetID      string               `json:"dataset_id"`
-	DatasetURL     string               `json:"dataset_url"`
-	Revision       string               `json:"revision"`
-	TargetDir      string               `json:"target_dir"`
-	License        string               `json:"license"`
-	LicenseURL     string               `json:"license_url"`
-	Files          []FetchATMFileReport `json:"files"`
-	Rebuilt        bool                 `json:"rebuilt"`
-	PinsVerified   bool                 `json:"pins_verified"`
-	CorpusSHA256   string               `json:"corpus_sha256"`
-	TierSHA256     map[string]string    `json:"tier_sha256"`
-	ProvenancePath string               `json:"provenance_path"`
+	DatasetID    string               `json:"dataset_id"`
+	DatasetURL   string               `json:"dataset_url"`
+	Revision     string               `json:"revision"`
+	TargetDir    string               `json:"target_dir"`
+	License      string               `json:"license"`
+	LicenseURL   string               `json:"license_url"`
+	Files        []FetchATMFileReport `json:"files"`
+	Rebuilt      bool                 `json:"rebuilt"`
+	PinsVerified bool                 `json:"pins_verified"`
+	CorpusSHA256 string               `json:"corpus_sha256"`
+	// CorpusSemanticSHA256 是语料条目内容摘要；CorpusContainerByteIdentical 报告重建出的
+	// gzip 容器是否与官方 pin 逐字节一致（false 表示同内容、不同压缩实现）。
+	CorpusSemanticSHA256         string            `json:"corpus_semantic_sha256"`
+	CorpusContainerByteIdentical bool              `json:"corpus_container_byte_identical"`
+	TierSHA256                   map[string]string `json:"tier_sha256"`
+	ProvenancePath               string            `json:"provenance_path"`
 }
 
 // UpstreamATMNotice 返回下载前展示给用户的上游语料说明。
@@ -218,14 +222,26 @@ func FetchATMUpstream(ctx context.Context, opts FetchATMOptions) (*FetchATMRepor
 	if err != nil {
 		return nil, err
 	}
+	semanticSHA, semanticErr := ATMCorpusSemanticDigestFromGz(filepath.Join(tmpDir, "corpus.jsonl.gz"))
+	containerIdentical := true
 	for rel, want := range expected {
 		got, ok := digestForRel(rel, corpusSHA, tierSHAs)
 		if !ok {
 			return nil, fmt.Errorf("重建产物缺少官方 pin 对应文件 (%s)", rel)
 		}
-		if got != want {
-			return nil, fmt.Errorf("重建产物与官方 pin 不符 (%s)：期望 %s，实际 %s；上游数据可能已变更，请保留现场反馈", rel, want, got)
+		if got == want {
+			continue
 		}
+		// 官方 pin 钉的是官方构建产物；Go 工具链的 flate 实现变化会改变 gzip 容器字节，
+		// 但条目与顺序不变时评测输入完全一致。此时以内容摘要放行并如实记录。
+		if useOfficialPins && rel == "corpus.jsonl.gz" && semanticErr == nil && semanticSHA == PinATMCorpusSemanticSHA256 {
+			containerIdentical = false
+			continue
+		}
+		return nil, fmt.Errorf("重建产物与官方 pin 不符 (%s)：期望 %s，实际 %s；若上游文件哈希全部通过，通常是 Go 工具链的 gzip 实现差异，请保留现场反馈", rel, want, got)
+	}
+	if !containerIdentical {
+		logf("重建语料的 gzip 容器字节与官方 pin 不同（压缩实现随工具链变化），条目内容摘要与官方一致：%s", semanticSHA)
 	}
 	if useOfficialPins {
 		if err := VerifyATMCorpusPins(tmpDir); err != nil {
@@ -240,24 +256,26 @@ func FetchATMUpstream(ctx context.Context, opts FetchATMOptions) (*FetchATMRepor
 	if keepManifest {
 		logf("既有 MANIFEST.json 与本轮重建同 pin，予以保留")
 	}
-	provPath, err := writeUpstreamProvenance(target, report, corpusSHA, tierSHAs)
+	provPath, err := writeUpstreamProvenance(target, report, corpusSHA, semanticSHA, containerIdentical, tierSHAs)
 	if err != nil {
 		return nil, err
 	}
 	logf("完成：语料已重建并就位（官方 pin 复核通过）→ %s", target)
 	return &FetchATMReport{
-		DatasetID:      report.DatasetID,
-		DatasetURL:     report.DatasetURL,
-		Revision:       report.Revision,
-		TargetDir:      target,
-		License:        report.License,
-		LicenseURL:     report.LicenseURL,
-		Files:          report.Files,
-		Rebuilt:        true,
-		PinsVerified:   true,
-		CorpusSHA256:   corpusSHA,
-		TierSHA256:     tierSHAs,
-		ProvenancePath: provPath,
+		DatasetID:                    report.DatasetID,
+		DatasetURL:                   report.DatasetURL,
+		Revision:                     report.Revision,
+		TargetDir:                    target,
+		License:                      report.License,
+		LicenseURL:                   report.LicenseURL,
+		Files:                        report.Files,
+		Rebuilt:                      true,
+		PinsVerified:                 true,
+		CorpusSHA256:                 corpusSHA,
+		CorpusSemanticSHA256:         semanticSHA,
+		CorpusContainerByteIdentical: containerIdentical,
+		TierSHA256:                   tierSHAs,
+		ProvenancePath:               provPath,
 	}, nil
 }
 
@@ -424,7 +442,7 @@ func existingManifestMatchesPins(target, corpusSHA string, tierSHAs map[string]s
 }
 
 // writeUpstreamProvenance 记录本次取数的来源、revision、逐文件哈希与重建结论。
-func writeUpstreamProvenance(target string, report *FetchATMReport, corpusSHA string, tierSHAs map[string]string) (string, error) {
+func writeUpstreamProvenance(target string, report *FetchATMReport, corpusSHA, semanticSHA string, containerIdentical bool, tierSHAs map[string]string) (string, error) {
 	record := map[string]any{
 		"dataset_id":  report.DatasetID,
 		"dataset_url": report.DatasetURL,
@@ -435,9 +453,11 @@ func writeUpstreamProvenance(target string, report *FetchATMReport, corpusSHA st
 		"fetched_at":  time.Now().Format(time.RFC3339),
 		"files":       report.Files,
 		"rebuild": map[string]any{
-			"corpus_sha256": corpusSHA,
-			"tier_sha256":   tierSHAs,
-			"pins_verified": true,
+			"corpus_sha256":                   corpusSHA,
+			"corpus_semantic_sha256":          semanticSHA,
+			"corpus_container_byte_identical": containerIdentical,
+			"tier_sha256":                     tierSHAs,
+			"pins_verified":                   true,
 		},
 		"note": "obtained from the upstream dataset on this machine and rebuilt locally; corpora are not redistributed with the project",
 	}

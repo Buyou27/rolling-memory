@@ -792,7 +792,7 @@ func BuildParser() *Parser {
 		choiceOption([]string{"--pulse-tokenizer"}, "pulse_tokenizer", []string{"product", "standard", "trigram"}, "product",
 			"evaluation tokenizer arm: product = default max-capability product tokenizer (128k BPE substring pieces + companion-word expansion + unit/date beacons; default) | standard = SDK native surface+subword (diagnostic) | trigram = trigram-window segmenter (diagnostic)"),
 		flagOption([]string{"--no-verify"}, "no_verify", false,
-			"skip the sha256 check of the bundled data files"),
+			"skip the sha256 pin check of the evaluation corpus and question set (diagnostic only; readings produced this way are not comparable to published baselines)"),
 		floatOption([]string{"--denoise-ratio"}, "denoise_ratio", 0.0,
 			"分形干句降噪比例 (0.0=零损, 0.25=安全, 0.50=推荐, 0.75=激进)"),
 	}

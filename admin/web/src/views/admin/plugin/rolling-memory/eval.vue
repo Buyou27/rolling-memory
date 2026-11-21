@@ -91,8 +91,8 @@
                                 <div class="rm-intro-body">
                                     {{
                                         isEn
-                                            ? 'Primary benchmark: University of Cambridge ATM-Bench (11,034 multimodal items; Main-1013 R@10 82.85% / QS 70.13%, Hard-31 R@10 52.43% / Any-Hit@10 80.65% / QS 25.06%). Comparative reference: LoCoMo (ACL 2024, 5,882 dialogue turns).'
-                                            : '第一主基准采用剑桥大学 ATM-Bench（11,034 条多模态个人记忆；Main-1013 R@10 82.85% / QS 70.13%，Hard-31 R@10 52.43% / Any-Hit@10 80.65% / QS 25.06%）；长程对话基准 LoCoMo（ACL 2024，5,882 轮对话）作为对照参照。'
+                                            ? 'Primary benchmark: University of Cambridge ATM-Bench (11,034 multimodal items; Main-1013 R@10 82.77% / QS 70.13%, Hard-31 R@10 52.43% / Any-Hit@10 80.65% / QS 25.06%). Comparative reference: LoCoMo (ACL 2024, 5,882 dialogue turns).'
+                                            : '第一主基准采用剑桥大学 ATM-Bench（11,034 条多模态个人记忆；Main-1013 R@10 82.77% / QS 70.13%，Hard-31 R@10 52.43% / Any-Hit@10 80.65% / QS 25.06%）；长程对话基准 LoCoMo（ACL 2024，5,882 轮对话）作为对照参照。'
                                     }}
                                 </div>
                             </div>
@@ -840,7 +840,7 @@
                         <div>
                             <span>{{ isEn ? 'Retrieval Latency (Mean / P95)' : '检索延迟（均值 / P95）' }}</span>
                             <strong>{{ runMetricDuration(activeRecord, 'avg_recall_ms') }} / {{ runMetricDuration(activeRecord, 'p95_recall_ms') }}</strong>
-                            <small v-if="activeRecord.elapsed_seconds > 0" class="rm-kpi-micro">{{ isEn ? `end-to-end ${activeRecord.elapsed_seconds}s` : `端到端 ${activeRecord.elapsed_seconds}s` }}</small>
+                            <small v-if="e2eSecondsText(activeRecord) !== '—'" class="rm-kpi-micro">{{ isEn ? `end-to-end ${e2eSecondsText(activeRecord)}` : `端到端 ${e2eSecondsText(activeRecord)}` }}</small>
                             <svg v-if="tab2Sparks.latency.has" class="rm-spark" viewBox="0 0 100 26" preserveAspectRatio="none" role="img">
                                 <title>{{ sparkRangeText(tab2Sparks.latency, 'ms') }}</title>
                                 <polyline v-for="(seg, si) in tab2Sparks.latency.lines[0]?.segs || []" :key="si" :points="seg" class="rm-spark-line is-warn" vector-effect="non-scaling-stroke" />
@@ -848,8 +848,8 @@
                             </svg>
                         </div>
                         <div>
-                            <span>{{ isEn ? 'Corpus Ingest / Scored Qs' : '语料导入 / 计分题' }}</span>
-                            <strong>{{ runMetricDuration(activeRecord, 'ingest_ms') }} / {{ activeRecord.scored_questions }}</strong>
+                            <span>{{ isEn ? 'Corpus Load / Scored Qs' : '语料载入 / 计分题' }}</span>
+                            <strong>{{ loadSecondsText(activeRecord) }} / {{ activeRecord.scored_questions }}</strong>
                             <small v-if="!hasOfficialRecall(activeRecord) && runMetricValue(activeRecord, 'evidence_hit') !== null" class="rm-kpi-micro">{{ isEn ? `legacy window hit ${runMetricPct(activeRecord, 'evidence_hit')}` : `旧口径窗口命中 ${runMetricPct(activeRecord, 'evidence_hit')}` }}</small>
                         </div>
                     </div>
@@ -1174,8 +1174,11 @@
                                 </template>
                             </el-table-column>
                             <el-table-column prop="created_at" :label="isEn ? 'Time' : '时间'" width="160" />
-                            <el-table-column :label="isEn ? 'Duration' : '耗时'" width="90" align="right">
-                                <template #default="{ row }">{{ row.elapsed_seconds > 0 ? `${row.elapsed_seconds}s` : '—' }}</template>
+                            <el-table-column :label="isEn ? 'Load' : '载入'" width="82" align="right">
+                                <template #default="{ row }">{{ loadSecondsText(row) }}</template>
+                            </el-table-column>
+                            <el-table-column :label="isEn ? 'End-to-end' : '端到端'" width="96" align="right">
+                                <template #default="{ row }">{{ e2eSecondsText(row) }}</template>
                             </el-table-column>
                             <el-table-column :label="t('plugin.rolling-memory.eval.colAction')" width="125" align="center" fixed="right">
                                 <template #default="{ row }">
@@ -1209,7 +1212,9 @@
                     <el-descriptions v-if="activeRecord" :column="3" border size="small" class="rm-detail-summary">
                         <el-descriptions-item :label="isEn ? 'Run ID' : '运行 ID'">{{ activeRecord.id }}</el-descriptions-item>
                         <el-descriptions-item :label="isEn ? 'Time' : '时间'">{{ activeRecord.created_at || '—' }}</el-descriptions-item>
-                        <el-descriptions-item :label="isEn ? 'Duration' : '耗时'">{{ activeRecord.elapsed_seconds > 0 ? `${activeRecord.elapsed_seconds}s` : '—' }}</el-descriptions-item>
+                        <el-descriptions-item :label="isEn ? 'Load' : '载入耗时'">{{ loadSecondsText(activeRecord) }}</el-descriptions-item>
+                        <el-descriptions-item :label="isEn ? 'End-to-end' : '端到端耗时'">{{ e2eSecondsText(activeRecord) }}</el-descriptions-item>
+                        <el-descriptions-item :label="isEn ? 'Total' : '总耗时'">{{ activeRecord.elapsed_seconds > 0 ? `${activeRecord.elapsed_seconds}s` : '—' }}</el-descriptions-item>
                         <el-descriptions-item :label="isEn ? 'Arm' : '评测臂'">{{ activeRecord.arm || '—' }}</el-descriptions-item>
                         <el-descriptions-item :label="isEn ? 'Model' : '模型'">{{ activeRecord.model || '—' }}</el-descriptions-item>
                         <el-descriptions-item label="TopK">{{ topKOf(activeRecord) > 0 ? topKOf(activeRecord) : '—' }}</el-descriptions-item>
@@ -3025,6 +3030,15 @@ const formatDurationMS = (ms: any) => {
     const v = Number(ms) || 0
     return v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
 }
+// 载入与端到端分开：新记录用 load_ms / eval_seconds，旧记录回退 ingest_ms / elapsed_seconds。
+const loadSecondsText = (record: any) => {
+    const ms = Number(record?.load_ms || record?.ingest_ms || 0)
+    return ms > 0 ? `${(ms / 1000).toFixed(2)}s` : '—'
+}
+const e2eSecondsText = (record: any) => {
+    const seconds = Number(record?.eval_seconds || record?.elapsed_seconds || 0)
+    return seconds > 0 ? `${seconds.toFixed(1)}s` : '—'
+}
 const formatDelta = (v: number) => `${Number(v || 0) >= 0 ? '+' : ''}${Number(v || 0).toFixed(3)}`
 
 // ===== Delta 对比矩阵（基线 / 本次 / Δ 三列）=====
@@ -4227,7 +4241,7 @@ const currentSplitBenchmarkRef = computed(() => {
     }
     if (query.suite === 'atm') {
         return query.tier === '1013'
-            ? (isEn.value ? 'Reference baseline: Official R@10 82.85% / R@50 90.11% / Hybrid QS 70.13% (vs MemPalace R@10 76.40% / QS 56.80%).' : '主榜参考基线：官方 R@10 82.85% / R@50 90.11% / 混合 QS 70.13%（外部最高 MemPalace R@10 76.40% / QS 56.80%）。')
+            ? (isEn.value ? 'Reference baseline: Official R@10 82.77% / R@50 90.16% / Hybrid QS 70.13% (vs MemPalace R@10 76.40% / QS 56.80%).' : '主榜参考基线：官方 R@10 82.77% / R@50 90.16% / 混合 QS 70.13%（外部最高 MemPalace R@10 76.40% / QS 56.80%）。')
             : (isEn.value ? 'Reference baseline: Official R@10 52.43% / R@50 70.62% / Hybrid QS 25.06% (vs MemoryOS R@10 32.70% / QS 13.70%).' : 'Hard 参考基线：官方 R@10 52.43% / R@50 70.62% / 混合 QS 25.06%（外部最高 MemoryOS R@10 32.70% / QS 13.70%）。')
     }
     return isEn.value ? 'Current baseline: 1313/1540 = 85.26% on the full 1,540 set (Top-96 delivery; deepseek-v4.1-flash answerer + judge).' : '现行基线：1,540 全量判对 1313/1540 = 85.26%（Top-96 交付；deepseek-v4.1-flash 答器+判官）。'

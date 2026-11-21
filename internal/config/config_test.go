@@ -299,6 +299,18 @@ func TestEgressPolicy(t *testing.T) {
 		t.Errorf("ftp scheme error = %v, want ErrEgressDenied", err)
 	}
 
+	// Evaluation LLM legs use the user-configured endpoint and may leave the
+	// machine to any http(s) host; only the URL shape is checked.
+	if err := local.CheckEvalEgress("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"); err != nil {
+		t.Errorf("CheckEvalEgress(remote eval endpoint) = %v, want nil", err)
+	}
+	if err := local.CheckEvalEgress("http://127.0.0.1:18080/v1/chat/completions"); err != nil {
+		t.Errorf("CheckEvalEgress(loopback eval endpoint) = %v, want nil", err)
+	}
+	if err := local.CheckEvalEgress("ftp://127.0.0.1/x"); !errors.Is(err, ErrEgressDenied) {
+		t.Errorf("CheckEvalEgress ftp scheme error = %v, want ErrEgressDenied", err)
+	}
+
 	if _, err := Load(LoadOptions{Path: &path, Mode: stringPtr("cloud"), Env: map[string]string{}}); !errors.Is(err, ErrConfig) {
 		t.Fatalf("cloud mode Load = %v, want ErrConfig", err)
 	}

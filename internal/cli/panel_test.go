@@ -284,6 +284,28 @@ func TestConsoleSourceStaleness(t *testing.T) {
 		t.Fatal("a source edit newer than the binary must mark it stale")
 	}
 
+	// go:embed 的基线/榜单 JSON 同样编进二进制：数据件更新必须触发重建。
+	setTime(mainGo, older)
+	setTime(binPath, newer)
+	embedded := filepath.Join(sourceRoot, "internal", "rmconsole", "evalstatic", "atm_baselines.json")
+	mustWrite(embedded)
+	setTime(embedded, older)
+	if consoleBinaryStale(sourceRoot, binPath) {
+		t.Fatal("binary newer than the embedded baseline JSON must not be stale")
+	}
+	setTime(embedded, newer.Add(3*time.Hour))
+	if !consoleBinaryStale(sourceRoot, binPath) {
+		t.Fatal("an embedded baseline refresh must mark the binary stale")
+	}
+	// evalstatic 之外的 JSON 夹具不参与重建判定。
+	unrelated := filepath.Join(sourceRoot, "testdata", "fixture.json")
+	mustWrite(unrelated)
+	setTime(unrelated, newer.Add(4*time.Hour))
+	setTime(embedded, older)
+	if consoleBinaryStale(sourceRoot, binPath) {
+		t.Fatal("an unrelated JSON fixture must not mark the binary stale")
+	}
+
 	webRoot := filepath.Join(dir, "web")
 	view := filepath.Join(webRoot, "src", "views", "dashboard.vue")
 	mustWrite(view)

@@ -34,6 +34,7 @@ Rolling Memory 的管理后台内置一个轻量命令行工具（面板里的�
 | `rmem sync prune --json` | **回收与自愈预演**（只读）：内容完好 / 可重锚 / 可回收 / 源不可读计数 | 终端（下拉） |
 | `rmem recall --cue "关键词" --json` | 手动检索一次，排查「为什么没命中」 | 系统终端 |
 | `rmem sync watch --pause / --resume / --step` | 后台扫描与历史指针索引回填控制 | L2 会话记录页按钮 |
+| `rmem recover --passes 10 --budget-sec 60` | 从本地转录窗口重建金库：只做增量扫描，不做回收、自愈与清理（`--limit` 限定每轮条数） | 系统终端 |
 | `rmem sync prune --apply --yes` | **执行回收与自愈**：回收确证过时的单元、重锚坐标位移的指针，写入可审计回执 | 记忆总览 → 「回收与自愈」入口 |
 | `rmem eval --suite atm …` | 冻结基准评测 | 评测实验室 |
 

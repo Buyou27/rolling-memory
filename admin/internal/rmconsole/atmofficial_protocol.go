@@ -8,10 +8,12 @@ package rollingmemory
 // present in this package).
 
 import (
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +40,10 @@ const (
 	PinATMCorpusSHA256 = "c9c4cc55dd3be147638121765b5dc7b8321a5e292b90909b68ae7fe8a57ee3a7"
 	PinATM1013SHA256   = "3c4cbf84deeb158c78d515626a540908878d304ce0cda5c8e2ae7e52c6b878a2"
 	PinATMHardSHA256   = "f6f63ff196a9f1de5715e35b328d4e80ca80311f2e2eae8028e7cb60e87ad37e"
+
+	// PinATMCorpusStreamSHA256 是 corpus.jsonl.gz 解压后的 JSONL 字节流摘要：
+	// gzip 容器字节随 Go 工具链的 flate 实现变化，解压流不受影响。
+	PinATMCorpusStreamSHA256 = "5841ef086954ac9fb75b45f0a45e54e81b1b5c6c04c958a1ab88678c3b266f4d"
 )
 
 // Historical fixtures are not distributed with the runtime.
@@ -112,10 +118,35 @@ func verifyATMCorpusPinsAdmin(atmDir string) error {
 		}
 		sum := sha256.Sum256(data)
 		if got := hex.EncodeToString(sum[:]); got != want {
+			// 容器字节随 Go 工具链的 gzip 实现变化；解压流一致即评测输入一致。
+			if rel == "corpus.jsonl.gz" {
+				if stream, serr := sha256GzStreamAdmin(path); serr == nil && stream == PinATMCorpusStreamSHA256 {
+					continue
+				}
+			}
 			return fmt.Errorf("ATM-Bench 官方语料 pin 不符 (%s)：期望 %s，实际 %s", rel, want, got)
 		}
 	}
 	return nil
+}
+
+// sha256GzStreamAdmin 计算 gzip 解压后的字节流摘要（与容器字节无关）。
+func sha256GzStreamAdmin(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, gz); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 type ATMOfficialPinStatus struct {

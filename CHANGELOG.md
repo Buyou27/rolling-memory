@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-11-21
+
+### Added
+
+- `rmem recover` rebuilds a vault from the local transcript window in additive scan passes: it never retires, heals or prunes, `--passes` / `--limit` / `--budget-sec` bound the work, and the command stops after two idle passes. `rmem sync --scan-limit` (1–50000, default 2000) sets how many harness turns one foreground pass may scan per harness, so a manual recovery after a vault reset can walk the full local backlog without changing what the scan writes.
+
+### Changed
+
+- Benchmark disclosure now reports the current product arm: ATM-Bench Main-1013 official R@10 **82.77%** (Any-Hit@10 85.29%, All-Hit@10 80.06%), Hard-31 R@10 **52.43%** (Any-Hit@10 80.65%, All-Hit@10 29.03%), composite **73.67** (7366.8 bps). These are the values a fresh build reproduces after the kernel's exact calendar-occupancy operator replaced the previous heuristic; the value-ordered group-mass summation shipped in the same sync is score-neutral. The earlier 82.85% / 73.72 figures came from the prior heuristic and remain in the 0.0.7 entry as history only.
+- The evaluation workbench reports corpus load time (`load_ms`) separately from the question loop (`eval_seconds`). Total elapsed remains their sum, and run records written by earlier releases fall back to the single stored duration.
+
+### Fixed
+
+- `rmem eval --fetch atm` no longer stops when a correct rebuild differs only in its gzip container. The corpus pin now accepts three equivalent proofs — the exact container bytes, the decompressed JSONL stream, or the per-item content digest — so a Go toolchain with a different flate implementation still rebuilds the same 11,034 items in the same order; `UPSTREAM-PROVENANCE.json` records which proof matched. The question tiers remain byte-pinned. `--no-verify` is now documented as skipping the whole pin set rather than one file.
+- The ROI monitor accepts a canonical vault whose `rm_units` is a view and skips the revision and twin-row reconciliation when the ledger has neither, so a plain ledger is scanned directly instead of through correlated subqueries.
+- The console's stale-binary check now covers the embedded baseline and leaderboard JSON, so refreshing those files marks the console for a rebuild instead of serving the previous numbers.
+
 ## [0.0.8] - 2026-11-20
 
 ### Changed
@@ -174,7 +191,8 @@ Initial public release.
 - **Client SDK (`sdk/`)**: a zero-dependency Go SDK (`v1.11.3`) for local memory encoding and integration, with complete third-party license notices.
 - **Licensing**: source-available under **PolyForm Noncommercial 1.0.0** — free to use, modify, and share for noncommercial purposes; commercial use or distribution requires a separate license.
 
-[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/rocareer/rolling-memory/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/rocareer/rolling-memory/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/rocareer/rolling-memory/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/rocareer/rolling-memory/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/rocareer/rolling-memory/compare/v0.0.5...v0.0.6

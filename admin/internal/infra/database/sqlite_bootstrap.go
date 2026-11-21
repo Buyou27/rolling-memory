@@ -1,6 +1,8 @@
 package database
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ai-go-hub/ai-go-admin/internal/version"
@@ -754,8 +756,7 @@ func bootstrapAIReportTables(db *gorm.DB) error {
 
 // bootstrapRollingMemoryEvalTables 幂等初始化 rolling-memory 插件的测评任务台账表与逐题明细表。
 func bootstrapRollingMemoryEvalTables(db *gorm.DB) error {
-	ddls := []string{
-		`CREATE TABLE IF NOT EXISTS "plugin_rolling_memory_eval_task" (
+	taskDDL := `CREATE TABLE IF NOT EXISTS "plugin_rolling_memory_eval_task" (
 			"id" varchar(128) PRIMARY KEY,
 			"suite" varchar(32) NOT NULL DEFAULT 'locomo',
 			"status" varchar(32) NOT NULL DEFAULT 'completed',
@@ -793,10 +794,8 @@ func bootstrapRollingMemoryEvalTables(db *gorm.DB) error {
 			"create_time" integer NOT NULL DEFAULT 0,
 			"update_time" integer NOT NULL DEFAULT 0,
 			CONSTRAINT "ck_plugin_rm_eval_task_status" CHECK ("status" IN ('completed', 'cancelled', 'failed'))
-		)`,
-		`CREATE INDEX IF NOT EXISTS "idx_plugin_rm_eval_task_suite_time" ON "plugin_rolling_memory_eval_task" ("suite", "create_time" DESC)`,
-		`CREATE INDEX IF NOT EXISTS "idx_plugin_rm_eval_task_status" ON "plugin_rolling_memory_eval_task" ("status")`,
-		`CREATE TABLE IF NOT EXISTS "plugin_rolling_memory_eval_task_item" (
+		)`
+	itemDDL := `CREATE TABLE IF NOT EXISTS "plugin_rolling_memory_eval_task_item" (
 			"id" INTEGER PRIMARY KEY AUTOINCREMENT,
 			"run_id" varchar(128) NOT NULL DEFAULT '',
 			"seq" integer NOT NULL DEFAULT 0,
@@ -814,12 +813,76 @@ func bootstrapRollingMemoryEvalTables(db *gorm.DB) error {
 			"total_ms" integer NOT NULL DEFAULT 0,
 			"payload" text NOT NULL DEFAULT '{}',
 			"create_time" integer NOT NULL DEFAULT 0
-		)`,
+		)`
+	ddls := []string{
+		taskDDL,
+		`CREATE INDEX IF NOT EXISTS "idx_plugin_rm_eval_task_suite_time" ON "plugin_rolling_memory_eval_task" ("suite", "create_time" DESC)`,
+		`CREATE INDEX IF NOT EXISTS "idx_plugin_rm_eval_task_status" ON "plugin_rolling_memory_eval_task" ("status")`,
+		itemDDL,
 		`CREATE INDEX IF NOT EXISTS "idx_plugin_rm_eval_task_item_run_seq" ON "plugin_rolling_memory_eval_task_item" ("run_id", "seq")`,
 	}
 	for _, stmt := range ddls {
 		if err := db.Exec(strings.TrimSpace(stmt)).Error; err != nil {
 			return err
+		}
+	}
+	// CREATE TABLE IF NOT EXISTS 只建新表，不会给已存在的表补列：旧库的逐题明细仍带已下线的
+	// cloud_hits 列、缺 local_hits，写入时会报 "table ... has no column named local_hits"。
+	// 这里按当前 DDL 给两张表补齐缺失列，使既存库与新建库的列集合一致。
+	for _, ddl := range []string{taskDDL, itemDDL} {
+		if err := ensureCreateTableColumns(db, ddl); err != nil {
+			return err
+		}
+	}
+	// cloud_hits 是云端面停用前的逐题命中投影，本地明文台账以 local_hits 为准；每行 payload
+	// 是完整 JSON 真源 ⇒ 回收该列不丢读数。旧 SQLite 不支持 DROP COLUMN 时不阻断启动。
+	_ = db.Exec(`ALTER TABLE "plugin_rolling_memory_eval_task_item" DROP COLUMN "cloud_hits"`).Error
+	return nil
+}
+
+var (
+	createTableNamePattern   = regexp.MustCompile(`CREATE TABLE IF NOT EXISTS "([A-Za-z0-9_]+)"`)
+	createTableColumnPattern = regexp.MustCompile(`^\s*"([A-Za-z0-9_]+)"\s+(.+?)(?:,)?\s*$`)
+)
+
+// createTableColumnSpec 从本文件的建表 DDL 里取出表名与列定义（列名 + 列定义），
+// 供既存库在启动时按当前 DDL 补齐缺失列；列清单只有 DDL 一份，不另抄。
+func createTableColumnSpec(ddl string) (string, [][2]string) {
+	lines := strings.Split(ddl, "\n")
+	table := ""
+	if match := createTableNamePattern.FindStringSubmatch(lines[0]); len(match) == 2 {
+		table = match[1]
+	}
+	columns := make([][2]string, 0, len(lines))
+	for _, line := range lines[1:] {
+		if match := createTableColumnPattern.FindStringSubmatch(line); len(match) == 3 {
+			columns = append(columns, [2]string{match[1], strings.TrimSpace(match[2])})
+		}
+	}
+	return table, columns
+}
+
+// ensureCreateTableColumns 给既存表补齐缺失列（只加列，不改类型、不重建表）。
+func ensureCreateTableColumns(db *gorm.DB, ddl string) error {
+	table, columns := createTableColumnSpec(ddl)
+	if table == "" || len(columns) == 0 {
+		return fmt.Errorf("cannot parse CREATE TABLE DDL: %.80q", ddl)
+	}
+	var names []string
+	if err := db.Raw(fmt.Sprintf(`SELECT name FROM pragma_table_info('%s')`, table)).Scan(&names).Error; err != nil {
+		return fmt.Errorf("read table columns of %s: %w", table, err)
+	}
+	existing := make(map[string]bool, len(names))
+	for _, name := range names {
+		existing[name] = true
+	}
+	for _, column := range columns {
+		if existing[column[0]] {
+			continue
+		}
+		stmt := fmt.Sprintf(`ALTER TABLE "%s" ADD COLUMN "%s" %s`, table, column[0], column[1])
+		if err := db.Exec(stmt).Error; err != nil {
+			return fmt.Errorf("add column %s.%s: %w", table, column[0], err)
 		}
 	}
 	return nil

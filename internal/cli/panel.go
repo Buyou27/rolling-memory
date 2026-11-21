@@ -619,7 +619,12 @@ func consoleBinaryStale(sourceRoot, binPath string) bool {
 	}
 	newest := maxSourceModTime(sourceRoot, func(path string) bool {
 		base := filepath.Base(path)
-		return strings.HasSuffix(base, ".go") || base == "go.mod" || base == "go.sum"
+		if strings.HasSuffix(base, ".go") || base == "go.mod" || base == "go.sum" {
+			return true
+		}
+		// go:embed 的数据件同样编进二进制：基线/榜单 JSON 更新后若只看 .go，
+		// 控制台会继续服务旧读数且没有任何陈旧提示。
+		return strings.HasSuffix(base, ".json") && strings.Contains(filepath.ToSlash(path), "/evalstatic/")
 	})
 	return newest.After(info.ModTime())
 }

@@ -153,6 +153,72 @@ func TestBootstrapSQLiteDeveloperMenuOrder(t *testing.T) {
 	})
 }
 
+// TestBootstrapSQLiteUpgradesLegacyEvalTaskItemTable 复刻旧库形态：逐题明细表已存在，
+// 带已下线的 cloud_hits 列、缺 local_hits。bootstrap 必须补齐缺失列、回收下线列，
+// 使逐题明细写入（生产 INSERT 的列清单）能直接落库；重复启动幂等。
+func TestBootstrapSQLiteUpgradesLegacyEvalTaskItemTable(t *testing.T) {
+	db := openBootstrapTestDB(t)
+	legacyDDL := `CREATE TABLE "plugin_rolling_memory_eval_task_item" (
+			"id" INTEGER PRIMARY KEY AUTOINCREMENT,
+			"run_id" varchar(128) NOT NULL DEFAULT '',
+			"seq" integer NOT NULL DEFAULT 0,
+			"question_id" varchar(128) NOT NULL DEFAULT '',
+			"category" varchar(32) NOT NULL DEFAULT '',
+			"correct" smallint NOT NULL DEFAULT 0,
+			"evidence_hit" smallint NOT NULL DEFAULT 0,
+			"qs_score" real NOT NULL DEFAULT 0,
+			"engine_transport" varchar(64) NOT NULL DEFAULT '',
+			"engine_scope" varchar(128) NOT NULL DEFAULT '',
+			"cloud_hits" integer NOT NULL DEFAULT 0,
+			"recall_ms" integer NOT NULL DEFAULT 0,
+			"delivered_tokens" integer NOT NULL DEFAULT 0,
+			"delivered_items" integer NOT NULL DEFAULT 0,
+			"total_ms" integer NOT NULL DEFAULT 0,
+			"payload" text NOT NULL DEFAULT '{}',
+			"create_time" integer NOT NULL DEFAULT 0
+		)`
+	if err := db.Exec(legacyDDL).Error; err != nil {
+		t.Fatalf("建旧版逐题明细表: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := BootstrapSQLite(db); err != nil {
+			t.Fatalf("BootstrapSQLite #%d: %v", i+1, err)
+		}
+	}
+	var names []string
+	if err := db.Raw(`SELECT name FROM pragma_table_info('plugin_rolling_memory_eval_task_item')`).Scan(&names).Error; err != nil {
+		t.Fatalf("读取逐题明细表列: %v", err)
+	}
+	columns := make(map[string]bool, len(names))
+	for _, name := range names {
+		columns[name] = true
+	}
+	if !columns["local_hits"] {
+		t.Fatalf("升级后仍缺 local_hits 列: %v", names)
+	}
+	if columns["cloud_hits"] {
+		t.Fatalf("升级后 cloud_hits 未回收: %v", names)
+	}
+	if err := db.Exec(`INSERT INTO "plugin_rolling_memory_eval_task_item" (
+			"run_id", "seq", "question_id", "category", "correct", "evidence_hit", "qs_score",
+			"engine_transport", "engine_scope", "local_hits",
+			"recall_ms", "delivered_tokens", "delivered_items", "total_ms", "payload", "create_time"
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"run-legacy-upgrade", 1, "q1", "cat1", 1, 1, 1.0,
+		"local", "u10-mem-eval-locomo-local-plain", 3,
+		12, 100, 3, 20, `{}`, 0,
+	).Error; err != nil {
+		t.Fatalf("补齐列后逐题明细仍写入失败: %v", err)
+	}
+	var hits int
+	if err := db.Raw(`SELECT "local_hits" FROM "plugin_rolling_memory_eval_task_item" WHERE "run_id" = ?`, "run-legacy-upgrade").Scan(&hits).Error; err != nil {
+		t.Fatalf("读取 local_hits: %v", err)
+	}
+	if hits != 3 {
+		t.Fatalf("local_hits = %d, want 3", hits)
+	}
+}
+
 func TestBootstrapSQLitePreservesCustomizedMenuAndPermissions(t *testing.T) {
 	db := openBootstrapTestDB(t)
 	if err := BootstrapSQLite(db); err != nil {
